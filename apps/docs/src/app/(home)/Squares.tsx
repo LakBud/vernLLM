@@ -43,7 +43,7 @@ const withAlpha = (hslColor: string, alpha: number) =>
     return `hsla(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
   });
 
-export default function Squares({ squareSize = 48, tripChance = 0.00008 }: SquaresProps) {
+export default function Squares({ squareSize = 48, tripChance = 0.0001 }: SquaresProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const raf = useRef<number>(0);
 
