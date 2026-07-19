@@ -1,5 +1,11 @@
 # vern-llm
 
+## 0.2.1
+
+### Patch Changes
+
+- ee5bb90: Connect repo with package
+
 ## 0.2.0
 
 ### Minor Changes
