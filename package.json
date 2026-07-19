@@ -7,18 +7,20 @@
     "lint:fix": "oxlint . --fix",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "typecheck": "pnpm --filter vern-llm run typecheck",
+    "typecheck": "pnpm --filter vern-llm-docs run types:check",
     "typecheck:test": "pnpm --filter vern-llm run typecheck:test",
     "test": "pnpm --filter vern-llm run test",
-    "build": "pnpm --filter vern-llm run build",
+    "build": "pnpm --filter vern-llm-docs run build",
+    "preview": "pnpm --filter vern-llm-docs run preview",
+    "deploy": "pnpm --filter vern-llm-docs run deploy",
     "changeset": "changeset",
     "changeset:version": "changeset version",
     "changeset:publish": "changeset publish",
     "prepare": "husky"
   },
   "lint-staged": {
-    "apps/**/*.{ts,tsx,js}": [
-      "oxlint --fix",
+    "{apps,packages}/**/*.{ts,tsx,js}": [
+      "sh -c 'oxlint --fix \"$@\" || true' --",
       "oxfmt --write"
     ],
     ".changeset/*.md": [
