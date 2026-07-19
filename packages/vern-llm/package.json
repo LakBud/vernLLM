@@ -1,6 +1,6 @@
 {
   "name": "vern-llm",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Retry + timeout + cache wrapper for OpenAI-compatible LLM chat completion calls (OpenAI, Groq, etc).",
   "type": "module",
   "main": "./dist/index.cjs",
