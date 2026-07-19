@@ -30,7 +30,7 @@
     "oxlint": "^1.74.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "dependencies": {
     "pnpm": "^11.15.0"
