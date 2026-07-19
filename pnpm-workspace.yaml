@@ -6,3 +6,5 @@ allowBuilds:
   esbuild: true
   rolldown: true
   sharp: false
+
+minimumReleaseAge: 720
