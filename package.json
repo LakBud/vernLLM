@@ -7,13 +7,14 @@
     "lint:fix": "oxlint . --fix",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "typecheck": "pnpm --filter vern-llm run typecheck",
-    "typecheck:test": "pnpm --filter vern-llm run typecheck:test",
-    "test": "pnpm --filter vern-llm run test",
-    "build": "pnpm --filter vern-llm run build",
+    "typecheck:vern-llm": "pnpm --filter vern-llm run typecheck",
+    "typecheck:test:vern-llm": "pnpm --filter vern-llm run typecheck:test",
+    "test:vern-llm": "pnpm --filter vern-llm run test",
+    "build:vern-llm": "pnpm --filter vern-llm run build",
     "changeset": "changeset",
     "changeset:version": "changeset version",
-    "changeset:publish": "changeset publish"
+    "changeset:publish": "changeset publish",
+    "prepare": "husky"
   },
   "lint-staged": {
     "apps/**/*.{ts,tsx,js}": [
@@ -30,5 +31,9 @@
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "dependencies": {
+    "pnpm": "^11.15.0"
+  },
+  "packageManager": "pnpm@11.15.0"
 }
