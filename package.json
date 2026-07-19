@@ -1,59 +1,34 @@
 {
-  "name": "retry-llm",
-  "version": "0.1.0",
-  "description": "Retry + timeout + cache wrapper for OpenAI-compatible LLM chat completion calls (OpenAI, Groq, etc).",
+  "name": "vern-llm-monorepo",
+  "private": true,
   "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
+  "scripts": {
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "typecheck": "pnpm --filter vern-llm run typecheck",
+    "typecheck:test": "pnpm --filter vern-llm run typecheck:test",
+    "test": "pnpm --filter vern-llm run test",
+    "build": "pnpm --filter vern-llm run build",
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "changeset:publish": "changeset publish"
   },
-  "files": [
-    "dist"
-  ],
-  "engines": {
-    "node": ">=20"
-  },
-"scripts": {
-  "build": "tsdown",
-  "dev": "tsdown --watch",
-  "typecheck": "tsc --noEmit -p tsconfig.json",
-  "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-
-  "test": "vitest run",
-  "test:unit": "vitest run --project unit",
-  "test:int": "vitest run --project integration",
-
-  "test:watch": "vitest",
-  "test:coverage": "vitest run --coverage",
-
-  "changeset": "changeset",
-  "version-packages": "changeset version",
-  "release": "pnpm run build && changeset publish",
-  "prepublishOnly": "pnpm run typecheck && pnpm run build"
-},
-  "peerDependencies": {
-    "openai": "^4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "openai": {
-      "optional": true
-    }
+  "lint-staged": {
+    "apps/**/*.{ts,tsx,js}": [
+      "oxlint --fix",
+      "oxfmt --write"
+    ]
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.1",
-    "@types/node": "^26.1.1",
-    "@vitest/coverage-v8": "^4.1.10",
-    "tsdown": "^0.9.9",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.10",
-    "zod": "^4.4.3"
+    "@changesets/cli": "^2.27.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.1.0",
+    "oxfmt": "^0.59.0",
+    "oxlint": "^1.74.0"
   },
-  "packageManager": "pnpm@11.14.0",
-  "license": "MIT"
+  "engines": {
+    "node": ">=20"
+  }
 }

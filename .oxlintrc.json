@@ -1,0 +1,54 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/out/**",
+    "**/*.config.ts"
+  ],
+  "plugins": ["typescript", "react", "jsx-a11y", "import"],
+  "rules": {
+    "no-debugger": "warn",
+    "eqeqeq": "error",
+    "no-duplicate-imports": "error",
+    "import/no-cycle": "warn",
+    "typescript/no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-explicit-any": "error",
+    "typescript/ban-ts-comment": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["packages/vern-llm/src/**/*.ts", "packages/vern-llm/tests/**/*.ts"],
+      "env": { "node": true },
+      "rules": {
+        "curly": ["error", "multi-line"],
+        "no-console": "off",
+        "react-hooks/rules-of-hooks": "off",
+        "react-hooks/exhaustive-deps": "off"
+      }
+    },
+    {
+      "files": ["docs-site/**/*.{ts,tsx}"],
+      "env": { "browser": true, "node": true },
+      "rules": {
+        "curly": ["error", "all"],
+        "no-console": "warn",
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "warn"
+      }
+    },
+    {
+      "files": ["docs-site/app/**/*.{ts,tsx}", "docs-site/content/**/*.mdx"],
+      "rules": {
+        "react/only-export-components": ["warn", { "allowConstantExport": true }]
+      }
+    }
+  ]
+}
