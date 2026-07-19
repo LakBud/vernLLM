@@ -20,6 +20,9 @@
     "apps/**/*.{ts,tsx,js}": [
       "oxlint --fix",
       "oxfmt --write"
+    ],
+    ".changeset/*.md": [
+      "oxfmt --write"
     ]
   },
   "devDependencies": {
