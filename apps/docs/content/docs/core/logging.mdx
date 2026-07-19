@@ -1,0 +1,18 @@
+---
+title: Pluggable Logger
+description: Swap in your own logger implementation
+---
+
+```ts
+import type { Logger } from 'vern-llm';
+
+const pinoLogger: Logger = {
+  debug: (msg) => logger.debug(msg),
+  warn: (msg) => logger.warn(msg),
+  error: (msg, meta) => logger.error(meta, msg),
+};
+
+const llm = new VernLLM({ client: openai, model: 'gpt-4o', logger: pinoLogger });
+```
+
+Defaults to a console logger; `debug` logging is gated by the `debug` option (`NODE_ENV !== 'production'` by default), `warn`/`error` always fire.

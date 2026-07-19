@@ -1,0 +1,54 @@
+---
+title: Getting Started
+description: Install vern-llm and make your first call
+---
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn']}>
+  <Tab value="pnpm">``` pnpm add vern-llm ```</Tab>
+  <Tab value="npm">``` npm install vern-llm ```</Tab>
+  <Tab value="yarn">``` yarn add vern-llm ```</Tab>
+</Tabs>
+
+### Dont forget to install openAI too!
+
+<Tabs items={['pnpm', 'npm', 'yarn']}>
+  <Tab value="pnpm">``` pnpm add openai ```</Tab>
+  <Tab value="npm">``` npm install openai ```</Tab>
+  <Tab value="yarn">``` yarn add openai ```</Tab>
+</Tabs>
+
+## Basic usage
+
+```ts
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+});
+
+const parsed = await llm.call({
+  systemPrompt: 'Return JSON: { "skills": string[] }',
+  userContent: 'Extract skills from: ...',
+});
+```
+
+<Callout title="jsonMode">`jsonMode: false` returns the raw string, no parsing.</Callout>
+
+## Per-call overrides
+
+```ts
+const llm = new VernLLM({ client: openai, model: 'gpt-4o-mini' }); // default model
+
+await llm.call({
+  systemPrompt: '...',
+  userContent: '...',
+  model: 'o3', // overrides the instance default for this call only
+  reasoningEffort: 'high', // passed through as `reasoning_effort` for models that support it
+});
+```

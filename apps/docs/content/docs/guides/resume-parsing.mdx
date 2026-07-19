@@ -1,0 +1,48 @@
+---
+title: Structured Extraction with Caching
+description: Combining schema validation and cachedLLMCall for a realistic extraction pipeline
+---
+
+A common pattern: extract structured data from unstructured text, validate it, and cache the result so re-processing the same input doesn't cost another API call.
+
+```ts
+import OpenAI from 'openai';
+import { VernLLM, InMemoryCacheAdapter } from 'vern-llm';
+import { z } from 'zod';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  cache: new InMemoryCacheAdapter(),
+});
+
+const CandidateSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+  skills: z.array(z.string()),
+  yearsExperience: z.number(),
+});
+
+async function parseResume(resumeId: string, resumeText: string, userId: string) {
+  return llm.cachedLLMCall({
+    cacheKey: `resume:${resumeId}`,
+    ttl: 86_400, // 1 day
+    call: {
+      systemPrompt: 'Extract candidate details as JSON matching the given fields.',
+      userContent: resumeText,
+      schema: CandidateSchema,
+    },
+    reserveUsage: () => quota.reserve(userId),
+    refundUsage: () => quota.refund(userId),
+  });
+}
+```
+
+If the resume was already parsed, this returns the cached, already-typed result with no API call and no quota reserved. On a schema mismatch, `cachedLLMCall` throws `LLMError('validation')` without writing anything to the cache — so a bad response never gets stuck as a stale cached value.
+
+<Callout>
+  `reserveUsage`/`refundUsage` are optional — only pass them if you're metering usage per user. Omit
+  both if you don't need quota tracking.
+</Callout>

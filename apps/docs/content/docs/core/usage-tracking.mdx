@@ -1,0 +1,15 @@
+---
+title: Token Usage Tracking
+description: Hook into every call's usage data
+---
+
+```ts
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  onUsage: (usage) => {
+    // { promptTokens, completionTokens, totalTokens, requestId, model }
+    billing.record(usage);
+  },
+});
+```

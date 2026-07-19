@@ -1,0 +1,29 @@
+---
+title: Custom Providers — fromFetch
+description: Raw HTTP escape hatch for providers with no SDK
+---
+
+For a provider with no SDK, or where pulling one in isn't worth it, `fromFetch` is a raw HTTP escape hatch — supply the URL, headers, and two small mapping functions, and retries/timeouts/circuit-breaker/JSON handling all still apply.
+
+```ts
+import { VernLLM, fromFetch } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: fromFetch({
+    url: 'https://api.example.com/v1/generate',
+    headers: () => ({ Authorization: `Bearer ${process.env.EXAMPLE_API_KEY}` }),
+    mapRequest: (params) => ({
+      model: params.model,
+      prompt: params.messages.map((m) => m.content).join('\n\n'),
+      max_tokens: params.max_tokens,
+    }),
+    mapResponse: (json) => ({
+      content: json.output,
+      usage: { promptTokens: json.usage?.input, completionTokens: json.usage?.output },
+    }),
+  }),
+  model: 'example-model-v1',
+});
+```
+
+Non-2xx responses throw with `.status` set, so `nonRetryableStatus` still fails fast on 401/403 as usual.

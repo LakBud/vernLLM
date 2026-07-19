@@ -1,0 +1,24 @@
+---
+title: Overview
+description: VernLLM expects an OpenAI-shaped client — adapters translate other providers into that shape
+---
+
+`VernLLM` expects a client shaped like OpenAI's `chat.completions.create`. Some providers already match that shape and need no adapter; others need one that translates their native API into it.
+
+<Cards>
+  <Card title="OpenAI-Compatible" href="/docs/adapters/openai-compatible">
+    Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama
+  </Card>
+  <Card title="Anthropic" href="/docs/adapters/anthropic">
+    fromAnthropic
+  </Card>
+  <Card title="Gemini" href="/docs/adapters/gemini">
+    fromGemini
+  </Card>
+  <Card title="AWS Bedrock" href="/docs/adapters/bedrock">
+    fromBedrock
+  </Card>
+  <Card title="Custom / fromFetch" href="/docs/adapters/custom-fetch">
+    Raw HTTP escape hatch
+  </Card>
+</Cards>

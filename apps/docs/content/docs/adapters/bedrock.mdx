@@ -1,0 +1,23 @@
+---
+title: AWS Bedrock
+description: fromBedrock adapter
+---
+
+Bedrock's SDK v3 exposes `.send(command)`, not a direct method, so wrap it:
+
+```ts
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { VernLLM, fromBedrock } from 'vern-llm';
+
+const client = new BedrockRuntimeClient({ region: 'us-east-1' });
+
+const llm = new VernLLM({
+  client: fromBedrock({
+    converse: (params, options) =>
+      client.send(new ConverseCommand(params), { abortSignal: options.signal }),
+  }),
+  model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+});
+```
+
+Uses Bedrock's Converse API, which is unified across model families (Anthropic, Titan, Llama, Mistral, etc. all speak the same request/response shape), so this one adapter works regardless of which `model` you point it at. JSON mode is emulated via system prompt, same as Anthropic; `reasoning_effort` is dropped.

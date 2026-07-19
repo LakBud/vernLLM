@@ -1,0 +1,57 @@
+---
+title: Caching & Usage Metering
+description: Wrap calls with cachedCall or cachedLLMCall
+---
+
+```ts
+import { InMemoryCacheAdapter } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  cache: new InMemoryCacheAdapter(), // swap for your own Redis/Upstash adapter
+});
+
+const result = await llm.cachedCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  fn: () => llm.call({ systemPrompt, userContent }),
+  reserveUsage: () => quota.reserve(userId),
+  refundUsage: () => quota.refund(userId),
+});
+```
+
+<Callout>
+  If `refundUsage` itself throws, that failure is logged and swallowed — the original error from
+  `fn` (or the cache write) is what propagates, so a broken refund path never masks the real
+  failure.
+</Callout>
+
+## `cachedLLMCall` — cached + retried in one call
+
+`cachedCall` is a thin cache wrapper; it doesn't apply retry/timeout/circuit-breaker behavior on its own. If `fn` is always going to be `() => llm.call(...)`, `cachedLLMCall` wires that up for you:
+
+```ts
+const result = await llm.cachedLLMCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  call: { systemPrompt, userContent }, // same shape as call()'s params
+  reserveUsage: () => quota.reserve(userId),
+  refundUsage: () => quota.refund(userId),
+});
+```
+
+## Custom cache adapter
+
+```ts
+import type { CacheAdapter } from 'vern-llm';
+
+class UpstashCacheAdapter implements CacheAdapter {
+  async get(key: string) {
+    /* ... */
+  }
+  async set(key: string, value: unknown, ttl: number) {
+    /* ... */
+  }
+}
+```

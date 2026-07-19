@@ -1,0 +1,17 @@
+---
+title: Development
+description: Scripts and test layout for contributing to vern-llm
+---
+
+```bash
+pnpm install
+pnpm run build            # tsdown → dist (ESM + CJS + types)
+pnpm run typecheck        # tsc --noEmit on src, since tsdown doesn't fully type-check
+pnpm run typecheck:test   # tsc --noEmit on src + test (separate tsconfig, no rootDir conflict)
+pnpm run test             # vitest run
+pnpm run test:watch       # vitest, watch mode
+pnpm run test:coverage    # vitest run --coverage (v8 provider)
+pnpm run changeset        # record a change for the next release
+```
+
+Tests live in `tests/`, mirroring `src/`: `VernLLM.call.test.ts` and `VernLLM.schema.test.ts` cover retry/backoff/timeout/abort/schema/model-override/usage behavior, `circuitBreaker.test.ts` covers the breaker as a unit and its integration with `call()`, `cachedCall.test.ts` covers caching and usage reservation/refund, `logger.test.ts` covers the injectable logger, and `test/adapters/*.test.ts` cover each provider adapter's request/response translation against a fake client — no real API calls are made anywhere in the suite.

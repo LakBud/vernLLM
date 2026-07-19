@@ -40,6 +40,9 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - if: steps.filter.outputs.code == 'true'
+        run: npm install -g npm@latest && npm --version
+
+      - if: steps.filter.outputs.code == 'true'
         run: pnpm install --frozen-lockfile
 
       - if: steps.filter.outputs.code == 'true'

@@ -1,0 +1,36 @@
+---
+title: Cancellation & Timeouts
+description: How AbortSignal, per-attempt timeouts, and retries interact
+---
+
+`call()` accepts a standard `AbortSignal`, which composes with vern-llm's own per-attempt timeout rather than replacing it.
+
+```ts
+const controller = new AbortController();
+
+const promise = llm.call({
+  systemPrompt,
+  userContent,
+  signal: controller.signal,
+});
+
+// cancel from anywhere
+controller.abort();
+```
+
+## How it composes with timeouts
+
+Each attempt gets its own internal timeout controller. If you also pass a `signal`, vern-llm combines both into a single signal via `AbortSignal.any([yourSignal, internalTimeoutSignal])` — either one firing cancels the in-flight request. The internal timer is always cleared afterward, whether the call succeeds, fails, or is aborted, so nothing is left running in the background.
+
+## Fail-fast on an already-aborted signal
+
+If `signal.aborted` is already `true` when you call `call()`, it rejects immediately with `LLMError('aborted')` before any request is dispatched — no network call, no wasted attempt.
+
+## Aborting during a retry wait
+
+If the signal fires while waiting out a backoff delay between retries, the pending timer is cancelled immediately and the wait rejects right away — it won't sit idle until the delay would have finished on its own.
+
+<Callout>
+  An abort is never retried, even if it happens mid-backoff. It's treated as a deliberate
+  cancellation, not a transient failure.
+</Callout>

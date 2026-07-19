@@ -1,0 +1,15 @@
+{
+  "title": "vern-llm",
+  "pages": [
+    "---Introduction---",
+    "index",
+    "getting-started",
+    "---Core---",
+    "core",
+    "---Reference---",
+    "adapters",
+    "guides",
+    "reference",
+    "changelog"
+  ]
+}

@@ -1,0 +1,16 @@
+---
+title: Circuit Breaker
+description: Stop hammering a provider that's down
+---
+
+```ts
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000 }, // or `true` for defaults
+});
+
+llm.getCircuitState(); // 'closed' | 'open' | 'half-open' | undefined
+```
+
+Once `threshold` consecutive failures occur, further calls fail immediately with `LLMError('circuit_open')` until `cooldownMs` elapses, at which point one trial call is allowed through (half-open). A successful trial closes the circuit; a failed one reopens it.

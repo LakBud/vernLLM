@@ -1,0 +1,4 @@
+{
+  "title": "Adapters",
+  "pages": ["index", "openai-compatible", "anthropic", "gemini", "bedrock", "custom-fetch"]
+}

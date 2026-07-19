@@ -1,0 +1,20 @@
+---
+title: Anthropic
+description: fromAnthropic adapter
+---
+
+```ts
+import Anthropic from '@anthropic-ai/sdk';
+import { VernLLM, fromAnthropic } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })),
+  model: 'claude-sonnet-4-6',
+});
+```
+
+<Callout type="warn">
+  No native `response_format` or `reasoning_effort` equivalent — JSON mode/schema are emulated via a
+  system-prompt instruction (schema text embedded, not provider-enforced); `reasoning_effort` is
+  dropped.
+</Callout>

@@ -1,0 +1,42 @@
+---
+title: Provider Fallback
+description: Falling back to a secondary provider when the primary is down
+---
+
+vern-llm doesn't have built-in multi-provider fallback, but since every adapter produces the same `VernLLM` interface, wiring it yourself is a few lines:
+
+```ts
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
+import { VernLLM, fromAnthropic, isLLMError } from 'vern-llm';
+
+const primary = new VernLLM({
+  client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+  model: 'gpt-4o',
+  circuitBreaker: true,
+});
+
+const fallback = new VernLLM({
+  client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })),
+  model: 'claude-sonnet-4-6',
+});
+
+async function resilientCall(params: Parameters<VernLLM['call']>[0]) {
+  try {
+    return await primary.call(params);
+  } catch (err) {
+    if (isLLMError(err) && (err.type === 'circuit_open' || err.type === 'api')) {
+      return fallback.call(params);
+    }
+    throw err;
+  }
+}
+```
+
+Each `VernLLM` instance tracks its own circuit breaker independently, so `primary`'s breaker opening doesn't affect `fallback` at all — once `primary` recovers, calls naturally return to it since the breaker moves back to `half-open`, then `closed`, on its own.
+
+<Callout type="warn">
+  Don't fall back on `validation` or `parse` errors — those mean the *response* was bad, not the
+  provider. Falling back would just get you a different provider's badly-shaped response for the
+  same broken prompt.
+</Callout>

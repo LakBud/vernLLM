@@ -1,0 +1,12 @@
+{
+  "title": "Core Features",
+  "pages": [
+    "structured-output",
+    "caching",
+    "usage-tracking",
+    "circuit-breaker",
+    "logging",
+    "error-handling",
+    "cancellation"
+  ]
+}

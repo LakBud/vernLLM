@@ -1,0 +1,62 @@
+---
+title: Structured Output
+description: Client-side validation with Zod and provider-native JSON Schema mode
+---
+
+## With Zod
+
+### Remember to install zod first!
+
+<Tabs items={['pnpm', 'npm', 'yarn']}>
+  <Tab value="pnpm">``` pnpm add zod ```</Tab>
+  <Tab value="npm">``` npm install zod ```</Tab>
+  <Tab value="yarn">``` yarn add zod ```</Tab>
+</Tabs>
+
+Pass a `schema` and get a typed, validated result. Works with any validator exposing `safeParse` (Zod v3/v4).
+
+```ts
+import { z } from 'zod';
+
+const CandidateSchema = z.object({
+  name: z.string(),
+  skills: z.array(z.string()),
+});
+
+// result is typed as z.infer<typeof CandidateSchema>
+const result = await llm.call({
+  systemPrompt: 'Extract the candidate name and skills as JSON.',
+  userContent: resumeText,
+  schema: CandidateSchema,
+});
+```
+
+<Callout type="warn">
+  On a schema mismatch, `call` throws `LLMError('validation')` with `.issues` set to the validator's
+  error object, without burning a retry — validation failures are deterministic.
+</Callout>
+
+## Provider-native JSON Schema mode
+
+`schema` validates client-side, after the model has already responded. `jsonSchema` sends the schema to the provider (OpenAI/Groq `response_format: { type: 'json_schema' }`), constraining generation itself.
+
+```ts
+const result = await llm.call({
+  systemPrompt: 'Extract the candidate name and skills.',
+  userContent: resumeText,
+  jsonSchema: {
+    name: 'Candidate',
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        skills: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'skills'],
+    },
+  },
+  schema: CandidateSchema, // optional client-side type/validation on top
+});
+```
+
+`jsonSchema` implies JSON mode. The Anthropic adapter has no native structured-output equivalent, so it embeds the schema in the system prompt as an instruction instead of provider-enforcing it.

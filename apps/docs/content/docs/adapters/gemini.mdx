@@ -1,0 +1,49 @@
+---
+title: Gemini
+description: fromGemini adapter
+---
+
+`fromGemini` wraps the raw Gemini client — not a pre-configured model instance — since the adapter passes `model` through on every call rather than baking it in up front.
+
+## New SDK (`@google/genai`)
+
+The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it:
+
+```ts
+import { GoogleGenAI } from '@google/genai';
+import { VernLLM, fromGemini } from 'vern-llm';
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+const llm = new VernLLM({
+  client: fromGemini(ai.models),
+  model: 'gemini-2.5-flash',
+});
+```
+
+## Legacy SDK (`@google/generative-ai`)
+
+The older SDK bakes the model into `getGenerativeModel({ model })`, so its `generateContent` doesn't accept a `model` field per call — `fromGemini` still adapts it since it only calls `.generateContent`, but the `model` you pass to `VernLLM`/per-call override is effectively ignored by the underlying client. Whatever model you picked at `getGenerativeModel(...)` time is what actually runs:
+
+```ts
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { VernLLM, fromGemini } from 'vern-llm';
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+const llm = new VernLLM({
+  client: fromGemini(model),
+  model: 'gemini-2.5-flash', // kept in sync manually — the legacy client ignores this per call
+});
+```
+
+<Callout type="warn">
+  With the legacy SDK, a per-call `model` override (`llm.call({ model: 'gemini-2.0-flash', ... })`) has no effect — the model is fixed at `getGenerativeModel()` time. Use the new `@google/genai` SDK if you need per-call model switching.
+</Callout>
+
+<Callout>
+  Unlike Anthropic, `jsonSchema` maps to Gemini's native `responseSchema` + `responseMimeType:
+  'application/json'`, so it's actually provider-enforced here. `reasoning_effort` is dropped
+  (Gemini's thinking models use a token budget instead).
+</Callout>

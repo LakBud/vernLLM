@@ -1,0 +1,77 @@
+---
+title: Error Handling
+description: LLMError types, what triggers each, and what gets retried
+---
+
+Every failure — whatever the underlying cause — surfaces as a normalized `LLMError`, never a raw provider error. Check `err.type` to branch on what actually happened:
+
+```ts
+import { isLLMError } from 'vern-llm';
+
+try {
+  const result = await llm.call({ systemPrompt, userContent, schema });
+} catch (err) {
+  if (isLLMError(err)) {
+    switch (err.type) {
+      case 'validation':
+        console.log(err.issues); // the schema's error object
+        break;
+      case 'api':
+        console.log(err.status); // HTTP status, if the provider returned one
+        break;
+      case 'circuit_open':
+        // provider is down — back off, don't retry immediately
+        break;
+    }
+  }
+  throw err;
+}
+```
+
+## Error types
+
+<Cards>
+  <Card title="timeout">
+    A single attempt exceeded `timeoutMs`. Retried like any other transient failure.
+  </Card>
+  <Card title="api">
+    The provider returned an HTTP error with a status code. Retried unless the status is in
+    `nonRetryableStatus` (default `400, 401, 403`).
+  </Card>
+  <Card title="parse">
+    The response content wasn't valid JSON. Never retried — a malformed response won't fix itself on
+    retry.
+  </Card>
+  <Card title="validation">
+    JSON parsed fine but failed `schema.safeParse`. Never retried, same reasoning as `parse`.
+    Carries `.issues` with the validator's error object.
+  </Card>
+  <Card title="circuit_open">
+    The circuit breaker is open — the provider has failed too many times in a row. Fails immediately
+    without hitting the provider at all.
+  </Card>
+  <Card title="aborted">
+    The call's `AbortSignal` fired, either externally or via `timeoutMs`. See{' '}
+    <a href="/docs/core/cancellation">Cancellation</a>.
+  </Card>
+  <Card title="unknown">
+    Anything that doesn't fit the above — network errors with no status code, unexpected provider
+    responses, etc. Retried by default.
+  </Card>
+</Cards>
+
+## What gets retried
+
+`shouldRetry` skips a retry when any of these are true:
+
+- The signal has already aborted
+- `error.type` is `'parse'` or `'validation'` — these come from the response _content_, not a transient fault, so retrying won't help
+- `error.status` is in `nonRetryableStatus` (default `[400, 401, 403]`)
+
+Everything else — timeouts, 5xx errors, network blips, unknown errors — gets retried up to `maxRetries` with exponential backoff and jitter.
+
+<Callout type="warn">
+  Exhausting all retries also records a circuit breaker failure (if one is configured) and throws
+  the final normalized `LLMError` — the raw underlying error is not preserved on the thrown value
+  beyond what `extractStatus` could pull from it.
+</Callout>
