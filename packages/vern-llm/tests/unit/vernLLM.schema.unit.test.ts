@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 
 import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from '../helpers.js';
+import { at, createMockClient, jsonResponse } from '../helpers.js';
 
 describe('VernLLM.call — Zod schema validation', () => {
   const Schema = z.object({ name: z.string(), skills: z.array(z.string()) });
@@ -43,7 +43,7 @@ describe('VernLLM.call — provider-native jsonSchema mode', () => {
       },
     });
 
-    expect(calls[0].response_format).toEqual({
+    expect(at(calls, 0).response_format).toEqual({
       type: 'json_schema',
       json_schema: {
         name: 'Result',
@@ -64,7 +64,7 @@ describe('VernLLM.call — provider-native jsonSchema mode', () => {
       jsonSchema: { name: 'R', schema: {}, strict: false },
     });
 
-    expect(calls[0].response_format).toMatchObject({ json_schema: { strict: false } });
+    expect(at(calls, 0).response_format).toMatchObject({ json_schema: { strict: false } });
   });
 
   it('implies JSON mode even without jsonMode explicitly set', async () => {
@@ -77,7 +77,7 @@ describe('VernLLM.call — provider-native jsonSchema mode', () => {
       jsonSchema: { name: 'R', schema: {} },
     });
 
-    expect(calls[0].response_format?.type).toBe('json_schema');
+    expect(at(calls, 0).response_format?.type).toBe('json_schema');
     expect(result).toEqual({ ok: true }); // parsed, not raw string
   });
 
@@ -103,7 +103,7 @@ describe('VernLLM.call — per-call model override and reasoningEffort', () => {
     const llm = new VernLLM({ client, model: 'default-model' });
 
     await llm.call({ systemPrompt: 's', userContent: 'u' });
-    expect(calls[0].model).toBe('default-model');
+    expect(at(calls, 0).model).toBe('default-model');
   });
 
   it('overrides the model for a single call', async () => {
@@ -111,7 +111,7 @@ describe('VernLLM.call — per-call model override and reasoningEffort', () => {
     const llm = new VernLLM({ client, model: 'default-model' });
 
     await llm.call({ systemPrompt: 's', userContent: 'u', model: 'override-model' });
-    expect(calls[0].model).toBe('override-model');
+    expect(at(calls, 0).model).toBe('override-model');
   });
 
   it('does not leak a per-call model override into subsequent calls', async () => {
@@ -124,8 +124,8 @@ describe('VernLLM.call — per-call model override and reasoningEffort', () => {
     await llm.call({ systemPrompt: 's', userContent: 'u', model: 'override-model' });
     await llm.call({ systemPrompt: 's', userContent: 'u' });
 
-    expect(calls[0].model).toBe('override-model');
-    expect(calls[1].model).toBe('default-model');
+    expect(at(calls, 0).model).toBe('override-model');
+    expect(at(calls, 1).model).toBe('default-model');
   });
 
   it('passes reasoning_effort through when set', async () => {
@@ -133,7 +133,7 @@ describe('VernLLM.call — per-call model override and reasoningEffort', () => {
     const llm = new VernLLM({ client, model: 'm' });
 
     await llm.call({ systemPrompt: 's', userContent: 'u', reasoningEffort: 'high' });
-    expect(calls[0].reasoning_effort).toBe('high');
+    expect(at(calls, 0).reasoning_effort).toBe('high');
   });
 
   it('omits reasoning_effort when not set', async () => {
@@ -141,7 +141,7 @@ describe('VernLLM.call — per-call model override and reasoningEffort', () => {
     const llm = new VernLLM({ client, model: 'm' });
 
     await llm.call({ systemPrompt: 's', userContent: 'u' });
-    expect(calls[0].reasoning_effort).toBeUndefined();
+    expect(at(calls, 0).reasoning_effort).toBeUndefined();
   });
 });
 

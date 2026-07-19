@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BedrockConverseClient, fromBedrock } from '../../../src/adapters/bedrock.js';
+import { type BedrockConverseClient, fromBedrock } from '../../../src/adapters/bedrock.js';
+import { at } from '../../helpers.js';
 
 function makeFakeBedrockClient(text: string) {
   const converse = vi.fn<BedrockConverseClient['converse']>(async (_params, _options) => ({
@@ -86,9 +87,9 @@ describe('fromBedrock', () => {
       { signal: new AbortController().signal },
     );
 
-    const system = converse.mock.calls[0][0].system as Array<{ text: string }>;
-    expect(system[0].text).toBe('be brief');
-    expect(system[1].text).toMatch(/valid JSON only/i);
+    const system = at(converse.mock.calls, 0)[0].system as Array<{ text: string }>;
+    expect(at(system, 0).text).toBe('be brief');
+    expect(at(system, 1).text).toMatch(/valid JSON only/i);
   });
 
   it('leaves system undefined when there is no system message and no JSON mode', async () => {
@@ -100,6 +101,6 @@ describe('fromBedrock', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(converse.mock.calls[0][0].system).toBeUndefined();
+    expect(at(converse.mock.calls, 0)[0].system).toBeUndefined();
   });
 });

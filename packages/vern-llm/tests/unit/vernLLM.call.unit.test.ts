@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { LLMError } from '../../src/types.js';
 import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse, textResponse, FakeApiError } from '../helpers.js';
+import { createMockClient, jsonResponse, textResponse, FakeApiError, at } from '../helpers.js';
 
 describe('VernLLM.call: happy paths', () => {
   it('returns parsed JSON by default', async () => {
@@ -51,7 +51,7 @@ describe('VernLLM.call: happy paths', () => {
     const llm = new VernLLM({ client, model: 'm' });
 
     await llm.call({ systemPrompt: 's', userContent: 'u' });
-    expect(calls[0].response_format).toEqual({ type: 'json_object' });
+    expect(at(calls, 0).response_format).toEqual({ type: 'json_object' });
   });
 
   it('omits response_format when jsonMode is false', async () => {
@@ -59,7 +59,7 @@ describe('VernLLM.call: happy paths', () => {
     const llm = new VernLLM({ client, model: 'm' });
 
     await llm.call({ systemPrompt: 's', userContent: 'u', jsonMode: false });
-    expect(calls[0].response_format).toBeUndefined();
+    expect(at(calls, 0).response_format).toBeUndefined();
   });
 });
 

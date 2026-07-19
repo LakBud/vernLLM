@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import { fromAnthropic } from '../../../src/adapters/anthropic.js';
+import { at } from '../../helpers.js';
 
 function makeFakeAnthropicClient(
   responseText: string,
@@ -104,7 +105,7 @@ describe('fromAnthropic', () => {
       { signal: new AbortController().signal },
     );
 
-    const sentSystem = create.mock.calls[0][0].system as string;
+    const sentSystem = at(create.mock.calls, 0)[0].system as string;
     expect(sentSystem).toMatch(/valid JSON only/i);
   });
 
@@ -126,7 +127,7 @@ describe('fromAnthropic', () => {
       { signal: new AbortController().signal },
     );
 
-    const sentSystem = create.mock.calls[0][0].system as string;
+    const sentSystem = at(create.mock.calls, 0)[0].system as string;
     expect(sentSystem).toContain('Candidate');
     expect(sentSystem).toContain('"type":"object"');
   });
@@ -140,6 +141,6 @@ describe('fromAnthropic', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(create.mock.calls[0][0].system).toBeUndefined();
+    expect(at(create.mock.calls, 0)[0].system).toBeUndefined();
   });
 });

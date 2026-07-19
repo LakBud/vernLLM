@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { fromFetch } from '../../../src/adapters/fetch.js';
+import { at } from '../../helpers.js';
 
 type FetchResponse = {
   text: string;
@@ -30,7 +31,7 @@ describe('fromFetch', () => {
     const client = fromFetch({
       url: 'https://api.example.com/generate',
       headers: { Authorization: 'Bearer key' },
-      mapRequest: (params) => ({ model: params.model, prompt: params.messages[1].content }),
+      mapRequest: (params) => ({ model: params.model, prompt: at(params.messages, 1).content }),
       mapResponse: (json: unknown) => {
         if (!isFetchResponse(json)) {
           throw new Error('Invalid response shape');
@@ -63,7 +64,7 @@ describe('fromFetch', () => {
         }),
       }),
     );
-    const sentBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    const sentBody = JSON.parse((at(fetchMock.mock.calls, 0)[1] as RequestInit).body as string);
     expect(sentBody).toEqual({ model: 'example-model', prompt: 'u' });
     expect(result.choices?.[0]?.message?.content).toBe('hello from provider');
   });
@@ -122,7 +123,7 @@ describe('fromFetch', () => {
       { signal: new AbortController().signal },
     );
 
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const init = at(fetchMock.mock.calls, 0)[1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers.Authorization).toBe('Bearer async-token');
   });
@@ -223,6 +224,6 @@ describe('fromFetch', () => {
       { signal: controller.signal },
     );
 
-    expect(fetchMock.mock.calls[0][1]).toMatchObject({ signal: controller.signal });
+    expect(at(fetchMock.mock.calls, 0)[1]).toMatchObject({ signal: controller.signal });
   });
 });

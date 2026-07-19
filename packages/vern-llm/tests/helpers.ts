@@ -52,6 +52,10 @@ export function createMockClient(
     const entry = script[Math.min(i, script.length - 1)];
     i++;
 
+    if (entry === undefined) {
+      throw new Error('createMockClient: script is empty');
+    }
+
     if (entry instanceof Error) {
       throw entry;
     }
@@ -63,4 +67,13 @@ export function createMockClient(
 
   const client: LLMClient = { chat: { completions: { create } } };
   return { client, create, calls };
+}
+
+/** Non-null indexed access for arrays, for use with noUncheckedIndexedAccess. */
+export function at<T>(arr: readonly T[], index: number): T {
+  const value = arr[index];
+  if (value === undefined) {
+    throw new Error(`Expected element at index ${index}, but array has length ${arr.length}`);
+  }
+  return value;
 }
