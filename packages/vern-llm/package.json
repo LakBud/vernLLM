@@ -53,6 +53,10 @@
     "zod": "^4.4.3"
   },
   "packageManager": "pnpm@11.14.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LakBud/vernLLM"
+  },
   "license": "MIT",
   "publishConfig": {
     "access": "public",
