@@ -1,0 +1,163 @@
+---
+title: Multi-turn Conversations
+description: Learn how to maintain context across multiple LLM calls using conversation history.
+---
+
+# Multi-turn Conversations
+
+VernLLM supports multi-turn conversations by allowing you to provide previous user and assistant messages through the `history` option.
+
+This allows the model to continue a conversation while keeping context from earlier messages.
+
+## Basic usage
+
+```ts
+await llm.call({
+  systemPrompt: 'You are a helpful assistant.',
+  history: [
+    {
+      role: 'user',
+      content: 'What is TypeScript?',
+    },
+    {
+      role: 'assistant',
+      content: 'TypeScript is a typed superset of JavaScript created by Microsoft.',
+    },
+  ],
+  userContent: 'Who created it?',
+});
+```
+
+The model receives the conversation in this order:
+
+1. System prompt (if provided)
+2. Previous conversation history
+3. Current user message
+
+The resulting message sequence is:
+
+```
+system
+↓
+user: What is TypeScript?
+↓
+assistant: TypeScript is a typed superset of JavaScript created by Microsoft.
+↓
+user: Who created it?
+```
+
+## History format
+
+The `history` option accepts an array of conversation turns:
+
+```ts
+type ConversationTurn = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+```
+
+Each conversation turn contains:
+
+| Field     | Description                                       |
+| --------- | ------------------------------------------------- |
+| `role`    | The sender of the message (`user` or `assistant`) |
+| `content` | The message content                               |
+
+Example:
+
+```ts
+const history = [
+  {
+    role: 'user',
+    content: 'Explain async functions.',
+  },
+  {
+    role: 'assistant',
+    content: 'Async functions allow asynchronous code to be written using promise-based syntax.',
+  },
+];
+```
+
+## Continuing a conversation
+
+A typical chat application stores previous messages and sends them with every new request:
+
+```ts
+const history = [
+  {
+    role: 'user',
+    content: 'What is Rust?',
+  },
+  {
+    role: 'assistant',
+    content: 'Rust is a systems programming language focused on safety and performance.',
+  },
+];
+
+const response = await llm.call({
+  history,
+  userContent: 'What makes it memory safe?',
+});
+```
+
+The model can answer the follow-up question because the previous conversation is included in the request.
+
+## History validation
+
+VernLLM validates history before sending a request.
+
+History must:
+
+- Only contain `user` and `assistant` roles.
+- Alternate between user and assistant messages.
+- End with an `assistant` message.
+
+The current `userContent` is always appended after the history, so the final history entry cannot be a user message.
+
+### Valid history
+
+```ts
+history: [
+  {
+    role: 'user',
+    content: 'What is Python?',
+  },
+  {
+    role: 'assistant',
+    content: 'Python is a programming language.',
+  },
+];
+```
+
+### Invalid history
+
+```ts
+history: [
+  {
+    role: 'user',
+    content: 'What is Python?',
+  },
+];
+```
+
+The invalid example would create two consecutive user messages after `userContent` is added.
+
+## Empty history
+
+`history` is optional.
+
+Omitting it or passing an empty array behaves the same:
+
+```ts
+await llm.call({
+  history: [],
+  userContent: 'Hello!',
+});
+```
+
+## Provider support
+
+Conversation history is handled by VernLLM's core layer and converted into the correct format for each provider adapter.
+
+Both user and assistant messages are preserved, allowing multi-turn conversations to work consistently across supported LLM providers.

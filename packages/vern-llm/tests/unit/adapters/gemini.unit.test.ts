@@ -125,4 +125,30 @@ describe('fromGemini', () => {
 
     expect(generateContent.mock.calls[0]![0].systemInstruction).toBeUndefined();
   });
+
+  it('preserves assistant turns, mapped to Geminis "model" role, in order', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('About 2.1 million.');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        messages: [
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'user', content: "What's the capital of France?" },
+          { role: 'assistant', content: 'Paris.' },
+          { role: 'user', content: "What's its population?" },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].contents).toEqual([
+      { role: 'user', parts: [{ text: "What's the capital of France?" }] },
+      { role: 'model', parts: [{ text: 'Paris.' }] },
+      { role: 'user', parts: [{ text: "What's its population?" }] },
+    ]);
+  });
 });

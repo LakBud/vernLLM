@@ -10,7 +10,7 @@ export interface GeminiClient {
   generateContent(
     params: {
       model?: string;
-      contents: Array<{ role: 'user'; parts: Array<{ text: string }> }>;
+      contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
       systemInstruction?: { parts: Array<{ text: string }> };
       generationConfig?: {
         temperature?: number;
@@ -47,7 +47,11 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
       completions: {
         async create(params, options) {
           const systemMessage = params.messages.find((m) => m.role === 'system');
-          const userMessages = params.messages.filter((m) => m.role === 'user');
+          // Keep both user and assistant turns, in order. Gemini calls the
+          // assistant role 'model' rather than 'assistant'.
+          const conversationMessages = params.messages.filter(
+            (m) => m.role === 'user' || m.role === 'assistant',
+          );
 
           const wantsJson = Boolean(params.response_format);
           const generationConfig: NonNullable<
@@ -67,8 +71,8 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
           const response = await geminiClient.generateContent(
             {
               model: params.model,
-              contents: userMessages.map((m) => ({
-                role: 'user' as const,
+              contents: conversationMessages.map((m) => ({
+                role: m.role === 'assistant' ? ('model' as const) : ('user' as const),
                 parts: [{ text: m.content }],
               })),
               systemInstruction: systemMessage

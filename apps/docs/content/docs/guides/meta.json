@@ -1,4 +1,4 @@
 {
   "title": "Guides",
-  "pages": ["resume-parsing", "provider-fallback"]
+  "pages": ["resume-parsing", "provider-fallback", "multi-turn-conversations"]
 }

@@ -4,12 +4,20 @@
     "---Introduction---",
     "index",
     "getting-started",
-    "---Core---",
+
+    "---Core Concepts---",
     "core",
-    "---Reference---",
-    "adapters",
+
+    "---Guides---",
     "guides",
+
+    "---API Reference---",
     "API-reference",
+
+    "---Adapters---",
+    "adapters",
+
+    "---Resources---",
     "changelog"
   ]
 }
