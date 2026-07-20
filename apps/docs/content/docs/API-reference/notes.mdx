@@ -1,0 +1,11 @@
+---
+title: Notes & Caveats
+description: Requirements, edge cases, and dependency behavior
+---
+
+- Requires Node 20+ for `AbortSignal.any`.
+- Non retryable status codes (default `400, 401, 403`) fail fast instead of consuming a retry and are reported as `LLMError('api', status)`.
+- An already aborted `signal` rejects immediately with `LLMError('aborted')` before any request is dispatched.
+- Per attempt timeouts throw `LLMError('timeout')` and can be retried like other transient failures.
+- `jsonMode: false` skips JSON parsing entirely and returns the raw string.
+- `zod` and provider SDKs (`openai`, `groq-sdk`, `@anthropic-ai/sdk`) are not bundled. Bring your own. This package only relies on their shapes structurally.

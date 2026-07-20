@@ -32,9 +32,12 @@ export function extractStatus(err: unknown): number | undefined {
  * Runs an async function and cancels it if it takes longer than the given
  * timeout. Creates an internal abort controller that fires after the
  * timeout elapses, and combines it with any external signal the caller
- * passed in so either one can cancel the underlying call. The internal
- * timer is always cleared afterward, whether the function succeeds,
- * fails, or is aborted, so nothing is left running in the background
+ * passed in so either one can cancel the underlying call. If the internal
+ * timeout triggers and the underlying operation aborts, the error is
+ * converted into an LLMError with type "timeout". External cancellations
+ * continue to propagate as aborted errors. The internal timer is always
+ * cleared afterward, whether the function succeeds, fails, or is aborted,
+ * so nothing is left running in the background.
  */
 export async function withTimeout<T>(
   fn: (signal: AbortSignal) => Promise<T>,
@@ -53,6 +56,17 @@ export async function withTimeout<T>(
 
   try {
     return await fn(signal);
+  } catch (err) {
+    if (
+      controller.signal.aborted &&
+      !externalSignal?.aborted &&
+      err instanceof DOMException &&
+      err.name === 'AbortError'
+    ) {
+      throw new LLMError('Request timed out', 'timeout');
+    }
+
+    throw err;
   } finally {
     clearTimeout(timer);
   }

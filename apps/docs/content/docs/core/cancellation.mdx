@@ -20,7 +20,11 @@ controller.abort();
 
 ## How it composes with timeouts
 
-Each attempt gets its own internal timeout controller. If you also pass a `signal`, vern-llm combines both into a single signal via `AbortSignal.any([yourSignal, internalTimeoutSignal])` — either one firing cancels the in-flight request. The internal timer is always cleared afterward, whether the call succeeds, fails, or is aborted, so nothing is left running in the background.
+Each attempt gets its own internal timeout controller. If you also pass a `signal`, vern-llm combines both into a single signal via `AbortSignal.any([yourSignal, internalTimeoutSignal])` — either one firing cancels the in-flight request.
+
+If the internal timeout fires, vern-llm throws `LLMError('timeout')`. If the signal you provide fires, vern-llm throws `LLMError('aborted')`. This lets callers distinguish between requests that exceeded their time limit and requests that were intentionally cancelled.
+
+The internal timer is always cleared afterward, whether the call succeeds, fails, or is aborted, so nothing is left running in the background.
 
 ## Fail-fast on an already-aborted signal
 

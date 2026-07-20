@@ -3,7 +3,8 @@ title: Provider Fallback
 description: Falling back to a secondary provider when the primary is down
 ---
 
-vern-llm doesn't have built-in multi-provider fallback, but since every adapter produces the same `VernLLM` interface, wiring it yourself is a few lines:
+vern-llm does not have built-in multi-provider fallback, but since every adapter produces the same
+`VernLLM` interface, wiring it yourself is only a few lines:
 
 ```ts
 import OpenAI from 'openai';
@@ -25,18 +26,26 @@ async function resilientCall(params: Parameters<VernLLM['call']>[0]) {
   try {
     return await primary.call(params);
   } catch (err) {
-    if (isLLMError(err) && (err.type === 'circuit_open' || err.type === 'api')) {
+    if (
+      isLLMError(err) &&
+      (err.type === 'circuit_open' || (err.type === 'api' && err.status >= 500))
+    ) {
       return fallback.call(params);
     }
+
     throw err;
   }
 }
 ```
 
-Each `VernLLM` instance tracks its own circuit breaker independently, so `primary`'s breaker opening doesn't affect `fallback` at all — once `primary` recovers, calls naturally return to it since the breaker moves back to `half-open`, then `closed`, on its own.
+Each `VernLLM` instance tracks its own circuit breaker independently. If the primary provider's
+breaker opens, the fallback instance is unaffected.
+
+After the cooldown period, the primary breaker enters `half-open` and allows a trial request. If that
+request succeeds, the breaker returns to `closed` and traffic can continue using the primary again.
 
 <Callout type="warn">
-  Don't fall back on `validation` or `parse` errors — those mean the *response* was bad, not the
-  provider. Falling back would just get you a different provider's badly-shaped response for the
-  same broken prompt.
+  Do not fall back on `validation` or `parse` errors. These indicate that the response was invalid,
+  not that the provider is unavailable. Switching providers may produce the same invalid result for
+  the same prompt.
 </Callout>

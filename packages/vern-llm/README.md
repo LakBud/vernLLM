@@ -20,7 +20,7 @@
   <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
 </p>
 
-Retry + timeout + cache wrapper for OpenAI-compatible chat completion calls (OpenAI, Groq, Anthropic, Gemini, Bedrock, and more via adapters).
+Production-ready resilience for LLM calls; Retries, timeouts, caching, and circuit breaking for any OpenAI-compatible chat completion API (OpenAI, Groq, Anthropic, Gemini, Bedrock, and more via adapters).
 
 **Full documentation: [vern-llm.vercel.app](https://vern-llm.vercel.app)** — installation, structured output, caching, circuit breaker, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
 

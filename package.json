@@ -26,6 +26,7 @@
     "changeset:version": "changeset version",
     "changeset:publish": "changeset publish",
     "release": "pnpm --filter vern-llm run release",
+    "update-changelog": "node scripts/update-changelog.mts",
     "prepare": "husky"
   },
   "lint-staged": {

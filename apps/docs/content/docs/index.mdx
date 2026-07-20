@@ -5,7 +5,7 @@ description: A lightweight resilience layer for OpenAI-compatible chat completio
 
 ## Production-grade LLM calls, without the bloat
 
-**vern-llm** is the production layer for OpenAI-compatible LLMs. A lightweight wrapper that adds retries, timeouts, circuit breakers, caching, structured outputs, schema validation, usage tracking, and observability with sensible defaults and minimal dependencies.
+**vern-llm** is a resilience layer for LLM applications. A lightweight wrapper that adds retries, timeouts, circuit breakers, caching, structured outputs, schema validation, usage tracking, and observability with sensible defaults and minimal dependencies.
 
 ```ts
 import OpenAI from 'openai';
@@ -51,16 +51,16 @@ const summary = await llm.cachedLLMCall({
     Zod validation + provider-native JSON Schema mode
   </Card>
   <Card title="Circuit Breaker" href="/docs/core/circuit-breaker">
-    Stop hammering a provider that's already down
+    Stop hammering a provider that is already failing
   </Card>
 </Cards>
 
 ## Why vern-llm?
 
-- **Retries with backoff**: transient failures get retried automatically; parse/validation errors and non-retryable status codes fail fast instead
-- **Structured output**: pass a Zod schema, get a typed, validated result back
-- **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
-- **Caching**: wrap any call with `cachedCall` or `cachedLLMCall`, bring your own adapter (Redis, Upstash, whatever)
-- **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back
-- **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
-- **Zero bundled deps**: `zod` and provider SDKs are peer dependencies; this package only relies on their shapes structurally
+- **Retries with backoff**: transient failures get retried automatically. Parse errors, validation errors, and non retryable status codes fail fast instead
+- **Structured output**: pass a Zod schema and get a typed, validated result back
+- **Provider native JSON Schema mode**: constrain generation itself, not just validate after the fact
+- **Caching**: wrap any call with `cachedCall` or `cachedLLMCall`, and bring your own adapter such as Redis or Upstash
+- **Circuit breaker**: trips after repeated failures and recovers automatically once the provider is healthy again
+- **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP through `fromFetch`
+- **Zero bundled dependencies**: `zod` and provider SDKs are peer dependencies. The package only depends on compatible interfaces rather than specific provider implementations

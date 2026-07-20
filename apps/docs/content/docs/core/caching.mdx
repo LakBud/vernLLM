@@ -21,13 +21,40 @@ const result = await llm.cachedCall({
 });
 ```
 
-<Callout>
-  If `refundUsage` itself throws, that failure is logged and swallowed — the original error from
-  `fn` (or the cache write) is what propagates, so a broken refund path never masks the real
-  failure.
+<Callout type="warn">
+  `ttl` is in seconds, not milliseconds. `ttl: 3600` caches for one hour. This differs from most
+  other timing options in the library (`timeoutMs`, `baseDelayMs`), which are milliseconds, so it's
+  worth double-checking if you're copying a value across.
 </Callout>
 
-## `cachedLLMCall` — cached + retried in one call
+<Callout>
+  If `refundUsage` itself throws, that failure is logged and swallowed. The original error from `fn`
+  (or the cache write) is what propagates, so a broken refund path never masks the real failure.
+</Callout>
+
+## How the cache/reserve/refund flow works
+
+On a cache miss, `cachedCall` runs in this order:
+
+1. `reserveUsage()`, if provided.
+2. `fn()`, the actual LLM call.
+3. On success, write the result to the cache (a failed cache write is logged and swallowed; the result is still returned).
+4. On any failure in steps 1 or 2, call `refundUsage()`, then rethrow the original error.
+
+<Callout type="warn">
+  `refundUsage` runs on a failure from *either* `reserveUsage` or `fn`, since both are inside the
+  same try block. If `reserveUsage` itself throws (e.g. the user is already out of quota),
+  `refundUsage` still fires, refunding a reservation that was never actually made. Make sure your
+  `refundUsage` implementation is safe to call in that case (e.g. a no-op if there's nothing to
+  refund, rather than an unconditional decrement).
+</Callout>
+
+<Callout type="warn">
+  A cache hit is determined by `cached !== null`. If your cache adapter can legitimately store
+  `null` as a cached value, that entry will be treated as a miss and recomputed every time.
+</Callout>
+
+## `cachedLLMCall`: cached + retried in one call
 
 `cachedCall` is a thin cache wrapper; it doesn't apply retry/timeout/circuit-breaker behavior on its own. If `fn` is always going to be `() => llm.call(...)`, `cachedLLMCall` wires that up for you:
 
@@ -39,6 +66,16 @@ const result = await llm.cachedLLMCall({
   reserveUsage: () => quota.reserve(userId),
   refundUsage: () => quota.refund(userId),
 });
+```
+
+## Choosing a cache key
+
+There's no automatic key derivation from the call's contents. `cacheKey` is entirely up to you, which means it's also easy to get wrong: if you reuse a key across calls with a different `systemPrompt`, `schema`, or `model`, you'll get a cached result that doesn't match what the new call would have produced.
+
+A safer pattern is to fold the things that affect the output into the key itself:
+
+```ts
+const cacheKey = `cv:${cvId}:${model}:v2`; // bump the version suffix when the prompt/schema changes
 ```
 
 ## Custom cache adapter
@@ -55,3 +92,9 @@ class UpstashCacheAdapter implements CacheAdapter {
   }
 }
 ```
+
+<Callout>
+  The built-in `InMemoryCacheAdapter` treats `ttl` as seconds. Keep custom adapters consistent with
+  that convention (rather than milliseconds) so `ttl` means the same thing regardless of which
+  adapter is plugged in.
+</Callout>

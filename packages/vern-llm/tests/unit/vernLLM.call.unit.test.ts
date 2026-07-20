@@ -243,3 +243,29 @@ describe('LLMError', () => {
     expect(err).toBeInstanceOf(Error);
   });
 });
+
+describe('VernLLM.call — timeout handling', () => {
+  it('throws LLMError(timeout) when an internal timeout aborts the request', async () => {
+    const { client, create } = createMockClient([
+      (_params, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            reject(new DOMException('Aborted', 'AbortError'));
+          });
+        }),
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      timeoutMs: 10,
+      maxRetries: 0,
+    });
+
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+      type: 'timeout',
+    });
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});

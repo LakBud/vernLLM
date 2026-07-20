@@ -3,7 +3,8 @@ title: Structured Extraction with Caching
 description: Combining schema validation and cachedLLMCall for a realistic extraction pipeline
 ---
 
-A common pattern: extract structured data from unstructured text, validate it, and cache the result so re-processing the same input doesn't cost another API call.
+A common pattern: extract structured data from unstructured text, validate it, and cache the result so
+re-processing the same input does not cost another API call.
 
 ```ts
 import OpenAI from 'openai';
@@ -40,9 +41,13 @@ async function parseResume(resumeId: string, resumeText: string, userId: string)
 }
 ```
 
-If the resume was already parsed, this returns the cached, already-typed result with no API call and no quota reserved. On a schema mismatch, `cachedLLMCall` throws `LLMError('validation')` without writing anything to the cache — so a bad response never gets stuck as a stale cached value.
+If the resume was already parsed, this returns the cached validated result without making another API
+call or reserving additional quota.
+
+If schema validation fails, `cachedLLMCall` throws `LLMError('validation')` and does not write the
+response to the cache. This prevents invalid responses from becoming cached results.
 
 <Callout>
-  `reserveUsage`/`refundUsage` are optional — only pass them if you're metering usage per user. Omit
-  both if you don't need quota tracking.
+  `reserveUsage` and `refundUsage` are optional. Only pass them when you are tracking usage or
+  enforcing quotas per user. Omit both if you do not need quota tracking.
 </Callout>

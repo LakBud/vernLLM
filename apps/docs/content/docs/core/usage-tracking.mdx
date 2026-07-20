@@ -8,8 +8,51 @@ const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
   onUsage: (usage) => {
-    // { promptTokens, completionTokens, totalTokens, requestId, model }
     billing.record(usage);
+  },
+});
+```
+
+`onUsage` fires after every successful call, with the following shape:
+
+```ts
+interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requestId: string;
+  model: string;
+}
+```
+
+- **`requestId`** is whatever you passed to `call({ requestId: '...' })`, or an auto-generated UUID if you didn't. Useful for correlating a usage record back to the call that produced it, joining against your own logs, or deduplicating.
+- **`model`** reflects the model that actually served the request, including a per-call `model` override, not just the instance's default. Important if you bill different models at different rates.
+
+## When it does and doesn't fire
+
+<Callout type="warn">
+  `onUsage` only fires when the provider's response actually includes usage data. Not every adapter
+  surfaces this identically, check your provider's response shape if usage isn't showing up.
+</Callout>
+
+- **On success**, once per completed call, after retries have finished (not once per retry attempt).
+- **On failure**, `onUsage` never fires, even if some of the exhausted retry attempts consumed provider tokens before ultimately failing. There's no way to recover partial usage after all retries are exhausted; the provider response that would have carried it was never successfully returned.
+- **With caching**, a cache hit in `cachedCall`/`cachedLLMCall` skips the underlying `call()` entirely, so `onUsage` doesn't fire for cached results, only for the call that actually populated the cache.
+
+## Example: per-request cost estimation
+
+```ts
+const PRICE_PER_1K_TOKENS = { prompt: 0.005, completion: 0.015 };
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  onUsage: ({ promptTokens, completionTokens, requestId, model }) => {
+    const cost =
+      (promptTokens / 1000) * PRICE_PER_1K_TOKENS.prompt +
+      (completionTokens / 1000) * PRICE_PER_1K_TOKENS.completion;
+
+    logger.info(`[${requestId}] ${model} cost: $${cost.toFixed(4)}`);
   },
 });
 ```

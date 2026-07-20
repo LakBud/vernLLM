@@ -33,7 +33,17 @@ const result = await llm.call({
 
 <Callout type="warn">
   On a schema mismatch, `call` throws `LLMError('validation')` with `.issues` set to the validator's
-  error object, without burning a retry — validation failures are deterministic.
+  error object, without burning a retry. Validation failures are deterministic.
+</Callout>
+
+<Callout type="warn">
+  `schema` only runs if the call actually parses JSON, which happens when `jsonMode` is `true` (the
+  default) or `jsonSchema` is set. If you explicitly pass `jsonMode: false` alongside `schema`
+  without also setting `jsonSchema`, the schema is silently skipped: you get the raw string back
+  with no validation, cast as your schema's type with no runtime guarantee behind it. In practice
+  this only comes up if you set `jsonMode: false` on purpose while still passing `schema`, which
+  isn't a combination you'd reach for intentionally, but worth knowing if you're toggling `jsonMode`
+  dynamically per call.
 </Callout>
 
 ## Provider-native JSON Schema mode
@@ -54,9 +64,20 @@ const result = await llm.call({
       },
       required: ['name', 'skills'],
     },
+    // strict?: boolean, defaults to true
+    // description?: string, OpenAI-shaped providers only, see note below
   },
   schema: CandidateSchema, // optional client-side type/validation on top
 });
 ```
 
-`jsonSchema` implies JSON mode. The Anthropic adapter has no native structured-output equivalent, so it embeds the schema in the system prompt as an instruction instead of provider-enforcing it.
+- **`jsonSchema` implies (and overrides) JSON mode.** Even an explicit `jsonMode: false` is overridden if `jsonSchema` is also set; the request is still sent, and parsed, as JSON.
+- **`strict` defaults to `true`.** This is an OpenAI-specific flag; providers that don't recognize `response_format.json_schema.strict` just ignore it.
+- **`description` doesn't reach every provider.** OpenAI-shaped providers get it as part of the `json_schema` object. The Anthropic adapter only embeds `name` and `schema` into its system-prompt instruction; `description` is dropped for Anthropic specifically.
+
+<Callout>
+  The Anthropic adapter has no native structured-output equivalent, so it embeds the schema in the
+  system prompt as an instruction instead of provider-enforcing it. Combining `jsonSchema` with a
+  client-side `schema` is especially worth doing on Anthropic, since the provider-side constraint
+  there is a suggestion, not a guarantee, and the client-side `safeParse` is your actual safety net.
+</Callout>

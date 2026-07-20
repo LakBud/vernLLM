@@ -1,0 +1,85 @@
+---
+title: Configuration
+description: Every VernLLM constructor option and its default
+---
+
+Everything below is set once on the `VernLLM` instance and applies to every `call()` unless overridden per request. Nothing is required beyond `client` and `model` — every other option has a sensible default.
+
+```ts
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  maxRetries: 3,
+  timeoutMs: 10_000,
+  baseDelayMs: 500,
+  defaultMaxTokens: 1000,
+  nonRetryableStatus: [400, 401, 403],
+  circuitBreaker: true,
+  debug: false,
+});
+```
+
+## Required
+
+<Cards>
+  <Card title="client">
+    An `LLMClient` — an OpenAI SDK instance, or the result of wrapping another provider with an
+    adapter (`fromAnthropic`, `fromGemini`, `fromBedrock`, `fromFetch`, etc). See{' '}
+    <a href="/docs/adapters">Adapters</a>.
+  </Card>
+  <Card title="model">
+    The default model ID for calls that do not override it via `call({ model: '...' })`.
+  </Card>
+</Cards>
+
+## Retry & timeout
+
+| Option               | Default           | Notes                                                                                                                                      |
+| -------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxRetries`         | `1`               | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                   |
+| `timeoutMs`          | `25000`           | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window.                                           |
+| `baseDelayMs`        | `500`             | Base for exponential backoff between retries. Actual delay grows per attempt with jitter.                                                  |
+| `nonRetryableStatus` | `[400, 401, 403]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non transient. |
+
+<Callout type="warn">
+  `maxRetries` defaults to `1`, not `3`. See <a href="/docs/core/error-handling">Error Handling</a>
+  for exactly which failures get retried.
+</Callout>
+
+## Request defaults
+
+| Option             | Default            | Notes                                                                                                                                   |
+| ------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `defaultMaxTokens` | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                 |
+| `parseJson`        | `defaultParseJson` | Custom parser for non standard JSON responses. It should return `undefined` when parsing fails, which signals a parse error to VernLLM. |
+
+## Caching
+
+| Option  | Default                      | Notes                                                                                                                                                                                                                                                     |
+| ------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall` and `cachedLLMCall`, not plain `call()`. The default in memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi process deployments. See <a href="/docs/core/caching">Caching</a>. |
+
+## Observability
+
+| Option    | Default                       | Notes                                                                                                                                       |
+| --------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onUsage` | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response.                |
+| `logger`  | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>. |
+| `debug`   | `NODE_ENV !== 'production'`   | Controls `logger.debug` calls such as raw model output and retry attempts. `warn` and `error` always fire regardless of this flag.          |
+
+## Circuit breaker
+
+| Option           | Default  | Notes                                                                                                                                                        |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `circuitBreaker` | disabled | Pass `true` for default circuit breaker settings, or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. |
+
+## Per call defaults and overrides
+
+A handful of options are set per `call()` rather than on the instance. Two have their own defaults worth knowing:
+
+| Option        | Default | Notes                                                                                                                                  |
+| ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `temperature` | `0.2`   | Low by design. This library targets structured and deterministic extraction more than open ended generation. Override freely per call. |
+| `jsonMode`    | `true`  | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing.                             |
+
+The rest, including `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`, `signal`, and `requestId`, have no call level default beyond falling back to the instance level option or being undefined when omitted.

@@ -6,17 +6,53 @@ description: Install vern-llm and make your first call
 ## Install
 
 <Tabs items={['pnpm', 'npm', 'yarn']}>
-  <Tab value="pnpm">``` pnpm add vern-llm ```</Tab>
-  <Tab value="npm">``` npm install vern-llm ```</Tab>
-  <Tab value="yarn">``` yarn add vern-llm ```</Tab>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm
+```
+
+  </Tab>
 </Tabs>
 
-### Dont forget to install openAI too!
+### Don't forget to install OpenAI too
 
 <Tabs items={['pnpm', 'npm', 'yarn']}>
-  <Tab value="pnpm">``` pnpm add openai ```</Tab>
-  <Tab value="npm">``` npm install openai ```</Tab>
-  <Tab value="yarn">``` yarn add openai ```</Tab>
+  <Tab value="pnpm">
+
+```bash
+pnpm add openai
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install openai
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add openai
+```
+
+  </Tab>
 </Tabs>
 
 ## Basic usage
@@ -33,22 +69,22 @@ const llm = new VernLLM({
 });
 
 const parsed = await llm.call({
-  systemPrompt: 'Return JSON: { "skills": string[] }',
+  systemPrompt: 'Return JSON: { "skills": string[] }', // JSON mode enabled by default
   userContent: 'Extract skills from: ...',
 });
 ```
 
-<Callout title="jsonMode">`jsonMode: false` returns the raw string, no parsing.</Callout>
+<Callout title="JSON mode">`jsonMode: false` returns the raw string without JSON parsing.</Callout>
 
 ## Per-call overrides
 
 ```ts
-const llm = new VernLLM({ client: openai, model: 'gpt-4o-mini' }); // default model
+const llm = new VernLLM({ client: openai, model: 'gpt-4o-mini' });
 
 await llm.call({
   systemPrompt: '...',
   userContent: '...',
-  model: 'o3', // overrides the instance default for this call only
-  reasoningEffort: 'high', // passed through as `reasoning_effort` for models that support it
+  model: 'o3',
+  reasoningEffort: 'high', // passed through as `reasoning_effort` for supported models
 });
 ```

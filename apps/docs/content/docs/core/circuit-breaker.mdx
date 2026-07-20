@@ -13,4 +13,43 @@ const llm = new VernLLM({
 llm.getCircuitState(); // 'closed' | 'open' | 'half-open' | undefined
 ```
 
-Once `threshold` consecutive failures occur, further calls fail immediately with `LLMError('circuit_open')` until `cooldownMs` elapses, at which point one trial call is allowed through (half-open). A successful trial closes the circuit; a failed one reopens it.
+Once `threshold` consecutive failures occur, further calls fail immediately with `LLMError('circuit_open')` until `cooldownMs` elapses, at which point a trial call is allowed through (half-open). A successful trial closes the circuit; a failed one reopens it.
+
+## What counts as a failure
+
+<Callout type="warn">
+  The circuit breaker only tracks provider and transport-level health, not response correctness.
+  Success is recorded as soon as the provider returns usable content, before JSON parsing or schema
+  validation runs. A call that fails `schema.safeParse` still resets the failure counter to zero,
+  since as far as the breaker is concerned, the provider itself worked fine.
+</Callout>
+
+- **Counts as a failure**: timeouts, non-2xx responses, network errors, an empty response body. Anything that means the provider itself didn't come through.
+- **Does not count as a failure**: `validation` and `parse` type errors. Those happen after the breaker has already recorded success for that call.
+- **Counted per completed `call()`, not per HTTP attempt.** `recordFailure()` only fires once all of that call's own retries (`maxRetries`) are exhausted. With `maxRetries: 3` and `threshold: 5`, the breaker opens after 5 fully-retried calls fail, which is up to 20 raw attempts against the provider, not 5.
+
+## Half-open behavior
+
+When the cooldown elapses, the next call to check the breaker (via `assertClosed`) transitions the state from `open` to `half-open` and is allowed through as a trial.
+
+<Callout type="warn">
+  This transition has no locking around it. If several calls happen to check the breaker at roughly
+  the same moment right after cooldown elapses, more than one of them can pass through as trials,
+  not strictly one. If you need a hard guarantee of exactly one trial call under concurrent load,
+  that's not something the breaker enforces on its own.
+</Callout>
+
+- A **successful** trial call closes the circuit and resets the failure count to zero.
+- A **failed** trial call reopens the circuit immediately and restarts the cooldown clock from that moment, without needing to hit `threshold` again. One failed trial is enough to reopen.
+
+## Scope
+
+Each `VernLLM` instance owns its own circuit breaker; state is never shared across instances. If you're running multiple providers side by side (see the provider fallback guide), one instance's breaker opening has no effect on any other instance.
+
+## Checking state manually
+
+```ts
+llm.getCircuitState(); // 'closed' | 'open' | 'half-open' | undefined
+```
+
+Returns `undefined` if `circuitBreaker` wasn't configured on this instance at all, rather than defaulting to `'closed'`. Useful for distinguishing "the breaker is closed" from "there is no breaker."
