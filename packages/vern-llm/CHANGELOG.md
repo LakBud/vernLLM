@@ -1,5 +1,11 @@
 # vern-llm
 
+## 0.4.0
+
+### Minor Changes
+
+- 5e029b2: Add support for multi-turn conversation history via the `history` option in `CallParams`. Conversation history is now forwarded to all supported providers, including assistant messages, enabling native multi-turn interactions.
+
 ## 0.3.0
 
 ### Minor Changes
