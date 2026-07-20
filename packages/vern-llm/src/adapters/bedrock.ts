@@ -20,13 +20,27 @@ export interface BedrockConverseClient {
   converse(
     params: {
       modelId: string;
-      messages: Array<{ role: 'user'; content: Array<{ text: string }> }>;
+      messages: Array<{ role: 'user' | 'assistant'; content: Array<{ text: string }> }>;
       system?: Array<{ text: string }>;
       inferenceConfig?: { temperature?: number; maxTokens?: number };
+      toolConfig?: {
+        tools: Array<{
+          toolSpec: {
+            name: string;
+            description?: string;
+            inputSchema: { json: Record<string, unknown> };
+          };
+        }>;
+        toolChoice?: { tool: { name: string } };
+      };
     },
     options: { signal: AbortSignal },
   ): Promise<{
-    output?: { message?: { content?: Array<{ text?: string }> } };
+    output?: {
+      message?: {
+        content?: Array<{ text?: string; toolUse?: { name?: string; input?: unknown } }>;
+      };
+    };
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
   }>;
 }
@@ -39,11 +53,15 @@ export interface BedrockConverseClient {
  * regardless of which underlying model `modelId` points at, as long as
  * that model supports Converse (most current-generation ones do)
  *
- * Theres no uniform native JSON Schema enforcement across families here
- * (some support it via forced tool-use, which varies per model), so
- * `jsonSchema`/`jsonMode` are emulated via a system-prompt instruction, same
- * approach as the Anthropic adapter. `reasoning_effort` has no Converse
- * equivalent and is dropped
+ * `response_format: json_schema` is mapped to Converses `toolConfig`: a
+ * single tool is defined from the schema and `toolChoice` forces the model
+ * to call it, constraining output at generation time rather than merely
+ * instructing for it via prompt text. Native tool support varies by model
+ * family (most current-generation ones support it via Converse; check your
+ * specific `modelId` if a call fails with an unsupported-parameter error).
+ * `response_format: json_object` (no schema to build a tool from) and
+ * `reasoning_effort` (no Converse equivalent) fall back to a system-prompt
+ * instruction and are dropped respectively.
  */
 export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
   return {
@@ -51,13 +69,31 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
       completions: {
         async create(params, options) {
           const systemMessage = params.messages.find((m) => m.role === 'system');
-          const userMessages = params.messages.filter((m) => m.role === 'user');
+          // Keep both user and assistant turns, in order, so conversation
+          // history survives instead of collapsing to consecutive user turns.
+          const conversationMessages = params.messages.filter(
+            (m): m is typeof m & { role: 'user' | 'assistant' } =>
+              m.role === 'user' || m.role === 'assistant',
+          );
+
+          const toolName =
+            params.response_format?.type === 'json_schema'
+              ? params.response_format.json_schema.name
+              : undefined;
 
           let jsonInstruction: string | undefined;
-          if (params.response_format?.type === 'json_schema') {
-            const { name, schema } = params.response_format.json_schema;
-            jsonInstruction = `Respond with valid JSON only, no prose or markdown fences. The JSON must conform to this schema (name: "${name}"):\n${JSON.stringify(schema)}`;
+          let toolConfig:
+            | NonNullable<Parameters<BedrockConverseClient['converse']>[0]['toolConfig']>
+            | undefined;
+
+          if (params.response_format?.type === 'json_schema' && toolName) {
+            const { schema, description } = params.response_format.json_schema;
+            toolConfig = {
+              tools: [{ toolSpec: { name: toolName, description, inputSchema: { json: schema } } }],
+              toolChoice: { tool: { name: toolName } },
+            };
           } else if (params.response_format?.type === 'json_object') {
+            // No schema to build a tool from, fall back to a prompt instruction
             jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
           }
 
@@ -68,8 +104,8 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
           const response = await bedrockClient.converse(
             {
               modelId: params.model,
-              messages: userMessages.map((m) => ({
-                role: 'user' as const,
+              messages: conversationMessages.map((m) => ({
+                role: m.role,
                 content: [{ text: m.content }],
               })),
               system: systemParts.length ? systemParts.map((text) => ({ text })) : undefined,
@@ -77,11 +113,24 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
                 temperature: params.temperature,
                 maxTokens: params.max_tokens,
               },
+              ...(toolConfig ? { toolConfig } : {}),
             },
             options,
           );
 
-          const text = response.output?.message?.content?.map((c) => c.text ?? '').join('') ?? '';
+          let text: string;
+          if (toolName) {
+            // Forced tool-use: the schema-conforming payload arrives as the
+            // toolUse content block's already-parsed `input`, not as text.
+            // Re-serialize it to JSON so it flows through the same
+            // string-content contract every other adapter uses.
+            const toolUseBlock = response.output?.message?.content?.find(
+              (block) => block.toolUse?.name === toolName,
+            );
+            text = toolUseBlock?.toolUse ? JSON.stringify(toolUseBlock.toolUse.input) : '';
+          } else {
+            text = response.output?.message?.content?.map((c) => c.text ?? '').join('') ?? '';
+          }
 
           return {
             choices: [{ message: { content: text } }],

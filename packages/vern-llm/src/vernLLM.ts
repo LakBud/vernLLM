@@ -15,6 +15,7 @@ import {
   type VernLLMOptions,
   type CallParams,
   type CachedCallParams,
+  type ConversationTurn,
   type CacheAdapter,
   type LLMClient,
 } from './types.js';
@@ -232,6 +233,43 @@ export class VernLLM {
   }
 
   /**
+   * Anthropic and Gemini both require strict user/assistant alternation
+   * (and reject or silently mishandle two consecutive same-role turns), so
+   * this validates `history` up front rather than letting a malformed
+   * request surface as a confusing provider-side error. Thrown as a
+   * validation LLMError, which `shouldRetry` never retries, since retrying
+   * the same malformed input can't succeed
+   */
+  private validateHistory(history: ConversationTurn[]): void {
+    let previousRole: 'user' | 'assistant' | undefined;
+
+    for (const [index, turn] of history.entries()) {
+      if (turn.role !== 'user' && turn.role !== 'assistant') {
+        throw new LLMError(
+          `Invalid history[${index}].role "${turn.role}": must be "user" or "assistant"`,
+          'validation',
+        );
+      }
+
+      if (turn.role === previousRole) {
+        throw new LLMError(
+          `history must alternate user/assistant turns: consecutive "${turn.role}" turns at history[${index - 1}] and history[${index}]`,
+          'validation',
+        );
+      }
+
+      previousRole = turn.role;
+    }
+
+    if (previousRole === 'user') {
+      throw new LLMError(
+        'The last entry in history is a "user" turn, which would collide with the current userContent turn. history must end with an "assistant" turn (or be empty).',
+        'validation',
+      );
+    }
+  }
+
+  /**
    * Applies per call defaults and shapes the params into the request
    * object expected by the underlying client, including the resolved
    * response format. Also returns whether JSON parsing should be
@@ -241,6 +279,7 @@ export class VernLLM {
     const {
       systemPrompt,
       userContent,
+      history = [],
       temperature = 0.2,
       jsonMode = true,
       maxTokens = this.defaultMaxTokens,
@@ -252,6 +291,8 @@ export class VernLLM {
     const useJson = jsonMode || Boolean(jsonSchema);
     const responseFormat = this.buildResponseFormat(jsonSchema, useJson);
 
+    this.validateHistory(history);
+
     const request = {
       model,
       temperature,
@@ -260,6 +301,7 @@ export class VernLLM {
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       messages: [
         { role: 'system' as const, content: systemPrompt },
+        ...history.map((turn) => ({ role: turn.role, content: turn.content })),
         { role: 'user' as const, content: userContent },
       ],
     };

@@ -24,6 +24,7 @@ export {
   type LLMClient,
   type VernLLMOptions,
   type CallParams,
+  type ConversationTurn,
   type CachedCallParams,
   type ReserveUsage,
   type RefundUsage,

@@ -79,7 +79,7 @@ export interface LLMClient {
               };
           /** OpenAI reasoning-model param (o-series, gpt-5), ignored by providers that don't support it */
           reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
-          messages: Array<{ role: 'system' | 'user'; content: string }>;
+          messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
         },
         options: { signal: AbortSignal },
       ): Promise<{
@@ -163,9 +163,24 @@ export interface JsonSchemaSpec {
   description?: string;
 }
 
+/** A single prior turn in a multi-turn conversation, passed via `history`. */
+export interface ConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface CallParams<T = unknown> {
   systemPrompt: string;
   userContent: string;
+  /**
+   * Prior turns in the conversation, oldest first, NOT including the current
+   * `userContent` (that's appended automatically as the final user turn).
+   * Passed straight through to the provider so follow-up questions have
+   * access to earlier context. Must strictly alternate user/assistant and
+   * end on an assistant turn; validated up front and rejected with an
+   * LLMError('validation') before any request is made if malformed.
+   */
+  history?: ConversationTurn[];
   temperature?: number;
   jsonMode?: boolean;
   maxTokens?: number;
