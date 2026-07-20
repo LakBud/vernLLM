@@ -26,7 +26,7 @@ export function isLLMError(err: unknown): err is LLMError {
 export interface CacheAdapter<T = unknown> {
   get(key: string): Promise<T | null>;
   set(key: string, value: T, ttl: number): Promise<void>;
-  delete(key: string): Promise<void>;
+  delete?(key: string): Promise<void>;
 }
 
 /**

@@ -54,6 +54,16 @@ On a cache miss, `cachedCall` runs in this order:
   `null` as a cached value, that entry will be treated as a miss and recomputed every time.
 </Callout>
 
+## Deleting cached entries
+
+Cache invalidation is application-specific, so VernLLM does not automatically
+decide when a cached response becomes stale. When your application knows that a
+cached response should no longer be used, you can remove the entry manually:
+
+```ts
+await llm.deleteCache(`cv:${cvId}`);
+```
+
 ## `cachedLLMCall`: cached + retried in one call
 
 `cachedCall` is a thin cache wrapper; it doesn't apply retry/timeout/circuit-breaker behavior on its own. If `fn` is always going to be `() => llm.call(...)`, `cachedLLMCall` wires that up for you:
@@ -87,14 +97,19 @@ class UpstashCacheAdapter implements CacheAdapter {
   async get(key: string) {
     /* ... */
   }
+
   async set(key: string, value: unknown, ttl: number) {
+    /* ... */
+  }
+
+  async delete(key: string) {
     /* ... */
   }
 }
 ```
 
 <Callout>
-  The built-in `InMemoryCacheAdapter` treats `ttl` as seconds. Keep custom adapters consistent with
-  that convention (rather than milliseconds) so `ttl` means the same thing regardless of which
-  adapter is plugged in.
+  The built-in `InMemoryCacheAdapter` treats `ttl` as seconds and supports deletion. Custom adapters
+  should keep the same `ttl` convention (rather than milliseconds) so behavior stays consistent
+  across adapters. Implement `delete` if your storage backend supports explicit cache invalidation.
 </Callout>

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { CacheAdapter } from '../../src/types.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from '../helpers.js';
 
@@ -62,5 +63,20 @@ describe('cachedCall workflow integration', () => {
     expect(first).toEqual({ result: 'first' });
     expect(second).toEqual({ result: 'second' });
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not fail when cache adapter does not implement delete', async () => {
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => {}),
+    };
+
+    const llm = new VernLLM({
+      client: createMockClient([]).client,
+      model: 'm',
+      cache,
+    });
+
+    await expect(llm.deleteCache('k1')).resolves.toBeUndefined();
   });
 });

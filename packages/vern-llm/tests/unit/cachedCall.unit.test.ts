@@ -24,6 +24,15 @@ describe('InMemoryCacheAdapter', () => {
     expect(await cache.get('k')).toBeNull();
     vi.useRealTimers();
   });
+
+  it('deletes a cached value', async () => {
+    const cache = new InMemoryCacheAdapter();
+
+    await cache.set('k', { value: true }, 60);
+    await cache.delete('k');
+
+    expect(await cache.get('k')).toBeNull();
+  });
 });
 
 describe('VernLLM.cachedCall', () => {

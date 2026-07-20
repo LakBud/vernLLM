@@ -1,5 +1,5 @@
 ---
-'vern-llm': patch
+'vern-llm': minor
 ---
 
 Add delete cache functionality to vernLLM
