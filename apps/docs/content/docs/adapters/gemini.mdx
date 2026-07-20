@@ -43,7 +43,7 @@ const llm = new VernLLM({
 </Callout>
 
 <Callout>
-  Unlike Anthropic, `jsonSchema` maps to Gemini's native `responseSchema` + `responseMimeType:
-  'application/json'`, so it's actually provider-enforced here. `reasoning_effort` is dropped
-  (Gemini's thinking models use a token budget instead).
+  `jsonSchema` uses Gemini's native `responseSchema` + `responseMimeType: 'application/json'`,
+  providing provider-enforced structured output. `reasoning_effort` is dropped (Gemini's thinking
+  models use a token budget instead).
 </Callout>

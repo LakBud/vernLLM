@@ -1,23 +1,15 @@
 ---
 title: AWS Bedrock
-description: fromBedrock adapter
+description: Use the fromBedrock adapter with AWS Bedrock Converse API
 ---
 
-Bedrock's SDK v3 exposes `.send(command)`, not a direct method, so wrap it:
+Uses Bedrock's Converse API, which provides a unified request/response interface across supported model families (Anthropic, Titan, Llama, Mistral, and others).
 
-```ts
-import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
-import { VernLLM, fromBedrock } from 'vern-llm';
+JSON handling depends on the requested format:
 
-const client = new BedrockRuntimeClient({ region: 'us-east-1' });
+- `json_object` uses prompt-based JSON instructions.
+- `json_schema` uses Bedrock Converse tool use for native schema enforcement when supported by the selected model.
 
-const llm = new VernLLM({
-  client: fromBedrock({
-    converse: (params, options) =>
-      client.send(new ConverseCommand(params), { abortSignal: options.signal }),
-  }),
-  model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-});
-```
+`reasoning_effort` is not forwarded because Bedrock does not expose an equivalent option through Converse.
 
-Uses Bedrock's Converse API, which is unified across model families (Anthropic, Titan, Llama, Mistral, etc. all speak the same request/response shape), so this one adapter works regardless of which `model` you point it at. JSON mode is emulated via system prompt, same as Anthropic; `reasoning_effort` is dropped.
+Note: Tool-based structured output requires a Bedrock model that supports tool use. Models without tool support will return a provider error rather than falling back automatically.

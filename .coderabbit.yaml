@@ -1,0 +1,119 @@
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+
+  path_instructions:
+    - path: '**/*'
+      instructions: |
+        This repository is a monorepo.
+
+        General rules:
+        - Keep changes scoped to the relevant workspace.
+        - Avoid introducing dependencies between apps and packages unless required.
+        - Public API changes require tests and documentation updates.
+        - Prefer minimal, focused changes over broad refactors.
+        - Flag breaking changes clearly.
+        - Check that examples and documentation match the actual implementation.
+
+    - path: 'packages/vern-llm/**'
+      instructions: |
+        This is the core VernLLM package.
+
+        Review TypeScript changes with focus on:
+        - Public API stability and backwards compatibility.
+        - Correct TypeScript typing and avoiding unnecessary casts.
+        - Proper handling of generic types.
+        - Provider adapter consistency.
+        - Retry, timeout, caching, and circuit breaker behavior.
+        - Error classification and whether errors are retryable.
+        - Avoiding provider-specific behavior leaking into the core layer.
+
+        For new features:
+        - Require unit tests.
+        - Require integration tests when provider behavior changes.
+        - Ensure changes are documented when public APIs change.
+
+        Pay special attention to:
+        - CallParams changes.
+        - LLMClient interface changes.
+        - Adapter transformations.
+        - Response parsing and validation.
+        - Breaking changes to exported types.
+
+    - path: 'packages/vern-llm/src/adapters/**'
+      instructions: |
+        Review provider adapters carefully.
+
+        Check:
+        - Provider API conventions are followed.
+        - Message roles are mapped correctly.
+        - Provider-specific limitations are documented.
+        - Native provider features are preferred over prompt-based workarounds.
+        - Responses are normalized consistently into VernLLM behavior.
+
+        Flag:
+        - Silent fallbacks that hide provider incompatibilities.
+        - Incorrect assumptions about model capabilities.
+        - Missing tests for provider-specific behavior.
+
+    - path: 'packages/vern-llm/tests/**'
+      instructions: |
+        Review tests for:
+        - Meaningful assertions instead of implementation-only checks.
+        - Coverage of success and failure cases.
+        - Correct mocking of provider behavior.
+        - Regression coverage for bug fixes.
+
+    - path: 'apps/docs/**'
+      instructions: |
+        This is the VernLLM documentation site using Fumadocs.
+
+        Review documentation changes with focus on:
+        - Valid MDX syntax.
+        - Fumadocs compatibility.
+        - Clear structure and navigation.
+        - Accurate API examples.
+        - Examples matching the current package API.
+
+        Documentation should:
+        - Explain user workflows in Guides.
+        - Keep detailed signatures/types in API Reference.
+        - Avoid documenting internal implementation details unless necessary.
+
+        Flag:
+        - Incorrect imports.
+        - Outdated API usage.
+        - Examples that would not compile.
+        - Missing documentation for new public features.
+
+    - path: 'apps/docs/content/**'
+      instructions: |
+        Review content organization:
+        - Guides should explain how to use features.
+        - API reference should describe exported APIs.
+        - Adapter documentation should only cover provider-specific behavior.
+        - Avoid duplicate documentation across sections.
+
+    - path: '**/*'
+      instructions: |
+        Formatting is handled by oxfmt. Do not suggest manual formatting changes unless they affect correctness.
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: local
+
+tools:
+  oxlint:
+    enabled: true
+  oxfmt:
+    enabled: true
+  eslint:
+    enabled: false
+  prettier:
+    enabled: false

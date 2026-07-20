@@ -1,6 +1,6 @@
 ---
 title: Anthropic
-description: fromAnthropic adapter
+description: Use the fromAnthropic adapter with the Anthropic API
 ---
 
 ```ts
@@ -14,7 +14,8 @@ const llm = new VernLLM({
 ```
 
 <Callout type="warn">
-  No native `response_format` or `reasoning_effort` equivalent — JSON mode/schema are emulated via a
-  system-prompt instruction (schema text embedded, not provider-enforced); `reasoning_effort` is
-  dropped.
+  Anthropic does not support OpenAI's `response_format` or `reasoning_effort` parameters directly.
+  JSON schema responses are mapped to Anthropic's native tool-use mechanism for provider-enforced
+  structured output. Plain JSON mode (`json_object`) uses prompt-based JSON instructions.
+  `reasoning_effort` is dropped.
 </Callout>
