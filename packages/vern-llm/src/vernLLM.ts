@@ -426,6 +426,21 @@ export class VernLLM {
   }
 
   /**
+   * Removes a cached response by key when the configured cache adapter
+   * supports deletion.
+   *
+   * Cache invalidation remains the responsibility of the caller because
+   * only the application knows when cached data is stale.
+   */
+  async deleteCache(key: string): Promise<void> {
+    if (!this.cache.delete) {
+      return;
+    }
+
+    await this.cache.delete(key);
+  }
+
+  /**
    * Thin cache wrapper around caller supplied logic. `params.fn` is expected
    * to be a call that itself invokes `this.call(...)` (see `cachedLLMCall`
    * below for a convenience wrapper that wires this up automatically),

@@ -104,8 +104,11 @@ describe('VernLLM.cachedCall', () => {
       set: vi.fn(async () => {
         throw new Error('cache unavailable');
       }),
+      delete: vi.fn(async () => {}),
     };
+
     const fn = vi.fn(async () => 'result');
+
     const llm = new VernLLM({
       client: createMockClient([]).client,
       model: 'm',
@@ -120,5 +123,87 @@ describe('VernLLM.cachedCall', () => {
     const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
 
     await expect(llm.cachedCall({ cacheKey: 'k', ttl: 60, fn })).resolves.toBe('result');
+  });
+});
+
+describe('VernLLM.deleteCache', () => {
+  it('deletes a cache entry through the configured adapter', async () => {
+    const deletedKeys: string[] = [];
+
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => {}),
+      delete: vi.fn(async (key: string) => {
+        deletedKeys.push(key);
+      }),
+    };
+
+    const llm = new VernLLM({
+      client: createMockClient([]).client,
+      model: 'm',
+      cache,
+    });
+
+    await llm.deleteCache('k1');
+
+    expect(deletedKeys).toEqual(['k1']);
+  });
+
+  it('deletes a cache entry from the in-memory adapter', async () => {
+    const cache = new InMemoryCacheAdapter();
+
+    await cache.set('k1', { value: true }, 60);
+
+    const llm = new VernLLM({
+      client: createMockClient([]).client,
+      model: 'm',
+      cache,
+    });
+
+    await llm.deleteCache('k1');
+
+    expect(await cache.get('k1')).toBeNull();
+  });
+
+  it('recomputes after deleting cached value', async () => {
+    const cache = new InMemoryCacheAdapter();
+
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce({ result: 'first' })
+      .mockResolvedValueOnce({ result: 'second' });
+
+    const llm = new VernLLM({
+      client: createMockClient([]).client,
+      model: 'm',
+      cache,
+    });
+
+    const first = await llm.cachedCall({
+      cacheKey: 'abc',
+      ttl: 100,
+      fn,
+    });
+
+    await llm.deleteCache('abc');
+
+    const second = await llm.cachedCall({
+      cacheKey: 'abc',
+      ttl: 100,
+      fn,
+    });
+
+    expect(first).toEqual({ result: 'first' });
+    expect(second).toEqual({ result: 'second' });
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('deletes an existing key', async () => {
+    const cache = new InMemoryCacheAdapter();
+
+    await cache.set('k', { a: 1 }, 60);
+    await cache.delete('k');
+
+    expect(await cache.get('k')).toBeNull();
   });
 });

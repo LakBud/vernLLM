@@ -26,6 +26,7 @@ export function isLLMError(err: unknown): err is LLMError {
 export interface CacheAdapter<T = unknown> {
   get(key: string): Promise<T | null>;
   set(key: string, value: T, ttl: number): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 /**
@@ -37,16 +38,26 @@ export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
 
   async get(key: string): Promise<T | null> {
     const entry = this.store.get(key);
+
     if (!entry) return null;
+
     if (Date.now() > entry.expiresAt) {
       this.store.delete(key);
       return null;
     }
+
     return entry.value;
   }
 
   async set(key: string, value: T, ttl: number): Promise<void> {
-    this.store.set(key, { value, expiresAt: Date.now() + ttl * 1000 });
+    this.store.set(key, {
+      value,
+      expiresAt: Date.now() + ttl * 1000,
+    });
+  }
+
+  async delete(key: string): Promise<void> {
+    this.store.delete(key);
   }
 }
 
