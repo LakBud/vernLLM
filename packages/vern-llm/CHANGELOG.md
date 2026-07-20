@@ -1,5 +1,15 @@
 # vern-llm
 
+## 0.5.0
+
+### Minor Changes
+
+- 037e8ee: Add delete cache functionality to vernLLM
+
+### Patch Changes
+
+- e18b37e: add keywords to package
+
 ## 0.4.0
 
 ### Minor Changes
