@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { CacheAdapter } from '../../src/types.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from '../helpers.js';
+
+import type { CacheAdapter } from '../../src/types.js';
 
 describe('cachedCall workflow integration', () => {
   it('does not call underlying function after cache hit', async () => {
