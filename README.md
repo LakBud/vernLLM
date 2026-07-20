@@ -5,7 +5,7 @@
 <h1 align="center">VernLLM</h1>
 
 <p align="center">
-  <a href="https://vern-llm.vercel.app">Documentation</a> ·
+  <a href="https://vernllm.vercel.app">Documentation</a> ·
   <a href="./packages/vern-llm">Package</a>
 </p>
 

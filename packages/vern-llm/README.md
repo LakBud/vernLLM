@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/LakBud/vernLLM">GitHub</a> ·
-  <a href="https://vern-llm.vercel.app">Documentation</a> ·
+  <a href="https://vernllm.vercel.app">Documentation</a> ·
   <a href="https://www.npmjs.com/package/vern-llm">npm</a>
 </p>
 
@@ -22,7 +22,7 @@
 
 Production-ready resilience for LLM calls; Retries, timeouts, caching, and circuit breaking for any OpenAI-compatible chat completion API (OpenAI, Groq, Anthropic, Gemini, Bedrock, and more via adapters).
 
-**Full documentation: [vern-llm.vercel.app](https://vern-llm.vercel.app)** — installation, structured output, caching, circuit breaker, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
+**Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** — installation, structured output, caching, circuit breaker, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
 
 ## Install
 
@@ -60,7 +60,7 @@ const result = await llm.call({
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
 - **Zero bundled deps**: `zod` and provider SDKs are peer dependencies; this package only relies on their shapes structurally
 
-See the [docs](https://vern-llm.vercel.app) for adapter setup, caching, the circuit breaker, and structured output in depth.
+See the [docs](https://vernllm.vercel.app) for adapter setup, caching, the circuit breaker, and structured output in depth.
 
 ## Development
 

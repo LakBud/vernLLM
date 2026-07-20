@@ -5,13 +5,13 @@
 <h1 align="center">vern-llm-docs</h1>
 
 <p align="center">
-  <a href="https://vern-llm.vercel.app"><img src="https://img.shields.io/website?url=https%3A%2F%2Fvern-llm.vercel.app&label=docs%20site" alt="docs site status" /></a>
-  <a href="https://vern-llm.vercel.app"><img src="https://img.shields.io/badge/deployed%20on-Vercel-000000?logo=vercel&logoColor=white" alt="Deployed on Vercel" /></a>
+  <a href="https://vernllm.vercel.app"><img src="https://img.shields.io/website?url=https%3A%2F%2Fvernllm.vercel.app&label=docs%20site" alt="docs site status" /></a>
+  <a href="https://vernllm.vercel.app"><img src="https://img.shields.io/badge/deployed%20on-Vercel-000000?logo=vercel&logoColor=white" alt="Deployed on Vercel" /></a>
   <img src="https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white" alt="Next.js" />
   <img src="https://img.shields.io/badge/Fumadocs-16-6366F1" alt="Fumadocs" />
 </p>
 
-<p align="center">The documentation site for <a href="../../packages/vern-llm"><code>vern-llm</code></a>, built with <a href="https://nextjs.org">Next.js</a> and <a href="https://fumadocs.dev">Fumadocs</a> (scaffolded with Create Fumadocs). Deployed on <a href="https://vercel.com">Vercel</a> at <a href="https://vern-llm.vercel.app">vern-llm.vercel.app</a>.</p>
+<p align="center">The documentation site for <a href="../../packages/vern-llm"><code>vern-llm</code></a>, built with <a href="https://nextjs.org">Next.js</a> and <a href="https://fumadocs.dev">Fumadocs</a> (scaffolded with Create Fumadocs). Deployed on <a href="https://vercel.com">Vercel</a> at <a href="https://vernllm.vercel.app">vernllm.vercel.app</a>.</p>
 
 ## Development
 
