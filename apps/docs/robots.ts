@@ -1,6 +1,6 @@
 import type { MetadataRoute } from 'next';
 
-const baseUrl = 'https://vernllm.dev';
+import { baseUrl } from '@/lib/utils';
 
 export default function robots(): MetadataRoute.Robots {
   return {

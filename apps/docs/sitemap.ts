@@ -1,8 +1,7 @@
 import type { MetadataRoute } from 'next';
 
 import { source } from '@/lib/source';
-
-const baseUrl = 'https://vernllm.vercel.app';
+import { baseUrl } from '@/lib/utils';
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const staticRoutes: MetadataRoute.Sitemap = [
