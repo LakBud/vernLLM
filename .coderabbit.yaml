@@ -2,7 +2,9 @@ language: en-US
 
 reviews:
   profile: chill
-  request_changes_workflow: true
+  request_changes_workflow: false
+  auto_review:
+    enabled: false
   high_level_summary: true
 
   path_instructions:
@@ -107,13 +109,3 @@ chat:
 knowledge_base:
   learnings:
     scope: local
-
-tools:
-  oxlint:
-    enabled: true
-  oxfmt:
-    enabled: true
-  eslint:
-    enabled: false
-  prettier:
-    enabled: false
