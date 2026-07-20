@@ -73,12 +73,6 @@ export default function HomePage() {
             <div className="rounded-lg border border-fd-border bg-fd-card overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-fd-border">
                 <span className="font-mono text-xs text-fd-muted-foreground">example.ts</span>
-                <button
-                  type="button"
-                  className="font-mono text-xs text-fd-muted-foreground hover:text-fd-foreground transition-colors"
-                >
-                  Copy
-                </button>
               </div>
               <pre className="p-5 overflow-x-auto text-sm leading-relaxed">
                 <code className="font-mono text-fd-card-foreground whitespace-pre">
