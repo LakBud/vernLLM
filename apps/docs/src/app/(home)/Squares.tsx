@@ -81,19 +81,21 @@ export default function Squares({ squareSize = 48, tripChance = 0.0001 }: Square
           const x = i * squareSize;
           const y = j * squareSize;
 
+          if (!cell) continue;
+
           if (cell.state === 'idle' && Math.random() < tripChance) {
             cell.state = 'active';
             cell.intensity = 1;
             cell.breakerState = pickBreakerState();
           } else if (cell.state === 'active') {
-            cell.intensity -= 0.008; // slower decay — a held blip, not a flash
+            cell.intensity -= 0.008;
+
             if (cell.intensity <= 0) {
               cell.state = 'idle';
               cell.intensity = 0;
             }
           }
 
-          // Always-visible faint grid line
           ctx.strokeStyle = COLORS.border;
           ctx.lineWidth = 1;
           ctx.strokeRect(x, y, squareSize, squareSize);
