@@ -45,13 +45,7 @@ const features = [
   },
 ];
 
-const providers = [
-  'OpenAI-compatible APIs',
-  'Anthropic',
-  'Gemini',
-  'AWS Bedrock',
-  'Custom APIs via fromFetch',
-];
+const providers = ['OpenAI-compatible APIs', 'Anthropic', 'Gemini', 'AWS Bedrock', 'Custom APIs'];
 
 const codeExample = `import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
@@ -136,7 +130,7 @@ export default function HomePage() {
             <span className="text-fd-muted-foreground">$</span> npm install vern-llm
           </code>
           <span className="font-mono text-xs text-fd-muted-foreground hidden sm:inline">
-            works with your existing OpenAI client
+            built around the clients you already use
           </span>
         </div>
       </section>
@@ -204,14 +198,12 @@ export default function HomePage() {
       {/* ---------- PROVIDER STRIP ---------- */}
       <section className="px-6 lg:px-16 pb-20">
         <div className="max-w-6xl mx-auto flex flex-col items-center gap-4">
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-fd-muted-foreground">
-            Works with
-          </span>
+          <span className="text-[60px] font-semibold ">Works with</span>
           <div className="flex flex-wrap justify-center gap-2">
             {providers.map((p) => (
               <span
                 key={p}
-                className="rounded-md border border-fd-border px-3 py-1.5 text-xs text-fd-muted-foreground"
+                className="rounded-md border text-[20px] border-fd-border px-3 py-1.5 text-xs text-fd-primary"
               >
                 {p}
               </span>
@@ -225,7 +217,7 @@ export default function HomePage() {
         <div className="max-w-2xl mx-auto flex flex-col gap-4">
           <h2 className="text-fd-foreground text-2xl font-bold">Why vern-llm?</h2>
           <p className="text-fd-muted-foreground leading-relaxed">
-            Every project calling an LLM API ends up writing the same defensive code — retry logic,
+            Every project calling an LLM API ends up writing the same defensive code; retry logic,
             timeouts, a circuit breaker, a cache layer, usually copied between projects and slightly
             wrong each time.
           </p>
@@ -241,8 +233,8 @@ export default function HomePage() {
       {/* FOOTER CTA */}
       <section className="border-t border-fd-border">
         <div className="px-6 lg:px-16 py-16 max-w-6xl mx-auto w-full flex flex-col items-center text-center gap-6">
-          <h2 className="text-fd-foreground text-2xl sm:text-3xl font-bold max-w-lg">
-            Stop writing retry logic from scratch.
+          <h2 className="text-fd-foreground text-xl sm:text-3xl font-bold max-w-xl">
+            Stop reinventing the resilience layer.
           </h2>
 
           <div className="lg:col-span-4 flex flex-col items-start lg:items-end gap-6 lg:text-right">
