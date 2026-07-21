@@ -35,6 +35,9 @@ importers:
       '@fumadocs/base-ui':
         specifier: ^16.11.5
         version: 16.11.5(@types/mdx@2.0.14)(@types/react@19.2.17)(fumadocs-core@16.11.5(@mdx-js/mdx@3.1.1(supports-color@10.2.2))(@types/estree-jsx@1.0.5)(@types/hast@3.0.5)(@types/mdast@4.0.4)(@types/react@19.2.17)(lucide-react@1.25.0(react@19.2.7))(next@16.2.10(@babel/core@7.29.7(supports-color@10.2.2))(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@10.2.2)(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7(supports-color@10.2.2))(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(tailwindcss@4.3.3)
+      '@vercel/analytics':
+        specifier: ^2.0.1
+        version: 2.0.1(next@16.2.10(@babel/core@7.29.7(supports-color@10.2.2))(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2311,6 +2314,35 @@ packages:
     resolution: {integrity: sha512-/9crJgPptVsGCL6X+JPDQyaJwkalSZ/52WuF8DiRUxJgcmpNdzYRfZ+gqMEP8W3CTVfuMWPqqvIgfwJ97f9Etw==}
     peerDependencies:
       valibot: ^1.0.0
+
+  '@vercel/analytics@2.0.1':
+    resolution: {integrity: sha512-MTQG6V9qQrt1tsDeF+2Uoo5aPjqbVPys1xvnIftXSJYG2SrwXRHnqEvVoYID7BTruDz4lCd2Z7rM1BdkUehk2g==}
+    peerDependencies:
+      '@remix-run/react': ^2
+      '@sveltejs/kit': ^1 || ^2
+      next: '>= 13'
+      nuxt: '>= 3'
+      react: ^18 || ^19 || ^19.0.0-rc
+      svelte: '>= 4'
+      vue: ^3
+      vue-router: ^4
+    peerDependenciesMeta:
+      '@remix-run/react':
+        optional: true
+      '@sveltejs/kit':
+        optional: true
+      next:
+        optional: true
+      nuxt:
+        optional: true
+      react:
+        optional: true
+      svelte:
+        optional: true
+      vue:
+        optional: true
+      vue-router:
+        optional: true
 
   '@vitest/coverage-v8@4.1.10':
     resolution: {integrity: sha512-IM49HmthevbgAO4anp1hwtoT9wYe59w0LR00gr+eagHE+ZJ5lK4sLPeO0ubgoJcwLk6dehU3R24N+FbEEKDc8g==}
@@ -7369,6 +7401,11 @@ snapshots:
   '@valibot/to-json-schema@1.0.0(valibot@1.0.0(typescript@5.9.3))':
     dependencies:
       valibot: 1.0.0(typescript@5.9.3)
+
+  '@vercel/analytics@2.0.1(next@16.2.10(@babel/core@7.29.7(supports-color@10.2.2))(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)':
+    optionalDependencies:
+      next: 16.2.10(@babel/core@7.29.7(supports-color@10.2.2))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      react: 19.2.7
 
   '@vitest/coverage-v8@4.1.10(vitest@4.1.10)':
     dependencies:
