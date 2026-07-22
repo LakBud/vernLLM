@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/logo.png" alt="vernLLM logo" width="96" />
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/banner.png" alt="VernLLM banner" />
 </p>
-
-<h1 align="center">VernLLM</h1>
 
 <p align="center">
   <a href="https://vernllm.vercel.app">Documentation</a> ·
