@@ -79,7 +79,10 @@ const parsed = await llm.call({
 `systemPrompt` is optional, omit it and no system message is sent at all:
 
 ```ts
-const answer = await llm.call({ userContent: 'What is the capital of France?' });
+const answer = await llm.call({
+  userContent: 'What is the capital of France?',
+  jsonMode: false,
+});
 ```
 
 ## Per-call overrides

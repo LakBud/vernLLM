@@ -5,15 +5,15 @@ import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
 describe('InMemoryCacheAdapter', () => {
-  it('returns null for a missing key', async () => {
+  it('returns a miss for a missing key', async () => {
     const cache = new InMemoryCacheAdapter();
-    expect(await cache.get('missing')).toBeNull();
+    expect(await cache.get('missing')).toEqual({ hit: false, value: null });
   });
 
   it('round-trips a value within its TTL', async () => {
     const cache = new InMemoryCacheAdapter<{ a: number }>();
     await cache.set('k', { a: 1 }, 60);
-    expect(await cache.get('k')).toEqual({ a: 1 });
+    expect(await cache.get('k')).toEqual({ hit: true, value: { a: 1 } });
   });
 
   it('expires a value after its TTL', async () => {
@@ -21,7 +21,7 @@ describe('InMemoryCacheAdapter', () => {
     const cache = new InMemoryCacheAdapter<number>();
     await cache.set('k', 42, 1); // 1 second TTL
     vi.advanceTimersByTime(1001);
-    expect(await cache.get('k')).toBeNull();
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
     vi.useRealTimers();
   });
 
@@ -31,7 +31,7 @@ describe('InMemoryCacheAdapter', () => {
     await cache.set('k', { value: true }, 60);
     await cache.delete('k');
 
-    expect(await cache.get('k')).toBeNull();
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
   });
 });
 
@@ -45,7 +45,7 @@ describe('VernLLM.cachedCall', () => {
     const result = await llm.cachedCall({ cacheKey: 'k1', ttl: 60, fn });
     expect(result).toEqual({ ok: true });
     expect(fn).toHaveBeenCalledTimes(1);
-    expect(await cache.get('k1')).toEqual({ ok: true });
+    expect(await cache.get('k1')).toEqual({ hit: true, value: { ok: true } });
   });
 
   it('returns the cached value on a hit without calling fn again', async () => {
@@ -109,7 +109,7 @@ describe('VernLLM.cachedCall', () => {
 
   it('still returns the result if the cache write fails', async () => {
     const brokenCache: CacheAdapter = {
-      get: vi.fn(async () => null),
+      get: vi.fn(async () => ({ hit: false, value: null })),
       set: vi.fn(async () => {
         throw new Error('cache unavailable');
       }),
@@ -140,7 +140,7 @@ describe('VernLLM.deleteCache', () => {
     const deletedKeys: string[] = [];
 
     const cache: CacheAdapter = {
-      get: vi.fn(async () => null),
+      get: vi.fn(async () => ({ hit: false, value: null })),
       set: vi.fn(async () => {}),
       delete: vi.fn(async (key: string) => {
         deletedKeys.push(key);
@@ -171,7 +171,7 @@ describe('VernLLM.deleteCache', () => {
 
     await llm.deleteCache('k1');
 
-    expect(await cache.get('k1')).toBeNull();
+    expect(await cache.get('k1')).toEqual({ hit: false, value: null });
   });
 
   it('recomputes after deleting cached value', async () => {
@@ -213,6 +213,6 @@ describe('VernLLM.deleteCache', () => {
     await cache.set('k', { a: 1 }, 60);
     await cache.delete('k');
 
-    expect(await cache.get('k')).toBeNull();
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
   });
 });

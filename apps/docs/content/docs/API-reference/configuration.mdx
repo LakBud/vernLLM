@@ -3,7 +3,7 @@ title: Configuration
 description: Every VernLLM constructor option and its default
 ---
 
-Everything below is set once on the `VernLLM` instance and applies to every `call()` unless overridden per request. Nothing is required beyond `client` and `model`, every other option has a sensible default.
+Everything below is set once on the `VernLLM` instance and applies to every `call()` unless overridden per request. Nothing is required beyond `client` and `model`; every other option has a sensible default.
 
 ```ts
 const llm = new VernLLM({
@@ -79,8 +79,8 @@ A handful of options are set per `call()` rather than on the instance. Three hav
 
 | Option         | Default | Notes                                                                                                                                  |
 | -------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `temperature`  | `0.2`   | Low by design. This library targets structured and deterministic extraction more than open ended generation. Override freely per call. |
+| `temperature`  | `0.2`   | Low by design. This library targets structured and deterministic extraction more than open-ended generation. Override freely per call. |
 | `jsonMode`     | `true`  | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing.                             |
 | `systemPrompt` | none    | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                              |
 
-The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`, `signal`, and `requestId`, have no call level default beyond falling back to the instance level option or being undefined when omitted. `userContent` remains required.
+The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`, `signal`, and `requestId`, have no call-level default beyond falling back to the instance-level option or being undefined when omitted. `userContent` remains required.

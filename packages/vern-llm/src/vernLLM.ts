@@ -449,8 +449,8 @@ export class VernLLM {
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
     const cached = await this.cache.get(params.cacheKey);
 
-    if (cached !== null) {
-      return cached as T;
+    if (cached.hit) {
+      return cached.value as T;
     }
 
     try {

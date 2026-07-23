@@ -77,3 +77,26 @@ export function at<T>(arr: readonly T[], index: number): T {
   }
   return value;
 }
+
+export function makeFakeAnthropicClient(
+  responseText: string,
+  usage = { input_tokens: 10, output_tokens: 5 },
+) {
+  const create = vi.fn(
+    async (
+      _params: {
+        model: string;
+        max_tokens: number;
+        temperature?: number;
+        system?: string;
+        messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+      },
+      _options: { signal: AbortSignal },
+    ) => ({
+      content: [{ type: 'text', text: responseText }],
+      usage,
+    }),
+  );
+
+  return { client: { messages: { create } }, create };
+}
