@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import { LLMClient } from '../src/types';
+import { type LLMClient } from '../src/types/index.js';
 
 type CreateResult = Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
 type CreateParams = Parameters<LLMClient['chat']['completions']['create']>[0];

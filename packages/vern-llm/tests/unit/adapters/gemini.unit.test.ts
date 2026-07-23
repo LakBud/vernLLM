@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromGemini, GeminiClient } from '../../../src/adapters/index.js';
+import { fromGemini, type GeminiClient } from '../../../src/adapters/index.js';
 
 function makeFakeGeminiClient(text: string) {
   const generateContent = vi.fn<GeminiClient['generateContent']>(async (_params, _options) => ({

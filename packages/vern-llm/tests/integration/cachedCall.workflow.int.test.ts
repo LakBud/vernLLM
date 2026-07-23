@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { CacheAdapter } from '../../src/types/index.js';
+import { type CacheAdapter } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from '../helpers.js';
 
