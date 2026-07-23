@@ -4,9 +4,9 @@ description: Wrap calls with cachedCall or cachedLLMCall
 ---
 
 <Callout type="warn">
-  **Breaking change (vX major):** `CacheAdapter.get()` now returns
+  **Breaking change (v1.0.0 major):** `CacheAdapter.get()` now returns
   `Promise<{ hit: boolean; value: T | null }>` instead of `Promise<T | null>`. If you have a
-  custom adapter (Redis, Upstash, etc.), you'll need to update it — see
+  custom adapter (Redis, Upstash, etc.), you'll need to update it. See
   [Custom cache adapter](#custom-cache-adapter) below. The built-in `InMemoryCacheAdapter`
   is already updated; no action needed if you use it.
 </Callout>
