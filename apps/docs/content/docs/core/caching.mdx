@@ -3,6 +3,14 @@ title: Caching & Usage Metering
 description: Wrap calls with cachedCall or cachedLLMCall
 ---
 
+<Callout type="warn">
+  **Breaking change (vX major):** `CacheAdapter.get()` now returns
+  `Promise<{ hit: boolean; value: T | null }>` instead of `Promise<T | null>`. If you have a
+  custom adapter (Redis, Upstash, etc.), you'll need to update it — see
+  [Custom cache adapter](#custom-cache-adapter) below. The built-in `InMemoryCacheAdapter`
+  is already updated; no action needed if you use it.
+</Callout>
+
 ```ts
 import { InMemoryCacheAdapter } from 'vern-llm';
 
@@ -50,8 +58,10 @@ On a cache miss, `cachedCall` runs in this order:
 </Callout>
 
 <Callout type="warn">
-  Cache adapters should use the `hit` field to indicate whether a value exists. Returning
-  `{ hit: true, value: null }` is valid, while `{ hit: false, value: null }` indicates a cache miss.
+  Cache adapters use the `hit` field to indicate whether a value exists, not the presence of
+  `value` alone. This lets a legitimately cached `null` be served from cache instead of being
+  treated as a miss. `{ hit: true, value: null }` means "we have a cached result, and it's
+  `null`." `{ hit: false, value: null }` means "nothing is cached for this key."
 </Callout>
 
 ## Deleting cached entries
@@ -95,18 +105,32 @@ import type { CacheAdapter } from 'vern-llm';
 
 class UpstashCacheAdapter implements CacheAdapter {
   async get(key: string) {
-    /* ... */
+    const raw = await redis.get(key);
+
+    if (raw === null) {
+      return { hit: false, value: null };
+    }
+
+    return { hit: true, value: JSON.parse(raw) };
   }
 
   async set(key: string, value: unknown, ttl: number) {
-    /* ... */
+    await redis.set(key, JSON.stringify(value), { ex: ttl });
   }
 
   async delete(key: string) {
-    /* ... */
+    await redis.del(key);
   }
 }
 ```
+
+<Callout>
+  The key thing to get right when migrating: `hit` should be `true` whenever the key existed in your
+  underlying store, even if the stored value itself is `null`. `hit` should only be `false` when
+  nothing was found for that key. Most stores already give you this signal for free — e.g. Redis's
+  `GET` returning `null` for "key doesn't exist" is different from a `null` you stored yourself, so
+  make sure your adapter checks existence rather than just checking `value !== null`.
+</Callout>
 
 <Callout>
   The built-in `InMemoryCacheAdapter` treats `ttl` as seconds, supports deletion, and accepts an
