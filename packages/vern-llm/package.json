@@ -1,6 +1,6 @@
 {
   "name": "vern-llm",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "description": "Retry, timeout, caching, and circuit breaker for OpenAI-compatible LLM calls, Groq, Anthropic, Gemini, Bedrock, and more.",
   "keywords": [
     "llm",
