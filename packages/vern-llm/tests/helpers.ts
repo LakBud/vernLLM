@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import type { LLMClient } from '../src/types.js';
+import { type LLMClient } from '../src/types/index.js';
 
 type CreateResult = Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
 type CreateParams = Parameters<LLMClient['chat']['completions']['create']>[0];
@@ -76,4 +76,27 @@ export function at<T>(arr: readonly T[], index: number): T {
     throw new Error(`Expected element at index ${index}, but array has length ${arr.length}`);
   }
   return value;
+}
+
+export function makeFakeAnthropicClient(
+  responseText: string,
+  usage = { input_tokens: 10, output_tokens: 5 },
+) {
+  const create = vi.fn(
+    async (
+      _params: {
+        model: string;
+        max_tokens: number;
+        temperature?: number;
+        system?: string;
+        messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+      },
+      _options: { signal: AbortSignal },
+    ) => ({
+      content: [{ type: 'text', text: responseText }],
+      usage,
+    }),
+  );
+
+  return { client: { messages: { create } }, create };
 }

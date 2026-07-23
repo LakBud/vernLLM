@@ -12,4 +12,6 @@ JSON handling depends on the requested format:
 
 `reasoning_effort` is not forwarded because Bedrock does not expose an equivalent option through Converse.
 
+`BedrockConverseClient` is the public client type exported by `vern-llm` and accepted by `fromBedrock`. It allows TypeScript users to type their Bedrock Converse client without depending on adapter internals.
+
 Note: Tool-based structured output requires a Bedrock model that supports tool use. Models without tool support will return a provider error rather than falling back automatically.

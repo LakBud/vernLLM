@@ -1,4 +1,4 @@
-import type { LLMClient } from '../types.js';
+import type { LLMClient } from '../types/index.js';
 
 /**
  * Passthrough adapter for any SDK/client whose `chat.completions.create`

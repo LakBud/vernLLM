@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { fromAnthropic } from '../../../src/adapters/anthropic.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { at, makeFakeAnthropicClient } from '../../helpers.js';
 
 describe('Anthropic adapter integration', () => {
   it('maps Anthropic messages API into LLMClient format', async () => {
@@ -139,5 +141,26 @@ describe('Anthropic adapter integration', () => {
       }),
       expect.anything(),
     );
+  });
+
+  it('omits provider system field when VernLLM is called without systemPrompt', async () => {
+    const { client, create } = makeFakeAnthropicClient('ok');
+
+    const llm = new VernLLM({
+      client: fromAnthropic(client),
+      model: 'claude-test',
+    });
+
+    const result = await llm.call({
+      userContent: 'hello',
+      jsonMode: false,
+    });
+
+    expect(result).toBe('ok');
+
+    const sentParams = at(create.mock.calls, 0)[0];
+
+    expect(sentParams.messages).toEqual([{ role: 'user', content: 'hello' }]);
+    expect(sentParams.system).toBeUndefined();
   });
 });

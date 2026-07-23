@@ -1,11 +1,15 @@
 export { VernLLM } from './vernLLM.js';
 export { CircuitBreaker, type CircuitBreakerOptions } from './circuitBreaker.js';
 export { ConsoleLogger, type Logger } from './logger.js';
-export { fromAnthropic } from './adapters/anthropic.js';
-export { fromGemini } from './adapters/gemini.js';
-export { fromBedrock } from './adapters/bedrock.js';
-export { fromFetch, type FetchAdapterConfig } from './adapters/fetch.js';
 export {
+  fromAnthropic,
+  type AnthropicClient,
+  fromGemini,
+  type GeminiClient,
+  fromBedrock,
+  type BedrockConverseClient,
+  fromFetch,
+  type FetchAdapterConfig,
   fromOpenAICompatible,
   fromGroq,
   fromMistral,
@@ -14,7 +18,7 @@ export {
   fromTogether,
   fromFireworks,
   fromOllama,
-} from './adapters/openaiCompatible.js';
+} from './adapters/index.js';
 export {
   LLMError,
   isLLMError,
@@ -32,4 +36,4 @@ export {
   type TokenUsage,
   type SchemaLike,
   type JsonSchemaSpec,
-} from './types.js';
+} from './types/index.js';

@@ -1,4 +1,4 @@
-import { LLMError } from '../types.js';
+import { LLMError } from '../types/errors.js';
 
 export function defaultParseJson(content: string): unknown {
   try {

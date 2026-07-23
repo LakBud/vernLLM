@@ -1,30 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromAnthropic } from '../../../src/adapters/anthropic.js';
-import { at } from '../../helpers.js';
-
-function makeFakeAnthropicClient(
-  responseText: string,
-  usage = { input_tokens: 10, output_tokens: 5 },
-) {
-  const create = vi.fn(
-    async (
-      _params: {
-        model: string;
-        max_tokens: number;
-        temperature?: number;
-        system?: string;
-        messages: Array<{ role: 'user' | 'assistant'; content: string }>;
-      },
-      _options: { signal: AbortSignal },
-    ) => ({
-      content: [{ type: 'text', text: responseText }],
-      usage,
-    }),
-  );
-
-  return { client: { messages: { create } }, create };
-}
+import { fromAnthropic } from '../../../src/adapters/index.js';
+import { at, makeFakeAnthropicClient } from '../../helpers.js';
 
 /** A fake client that responds with a forced tool_use block instead of text. */
 function makeFakeAnthropicToolClient(

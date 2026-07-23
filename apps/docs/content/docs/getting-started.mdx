@@ -29,7 +29,7 @@ yarn add vern-llm
   </Tab>
 </Tabs>
 
-### Don't forget to install OpenAI too
+### Don't forget to install OpenAI too!
 
 <Tabs items={['pnpm', 'npm', 'yarn']}>
   <Tab value="pnpm">
@@ -75,6 +75,15 @@ const parsed = await llm.call({
 ```
 
 <Callout title="JSON mode">`jsonMode: false` returns the raw string without JSON parsing.</Callout>
+
+`systemPrompt` is optional, omit it and no system message is sent at all:
+
+```ts
+const answer = await llm.call({
+  userContent: 'What is the capital of France?',
+  jsonMode: false,
+});
+```
 
 ## Per-call overrides
 

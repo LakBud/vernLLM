@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { type CacheAdapter } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from '../helpers.js';
-
-import type { CacheAdapter } from '../../src/types.js';
 
 describe('cachedCall workflow integration', () => {
   it('does not call underlying function after cache hit', async () => {
@@ -68,7 +67,7 @@ describe('cachedCall workflow integration', () => {
 
   it('does not fail when cache adapter does not implement delete', async () => {
     const cache: CacheAdapter = {
-      get: vi.fn(async () => null),
+      get: vi.fn(async () => ({ hit: false, value: null })),
       set: vi.fn(async () => {}),
     };
 

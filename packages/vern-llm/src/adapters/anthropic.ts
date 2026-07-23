@@ -1,4 +1,4 @@
-import type { LLMClient } from '../types.js';
+import type { LLMClient } from '../types/index.js';
 
 /** Minimal structural type for the Anthropic SDKs `messages.create` */
 export interface AnthropicClient {

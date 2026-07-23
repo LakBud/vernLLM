@@ -1,4 +1,4 @@
-import type { LLMClient } from '../types.js';
+import type { LLMClient } from '../types/index.js';
 
 /**
  * Minimal structural type matching AWS Bedrocks Converse API. This is
