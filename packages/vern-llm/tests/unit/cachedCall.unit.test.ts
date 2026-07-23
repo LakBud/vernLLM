@@ -19,8 +19,10 @@ describe('InMemoryCacheAdapter', () => {
   it('expires a value after its TTL', async () => {
     vi.useFakeTimers();
     const cache = new InMemoryCacheAdapter<number>();
+
     await cache.set('k', 42, 1); // 1 second TTL
     vi.advanceTimersByTime(1001);
+
     expect(await cache.get('k')).toEqual({ hit: false, value: null });
     vi.useRealTimers();
   });
@@ -32,6 +34,18 @@ describe('InMemoryCacheAdapter', () => {
     await cache.delete('k');
 
     expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('evicts the oldest entries when max size is exceeded', async () => {
+    const cache = new InMemoryCacheAdapter<number>(2);
+
+    await cache.set('a', 1, 60);
+    await cache.set('b', 2, 60);
+    await cache.set('c', 3, 60);
+
+    expect(await cache.get('a')).toEqual({ hit: false, value: null });
+    expect(await cache.get('b')).toEqual({ hit: true, value: 2 });
+    expect(await cache.get('c')).toEqual({ hit: true, value: 3 });
   });
 });
 

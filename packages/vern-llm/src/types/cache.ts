@@ -10,7 +10,8 @@ export interface CacheAdapter<T = unknown> {
  */
 export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
   private store = new Map<string, { value: T; expiresAt: number }>();
-  private readonly cleanupBatchSize = 100;
+
+  constructor(private readonly maxSize = 1000) {}
 
   async get(key: string): Promise<{ hit: boolean; value: T | null }> {
     const entry = this.store.get(key);
@@ -32,6 +33,8 @@ export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
       value,
       expiresAt: Date.now() + ttl * 1000,
     });
+
+    this.enforceSizeLimit();
   }
 
   async delete(key: string): Promise<void> {
@@ -40,16 +43,21 @@ export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
 
   private cleanupExpiredEntries(): void {
     const now = Date.now();
-    let checked = 0;
 
     for (const [key, entry] of this.store) {
-      if (checked >= this.cleanupBatchSize) break;
-
       if (now >= entry.expiresAt) {
         this.store.delete(key);
       }
+    }
+  }
 
-      checked++;
+  private enforceSizeLimit(): void {
+    while (this.store.size > this.maxSize) {
+      const oldestKey = this.store.keys().next().value;
+
+      if (oldestKey === undefined) break;
+
+      this.store.delete(oldestKey);
     }
   }
 }

@@ -5,6 +5,8 @@ description: fromGemini adapter
 
 `fromGemini` wraps the raw Gemini client — not a pre-configured model instance — since the adapter passes `model` through on every call rather than baking it in up front.
 
+`GeminiClient` is the public client type exported by `vern-llm` and accepted by `fromGemini`. It allows TypeScript users to type their Gemini client without depending on adapter internals.
+
 ## New SDK (`@google/genai`)
 
 The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it:

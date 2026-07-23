@@ -50,8 +50,8 @@ On a cache miss, `cachedCall` runs in this order:
 </Callout>
 
 <Callout type="warn">
-  A cache hit is determined by `cached !== null`. If your cache adapter can legitimately store
-  `null` as a cached value, that entry will be treated as a miss and recomputed every time.
+  Cache adapters should use the `hit` field to indicate whether a value exists. Returning
+  `{ hit: true, value: null }` is valid, while `{ hit: false, value: null }` indicates a cache miss.
 </Callout>
 
 ## Deleting cached entries
@@ -109,7 +109,9 @@ class UpstashCacheAdapter implements CacheAdapter {
 ```
 
 <Callout>
-  The built-in `InMemoryCacheAdapter` treats `ttl` as seconds and supports deletion. Custom adapters
-  should keep the same `ttl` convention (rather than milliseconds) so behavior stays consistent
-  across adapters. Implement `delete` if your storage backend supports explicit cache invalidation.
+  The built-in `InMemoryCacheAdapter` treats `ttl` as seconds, supports deletion, and accepts an
+  optional `maxSize` limit to prevent unbounded memory growth. When the limit is reached, the oldest
+  entries are removed first. Custom adapters should keep the same `ttl` convention (rather than
+  milliseconds) so behavior stays consistent across adapters. Implement `delete` if your storage
+  backend supports explicit cache invalidation.
 </Callout>
