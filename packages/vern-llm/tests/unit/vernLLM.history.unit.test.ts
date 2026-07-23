@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { LLMError } from '../../src/types.js';
+import { LLMError } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { at, createMockClient, textResponse } from '../helpers.js';
 

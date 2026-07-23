@@ -7,18 +7,18 @@ import {
   withTimeout,
   getBackoffDelay,
   waitForRetry,
-} from './internal/vernLLM.utilts.js';
+} from './internal/vernLLM.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import {
-  LLMError,
   InMemoryCacheAdapter,
-  type VernLLMOptions,
-  type CallParams,
-  type CachedCallParams,
-  type ConversationTurn,
+  LLMError,
   type CacheAdapter,
+  type CachedCallParams,
+  type CallParams,
+  type ConversationTurn,
   type LLMClient,
-} from './types.js';
+  type VernLLMOptions,
+} from './types/index.js';
 
 /**
  * A resilient wrapper around an LLM chat completions client, this is VernLLM!
@@ -300,7 +300,7 @@ export class VernLLM {
       ...(responseFormat ? { response_format: responseFormat } : {}),
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       messages: [
-        { role: 'system' as const, content: systemPrompt },
+        ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
         ...history.map((turn) => ({ role: turn.role, content: turn.content })),
         { role: 'user' as const, content: userContent },
       ],

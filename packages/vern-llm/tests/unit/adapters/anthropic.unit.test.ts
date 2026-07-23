@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromAnthropic } from '../../../src/adapters/anthropic.js';
+import { fromAnthropic } from '../../../src/adapters/index.js';
 import { at } from '../../helpers.js';
 
 function makeFakeAnthropicClient(

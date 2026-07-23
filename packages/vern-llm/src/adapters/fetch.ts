@@ -1,4 +1,4 @@
-import type { LLMClient } from '../types.js';
+import type { LLMClient } from '../types/index.js';
 
 /** The chat-completion-shaped request VernLLM builds internally */
 type ChatRequest = Parameters<LLMClient['chat']['completions']['create']>[0];

@@ -1,15 +1,15 @@
 import { describe, it, expect } from 'vitest';
 
 import {
-  fromOpenAICompatible,
+  fromCerebras,
+  fromDeepSeek,
+  fromFireworks,
   fromGroq,
   fromMistral,
-  fromDeepSeek,
-  fromCerebras,
-  fromTogether,
-  fromFireworks,
   fromOllama,
-} from '../../../src/adapters/openaiCompatible.js';
+  fromOpenAICompatible,
+  fromTogether,
+} from '../../../src/adapters/index.js';
 
 describe('fromOpenAICompatible and its aliases', () => {
   it('returns the same client instance untouched (pure passthrough)', () => {

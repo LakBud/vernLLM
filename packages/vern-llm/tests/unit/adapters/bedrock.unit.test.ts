@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { type BedrockConverseClient, fromBedrock } from '../../../src/adapters/bedrock.js';
+import { BedrockConverseClient, fromBedrock } from '../../../src/adapters/index.js';
 import { at } from '../../helpers.js';
 
 function makeFakeBedrockClient(text: string) {

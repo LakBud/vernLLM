@@ -1,4 +1,4 @@
-import { LLMError } from './types.js';
+import { LLMError } from './types/errors.js';
 
 export interface CircuitBreakerOptions {
   /** Consecutive failures before the circuit opens, default 5 */

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { LLMError } from '../../src/types.js';
+import { LLMError } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse, textResponse, FakeApiError, at } from '../helpers.js';
 
@@ -23,6 +23,17 @@ describe('VernLLM.call: happy paths', () => {
       jsonMode: false,
     });
     expect(result).toBe('not json at all {{{');
+  });
+
+  it('omits the system message entirely when systemPrompt is not provided', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await llm.call({ userContent: 'usr' });
+
+    expect(calls[0]).toMatchObject({
+      messages: [{ role: 'user', content: 'usr' }],
+    });
   });
 
   it('sends model, temperature, max_tokens, and messages correctly', async () => {
