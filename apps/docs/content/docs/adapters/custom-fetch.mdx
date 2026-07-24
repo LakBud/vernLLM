@@ -1,9 +1,9 @@
 ---
-title: Custom Providers — fromFetch
+title: Custom Providers - fromFetch
 description: Raw HTTP escape hatch for providers with no SDK
 ---
 
-For a provider with no SDK, or where pulling one in isn't worth it, `fromFetch` is a raw HTTP escape hatch — supply the URL, headers, and two small mapping functions, and retries/timeouts/circuit-breaker/JSON handling all still apply.
+For a provider with no SDK, or where pulling one in isn't worth it, `fromFetch` is a raw HTTP escape hatch; supply the URL, headers, and two small mapping functions, and retries/timeouts/circuit-breaker/JSON handling all still apply.
 
 ```ts
 import { VernLLM, fromFetch } from 'vern-llm';

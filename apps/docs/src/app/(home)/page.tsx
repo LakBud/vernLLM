@@ -28,8 +28,8 @@ export default function HomePage() {
               by default.
             </h1>
             <p className="mt-6 text-fd-muted-foreground text-base lg:text-lg max-w-xl">
-              A lightweight resilience layer for OpenAI-compatible chat completions: retries,
-              timeouts, caching, and circuit breaking, dependency-light and typed from the start.
+              A lightweight resilience layer for LLM chat completions: retries, timeouts, caching,
+              and circuit breaking, dependency-light and typed from the start.
             </p>
           </div>
 
@@ -122,21 +122,27 @@ export default function HomePage() {
 
       {/* ---------- PROVIDER STRIP ---------- */}
       <section className="px-6 lg:px-16 pb-20">
-        <div className="max-w-6xl mx-auto flex flex-col items-center gap-4">
-          <span className="text-[60px] font-semibold ">Works with</span>
-          <div className="flex flex-wrap justify-center gap-2">
-            {providers.map((p) => (
-              <span
-                key={p}
-                className="rounded-md border text-[20px] border-fd-border px-3 py-1.5 text-xs text-fd-primary"
-              >
-                {p}
-              </span>
-            ))}
+        <div className="max-w-6xl mx-auto flex flex-col items-center gap-6">
+          <span className="text-[60px] font-semibold">Works with</span>
+
+          <div className="flex flex-wrap items-center justify-center gap-8">
+            {providers.map(({ name, Icon }) =>
+              Icon ? (
+                <div key={name} className="group relative flex items-center justify-center">
+                  <Icon
+                    aria-label={name}
+                    className="h-12 w-12 text-fd-muted-foreground opacity-60 transition-colors hover:text-white hover:opacity-100 md:h-14 md:w-14"
+                  />
+
+                  <span className="pointer-events-none absolute -bottom-10 z-10 whitespace-nowrap rounded-lg border bg-fd-background px-3 py-1.5 text-sm shadow-sm opacity-0 translate-y-1 transition-all group-hover:translate-y-0 group-hover:opacity-100">
+                    {name}
+                  </span>
+                </div>
+              ) : null,
+            )}
           </div>
         </div>
       </section>
-
       {/* ---------- WHY VERN-LLM  ---------- */}
       <section className="px-6 lg:px-16 pb-24">
         <div className="max-w-2xl mx-auto flex flex-col gap-4">
