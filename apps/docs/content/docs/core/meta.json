@@ -1,5 +1,6 @@
 {
   "title": "Core Features",
+  "icon": "Layers",
   "pages": [
     "structured-output",
     "caching",

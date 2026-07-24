@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/pnpm-monorepo-F69220?logo=pnpm&logoColor=white" alt="pnpm monorepo" />
 </p>
 
-<p align="center">A lightweight resilience layer for OpenAI-compatible chat completion calls — retries, timeouts, circuit breaking, caching, structured output, and usage tracking, with one interface across providers.</p>
+<p align="center">A lightweight resilience layer for LLM chat completions; retries, timeouts, circuit breaking, caching, structured output, and usage tracking, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
 
 ```ts
 import OpenAI from 'openai';

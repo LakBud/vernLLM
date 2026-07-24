@@ -1,4 +1,5 @@
 {
   "title": "API Reference",
+  "icon": "FileCode",
   "pages": ["configuration", "notes", "development"]
 }
