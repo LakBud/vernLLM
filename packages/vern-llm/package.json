@@ -1,6 +1,6 @@
 {
   "name": "vern-llm",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Production-ready resilience for LLM calls: retries, timeouts, caching, and circuit breaking behind one typed interface, with adapters for OpenAI-compatible APIs (OpenAI, Groq, and more), Anthropic, Gemini, and Bedrock.",
   "keywords": [
     "llm",
