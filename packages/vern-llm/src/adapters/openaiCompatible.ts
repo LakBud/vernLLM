@@ -101,9 +101,6 @@ export const fromSambaNova = fromOpenAICompatible;
 /** Baseten's model hosting exposes an OpenAI-compatible endpoint */
 export const fromBaseten = fromOpenAICompatible;
 
-/** Alibaba Cloud's DashScope (Qwen) API is OpenAI-compatible */
-export const fromDashScope = fromOpenAICompatible;
-
 /** Featherless AI's API is OpenAI-compatible */
 export const fromFeatherless = fromOpenAICompatible;
 
@@ -112,12 +109,6 @@ export const fromFriendli = fromOpenAICompatible;
 
 /** SiliconFlow's API is OpenAI-compatible */
 export const fromSiliconFlow = fromOpenAICompatible;
-
-/**
- * A self-hosted LiteLLM proxy speaks the OpenAI wire format itself, even
- * though it may fan requests out to 100+ providers behind the scenes.
- */
-export const fromLiteLLMProxy = fromOpenAICompatible;
 
 /** Parasail's inference API is OpenAI-compatible */
 export const fromParasail = fromOpenAICompatible;

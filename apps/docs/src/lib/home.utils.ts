@@ -34,6 +34,7 @@ import {
   Parasail,
   Perplexity,
   SambaNova,
+  SiliconCloud,
   Snowflake,
   Stepfun,
   Together,
@@ -73,11 +74,9 @@ export const providers = [
   { name: 'Nebius AI Studio', Icon: Nebius, href: '/docs/adapters/openai-compatible' },
   { name: 'SambaNova Cloud', Icon: SambaNova, href: '/docs/adapters/openai-compatible' },
   { name: 'Baseten', Icon: Baseten, href: '/docs/adapters/openai-compatible' },
-  { name: 'DashScope (Qwen)', Icon: Globe, href: '/docs/adapters/openai-compatible' },
   { name: 'Featherless AI', Icon: Featherless, href: '/docs/adapters/openai-compatible' },
   { name: 'Friendli AI', Icon: Friendli, href: '/docs/adapters/openai-compatible' },
-  { name: 'SiliconFlow', Icon: Globe, href: '/docs/adapters/openai-compatible' },
-  { name: 'LiteLLM Proxy', Icon: Globe, href: '/docs/adapters/openai-compatible' },
+  { name: 'SiliconFlow', Icon: SiliconCloud, href: '/docs/adapters/openai-compatible' },
   { name: 'Parasail', Icon: Parasail, href: '/docs/adapters/openai-compatible' },
   { name: 'StepFun', Icon: Stepfun, href: '/docs/adapters/openai-compatible' },
   { name: 'MiniMax', Icon: Minimax, href: '/docs/adapters/openai-compatible' },
@@ -91,7 +90,7 @@ export const providers = [
   { name: 'AtlasCloud', Icon: AtlasCloud, href: '/docs/adapters/openai-compatible' },
   { name: '01.AI (Yi)', Icon: Yi, href: '/docs/adapters/openai-compatible' },
   { name: 'AWS Bedrock', Icon: Bedrock, href: '/docs/adapters/bedrock' },
-  { name: 'Custom HTTPS API', Icon: Globe, href: '/docs/adapters/openai-compatible' },
+  { name: 'Custom HTTPS API', Icon: Globe, href: '/docs/adapters/custom-fetch' },
 ];
 
 export const features = [
@@ -138,7 +137,17 @@ export const features = [
 ];
 
 export const codeExample = `import OpenAI from 'openai';
+import { z } from 'zod';
 import { VernLLM } from 'vern-llm';
+
+const resumeId = 'candidate-123';
+const resumeText = 'Software engineer with 5 years of experience';
+
+const HiringSummarySchema = z.object({
+  strengths: z.array(z.string()),
+  concerns: z.array(z.string()),
+  recommendation: z.string(),
+});
 
 export const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
