@@ -2,13 +2,22 @@ import { describe, it, expect } from 'vitest';
 
 import {
   fromCerebras,
+  fromDeepInfra,
   fromDeepSeek,
   fromFireworks,
   fromGroq,
+  fromHyperbolic,
+  fromLMStudio,
   fromMistral,
+  fromMoonshot,
+  fromNovita,
   fromOllama,
   fromOpenAICompatible,
+  fromOpenRouter,
+  fromPerplexity,
   fromTogether,
+  fromVLLM,
+  fromZhipu,
 } from '../../../src/adapters/index.js';
 
 describe('fromOpenAICompatible and its aliases', () => {
@@ -25,6 +34,15 @@ describe('fromOpenAICompatible and its aliases', () => {
     ['fromTogether', fromTogether],
     ['fromFireworks', fromFireworks],
     ['fromOllama', fromOllama],
+    ['fromOpenRouter', fromOpenRouter],
+    ['fromPerplexity', fromPerplexity],
+    ['fromDeepInfra', fromDeepInfra],
+    ['fromNovita', fromNovita],
+    ['fromHyperbolic', fromHyperbolic],
+    ['fromMoonshot', fromMoonshot],
+    ['fromZhipu', fromZhipu],
+    ['fromLMStudio', fromLMStudio],
+    ['fromVLLM', fromVLLM],
   ])('%s is an alias for fromOpenAICompatible', (_name, fn) => {
     expect(fn).toBe(fromOpenAICompatible);
   });
