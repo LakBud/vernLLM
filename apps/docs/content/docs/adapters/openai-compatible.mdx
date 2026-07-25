@@ -6,7 +6,8 @@ description: Zero-transform passthrough for wire-compatible providers
 Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, Ollama (via its `/v1/chat/completions` endpoint), OpenRouter, Perplexity, DeepInfra, Novita, Hyperbolic, Moonshot (Kimi), Zhipu (GLM), LM Studio, and vLLM all speak the same wire format as OpenAI. These are thin named wrappers around the same passthrough — pick whichever name matches your provider for readability.
 
 ```ts
-import { VernLLM, fromGroq, fromMistral, fromTogether, fromOpenRouter } from 'vern-llm';
+import Groq from 'groq-sdk';
+import { VernLLM, fromGroq } from 'vern-llm';
 
 const llm = new VernLLM({
   client: fromGroq(new Groq({ apiKey: process.env.GROQ_API_KEY })),
