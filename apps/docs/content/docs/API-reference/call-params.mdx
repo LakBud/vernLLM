@@ -1,0 +1,113 @@
+---
+title: Call Params
+description: Every field accepted by call(), cachedLLMCall(), and their defaults
+---
+
+`call()` takes a single `CallParams<T>` object. `userContent` is the only required field; everything
+else has a default or is simply optional.
+
+```ts
+const result = await llm.call({
+  systemPrompt: 'You are a helpful assistant.',
+  userContent: 'Summarize this text.',
+  temperature: 0.7,
+  maxTokens: 500,
+});
+```
+
+<Callout>
+  `cachedLLMCall`'s `call` field accepts this exact same shape. `cachedCall`'s `fn` is a plain
+  function, so it's up to you to pass these through to `llm.call()` yourself.
+</Callout>
+
+## Content
+
+<Cards>
+  <Card title="userContent">
+    <b>Required.</b> `string`. The current user message. Always sent as the final user turn, after
+    `history` if provided.
+  </Card>
+  <Card title="systemPrompt">
+    `string`, optional. Sent as the system message. Omit it and the provider's own default system
+    behavior applies.
+  </Card>
+  <Card title="history">
+    `ConversationTurn[]`, optional. Prior turns, oldest first, not including `userContent`. Must
+    strictly alternate `user`/`assistant` and end on an `assistant` turn, or `call()` throws
+    `LLMError('validation')` before any request is made. See{' '}
+    <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a>.
+  </Card>
+</Cards>
+
+## Model & generation
+
+| Field             | Type                                       | Default                                    | Notes                                                                                                                                                                                                                                 |
+| ----------------- | ------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`           | `string`                                   | The instance's `model` option              | Overrides the model for this call only. See <a href="/docs/guides/per-call-overrides">Per-call overrides</a>.                                                                                                                         |
+| `temperature`     | `number`                                   | `0.2`                                      | Not the provider's own default &mdash; VernLLM always sends a `temperature`, defaulting to `0.2` if you don't set one.                                                                                                                |
+| `maxTokens`       | `number`                                   | The instance's `defaultMaxTokens` (`1000`) | Caps the length of the response.                                                                                                                                                                                                      |
+| `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Not sent                                   | OpenAI-style reasoning effort for reasoning models (o-series, gpt-5, etc). Omitted from the request entirely if unset, so the provider's own default applies. Passed through as-is; providers/models that don't support it ignore it. |
+
+## JSON & validation
+
+<Cards>
+  <Card title="jsonMode">
+    `boolean`, default `true`. When `true`, the response is parsed as JSON. Set to `false` to get the
+    raw string content back untouched. Forced back to `true` if `jsonSchema` is set, even if you pass
+    `jsonMode: false` explicitly.
+  </Card>
+  <Card title="jsonSchema">
+    `JsonSchemaSpec`, optional. Provider-native JSON Schema structured-output mode
+    (`{ name, schema, strict?, description? }`). Constrains generation itself rather than just
+    validating after the fact. Implies `jsonMode: true`. See{' '}
+    <a href="/docs/core/structured-output">Structured Output</a>.
+  </Card>
+  <Card title="schema">
+    A Zod (or Zod-compatible, anything exposing `safeParse`) schema, optional. Validates the parsed
+    JSON client-side. On failure, throws `LLMError('validation')` with `.issues` set to the
+    validator's error object. Implies `jsonMode: true`. Can be combined with `jsonSchema` for
+    provider-level constraint plus client-side typing.
+  </Card>
+</Cards>
+
+<Callout type="warn">
+  `schema` only runs if the call actually parses JSON. If you explicitly pass `jsonMode: false`
+  without also setting `jsonSchema`, `schema` is silently skipped and you get the raw string back,
+  cast as your schema's type with no runtime guarantee behind it.
+</Callout>
+
+## Request lifecycle
+
+<Cards>
+  <Card title="requestId">
+    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage` so you can
+    correlate a usage record back to the call that produced it. See{' '}
+    <a href="/docs/core/usage-tracking">Token Usage Tracking</a>.
+  </Card>
+  <Card title="signal">
+    `AbortSignal`, optional. If already aborted when `call()` is invoked, it throws
+    `LLMError('aborted')` immediately without making a request. If it aborts mid-flight, the
+    in-flight attempt and any pending retry delay are cancelled. See{' '}
+    <a href="/docs/core/cancellation">Cancellation</a>.
+  </Card>
+</Cards>
+
+## Type parameter
+
+`call<T>()` is generic over `T`, the shape of the parsed result:
+
+- With `schema`, `T` is inferred from the schema (e.g. `z.infer<typeof MySchema>`) and the return
+  value is a validated, typed `T`.
+- Without `schema`, `T` defaults to `unknown` and you're responsible for narrowing the result
+  yourself.
+
+```ts
+// result: { name: string; skills: string[] }
+const result = await llm.call({
+  userContent: resumeText,
+  schema: CandidateSchema,
+});
+
+// result: unknown
+const raw = await llm.call({ userContent: 'Hello' });
+```

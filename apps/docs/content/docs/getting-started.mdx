@@ -99,3 +99,7 @@ await llm.call({
   reasoningEffort: 'high', // passed through as `reasoning_effort` for supported models
 });
 ```
+
+See <a href="/docs/guides/per-call-overrides">Per-call Overrides</a> for the full guide, including
+which fields fall back to instance defaults, cheap-default/expensive-escalation patterns, and how
+overrides interact with usage tracking and caching.

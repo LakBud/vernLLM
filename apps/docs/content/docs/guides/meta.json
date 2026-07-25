@@ -1,5 +1,5 @@
 {
   "title": "Guides",
   "icon": "BookOpen",
-  "pages": ["resume-parsing", "provider-fallback", "multi-turn-conversations"]
+  "pages": ["resume-parsing", "provider-fallback", "multi-turn-conversations", "per-call-overrides"]
 }

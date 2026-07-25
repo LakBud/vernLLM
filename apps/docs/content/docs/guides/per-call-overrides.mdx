@@ -1,0 +1,141 @@
+---
+title: Per-call Overrides
+description: Using different models, temperatures, or token limits for individual calls
+---
+
+A `VernLLM` instance is configured once with a default `model` (and other options like
+`defaultMaxTokens`), but almost every generation-related field on `CallParams` can be overridden
+for an individual `call()` without creating a second instance.
+
+```ts
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o-mini', // cheap default for most calls
+});
+
+// Uses gpt-4o-mini, the instance default
+const summary = await llm.call({
+  userContent: 'Summarize this in one sentence.',
+});
+
+// Overrides the model for just this call
+const analysis = await llm.call({
+  model: 'gpt-4o',
+  temperature: 0.2,
+  userContent: 'Do a careful multi-step analysis of this contract.',
+});
+```
+
+## What can be overridden per call
+
+| Field             | Falls back to                                                         |
+| ----------------- | --------------------------------------------------------------------- |
+| `model`           | The instance's `model` option                                         |
+| `maxTokens`       | The instance's `defaultMaxTokens` (`1000`)                            |
+| `temperature`     | `0.2`, VernLLM's own default, not the provider's                      |
+| `reasoningEffort` | Omitted from the request entirely; the provider's own default applies |
+
+<Callout type="warn">
+  `temperature` isn't left unset when you don't pass it &mdash; VernLLM defaults it to `0.2` itself.
+  If you want the provider's own default temperature instead of `0.2`, you currently have to check
+  what that provider's default is and pass it explicitly.
+</Callout>
+
+`temperature`, `reasoningEffort`, `jsonMode`, `jsonSchema`, and `schema` aren't instance-level
+options at all &mdash; they only ever exist per call, so there's nothing to "override" at the
+instance level, you just set them on the calls that need them.
+
+<Callout>
+  <a href="/docs/getting-started#per-call-overrides">Getting Started</a> has a quick-start version of
+  this same pattern, including switching to a reasoning model for a single call:
+
+```ts
+const llm = new VernLLM({ client: openai, model: 'gpt-4o-mini' });
+
+await llm.call({
+  systemPrompt: '...',
+  userContent: '...',
+  model: 'o3',
+  reasoningEffort: 'high', // passed through as `reasoning_effort` for supported models
+});
+```
+
+This page goes into more depth on when and how to reach for overrides.
+
+</Callout>
+
+<Callout>
+  Retry/timeout/circuit-breaker behavior (`maxRetries`, `timeoutMs`, `baseDelayMs`,
+  `nonRetryableStatus`, `circuitBreaker`) is instance-level only and cannot be changed per call. If
+  different calls need different resilience settings, use separate `VernLLM` instances that share
+  the same underlying `client`.
+</Callout>
+
+## Common pattern: cheap default, expensive escalation
+
+A typical setup uses a fast/cheap model by default and escalates to a stronger model only for calls
+that need it, rather than paying for the expensive model on every request:
+
+```ts
+async function extractCandidate(resumeText: string) {
+  return llm.call({
+    model: 'gpt-4o-mini',
+    userContent: resumeText,
+    schema: CandidateSchema,
+  });
+}
+
+async function reviewFlaggedResume(resumeText: string) {
+  // Harder task, worth the stronger model
+  return llm.call({
+    model: 'gpt-4o',
+    temperature: 0.1,
+    userContent: resumeText,
+    schema: CandidateSchema,
+  });
+}
+```
+
+## Per-user or per-tenant model selection
+
+Because `model` is just a string on `CallParams`, it can come from anywhere at call time &mdash; a
+config lookup, a feature flag, a per-tenant setting:
+
+```ts
+async function callForTenant(tenantId: string, userContent: string) {
+  const model = await getTenantModelPreference(tenantId); // e.g. 'gpt-4o' or 'gpt-4o-mini'
+
+  return llm.call({ model, userContent });
+}
+```
+
+## Interaction with usage tracking
+
+`onUsage` reports the model that actually served the request, including a per-call override, not
+the instance's default. This matters if you bill different models at different rates:
+
+```ts
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o-mini',
+  onUsage: ({ model, promptTokens, completionTokens }) => {
+    // `model` reflects the override, e.g. 'gpt-4o', not 'gpt-4o-mini'
+    billing.record({ model, promptTokens, completionTokens });
+  },
+});
+```
+
+See <a href="/docs/core/usage-tracking">Token Usage Tracking</a> for the full `onUsage` shape.
+
+## Interaction with caching
+
+If you cache calls that use different `model` or `temperature` overrides under the same
+`cacheKey`, you'll get a cached result from whichever call happened to populate the cache first,
+regardless of which override the current call is using. Fold the override into the key if it
+affects the output you want back:
+
+```ts
+const cacheKey = `analysis:${docId}:${model}`;
+```
+
+See <a href="/docs/core/caching">Caching &amp; Usage Metering</a> for more on choosing cache keys.
