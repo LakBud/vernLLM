@@ -76,3 +76,81 @@ export const fromLMStudio = fromOpenAICompatible;
  * Point an OpenAI SDK instance's `baseURL` at your vLLM server.
  */
 export const fromVLLM = fromOpenAICompatible;
+
+/** xAI's Grok API is OpenAI-compatible */
+export const fromXAI = fromOpenAICompatible;
+
+/** NVIDIA NIM's hosted and self-hosted endpoints are OpenAI-compatible */
+export const fromNvidiaNIM = fromOpenAICompatible;
+
+/** Vercel AI Gateway is OpenAI-compatible */
+export const fromVercelAIGateway = fromOpenAICompatible;
+
+/** Cloudflare Workers AI exposes an OpenAI-compatible endpoint */
+export const fromCloudflareWorkersAI = fromOpenAICompatible;
+
+/** GitHub Models is OpenAI-compatible */
+export const fromGitHubModels = fromOpenAICompatible;
+
+/** Nebius AI Studio is OpenAI-compatible */
+export const fromNebius = fromOpenAICompatible;
+
+/** SambaNova Cloud's API is OpenAI-compatible */
+export const fromSambaNova = fromOpenAICompatible;
+
+/** Baseten's model hosting exposes an OpenAI-compatible endpoint */
+export const fromBaseten = fromOpenAICompatible;
+
+/** Alibaba Cloud's DashScope (Qwen) API is OpenAI-compatible */
+export const fromDashScope = fromOpenAICompatible;
+
+/** Featherless AI's API is OpenAI-compatible */
+export const fromFeatherless = fromOpenAICompatible;
+
+/** Friendli AI's serving endpoint is OpenAI-compatible */
+export const fromFriendli = fromOpenAICompatible;
+
+/** SiliconFlow's API is OpenAI-compatible */
+export const fromSiliconFlow = fromOpenAICompatible;
+
+/**
+ * A self-hosted LiteLLM proxy speaks the OpenAI wire format itself, even
+ * though it may fan requests out to 100+ providers behind the scenes.
+ */
+export const fromLiteLLMProxy = fromOpenAICompatible;
+
+/** Parasail's inference API is OpenAI-compatible */
+export const fromParasail = fromOpenAICompatible;
+
+/** StepFun's API is OpenAI-compatible */
+export const fromStepFun = fromOpenAICompatible;
+
+/** MiniMax's API is OpenAI-compatible */
+export const fromMiniMax = fromOpenAICompatible;
+
+/** Lambda Labs' Inference API is OpenAI-compatible */
+export const fromLambdaLabs = fromOpenAICompatible;
+
+/** Snowflake Cortex's LLM endpoint is OpenAI-compatible */
+export const fromSnowflakeCortex = fromOpenAICompatible;
+
+/** Anyscale Endpoints' API is OpenAI-compatible */
+export const fromAnyscale = fromOpenAICompatible;
+
+/** Lepton AI's inference API is OpenAI-compatible */
+export const fromLepton = fromOpenAICompatible;
+
+/** kluster.ai's inference API is OpenAI-compatible */
+export const fromKlusterAI = fromOpenAICompatible;
+
+/** Inference.net's API is OpenAI-compatible */
+export const fromInferenceNet = fromOpenAICompatible;
+
+/** Infermatic's API is OpenAI-compatible */
+export const fromInfermatic = fromOpenAICompatible;
+
+/** AtlasCloud's inference API is OpenAI-compatible */
+export const fromAtlasCloud = fromOpenAICompatible;
+
+/** 01.AI's (Yi models) API is OpenAI-compatible */
+export const from01AI = fromOpenAICompatible;
