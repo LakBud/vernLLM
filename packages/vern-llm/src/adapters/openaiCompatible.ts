@@ -43,3 +43,36 @@ export const fromFireworks = fromOpenAICompatible;
  * this does not talk to Ollamas native API directly.
  */
 export const fromOllama = fromOpenAICompatible;
+
+/** OpenRouter's API is OpenAI-compatible */
+export const fromOpenRouter = fromOpenAICompatible;
+
+/** Perplexity's API is OpenAI-compatible */
+export const fromPerplexity = fromOpenAICompatible;
+
+/** DeepInfra's API is OpenAI-compatible */
+export const fromDeepInfra = fromOpenAICompatible;
+
+/** Novita's API is OpenAI-compatible */
+export const fromNovita = fromOpenAICompatible;
+
+/** Hyperbolic's API is OpenAI-compatible */
+export const fromHyperbolic = fromOpenAICompatible;
+
+/** Moonshot's (Kimi) API is OpenAI-compatible */
+export const fromMoonshot = fromOpenAICompatible;
+
+/** Zhipu's (GLM) API is OpenAI-compatible */
+export const fromZhipu = fromOpenAICompatible;
+
+/**
+ * LM Studio exposes an OpenAI-compatible endpoint at `/v1/chat/completions`.
+ * Point an OpenAI SDK instance's `baseURL` at your local LM Studio server.
+ */
+export const fromLMStudio = fromOpenAICompatible;
+
+/**
+ * vLLM's OpenAI-compatible server mode exposes `/v1/chat/completions`.
+ * Point an OpenAI SDK instance's `baseURL` at your vLLM server.
+ */
+export const fromVLLM = fromOpenAICompatible;

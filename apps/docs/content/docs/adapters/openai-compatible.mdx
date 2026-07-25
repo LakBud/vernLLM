@@ -3,10 +3,11 @@ title: OpenAI-Compatible
 description: Zero-transform passthrough for wire-compatible providers
 ---
 
-Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, and Ollama (via its `/v1/chat/completions` endpoint) all speak the same wire format as OpenAI. These are thin named wrappers around the same passthrough — pick whichever name matches your provider for readability.
+Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, Ollama (via its `/v1/chat/completions` endpoint), OpenRouter, Perplexity, DeepInfra, Novita, Hyperbolic, Moonshot (Kimi), Zhipu (GLM), LM Studio, and vLLM all speak the same wire format as OpenAI. These are thin named wrappers around the same passthrough — pick whichever name matches your provider for readability.
 
 ```ts
-import { VernLLM, fromGroq, fromMistral, fromTogether } from 'vern-llm';
+import Groq from 'groq-sdk';
+import { VernLLM, fromGroq } from 'vern-llm';
 
 const llm = new VernLLM({
   client: fromGroq(new Groq({ apiKey: process.env.GROQ_API_KEY })),
@@ -14,4 +15,19 @@ const llm = new VernLLM({
 });
 ```
 
-`fromOpenAICompatible()` is the underlying function if your provider isn't in the named list — same thing, generic name.
+`fromOpenAICompatible()` is the underlying function if your provider isn't in the named list — same thing, generic name:
+
+```ts
+import { VernLLM, fromOpenAICompatible } from 'vern-llm';
+import OpenAI from 'openai';
+
+const llm = new VernLLM({
+  client: fromOpenAICompatible(
+    new OpenAI({
+      apiKey: process.env.SOME_PROVIDER_API_KEY,
+      baseURL: 'https://api.some-provider.example/v1',
+    }),
+  ),
+  model: 'some-model',
+});
+```

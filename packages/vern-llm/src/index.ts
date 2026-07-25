@@ -18,6 +18,15 @@ export {
   fromTogether,
   fromFireworks,
   fromOllama,
+  fromOpenRouter,
+  fromPerplexity,
+  fromDeepInfra,
+  fromNovita,
+  fromHyperbolic,
+  fromMoonshot,
+  fromZhipu,
+  fromLMStudio,
+  fromVLLM,
 } from './adapters/index.js';
 export {
   LLMError,
