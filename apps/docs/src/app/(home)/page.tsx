@@ -1,8 +1,11 @@
 import Link from 'next/link';
 
-import Squares from './Squares';
+import Squares from '../../components/squares';
 
-import { annotations, codeExample, features, providers } from '@/lib/home.utils';
+import { AuroraBarsClient } from '@/components/aurora-bars-client';
+import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
+import { renderHighlightedCode } from '@/lib/home.lib';
+import { annotations, codeExample, faqItems, features, providers } from '@/lib/home.utils';
 import { generateSoftwareApplication, JsonLd } from '@/lib/seo/jsonld';
 
 export default function HomePage() {
@@ -10,13 +13,14 @@ export default function HomePage() {
     <div className="flex flex-col flex-1 bg-fd-background">
       <JsonLd
         data={generateSoftwareApplication({
-          name: 'vern-llm',
+          name: 'VernLLM',
           description:
-            'A lightweight resilience layer for OpenAI-compatible chat completion calls — retries, timeouts, circuit breaking, caching, structured output, and usage tracking, with one interface across providers.',
-          url: 'https://vernllm.dev',
+            'A lightweight resilience layer for LLM chat completion calls. Retries, timeouts, circuit breaking, caching, structured output, and usage tracking, with one interface across providers.',
+          url: 'https://vernllm.vercel.app',
         })}
       />
-      {/* ---------- HERO  ---------- */}
+
+      {/* HERO  */}
       <div className="relative overflow-hidden">
         <Squares squareSize={44} />
 
@@ -28,7 +32,7 @@ export default function HomePage() {
               by default.
             </h1>
             <p className="mt-6 text-fd-muted-foreground text-base lg:text-lg max-w-xl">
-              A lightweight resilience layer for LLM chat completions: retries, timeouts, caching,
+              A lightweight resilience layer for LLM chat completions. Retries, timeouts, caching,
               and circuit breaking, dependency-light and typed from the start.
             </p>
           </div>
@@ -54,7 +58,7 @@ export default function HomePage() {
         </section>
       </div>
 
-      {/* ---------- INSTALL STRIP ---------- */}
+      {/* INSTALL STRIP */}
       <section className="border-y border-fd-border">
         <div className="px-6 lg:px-16 py-4 flex items-center justify-between max-w-5xl mx-auto w-full">
           <code className="font-mono text-sm text-fd-foreground">
@@ -66,7 +70,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ---------- CODE EXAMPLE ---------- */}
+      {/* CODE EXAMPLE */}
       <section className="px-6 lg:px-16 py-20">
         <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-10">
           <div className="lg:col-span-8">
@@ -76,15 +80,15 @@ export default function HomePage() {
               </div>
               <pre className="p-5 overflow-x-auto text-sm leading-relaxed">
                 <code className="font-mono text-fd-card-foreground whitespace-pre">
-                  {codeExample}
+                  {renderHighlightedCode(codeExample)}
                 </code>
               </pre>
             </div>
           </div>
 
           <div className="lg:col-span-4 flex flex-col justify-center gap-5">
-            <h2 className="text-fd-foreground text-lg font-semibold">
-              One config. Every failure mode covered.
+            <h2 className="text-fd-foreground text-lg font-semibold text-[20px]">
+              What this call actually does.
             </h2>
             <ul className="flex flex-col gap-3">
               {annotations.map((a) => (
@@ -98,8 +102,8 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ---------- FEATURE LIST ---------- */}
-      <section className="px-6 lg:px-16 pb-20">
+      {/* FEATURE LIST */}
+      <section className="px-6 lg:px-16 py-20">
         <div className="max-w-4xl mx-auto flex flex-col">
           {features.map((f, i) => (
             <div
@@ -120,12 +124,12 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ---------- PROVIDER STRIP ---------- */}
-      <section className="px-6 lg:px-16 pb-20">
+      {/* PROVIDER STRIP */}
+      <section className="px-6 lg:px-16 py-20">
         <div className="max-w-6xl mx-auto flex flex-col items-center gap-6">
-          <span className="text-[60px] font-semibold">Works with</span>
+          <span className="text-4xl sm:text-5xl lg:text-[60px] font-semibold pb-4">Works with</span>
 
-          <div className="flex flex-wrap items-center justify-center gap-8">
+          <div className="flex flex-wrap items-center justify-center gap-10">
             {providers.map(({ name, Icon, href }) =>
               Icon ? (
                 <Link
@@ -135,7 +139,7 @@ export default function HomePage() {
                 >
                   <Icon
                     aria-label={name}
-                    className={`h-12 w-12 text-fd-muted-foreground opacity-60 transition-colors hover:text-white hover:opacity-100 md:h-14 md:w-14`}
+                    className={`h-12 w-12 text-fd-muted-foreground opacity-60 transition-colors hover:text-fd-card-foreground hover:opacity-100  md:h-14 md:w-14`}
                   />
 
                   <span className="pointer-events-none absolute -bottom-10 z-10 whitespace-nowrap rounded-lg border bg-fd-background px-3 py-1.5 text-sm shadow-sm opacity-0 translate-y-1 transition-all group-hover:translate-y-0 group-hover:opacity-100">
@@ -147,25 +151,32 @@ export default function HomePage() {
           </div>
         </div>
       </section>
-      {/* ---------- WHY VERN-LLM  ---------- */}
-      <section className="px-6 lg:px-16 pb-24">
-        <div className="max-w-2xl mx-auto flex flex-col gap-4">
-          <h2 className="text-fd-foreground text-2xl font-bold">Why vern-llm?</h2>
-          <p className="text-fd-muted-foreground leading-relaxed">
-            Every project calling an LLM API ends up writing the same defensive code; retry logic,
-            timeouts, a circuit breaker, a cache layer, usually copied between projects and slightly
-            wrong each time.
-          </p>
-          <p className="text-fd-muted-foreground leading-relaxed">
-            vern-llm is a thin, dependency-light wrapper that gives you these primitives with
-            sensible defaults out of the box, and lets you override exactly what you need. It works
-            with any OpenAI-compatible client, plus Anthropic, Gemini, and Bedrock adapters. No
-            vendor lock-in.
-          </p>
+
+      {/* FAQ */}
+      <section className="px-6 lg:px-16 py-20">
+        <div className="max-w-2xl mx-auto flex flex-col gap-8">
+          <MotionAccordion items={faqItems} gap={0} />
         </div>
       </section>
 
-      {/* FOOTER CTA */}
+      {/* VERY COOL BAR THING */}
+      <AuroraBarsClient
+        maxHeightRatio={1}
+        minHeightRatio={0.2}
+        className="mx-auto mt-12 h-64"
+        background="var(--background)"
+        barCount={20}
+        colors={[
+          'color-mix(in srgb, var(--color-fd-primary), white 65%)',
+          'var(--color-fd-primary)',
+          'color-mix(in srgb, var(--color-fd-primary), black 15%)',
+          'color-mix(in srgb, var(--color-fd-primary), black 35%)',
+          '#00000000',
+        ]}
+        speed={2}
+      />
+
+      {/* FOOTER */}
       <section className="border-t border-fd-border">
         <div className="px-6 lg:px-16 py-16 max-w-6xl mx-auto w-full flex flex-col items-center text-center gap-6">
           <h2 className="text-fd-foreground text-xl sm:text-3xl font-bold max-w-xl">
@@ -176,7 +187,7 @@ export default function HomePage() {
             <div className="flex gap-2">
               <Link
                 href="/docs"
-                className="inline-flex items-center gap-1.5 rounded-md border border-fd-border px-3 py-1.5 text-sm font-medium  bg-fd-primary text-fd-primary-foreground hover:opacity-90 transition-opacity"
+                className="inline-flex items-center gap-1.5 rounded-md border border-fd-border px-3 py-1.5 text-sm font-medium bg-fd-primary text-fd-primary-foreground hover:opacity-90 transition-opacity"
               >
                 Get started
               </Link>

@@ -15,33 +15,31 @@ html > body[data-scroll-locked] {
   --removed-body-scroll-bar-size: 0px !important;
 }
 
-@theme {
-  /* Light mode — daylight instrument panel */
-  --color-fd-background: hsl(210, 22%, 96%);
-  --color-fd-foreground: hsl(215, 28%, 14%);
+:root {
+  --color-fd-background: hsl(210, 24%, 95%);
+  --color-fd-foreground: hsl(215, 32%, 12%);
 
-  --color-fd-muted: hsl(212, 18%, 91%);
-  --color-fd-muted-foreground: hsl(212, 12%, 44%);
+  --color-fd-muted: hsl(212, 20%, 89%);
+  --color-fd-muted-foreground: hsl(212, 14%, 42%);
 
-  --color-fd-popover: hsl(210, 20%, 99%);
-  --color-fd-popover-foreground: hsl(215, 28%, 14%);
+  --color-fd-popover: hsl(210, 28%, 98%);
+  --color-fd-popover-foreground: hsl(215, 32%, 12%);
 
-  --color-fd-card: hsl(210, 18%, 93%);
-  --color-fd-card-foreground: hsl(215, 28%, 14%);
+  --color-fd-card: hsl(210, 22%, 92%);
+  --color-fd-card-foreground: hsl(215, 32%, 12%);
 
-  --color-fd-border: hsla(212, 18%, 45%, 28%);
+  --color-fd-border: hsla(212, 22%, 35%, 24%);
 
-  /* same amber signal color as dark mode */
-  --color-fd-primary: hsl(37, 85%, 42%);
-  --color-fd-primary-foreground: hsl(0, 0%, 100%);
+  --color-fd-primary: hsl(38, 92%, 45%);
+  --color-fd-primary-foreground: hsl(215, 30%, 10%);
 
-  --color-fd-secondary: hsl(212, 16%, 88%);
-  --color-fd-secondary-foreground: hsl(215, 28%, 16%);
+  --color-fd-secondary: hsl(212, 18%, 86%);
+  --color-fd-secondary-foreground: hsl(215, 30%, 15%);
 
-  --color-fd-accent: hsla(37, 85%, 42%, 12%);
-  --color-fd-accent-foreground: hsl(37, 85%, 34%);
+  --color-fd-accent: hsla(38, 92%, 45%, 14%);
+  --color-fd-accent-foreground: hsl(38, 88%, 35%);
 
-  --color-fd-ring: hsl(37, 85%, 45%);
+  --color-fd-ring: hsl(38, 92%, 48%);
 }
 
 .dark {

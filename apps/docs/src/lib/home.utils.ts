@@ -172,6 +172,24 @@ export const summary = await llm.cachedLLMCall({
   },
 });`;
 
+/**
+ * Identifiers in `codeExample` that VernLLM itself introduces (as opposed to
+ * plain OpenAI/Zod/JS syntax). Rendered in orange in the code block so the
+ * library's surface area stands out at a glance.
+ */
+export const codeHighlightKeywords = [
+  'VernLLM',
+  'vern-llm',
+  'maxRetries',
+  'timeoutMs',
+  'circuitBreaker',
+  'onUsage',
+  'totalTokens',
+  'cachedLLMCall',
+  'cacheKey',
+  'schema',
+];
+
 export const annotations = [
   { line: 'maxRetries: 3', note: '3 attempts with exponential backoff' },
   { line: 'timeoutMs: 10_000', note: '10s hard timeout per attempt' },
@@ -179,4 +197,42 @@ export const annotations = [
   { line: 'onUsage', note: 'Token usage reported per call' },
   { line: 'cachedLLMCall', note: 'Identical calls skip the network' },
   { line: 'schema', note: 'Response validated and typed via Zod' },
+];
+
+export const faqItems = [
+  {
+    question: 'Why use VernLLM instead of calling the client directly?',
+    answer:
+      'Every project calling an LLM API ends up writing the same defensive code: retry logic, timeouts, a circuit breaker, a cache layer, usually copied between projects and slightly wrong each time. VernLLM gives you those primitives with sensible defaults out of the box, so you keep your existing client and just wrap it.',
+  },
+  {
+    question: 'Do I need to change how I call my LLM client?',
+    answer:
+      'No. VernLLM wraps the client you already have, OpenAI, Anthropic, Gemini, Bedrock, or anything OpenAI-compatible, so you keep your existing setup and just route calls through it.',
+  },
+  {
+    question: 'Can I bring my own cache backend?',
+    answer:
+      'Yes. cachedLLMCall works with any adapter implementing get/set/delete, so you can plug in Redis, a database, or your own store instead of the built-in in-memory cache.',
+  },
+  {
+    question: 'Is it typed?',
+    answer:
+      'Yes, written in TypeScript from the ground up. Structured output schemas, call params, and errors are all typed, so mistakes surface at compile time instead of at runtime.',
+  },
+  {
+    question: 'How many dependencies does it add to my project?',
+    answer:
+      'Zero bundled dependencies. Zod and provider SDKs are peer dependencies, and VernLLM only relies on their shapes structurally, so it stays dependency-light and typed from the start.',
+  },
+  {
+    question: 'How big is the bundle?',
+    answer:
+      '12.1 kB minified, 4.4 kB minified and gzipped. Small enough to drop into a project without thinking twice about it.',
+  },
+  {
+    question: 'Is it open source?',
+    answer:
+      'Yes, VernLLM is MIT licensed and open source. Use it in personal or commercial projects, fork it, or contribute back on GitHub.',
+  },
 ];

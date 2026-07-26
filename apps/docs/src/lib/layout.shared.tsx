@@ -9,7 +9,13 @@ export function baseOptions(): BaseLayoutProps {
     nav: {
       title: (
         <div className="flex items-center gap-2">
-          <Image src="/logo.png" alt={appName} width={20} height={20} />
+          <Image
+            src="/logo.png"
+            alt={appName}
+            width={20}
+            height={25}
+            style={{ width: '20px', height: '25px' }}
+          />
           <span>{appName}</span>
         </div>
       ),
