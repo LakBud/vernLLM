@@ -15,7 +15,8 @@ export interface VernLLMOptions {
   baseDelayMs?: number;
   /** Default max_tokens for calls that don't override it. Default 1000 */
   defaultMaxTokens?: number;
-  /** Enables debug logging of raw model output. Default: NODE_ENV !== 'production' */
+  /** Enables debug logging of raw model output (logs up to 800 chars of each
+   * response). Off by default */
   debug?: boolean;
   /** Cache adapter for cachedCall. Defaults to an in-memory adapter */
   cache?: CacheAdapter;

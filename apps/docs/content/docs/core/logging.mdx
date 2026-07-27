@@ -29,6 +29,12 @@ If no logger is provided, `VernLLM` uses a console-based logger.
 
 - `debug: true` enables debug logging.
 - `debug: false` disables debug logging.
-- When `debug` is not provided, debug logging is enabled when `NODE_ENV !== 'production'`.
+- When `debug` is not provided, debug logging defaults to disabled (`false`).
 
 `warn` and `error` messages are always emitted regardless of the `debug` option.
+
+<Callout type="warn">
+  Debug logging outputs raw response content (up to 800 characters per call). It defaults to off so
+  response content isn't unintentionally written to logs — enable it explicitly with `debug: true`
+  when you need it.
+</Callout>
