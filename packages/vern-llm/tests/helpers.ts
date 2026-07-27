@@ -23,11 +23,18 @@ export function textResponse(text: string): CreateResult {
 
 /** An error carrying an HTTP-style status, as SDK errors typically do. */
 export class FakeApiError extends Error {
+  headers?: { get(name: string): string | null };
+
   constructor(
     message: string,
     public status: number,
+    headers?: Record<string, string>,
   ) {
     super(message);
+    if (headers) {
+      const map = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+      this.headers = { get: (name: string) => map.get(name.toLowerCase()) ?? null };
+    }
   }
 }
 

@@ -73,11 +73,61 @@ export async function withTimeout<T>(
 }
 
 /**
+ * Default cap (ms) for both exponential backoff and honored Retry-After values
+ */
+export const DEFAULT_MAX_DELAY_MS = 10_000;
+
+/**
+ * Looks inside an unknown error value for a Retry-After header and
+ * converts it to milliseconds. Checks `.headers` first (fetch-style,
+ * Headers-like with `.get()`), then `.response.headers` (axios-style,
+ * plain object) since different client libraries surface headers
+ * differently. Supports both the delta-seconds form ("30") and the
+ * HTTP-date form ("Wed, 21 Oct 2015 07:28:00 GMT"). The result is capped
+ * at maxDelayMs. Returns undefined when no usable Retry-After is present
+ */
+export function extractRetryAfterMs(
+  err: unknown,
+  maxDelayMs = DEFAULT_MAX_DELAY_MS,
+): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+
+  const error = err as { headers?: unknown; response?: { headers?: unknown } };
+  const headers = error.headers ?? error.response?.headers;
+
+  if (!headers || typeof headers !== 'object') return undefined;
+
+  const raw =
+    typeof (headers as { get?: unknown }).get === 'function'
+      ? (headers as { get: (name: string) => string | null }).get('Retry-After')
+      : ((headers as Record<string, unknown>)['retry-after'] as string | undefined);
+
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+
+  const trimmed = raw.trim();
+
+  if (/^\d+$/.test(trimmed)) {
+    return Math.max(0, Math.min(Number(trimmed) * 1000, maxDelayMs));
+  }
+
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, Math.min(dateMs - Date.now(), maxDelayMs));
+  }
+
+  return undefined;
+}
+
+/**
  * Exponential backoff with jitter, capped at maxDelayMs.
  * Jitter avoids thundering-herd retries when many callers back off in lockstep,
  * the cap prevents unbounded delays when maxRetries is high
  */
-export function getBackoffDelay(baseDelayMs: number, attempt: number, maxDelayMs = 10_000): number {
+export function getBackoffDelay(
+  baseDelayMs: number,
+  attempt: number,
+  maxDelayMs = DEFAULT_MAX_DELAY_MS,
+): number {
   const exp = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
   return exp / 2 + Math.random() * (exp / 2);
 }
