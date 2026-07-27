@@ -3,6 +3,33 @@ import type { LLMClient } from '../types/index.js';
 /** The chat-completion-shaped request VernLLM builds internally */
 type ChatRequest = Parameters<LLMClient['chat']['completions']['create']>[0];
 
+/**
+ * The minimal shape the fetch adapter needs from a response object.
+ * Native `fetch`'s `Response` satisfies this, but so do wrappers around
+ * `axios`, `node-fetch`, `undici`, etc, which makes `request` swappable
+ * without forcing consumers to polyfill the full `Response` interface
+ */
+export interface ResponseLike {
+  ok: boolean;
+  status: number;
+  headers: {
+    get(name: string): string | null;
+  };
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+}
+
+/** A fetch-compatible request function; defaults to native `fetch` */
+export type RequestLike = (
+  url: string,
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  },
+) => Promise<ResponseLike>;
+
 export interface FetchAdapterConfig {
   /** Endpoint URL, or a function of the request in case it depends on model/params */
   url: string | ((params: ChatRequest) => string);
@@ -12,6 +39,12 @@ export interface FetchAdapterConfig {
     | (() => Record<string, string> | Promise<Record<string, string>>);
   /** HTTP method. Default 'POST' */
   method?: string;
+  /**
+   * The function used to make the HTTP request. Defaults to native `fetch`.
+   * Swap in `axios`, `node-fetch`, or any other transport, as long as it
+   * resolves to a `ResponseLike` object
+   */
+  request?: RequestLike;
   /** Maps VernLLMs internal chat-completion request into the providers raw request body */
   mapRequest: (params: ChatRequest) => unknown;
   /**
@@ -43,11 +76,20 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
           const url = typeof config.url === 'function' ? config.url(params) : config.url;
           const headers =
             typeof config.headers === 'function' ? await config.headers() : config.headers;
+          const method = config.method ?? 'POST';
+          const request = config.request ?? fetch;
 
-          const res = await fetch(url, {
-            method: config.method ?? 'POST',
-            headers: { 'Content-Type': 'application/json', ...headers },
-            body: JSON.stringify(config.mapRequest(params)),
+          // GET/HEAD requests can't carry a body, so skip both the body and
+          // the Content-Type header for them rather than sending a body a
+          // server may reject
+          const supportsBody = !['GET', 'HEAD'].includes(method.toUpperCase());
+
+          const res = await request(url, {
+            method,
+            headers: supportsBody
+              ? { 'Content-Type': 'application/json', ...headers }
+              : { ...headers },
+            ...(supportsBody ? { body: JSON.stringify(config.mapRequest(params)) } : {}),
             signal: options.signal,
           });
 
@@ -55,8 +97,11 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
             const body = await res.text().catch(() => '');
             const err = new Error(
               `Fetch adapter request failed (${res.status}): ${body.slice(0, 500)}`,
-            ) as Error & { status?: number };
+            ) as Error & { status?: number; headers?: ResponseLike['headers'] };
             err.status = res.status;
+            // Attach headers so downstream retry logic (e.g. rate-limit
+            // handling) can read things like `Retry-After`
+            err.headers = res.headers;
             throw err;
           }
 
