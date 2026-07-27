@@ -70,7 +70,9 @@ try {
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to
-`maxRetries` with exponential backoff and jitter.
+`maxRetries`. If the failed attempt's error carries a `Retry-After` header (delta-seconds or
+HTTP-date form), that value is honored for the wait, capped at the same max delay as backoff.
+Otherwise the wait falls back to exponential backoff with jitter.
 
 <Callout type="warn">
   Exhausting all retries also records a circuit breaker failure if one is configured and throws the

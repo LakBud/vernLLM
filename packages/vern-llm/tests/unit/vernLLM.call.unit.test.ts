@@ -179,6 +179,54 @@ describe('VernLLM.call — non-retryable status codes', () => {
     vi.useRealTimers();
   });
 
+  it('honors a Retry-After header (delta-seconds) instead of exponential backoff', async () => {
+    vi.useFakeTimers();
+    const { client, create } = createMockClient([
+      new FakeApiError('rate limited', 429, { 'Retry-After': '2' }),
+      jsonResponse({ ok: true }),
+    ]);
+    // A huge baseDelayMs makes it obvious the 2s Retry-After was used
+    // instead of exponential backoff, which would wait far longer here
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 60_000 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(create).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('caps an oversized Retry-After at the max delay instead of waiting the full duration', async () => {
+    vi.useFakeTimers();
+    const { client, create } = createMockClient([
+      new FakeApiError('rate limited', 429, { 'Retry-After': '3600' }), // 1 hour
+      jsonResponse({ ok: true }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    // The cap (10s) should be enough; the full hour should not be required
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(create).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('falls back to exponential backoff when no Retry-After header is present', async () => {
+    vi.useFakeTimers();
+    const { client, create } = createMockClient([
+      new FakeApiError('server error', 500),
+      jsonResponse({ ok: true }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(create).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it('respects a custom nonRetryableStatus list', async () => {
     const { client, create } = createMockClient([new FakeApiError('teapot', 418)]);
     const llm = new VernLLM({

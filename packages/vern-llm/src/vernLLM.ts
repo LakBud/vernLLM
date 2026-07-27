@@ -4,6 +4,7 @@ import { CircuitBreaker } from './circuitBreaker.js';
 import {
   defaultParseJson,
   extractStatus,
+  extractRetryAfterMs,
   withTimeout,
   getBackoffDelay,
   waitForRetry,
@@ -156,7 +157,7 @@ export class VernLLM {
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
         if (attempt > 0) {
-          await this.recoverDelay(requestId, attempt, signal);
+          await this.recoverDelay(requestId, attempt, lastError, signal);
         }
 
         return await fn();
@@ -385,14 +386,24 @@ export class VernLLM {
 
   /**
    * Waits out the backoff delay for a given retry attempt, logging the
-   * attempt for observability before the wait begins. Rejects early if
-   * the signal aborts during the wait
+   * attempt for observability before the wait begins. Honors a
+   * Retry-After header on the failed attempt's error when present
+   * (capped at the same maxDelayMs as backoff), otherwise falls back to
+   * exponential backoff exactly as before. Rejects early if the signal
+   * aborts during the wait
    */
-  private async recoverDelay(requestId: string, attempt: number, signal?: AbortSignal) {
-    const delay = getBackoffDelay(this.baseDelayMs, attempt);
+  private async recoverDelay(
+    requestId: string,
+    attempt: number,
+    error: unknown,
+    signal?: AbortSignal,
+  ) {
+    const retryAfterMs = extractRetryAfterMs(error);
+    const delay = retryAfterMs ?? getBackoffDelay(this.baseDelayMs, attempt);
 
     this.logger.warn(
-      `[vern:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${delay}ms`,
+      `[vern:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${delay}ms` +
+        (retryAfterMs !== undefined ? ' (honoring Retry-After)' : ''),
     );
 
     await waitForRetry(delay, signal);
