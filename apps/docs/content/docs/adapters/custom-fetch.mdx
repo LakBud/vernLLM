@@ -26,4 +26,54 @@ const llm = new VernLLM({
 });
 ```
 
-Non-2xx responses throw with `.status` set, so `nonRetryableStatus` still fails fast on 401/403 as usual.
+Non-2xx responses throw with `.status` set, so `nonRetryableStatus` still fails fast on 401/403 as usual. The thrown error also carries `.headers` (the response's `Headers`-like object), so retry logic can read things like `Retry-After`.
+
+For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-Type` header, since those methods don't support a request body.
+
+## Bringing your own HTTP client
+
+By default `fromFetch` uses the global `fetch`. Pass `request` to swap in `axios`, `node-fetch`, `undici`, or anything else, as long as it resolves to a `Response`-compatible object (`ok`, `status`, `headers.get(name)`, `text()`, `json()`):
+
+```ts
+import axios from 'axios';
+import { VernLLM, fromFetch } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: fromFetch({
+    url: 'https://api.example.com/v1/generate',
+    headers: () => ({ Authorization: `Bearer ${process.env.EXAMPLE_API_KEY}` }),
+    request: async (url, init) => {
+      const res = await axios.request({
+        url,
+        method: init.method,
+        headers: init.headers,
+        data: init.body,
+        signal: init.signal,
+        validateStatus: () => true, // let fromFetch handle non-2xx itself
+      });
+
+      return {
+        ok: res.status >= 200 && res.status < 300,
+        status: res.status,
+        headers: { get: (name) => res.headers[name.toLowerCase()] ?? null },
+        text: async () => JSON.stringify(res.data),
+        json: async () => res.data,
+      };
+    },
+    mapRequest: (params) => ({
+      model: params.model,
+      prompt: params.messages.map((m) => m.content).join('\n\n'),
+      max_tokens: params.max_tokens,
+    }),
+    mapResponse: (json: unknown) => {
+      const body = json as { output: string; usage?: { input?: number; output?: number } };
+
+      return {
+        content: body.output,
+        usage: { promptTokens: body.usage?.input, completionTokens: body.usage?.output },
+      };
+    },
+  }),
+  model: 'example-model-v1',
+});
+```

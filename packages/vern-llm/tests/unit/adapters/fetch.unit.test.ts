@@ -167,10 +167,12 @@ describe('fromFetch', () => {
     });
   });
 
-  it('throws an error with .status set on a non-2xx response', async () => {
+  it('throws an error with .status and .headers set on a non-2xx response', async () => {
+    const headers = { get: vi.fn((name: string) => (name === 'Retry-After' ? '30' : null)) };
     const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
       ok: false,
       status: 429,
+      headers,
       text: async () => 'rate limited',
     }));
     vi.stubGlobal('fetch', fetchMock);
@@ -196,6 +198,8 @@ describe('fromFetch', () => {
 
     expect(err.status).toBe(429);
     expect(err.message).toContain('rate limited');
+    expect(err.headers).toBe(headers);
+    expect(err.headers.get('Retry-After')).toBe('30');
   });
 
   it('passes the abort signal through to fetch', async () => {
@@ -225,5 +229,134 @@ describe('fromFetch', () => {
     );
 
     expect(at(fetchMock.mock.calls, 0)[1]).toMatchObject({ signal: controller.signal });
+  });
+
+  it('uses a custom request function instead of global fetch when provided', async () => {
+    const globalFetchMock = vi.fn();
+    vi.stubGlobal('fetch', globalFetchMock);
+
+    const requestMock = vi.fn(async (_url: string, _init: unknown) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => '',
+      json: async () => ({ text: 'from custom transport' }),
+    }));
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      request: requestMock,
+      mapRequest: () => ({}),
+      mapResponse: (json: unknown) => {
+        if (!isFetchResponse(json)) {
+          throw new Error('Invalid response shape');
+        }
+
+        return { content: json.text };
+      },
+    });
+
+    const result = await client.chat.completions.create(
+      { model: 'm', temperature: 0.2, max_tokens: 10, messages: [] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(globalFetchMock).not.toHaveBeenCalled();
+    expect(result.choices?.[0]?.message?.content).toBe('from custom transport');
+  });
+
+  it('omits body and Content-Type for GET requests', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ text: 'x' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      method: 'GET',
+      headers: { Authorization: 'Bearer key' },
+      mapRequest: () => ({ ignored: true }),
+      mapResponse: (json: unknown) => {
+        if (!isFetchResponse(json)) {
+          throw new Error('Invalid response shape');
+        }
+
+        return { content: json.text };
+      },
+    });
+
+    await client.chat.completions.create(
+      { model: 'm', temperature: 0.2, max_tokens: 10, messages: [] },
+      { signal: new AbortController().signal },
+    );
+
+    const init = at(fetchMock.mock.calls, 0)[1] as RequestInit;
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer key');
+  });
+
+  it('omits body and Content-Type for HEAD requests', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ text: 'x' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      method: 'head',
+      mapRequest: () => ({ ignored: true }),
+      mapResponse: (json: unknown) => {
+        if (!isFetchResponse(json)) {
+          throw new Error('Invalid response shape');
+        }
+
+        return { content: json.text };
+      },
+    });
+
+    await client.chat.completions.create(
+      { model: 'm', temperature: 0.2, max_tokens: 10, messages: [] },
+      { signal: new AbortController().signal },
+    );
+
+    const init = at(fetchMock.mock.calls, 0)[1] as RequestInit;
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+  });
+
+  it('still attaches body and Content-Type for POST requests (default)', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ text: 'x' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({ hello: 'world' }),
+      mapResponse: (json: unknown) => {
+        if (!isFetchResponse(json)) {
+          throw new Error('Invalid response shape');
+        }
+
+        return { content: json.text };
+      },
+    });
+
+    await client.chat.completions.create(
+      { model: 'm', temperature: 0.2, max_tokens: 10, messages: [] },
+      { signal: new AbortController().signal },
+    );
+
+    const init = at(fetchMock.mock.calls, 0)[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({ hello: 'world' });
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
   });
 });
