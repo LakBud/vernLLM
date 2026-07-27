@@ -73,7 +73,9 @@ export async function withTimeout<T>(
 }
 
 /**
- * Default cap (ms) for both exponential backoff and honored Retry-After values
+ * Default cap (ms) for both exponential backoff and honored Retry-After
+ * values, so a misbehaving/adversarial Retry-After can't stall a caller
+ * indefinitely
  */
 export const DEFAULT_MAX_DELAY_MS = 10_000;
 
@@ -97,10 +99,14 @@ export function extractRetryAfterMs(
 
   if (!headers || typeof headers !== 'object') return undefined;
 
+  const getter = headers as { get?: (name: string) => string | null };
+
   const raw =
-    typeof (headers as { get?: unknown }).get === 'function'
-      ? (headers as { get: (name: string) => string | null }).get('Retry-After')
-      : ((headers as Record<string, unknown>)['retry-after'] as string | undefined);
+    typeof getter.get === 'function'
+      ? getter.get('Retry-After')
+      : Object.entries(headers as Record<string, string>)
+          .find(([name]) => name.toLowerCase() === 'retry-after')
+          ?.at(1);
 
   if (typeof raw !== 'string' || raw.trim() === '') return undefined;
 

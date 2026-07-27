@@ -32,6 +32,11 @@ describe('extractRetryAfterMs', () => {
     expect(extractRetryAfterMs(err)).toBe(3_000);
   });
 
+  it('matches a plain-object header name case-insensitively (canonical casing)', () => {
+    const err = { response: { headers: { 'Retry-After': '3' } } };
+    expect(extractRetryAfterMs(err)).toBe(3_000);
+  });
+
   it('parses an HTTP-date Retry-After relative to now', () => {
     const future = new Date(Date.now() + 4_000).toUTCString();
     const err = { headers: headersOf({ 'Retry-After': future }) };

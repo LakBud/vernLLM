@@ -39,7 +39,7 @@ const llm = new VernLLM({
 | `maxRetries`         | `1`               | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                  |
 | `timeoutMs`          | `25000`           | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window.                                                                                                          |
 | `baseDelayMs`        | `500`             | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay). |
-| `nonRetryableStatus` | `[400, 401, 403]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non transient.                                                                |
+| `nonRetryableStatus` | `[400, 401, 403]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                |
 
 <Callout type="warn">
   `maxRetries` defaults to `1`, not `3`. See <a href="/docs/core/error-handling">Error Handling</a>
