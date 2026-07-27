@@ -62,7 +62,7 @@ export class VernLLM {
     this.defaultMaxTokens = retryConfig.defaultMaxTokens;
 
     this.cache = options.cache ?? new InMemoryCacheAdapter();
-    this.nonRetryableStatus = options.nonRetryableStatus ?? [400, 401, 403];
+    this.nonRetryableStatus = options.nonRetryableStatus ?? [400, 401, 403, 404, 422];
 
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.onUsage = options.onUsage;
@@ -86,13 +86,11 @@ export class VernLLM {
 
   /**
    * Returns the caller supplied logger, or a console-based logger whose
-   * debug output is gated by the `debug` option (defaulting to on
-   * outside production)
+   * debug output is gated by the `debug` option (defaulting to off,
+   * so response content isn't unintentionally written to logs)
    */
   private resolveLogger(options: VernLLMOptions): Logger {
-    return (
-      options.logger ?? new ConsoleLogger(options.debug ?? process.env.NODE_ENV !== 'production')
-    );
+    return options.logger ?? new ConsoleLogger(options.debug ?? false);
   }
 
   /**

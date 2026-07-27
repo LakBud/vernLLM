@@ -15,11 +15,12 @@ export interface VernLLMOptions {
   baseDelayMs?: number;
   /** Default max_tokens for calls that don't override it. Default 1000 */
   defaultMaxTokens?: number;
-  /** Enables debug logging of raw model output. Default: NODE_ENV !== 'production' */
+  /** Enables debug logging of raw model output (logs up to 800 chars of each
+   * response). Off by default */
   debug?: boolean;
   /** Cache adapter for cachedCall. Defaults to an in-memory adapter */
   cache?: CacheAdapter;
-  /** HTTP status codes that should fail fast without retrying. Default [400, 401, 403] */
+  /** HTTP status codes that should fail fast without retrying. Default [400, 401, 403, 404, 422] */
   nonRetryableStatus?: number[];
   /** Custom JSON parser. Must return undefined/null on failure. Default: JSON.parse wrapped in try/catch */
   parseJson?: (content: string) => unknown;
