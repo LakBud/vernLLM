@@ -65,10 +65,14 @@ const llm = new VernLLM({
       prompt: params.messages.map((m) => m.content).join('\n\n'),
       max_tokens: params.max_tokens,
     }),
-    mapResponse: (json) => ({
-      content: json.output,
-      usage: { promptTokens: json.usage?.input, completionTokens: json.usage?.output },
-    }),
+    mapResponse: (json: unknown) => {
+      const body = json as { output: string; usage?: { input?: number; output?: number } };
+
+      return {
+        content: body.output,
+        usage: { promptTokens: body.usage?.input, completionTokens: body.usage?.output },
+      };
+    },
   }),
   model: 'example-model-v1',
 });
