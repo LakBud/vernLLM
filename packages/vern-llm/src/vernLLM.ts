@@ -86,8 +86,8 @@ export class VernLLM {
 
   /**
    * Returns the caller supplied logger, or a console-based logger whose
-   * debug output is gated by the `debug` option (defaulting to on
-   * outside production)
+   * debug output is gated by the `debug` option (defaulting to off,
+   * so response content isn't unintentionally written to logs)
    */
   private resolveLogger(options: VernLLMOptions): Logger {
     return options.logger ?? new ConsoleLogger(options.debug ?? false);

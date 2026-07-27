@@ -43,13 +43,13 @@ describe('VernLLM: injectable logger', () => {
 });
 
 describe('VernLLM: default logger resolution', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('defaults to no debug output when debug is not set', async () => {
     const spy = vi.spyOn(console, 'debug').mockImplementation(() => {});
     const { client } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm' }); // no logger, no debug
-
     await llm.call({ userContent: 'u' });
-
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -57,9 +57,7 @@ describe('VernLLM: default logger resolution', () => {
     const spy = vi.spyOn(console, 'debug').mockImplementation(() => {});
     const { client } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm', debug: true }); // no custom logger
-
     await llm.call({ userContent: 'u' });
-
     expect(spy).toHaveBeenCalled();
   });
 });

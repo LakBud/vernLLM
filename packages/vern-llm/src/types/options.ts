@@ -20,7 +20,7 @@ export interface VernLLMOptions {
   debug?: boolean;
   /** Cache adapter for cachedCall. Defaults to an in-memory adapter */
   cache?: CacheAdapter;
-  /** HTTP status codes that should fail fast without retrying. Default [400, 401, 403] */
+  /** HTTP status codes that should fail fast without retrying. Default [400, 401, 403, 404, 422] */
   nonRetryableStatus?: number[];
   /** Custom JSON parser. Must return undefined/null on failure. Default: JSON.parse wrapped in try/catch */
   parseJson?: (content: string) => unknown;
