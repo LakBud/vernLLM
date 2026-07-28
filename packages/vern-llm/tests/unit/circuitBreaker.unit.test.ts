@@ -58,6 +58,58 @@ describe('CircuitBreaker (unit)', () => {
     expect(cb.getState()).toBe('open');
     vi.useRealTimers();
   });
+
+  it('rejects concurrent callers during half-open, letting only the first through as the trial', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+
+    // First caller becomes the trial and is allowed through
+    expect(() => cb.assertClosed()).not.toThrow();
+    expect(cb.getState()).toBe('half-open');
+
+    // Every other concurrent caller is rejected while the trial is outstanding
+    expect(() => cb.assertClosed()).toThrow(expect.objectContaining({ type: 'circuit_open' }));
+    expect(() => cb.assertClosed()).toThrow(expect.objectContaining({ type: 'circuit_open' }));
+
+    vi.useRealTimers();
+  });
+
+  it('allows a new trial once the outstanding half-open trial is recorded (success)', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+
+    cb.assertClosed(); // trial 1 starts
+    expect(() => cb.assertClosed()).toThrow(expect.objectContaining({ type: 'circuit_open' })); // blocked while trial 1 is in flight
+
+    cb.recordSuccess(); // trial 1 resolves, circuit closes
+    expect(() => cb.assertClosed()).not.toThrow(); // closed circuit, no gating needed
+
+    vi.useRealTimers();
+  });
+
+  it('allows a new trial once the outstanding half-open trial is recorded (failure)', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+
+    cb.assertClosed(); // trial 1 starts
+    expect(() => cb.assertClosed()).toThrow(); // blocked while trial 1 is in flight
+
+    cb.recordFailure(); // trial 1 fails, circuit reopens with a fresh cooldown
+    expect(cb.getState()).toBe('open');
+    expect(() => cb.assertClosed()).toThrow(expect.objectContaining({ type: 'circuit_open' }));
+
+    vi.advanceTimersByTime(1001);
+    expect(() => cb.assertClosed()).not.toThrow(); // new cooldown elapsed, new trial allowed
+    expect(cb.getState()).toBe('half-open');
+
+    vi.useRealTimers();
+  });
 });
 
 describe('VernLLM — circuit breaker integration', () => {
@@ -118,5 +170,64 @@ describe('VernLLM — circuit breaker integration', () => {
     await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
     await llm.call({ systemPrompt: 's', userContent: 'u' });
     expect(llm.getCircuitState()).toBe('closed');
+  });
+
+  it('lets only one trial call reach the provider when several calls race right as cooldown ends', async () => {
+    vi.useFakeTimers();
+
+    let resolveTrial!: () => void;
+    const trialGate = new Promise<void>((resolve) => {
+      resolveTrial = resolve;
+    });
+
+    const { client, create } = createMockClient([
+      new Error('down'), // opens the circuit
+      async () => {
+        // The trial call hangs until we release it, so concurrent callers
+        // firing while it's outstanding have a real window to race against it
+        await trialGate;
+        return jsonResponse({ ok: true });
+      },
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 1000 },
+    });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
+    expect(llm.getCircuitState()).toBe('open');
+
+    vi.advanceTimersByTime(1001); // cooldown elapses
+
+    // Fire several concurrent calls at once, right as the circuit becomes eligible for a trial
+    const trialPromise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    // Give the first call a chance to become the trial before firing the rest
+    await Promise.resolve();
+    const rejectedPromises = [
+      llm.call({ systemPrompt: 's', userContent: 'u' }),
+      llm.call({ systemPrompt: 's', userContent: 'u' }),
+    ];
+
+    // The two concurrent callers should be rejected immediately, without
+    // waiting on the outstanding trial
+    const rejectedResults = await Promise.allSettled(rejectedPromises);
+    expect(rejectedResults.every((r) => r.status === 'rejected')).toBe(true);
+    for (const r of rejectedResults) {
+      if (r.status === 'rejected') {
+        expect(r.reason).toMatchObject({ type: 'circuit_open' });
+      }
+    }
+
+    // Only the trial call should have reached the provider (1 open-circuit call + 1 trial call)
+    expect(create.mock.calls.length).toBe(2);
+
+    resolveTrial();
+    await expect(trialPromise).resolves.toEqual({ ok: true });
+    expect(llm.getCircuitState()).toBe('closed');
+
+    vi.useRealTimers();
   });
 });
