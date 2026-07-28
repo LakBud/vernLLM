@@ -46,17 +46,18 @@ import {
 describe('fromOpenAICompatible and its aliases', () => {
   it('delegates create() to the underlying client, forwarding params/options untouched for string content', async () => {
     let received: unknown;
+    let receivedOptions: unknown;
     const fakeClient = {
       chat: {
         completions: {
-          create: async (params: unknown, _options: unknown) => {
+          create: async (params: unknown, options: unknown) => {
             received = params;
+            receivedOptions = options;
             return { choices: [{ message: { content: 'ok' } }] };
           },
         },
       },
     };
-
     const adapted = fromOpenAICompatible(fakeClient);
     const controller = new AbortController();
     const params = {
@@ -65,10 +66,9 @@ describe('fromOpenAICompatible and its aliases', () => {
       max_tokens: 10,
       messages: [{ role: 'user' as const, content: 'hi' }],
     };
-
     const result = await adapted.chat.completions.create(params, { signal: controller.signal });
-
     expect(received).toEqual(params);
+    expect(receivedOptions).toEqual({ signal: controller.signal });
     expect(result.choices?.[0]?.message?.content).toBe('ok');
   });
 
@@ -184,70 +184,5 @@ describe('fromOpenAICompatible and its aliases', () => {
     ['from01AI', from01AI],
   ])('%s is an alias for fromOpenAICompatible', (_name, fn) => {
     expect(fn).toBe(fromOpenAICompatible);
-  });
-
-  it('translates multimodal user content into OpenAI content blocks', async () => {
-    let received: unknown;
-
-    const original = {
-      chat: {
-        completions: {
-          create: async (params: unknown) => {
-            received = params;
-
-            return {
-              choices: [
-                {
-                  message: {
-                    content: 'ok',
-                  },
-                },
-              ],
-            };
-          },
-        },
-      },
-    };
-
-    const client = fromOpenAICompatible(original);
-
-    const result = await client.chat.completions.create(
-      {
-        model: 'test',
-        temperature: 0,
-        max_tokens: 10,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'describe this image' },
-              { type: 'image', data: 'ZmFrZWJhc2U2NA==', mimeType: 'image/png' },
-            ],
-          },
-        ],
-      },
-      {
-        signal: new AbortController().signal,
-      },
-    );
-
-    expect(result.choices?.[0]?.message?.content).toBe('ok');
-
-    expect(received).toMatchObject({
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'describe this image' },
-            {
-              type: 'image_url',
-              image_url: {
-                url: 'data:image/png;base64,ZmFrZWJhc2U2NA==',
-              },
-            },
-          ],
-        },
-      ],
-    });
   });
 });

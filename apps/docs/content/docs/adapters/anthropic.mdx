@@ -25,7 +25,8 @@ const llm = new VernLLM({
 ## Multimodal input
 
 `fromAnthropic` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
-Image blocks are translated into Anthropic's native `image` content blocks automatically.
+Image blocks are translated into Anthropic's native content blocks automatically. The selected
+Anthropic model must support vision/image input for multimodal requests to succeed.
 
 ```ts
 const result = await llm.call({

@@ -19,7 +19,8 @@ Note: Tool-based structured output requires a Bedrock model that supports tool u
 ## Multimodal input
 
 `fromBedrock` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
-Image blocks are translated into Bedrock's native `image` content blocks automatically.
+Image blocks are translated into Bedrock Converse's native image content blocks automatically. The
+selected Bedrock model must support image input for multimodal requests to succeed.
 
 ```ts
 const result = await llm.call({

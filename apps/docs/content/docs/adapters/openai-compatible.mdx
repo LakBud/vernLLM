@@ -75,7 +75,7 @@ const llm = new VernLLM({
 
 ## Multimodal input
 
-OpenAI-compatible providers that support vision models can receive images through VernLLM's
+OpenAI-compatible providers with vision-capable models can receive images through VernLLM's
 provider-independent `ContentBlock[]` format:
 
 ```ts
@@ -93,3 +93,15 @@ const result = await llm.call({
   ],
 });
 ```
+
+Image data must be raw base64-encoded bytes without a `data:` URL prefix. The OpenAI-compatible
+adapter converts image blocks into the provider's expected `image_url` data URL format internally.
+
+Supported image types are:
+
+- `image/png`
+- `image/jpeg`
+- `image/gif`
+- `image/webp`
+
+Plain string `userContent` remains unchanged for text-only requests.

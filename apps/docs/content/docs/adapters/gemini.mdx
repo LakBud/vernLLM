@@ -53,7 +53,8 @@ const llm = new VernLLM({
 ## Multimodal input
 
 `fromGemini` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
-Image blocks are translated into Gemini's native `inlineData` parts automatically.
+Image blocks are translated into Gemini's native `inlineData` parts automatically. The selected
+Gemini model must support image input for multimodal requests to succeed.
 
 ```ts
 const result = await llm.call({
