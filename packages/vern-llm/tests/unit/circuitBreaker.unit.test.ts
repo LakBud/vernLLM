@@ -83,7 +83,7 @@ describe('CircuitBreaker (unit)', () => {
     vi.advanceTimersByTime(1001);
 
     cb.assertClosed(); // trial 1 starts
-    expect(() => cb.assertClosed()).toThrow(); // blocked while trial 1 is in flight
+    expect(() => cb.assertClosed()).toThrow(expect.objectContaining({ type: 'circuit_open' })); // blocked while trial 1 is in flight
 
     cb.recordSuccess(); // trial 1 resolves, circuit closes
     expect(() => cb.assertClosed()).not.toThrow(); // closed circuit, no gating needed
