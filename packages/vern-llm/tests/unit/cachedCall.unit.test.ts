@@ -206,18 +206,37 @@ describe('VernLLM.cachedCall', () => {
       reserveCalls.push(info.coalesced);
     });
     const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
-
     const calls = [
       llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage }),
       llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage }),
     ];
-
     await Promise.resolve();
     resolveFn('result');
     await Promise.all(calls);
-
     expect(reserveUsage).toHaveBeenCalledTimes(2);
     expect(reserveCalls.sort()).toEqual([false, true]); // one trigger, one coalesced
+  });
+
+  it('reserves and refunds usage separately for each coalesced caller on failure, tagged with coalesced: true/false', async () => {
+    let rejectFn!: (err: Error) => void;
+    const gate = new Promise<string>((_resolve, reject) => {
+      rejectFn = reject;
+    });
+    const fn = vi.fn(() => gate);
+    const refundCalls: boolean[] = [];
+    const refundUsage = vi.fn(async (info: { coalesced: boolean }) => {
+      refundCalls.push(info.coalesced);
+    });
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+    const calls = [
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, refundUsage }).catch(() => {}),
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, refundUsage }).catch(() => {}),
+    ];
+    await Promise.resolve();
+    rejectFn(new Error('shared failure'));
+    await Promise.all(calls);
+    expect(refundUsage).toHaveBeenCalledTimes(2);
+    expect(refundCalls.sort()).toEqual([false, true]);
   });
 
   it('cleans up the in-flight entry after a successful call, allowing a fresh trigger later', async () => {
