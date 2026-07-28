@@ -147,6 +147,109 @@ describe('VernLLM.cachedCall', () => {
 
     await expect(llm.cachedCall({ cacheKey: 'k', ttl: 60, fn })).resolves.toBe('result');
   });
+
+  it('coalesces concurrent misses for the same cacheKey into a single fn() call', async () => {
+    let resolveFn!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      resolveFn = resolve;
+    });
+    const fn = vi.fn(() => gate);
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    const calls = [
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn }),
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn }),
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn }),
+    ];
+
+    for (let i = 0; i < 5; i++) await Promise.resolve(); // flush microtasks so all three reach the in-flight check
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    resolveFn('shared result');
+    const results = await Promise.all(calls);
+    expect(results).toEqual(['shared result', 'shared result', 'shared result']);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a coalesced fn() failure to every waiting caller', async () => {
+    let rejectFn!: (err: Error) => void;
+    const gate = new Promise<string>((_resolve, reject) => {
+      rejectFn = reject;
+    });
+    const fn = vi.fn(() => gate);
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    const calls = [
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn }).catch((e) => e),
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn }).catch((e) => e),
+    ];
+
+    await Promise.resolve();
+    rejectFn(new Error('shared failure'));
+
+    const results = await Promise.all(calls);
+    expect(fn).toHaveBeenCalledTimes(1);
+    for (const r of results) {
+      expect(r).toBeInstanceOf(Error);
+      expect((r as Error).message).toBe('shared failure');
+    }
+  });
+
+  it('reserves and refunds usage separately for each coalesced caller, tagged with coalesced: true/false', async () => {
+    let resolveFn!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      resolveFn = resolve;
+    });
+    const fn = vi.fn(() => gate);
+    const reserveCalls: boolean[] = [];
+    const reserveUsage = vi.fn(async (info: { coalesced: boolean }) => {
+      reserveCalls.push(info.coalesced);
+    });
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    const calls = [
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage }),
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage }),
+    ];
+
+    await Promise.resolve();
+    resolveFn('result');
+    await Promise.all(calls);
+
+    expect(reserveUsage).toHaveBeenCalledTimes(2);
+    expect(reserveCalls.sort()).toEqual([false, true]); // one trigger, one coalesced
+  });
+
+  it('cleans up the in-flight entry after a successful call, allowing a fresh trigger later', async () => {
+    const fn = vi.fn().mockResolvedValueOnce('first').mockResolvedValueOnce('second');
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    await llm.cachedCall({ cacheKey: 'k', ttl: 0, fn });
+    // A fresh call after the first settled and the cache entry doesn't
+    // apply (ttl 0) should trigger fn() again, proving the in-flight
+    // entry for 'k' was cleaned up rather than reused indefinitely
+    const result = await llm.cachedCall({ cacheKey: 'k', ttl: 0, fn });
+
+    expect(result).toBe('second');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('cleans up the in-flight entry after a failed call, allowing a retry to trigger fn() again', async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('first failure'))
+      .mockResolvedValueOnce('recovered');
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    await expect(llm.cachedCall({ cacheKey: 'k', ttl: 60, fn })).rejects.toThrow('first failure');
+    // If the in-flight entry weren't cleaned up, this second call would
+    // incorrectly reuse the failed (and by now settled) promise instead of
+    // triggering a fresh fn() call
+    const result = await llm.cachedCall({ cacheKey: 'k', ttl: 60, fn });
+
+    expect(result).toBe('recovered');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('VernLLM.deleteCache', () => {

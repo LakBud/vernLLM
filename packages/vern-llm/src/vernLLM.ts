@@ -41,6 +41,8 @@ export class VernLLM {
   private readonly cache: CacheAdapter<unknown>;
   private readonly nonRetryableStatus: number[];
 
+  private readonly inFlight = new Map<string, Promise<unknown>>();
+
   private readonly parseJson: (content: string) => unknown;
   private readonly onUsage?: VernLLMOptions['onUsage'];
 
@@ -450,10 +452,13 @@ export class VernLLM {
   }
 
   /**
-   * Thin cache wrapper around caller supplied logic. `params.fn` is expected
-   * to be a call that itself invokes `this.call(...)` (see `cachedLLMCall`
-   * below for a convenience wrapper that wires this up automatically),
-   * `cachedCall` does not itself apply retry/timeout policy.
+   * Cache wrapper around caller-supplied logic. `params.fn` should invoke
+   * `this.call(...)` (see `cachedLLMCall`); retry/timeout handling is left
+   * to the caller.
+   *
+   * Concurrent misses for the same `cacheKey` share a single in-flight call,
+   * avoiding cache stampedes. Each caller still receives its own
+   * `reserveUsage`/`refundUsage` callbacks with coalescing metadata.
    */
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
     const cached = await this.cache.get(params.cacheKey);
@@ -462,23 +467,64 @@ export class VernLLM {
       return cached.value as T;
     }
 
+    const existing = this.inFlight.get(params.cacheKey) as Promise<T> | undefined;
+    const coalesced = existing !== undefined;
+    const resultPromise = existing ?? this.registerTrigger(params, coalesced);
+
+    if (coalesced) {
+      return this.withRefundOnFailure(params, coalesced, async () => {
+        await params.reserveUsage?.({ coalesced });
+        return resultPromise;
+      });
+    }
+
+    return this.withRefundOnFailure(params, coalesced, () => resultPromise);
+  }
+
+  /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */
+  private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
+    const resultPromise = (async () => {
+      await params.reserveUsage?.({ coalesced });
+      return this.runAndCache(params);
+    })();
+
+    this.inFlight.set(params.cacheKey, resultPromise);
+    // Cleanup runs regardless of outcome
+    void resultPromise
+      .catch(() => {})
+      .finally(() => {
+        this.inFlight.delete(params.cacheKey);
+      });
+
+    return resultPromise;
+  }
+
+  /** Runs `fn` and writes its result to the cache. Only ever called once per cacheKey per in-flight window, from registerTrigger */
+  private async runAndCache<T>(params: CachedCallParams<T>): Promise<T> {
+    const result = await params.fn();
+
     try {
-      await params.reserveUsage?.();
+      await this.cache.set(params.cacheKey, result, params.ttl);
+    } catch (error) {
+      this.logger.error('[VernLLM] cache write failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
 
-      const result = await params.fn();
+    return result;
+  }
 
-      try {
-        await this.cache.set(params.cacheKey, result, params.ttl);
-      } catch (error) {
-        this.logger.error('[VernLLM] cache write failed', {
-          message: error instanceof Error ? error.message : 'unknown',
-        });
-      }
-
-      return result;
+  /** Awaits `run`, calling this caller's own refundUsage (tagged with whether it was coalesced) if it rejects, then rethrows the original error */
+  private async withRefundOnFailure<T>(
+    params: CachedCallParams<T>,
+    coalesced: boolean,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await run();
     } catch (error) {
       try {
-        await params.refundUsage?.();
+        await params.refundUsage?.({ coalesced });
       } catch (refundError) {
         this.logger.error('[VernLLM] refundUsage failed', {
           message: refundError instanceof Error ? refundError.message : 'unknown',

@@ -24,8 +24,8 @@ const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
   fn: () => llm.call({ systemPrompt, userContent }),
-  reserveUsage: () => quota.reserve(userId),
-  refundUsage: () => quota.refund(userId),
+  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
+  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
 });
 ```
 
@@ -40,21 +40,34 @@ const result = await llm.cachedCall({
   (or the cache write) is what propagates, so a broken refund path never masks the real failure.
 </Callout>
 
+## Concurrent misses are coalesced
+
+If several calls with the same `cacheKey` miss the cache at roughly the same time, only the first one (the "trigger") actually calls `fn`. Every other concurrent caller waits on that same in-flight call instead of starting its own, and all of them resolve (or reject) together once it settles. This prevents a cache stampede, where many simultaneous callers all trigger their own (possibly expensive) `fn()` call before the first one has had a chance to populate the cache.
+
+Every caller still gets its own `reserveUsage`/`refundUsage` invocation — the trigger and each coalesced caller — but is told whether it was coalesced via the `coalesced` flag, so your application decides how coalesced callers are billed: full price, a reduced rate, or not billed at all.
+
+<Callout>
+  Although `fn` executes only once per in-flight window, `reserveUsage` and `refundUsage` are still
+  invoked once per caller. If `fn` fails, every caller is refunded independently.
+</Callout>
+
 ## How the cache/reserve/refund flow works
 
-On a cache miss, `cachedCall` runs in this order:
+On a cache miss, `cachedCall` runs in this order for the triggering caller:
 
-1. `reserveUsage()`, if provided.
+1. `reserveUsage({ coalesced: false })`, if provided.
 2. `fn()`, the actual LLM call.
 3. On success, write the result to the cache (a failed cache write is logged and swallowed; the result is still returned).
-4. On any failure in steps 1 or 2, call `refundUsage()`, then rethrow the original error.
+4. On any failure in steps 1 or 2, call `refundUsage({ coalesced: false })`, then rethrow the original error.
+
+Coalesced callers skip step 2 (they share the trigger's `fn()` call instead) but still run their own `reserveUsage({ coalesced: true })` before waiting on the shared result, and their own `refundUsage({ coalesced: true })` if it fails.
 
 <Callout type="warn">
-  `refundUsage` runs on a failure from *either* `reserveUsage` or `fn`, since both are inside the
-  same try block. If `reserveUsage` itself throws (e.g. the user is already out of quota),
-  `refundUsage` still fires, refunding a reservation that was never actually made. Make sure your
-  `refundUsage` implementation is safe to call in that case (e.g. a no-op if there's nothing to
-  refund, rather than an unconditional decrement).
+  For a given caller, `refundUsage` runs on a failure from *either* its own `reserveUsage` or the
+  underlying `fn` call, since both feed into the same try block. If `reserveUsage` itself throws
+  (e.g. the user is already out of quota), `refundUsage` still fires, refunding a reservation that
+  was never actually made. Make sure your `refundUsage` implementation is safe to call in that case
+  (e.g. a no-op if there's nothing to refund, rather than an unconditional decrement).
 </Callout>
 
 <Callout type="warn">
@@ -83,8 +96,8 @@ const result = await llm.cachedLLMCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
   call: { systemPrompt, userContent }, // same shape as call()'s params
-  reserveUsage: () => quota.reserve(userId),
-  refundUsage: () => quota.refund(userId),
+  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
+  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
 });
 ```
 
