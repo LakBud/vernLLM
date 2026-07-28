@@ -24,8 +24,39 @@ const result = await llm.call({
 
 <Cards>
   <Card title="userContent">
-    <b>Required.</b> `string`. The current user message. Always sent as the final user turn, after
-    `history` if provided.
+    <b>Required.</b> `string | ContentBlock[]`. The current user message. Always sent as the final
+    user turn, after `history` if provided.
+
+    A plain `string` is used for text-only prompts (the common case). For multimodal input, pass an
+    array of text and image blocks:
+
+    ```ts
+    const result = await llm.call({
+      userContent: [
+        {
+          type: 'text',
+          text: 'Describe this image.',
+        },
+        {
+          type: 'image',
+          mimeType: 'image/png',
+          data: imageBase64,
+        },
+      ],
+    });
+    ```
+
+    Image blocks use base64-encoded image bytes without a `data:` URL prefix. VernLLM translates
+    them into each provider's native multimodal format automatically.
+
+    Supported image MIME types:
+    - `image/png`
+    - `image/jpeg`
+    - `image/gif`
+    - `image/webp`
+
+    Existing string-based calls remain fully compatible.
+
   </Card>
   <Card title="systemPrompt">
     `string`, optional. Sent as the system message. Omit it and the provider's own default system

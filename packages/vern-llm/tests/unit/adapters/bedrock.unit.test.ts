@@ -51,6 +51,63 @@ describe('fromBedrock', () => {
     );
   });
 
+  it('translates ContentBlock[] userContent into Converse image/text blocks, decoding base64 to bytes', async () => {
+    const { client, converse } = makeFakeBedrockClient('described');
+    const adapted = fromBedrock(client);
+    const base64 = 'ZmFrZWJhc2U2NA==';
+
+    await adapted.chat.completions.create(
+      {
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        temperature: 0.2,
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: "what's in this image?" },
+              { type: 'image', data: base64, mimeType: 'image/png' },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+    const content = sentParams.messages[0]!.content;
+
+    expect(content[0]).toEqual({ text: "what's in this image?" });
+    expect(content[1]).toMatchObject({ image: { format: 'png' } });
+
+    const imageBlock = content[1] as { image: { format: string; source: { bytes: Uint8Array } } };
+    expect(Array.from(imageBlock.image.source.bytes)).toEqual(
+      Array.from(Buffer.from(base64, 'base64')),
+    );
+  });
+
+  it('throws a validation LLMError for an unsupported image mimeType', async () => {
+    const { client } = makeFakeBedrockClient('unused');
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+          temperature: 0.2,
+          max_tokens: 100,
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'image', data: 'ZmFrZQ==', mimeType: 'image/tiff' }],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
+
   it('maps output.message.content back into choices[0].message.content', async () => {
     const { client } = makeFakeBedrockClient('bedrock response');
     const adapted = fromBedrock(client);

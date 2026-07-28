@@ -119,4 +119,57 @@ describe('Bedrock adapter integration', () => {
       expect.anything(),
     );
   });
+
+  it('passes multimodal user content into Bedrock Converse image blocks', async () => {
+    const bedrock = {
+      converse: vi.fn(async () => ({
+        output: { message: { content: [{ text: 'I see an image.' }] } },
+        usage: { inputTokens: 20, outputTokens: 5, totalTokens: 25 },
+      })),
+    };
+
+    const client = fromBedrock(bedrock);
+
+    const result = await client.chat.completions.create(
+      {
+        model: 'anthropic.claude-test',
+        temperature: 0.2,
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: "What's in this image?" },
+              { type: 'image', data: 'ZmFrZWJhc2U2NA==', mimeType: 'image/png' },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.content).toBe('I see an image.');
+
+    expect(bedrock.converse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { text: "What's in this image?" },
+              {
+                image: {
+                  format: 'png',
+                  source: {
+                    bytes: new Uint8Array(Buffer.from('ZmFrZWJhc2U2NA==', 'base64')),
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+      expect.anything(),
+    );
+  });
 });

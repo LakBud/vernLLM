@@ -83,4 +83,7 @@ A handful of options are set per `call()` rather than on the instance. Three hav
 | `jsonMode`     | `true`  | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing.                             |
 | `systemPrompt` | none    | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                              |
 
-The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`, `signal`, and `requestId`, have no call-level default beyond falling back to the instance-level option or being undefined when omitted. `userContent` remains required.
+The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`,
+`signal`, and `requestId`, have no call-level default beyond falling back to the instance-level
+option or being undefined when omitted. `userContent` remains required and accepts either a plain
+`string` for text-only requests or a `ContentBlock[]` for multimodal input (text and images).

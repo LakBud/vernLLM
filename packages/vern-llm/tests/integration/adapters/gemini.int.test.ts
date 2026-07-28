@@ -98,4 +98,61 @@ describe('Gemini adapter integration', () => {
       expect.anything(),
     );
   });
+
+  it('passes multimodal user content into Gemini inlineData parts', async () => {
+    const gemini = {
+      generateContent: vi.fn(async () => ({
+        candidates: [{ content: { parts: [{ text: 'I see an image.' }] } }],
+        usageMetadata: {
+          promptTokenCount: 20,
+          candidatesTokenCount: 5,
+          totalTokenCount: 25,
+        },
+      })),
+    };
+
+    const client = fromGemini(gemini);
+
+    const result = await client.chat.completions.create(
+      {
+        model: 'gemini-test',
+        temperature: 0.1,
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: "What's in this image?" },
+              { type: 'image', data: 'ZmFrZWJhc2U2NA==', mimeType: 'image/png' },
+            ],
+          },
+        ],
+      },
+      {
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(result.choices?.[0]?.message?.content).toBe('I see an image.');
+
+    expect(gemini.generateContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: "What's in this image?" },
+              {
+                inlineData: {
+                  mimeType: 'image/png',
+                  data: 'ZmFrZWJhc2U2NA==',
+                },
+              },
+            ],
+          },
+        ],
+      }),
+      expect.anything(),
+    );
+  });
 });
