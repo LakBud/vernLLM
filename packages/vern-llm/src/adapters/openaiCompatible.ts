@@ -1,13 +1,47 @@
-import type { LLMClient } from '../types/index.js';
+import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
+
+import type { ContentBlock, LLMClient } from '../types/index.js';
+
+/** OpenAI's native per-part content shape for a user message. */
+type OpenAIContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
 
 /**
- * Passthrough adapter for any SDK/client whose `chat.completions.create`
- * already matches the OpenAI wire format 1:1 : this covers most hosted
- * inference providers, since "OpenAI-compatible" is a de facto standard for
- * chat completion APIs. No transformation happens here, this exists purely
- * so call sites read clearly (`fromMistral(client)` vs handing a Mistral
- * client to something typed for OpenAI) and so a real transformation could
- * be added later, per-provider, without a breaking change.
+ * Translates a VernLLM `ContentBlock[]` into OpenAI's wire-level content
+ * array. Text blocks become `{ type: 'text', text }`; image blocks become
+ * `{ type: 'image_url', image_url: { url } }` with the base64 payload
+ * inlined as a `data:` URL, since our `ContentBlock` shape (`{ type:
+ * 'image', data, mimeType }`) is provider-agnostic and doesn't itself match
+ * OpenAI's wire format.
+ */
+function toOpenAIContent(blocks: ContentBlock[]): OpenAIContentPart[] {
+  return blocks.map((block) =>
+    block.type === 'image'
+      ? {
+          type: 'image_url',
+          image_url: {
+            url: `data:${assertSupportedImageMimeType(block.mimeType)};base64,${block.data}`,
+          },
+        }
+      : { type: 'text', text: block.text },
+  );
+}
+
+/**
+ * Adapter for any SDK/client whose `chat.completions.create` already
+ * matches the OpenAI wire format: this covers most hosted inference
+ * providers, since "OpenAI-compatible" is a de facto standard for chat
+ * completion APIs. Almost everything passes straight through untouched,
+ * this exists purely so call sites read clearly (`fromMistral(client)` vs
+ * handing a Mistral client to something typed for OpenAI) and so a real
+ * transformation could be added later, per-provider, without a breaking
+ * change.
+ *
+ * The one thing that isn't a pure passthrough: a `ContentBlock[]`
+ * `userContent` is translated into OpenAI's native `image_url` content-part
+ * shape, since VernLLM's `ContentBlock` is intentionally provider-agnostic
+ * rather than a copy of any one provider's wire format.
  *
  * Not every SDKs own TypeScript types line up exactly with `LLMClient`
  * (extra fields, stricter unions, etc.), so this takes `unknown` and casts:
@@ -15,8 +49,29 @@ import type { LLMClient } from '../types/index.js';
  * receives over the wire, not the SDKs TS types.
  */
 export function fromOpenAICompatible(client: unknown): LLMClient {
-  return client as LLMClient;
+  const raw = client as LLMClient;
+
+  return {
+    chat: {
+      completions: {
+        async create(params, options) {
+          const messages = params.messages.map((m) =>
+            m.role === 'user' && Array.isArray(m.content)
+              ? { ...m, content: toOpenAIContent(m.content) }
+              : m,
+          );
+
+          return raw.chat.completions.create(
+            { ...params, messages } as Parameters<LLMClient['chat']['completions']['create']>[0],
+            options,
+          );
+        },
+      },
+    },
+  };
 }
+
+// LLM aliases
 
 /** Groqs SDK matches the OpenAI wire format */
 export const fromGroq = fromOpenAICompatible;

@@ -1,4 +1,9 @@
-import type { LLMClient } from '../types/index.js';
+import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
+
+import type { ContentBlock, LLMClient } from '../types/index.js';
+
+/** Gemini's native per-part content shape for a `contents` entry. */
+type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
 
 /**
  * Minimal structural type for Geminis `generateContent`, matching both the
@@ -10,7 +15,7 @@ export interface GeminiClient {
   generateContent(
     params: {
       model?: string;
-      contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+      contents: Array<{ role: 'user' | 'model'; parts: GeminiPart[] }>;
       systemInstruction?: { parts: Array<{ text: string }> };
       generationConfig?: {
         temperature?: number;
@@ -28,6 +33,20 @@ export interface GeminiClient {
       totalTokenCount?: number;
     };
   }>;
+}
+
+/**
+ * Translates a VernLLM `ContentBlock[]` into Gemini's native `parts` array:
+ * text blocks become `{ text }`, image blocks become inline data parts
+ * (`{ inlineData: { mimeType, data } }`), Geminis shape for embedding raw
+ * base64 image bytes directly in the request.
+ */
+function toGeminiParts(blocks: ContentBlock[]): GeminiPart[] {
+  return blocks.map((block) =>
+    block.type === 'image'
+      ? { inlineData: { mimeType: assertSupportedImageMimeType(block.mimeType), data: block.data } }
+      : { text: block.text },
+  );
 }
 
 /**
@@ -73,10 +92,11 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
               model: params.model,
               contents: conversationMessages.map((m) => ({
                 role: m.role === 'assistant' ? ('model' as const) : ('user' as const),
-                parts: [{ text: m.content }],
+                parts: Array.isArray(m.content) ? toGeminiParts(m.content) : [{ text: m.content }],
               })),
               systemInstruction: systemMessage
-                ? { parts: [{ text: systemMessage.content }] }
+                ? // System turns are always plain strings; only user turns can carry ContentBlock[]
+                  { parts: [{ text: systemMessage.content as string }] }
                 : undefined,
               generationConfig,
             },

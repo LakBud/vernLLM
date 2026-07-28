@@ -163,4 +163,52 @@ describe('Anthropic adapter integration', () => {
     expect(sentParams.messages).toEqual([{ role: 'user', content: 'hello' }]);
     expect(sentParams.system).toBeUndefined();
   });
+
+  it('passes multimodal user content through VernLLM into Anthropic image/text blocks', async () => {
+    const anthropic = {
+      messages: {
+        create: vi.fn(async () => ({
+          content: [{ type: 'text', text: 'I see an image.' }],
+          usage: { input_tokens: 20, output_tokens: 5 },
+        })),
+      },
+    };
+
+    const llm = new VernLLM({
+      client: fromAnthropic(anthropic),
+      model: 'claude-test',
+    });
+
+    const result = await llm.call({
+      userContent: [
+        { type: 'text', text: "What's in this image?" },
+        { type: 'image', data: 'ZmFrZWJhc2U2NA==', mimeType: 'image/png' },
+      ],
+      jsonMode: false,
+    });
+
+    expect(result).toBe('I see an image.');
+
+    expect(anthropic.messages.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: "What's in this image?" },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: 'ZmFrZWJhc2U2NA==',
+                },
+              },
+            ],
+          },
+        ],
+      }),
+      expect.anything(),
+    );
+  });
 });

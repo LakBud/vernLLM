@@ -16,7 +16,10 @@ function makeFakeAnthropicToolClient(
         max_tokens: number;
         temperature?: number;
         system?: string;
-        messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+        messages: Array<{
+          role: 'user' | 'assistant';
+          content: string | Array<unknown>;
+        }>;
         tools?: Array<{ name: string; description?: string; input_schema: unknown }>;
         tool_choice?: { type: 'tool'; name: string };
       },
@@ -92,6 +95,65 @@ describe('fromAnthropic', () => {
       completion_tokens: 3,
       total_tokens: 10,
     });
+  });
+
+  it('translates ContentBlock[] userContent into Anthropic image/text blocks', async () => {
+    const { client, create } = makeFakeAnthropicClient('described');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        temperature: 0.2,
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: "what's in this image?" },
+              { type: 'image', data: 'ZmFrZWJhc2U2NA==', mimeType: 'image/png' },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(create.mock.calls, 0)[0];
+    expect(sentParams.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: "what's in this image?" },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'ZmFrZWJhc2U2NA==' },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('throws a validation LLMError for an unsupported image mimeType', async () => {
+    const { client } = makeFakeAnthropicClient('unused');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          temperature: 0.2,
+          max_tokens: 100,
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'image', data: 'ZmFrZQ==', mimeType: 'image/tiff' }],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
   });
 
   it('forces tool-use for json_schema mode instead of embedding the schema in the prompt', async () => {

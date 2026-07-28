@@ -21,3 +21,30 @@ const llm = new VernLLM({
   structured output. Plain JSON mode (`json_object`) uses prompt-based JSON instructions.
   `reasoning_effort` is dropped.
 </Callout>
+
+## Multimodal input
+
+`fromAnthropic` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
+Image blocks are translated into Anthropic's native content blocks automatically. The selected
+Anthropic model must support vision/image input for multimodal requests to succeed.
+
+```ts
+const result = await llm.call({
+  userContent: [
+    {
+      type: 'text',
+      text: 'Describe this image.',
+    },
+    {
+      type: 'image',
+      mimeType: 'image/png',
+      data: imageBase64,
+    },
+  ],
+});
+```
+
+Image data must be base64-encoded bytes without a `data:` URL prefix. Supported image types are
+`image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
+
+Plain string `userContent` remains unchanged for text-only requests.

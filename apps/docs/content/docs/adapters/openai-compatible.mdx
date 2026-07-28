@@ -3,7 +3,9 @@ title: OpenAI-Compatible
 description: Zero-transform passthrough for OpenAI-compatible providers
 ---
 
-Many hosted inference providers expose the same wire format as OpenAI's Chat Completions API. `vern-llm` includes a named adapter for each supported provider, but they're all thin aliases around the same zero-transform passthrough: `fromOpenAICompatible()`.
+Many hosted inference providers expose the same wire format as OpenAI's Chat Completions API. `vern-llm` includes a named adapter for each supported provider, but they're all thin aliases around the same OpenAI-compatible adapter: `fromOpenAICompatible()`.
+
+The adapter preserves the OpenAI-compatible request shape and only normalizes fields VernLLM adds on top of the standard Chat Completions format. In particular, multimodal `ContentBlock[]` input is translated into OpenAI's native content array format, while plain string messages pass through unchanged.
 
 The named adapters exist purely for readability and discoverability. They also leave room to introduce provider-specific behavior in the future without requiring a breaking API change.
 
@@ -70,3 +72,36 @@ const llm = new VernLLM({
   model: 'some-model',
 });
 ```
+
+## Multimodal input
+
+OpenAI-compatible providers with vision-capable models can receive images through VernLLM's
+provider-independent `ContentBlock[]` format:
+
+```ts
+const result = await llm.call({
+  userContent: [
+    {
+      type: 'text',
+      text: 'What is in this image?',
+    },
+    {
+      type: 'image',
+      mimeType: 'image/png',
+      data: imageBase64,
+    },
+  ],
+});
+```
+
+Image data must be raw base64-encoded bytes without a `data:` URL prefix. The OpenAI-compatible
+adapter converts image blocks into the provider's expected `image_url` data URL format internally.
+
+Supported image types are:
+
+- `image/png`
+- `image/jpeg`
+- `image/gif`
+- `image/webp`
+
+Plain string `userContent` remains unchanged for text-only requests.

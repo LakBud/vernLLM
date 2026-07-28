@@ -7,9 +7,41 @@ export interface ConversationTurn {
   content: string;
 }
 
+/** A plain text segment of a multimodal `userContent` array. */
+export interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+/**
+ * An inline image segment of a multimodal `userContent` array.
+ *
+ * `data` is the raw base64-encoded image bytes, with no `data:` URL prefix
+ * (adapters that need a data URL, e.g. OpenAI-compatible `image_url`, build
+ * it themselves from `mimeType` + `data`; adapters that need raw bytes, e.g.
+ * Bedrock, decode the base64 themselves).
+ */
+export interface ImageBlock {
+  type: 'image';
+  /** Base64-encoded image bytes, no `data:` prefix */
+  data: string;
+  /** e.g. 'image/png', 'image/jpeg', 'image/webp', 'image/gif' */
+  mimeType: string;
+}
+
+/** A single segment of multimodal `userContent`. */
+export type ContentBlock = TextBlock | ImageBlock;
+
 export interface CallParams<T = unknown> {
   systemPrompt?: string;
-  userContent: string;
+  /**
+   * The current user turn. A plain string for text-only prompts (the common
+   * case), or an array of `ContentBlock`s (text and/or image) for multimodal
+   * input. Each adapter translates image blocks into its provider's native
+   * shape; providers/models that don't support image input will reject or
+   * ignore them.
+   */
+  userContent: string | ContentBlock[];
   /**
    * Prior turns in the conversation, oldest first, NOT including the current
    * `userContent` (that's appended automatically as the final user turn).

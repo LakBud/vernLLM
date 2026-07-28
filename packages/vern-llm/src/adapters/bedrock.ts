@@ -1,4 +1,14 @@
-import type { LLMClient } from '../types/index.js';
+import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
+
+import type { ContentBlock, LLMClient } from '../types/index.js';
+
+/** Bedrock Converse's supported inline image formats. */
+type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
+
+/** Bedrock Converse's native per-block content shape for a message. */
+type BedrockContentBlock =
+  | { text: string }
+  | { image: { format: BedrockImageFormat; source: { bytes: Uint8Array } } };
 
 /**
  * Minimal structural type matching AWS Bedrocks Converse API. This is
@@ -20,7 +30,7 @@ export interface BedrockConverseClient {
   converse(
     params: {
       modelId: string;
-      messages: Array<{ role: 'user' | 'assistant'; content: Array<{ text: string }> }>;
+      messages: Array<{ role: 'user' | 'assistant'; content: BedrockContentBlock[] }>;
       system?: Array<{ text: string }>;
       inferenceConfig?: { temperature?: number; maxTokens?: number };
       toolConfig?: {
@@ -43,6 +53,49 @@ export interface BedrockConverseClient {
     };
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
   }>;
+}
+
+/** Maps a `ContentBlock` image MIME type, already validated, to Converse's `format` enum. */
+function toBedrockImageFormat(mimeType: string): BedrockImageFormat {
+  switch (assertSupportedImageMimeType(mimeType)) {
+    case 'image/png':
+      return 'png';
+    case 'image/jpeg':
+      return 'jpeg';
+    case 'image/gif':
+      return 'gif';
+    case 'image/webp':
+      return 'webp';
+  }
+}
+
+/**
+ * Decodes base64 image data into the raw `Uint8Array` bytes Converse's
+ * `image.source.bytes` expects (unlike Anthropic/Gemini/OpenAI, which all
+ * take base64 strings directly). Uses `Buffer`, since this adapter, like
+ * the rest of the package, targets Node.
+ */
+function decodeBase64(data: string): Uint8Array {
+  return new Uint8Array(Buffer.from(data, 'base64'));
+}
+
+/**
+ * Translates a VernLLM `ContentBlock[]` into Converse's native content-block
+ * array: text blocks pass through as `{ text }`, image blocks become
+ * `{ image: { format, source: { bytes } } }` with the base64 payload decoded
+ * to raw bytes, since Converse doesn't accept base64 strings directly.
+ */
+function toBedrockContent(blocks: ContentBlock[]): BedrockContentBlock[] {
+  return blocks.map((block) =>
+    block.type === 'image'
+      ? {
+          image: {
+            format: toBedrockImageFormat(block.mimeType),
+            source: { bytes: decodeBase64(block.data) },
+          },
+        }
+      : { text: block.text },
+  );
 }
 
 /**
@@ -106,7 +159,9 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
               modelId: params.model,
               messages: conversationMessages.map((m) => ({
                 role: m.role,
-                content: [{ text: m.content }],
+                content: Array.isArray(m.content)
+                  ? toBedrockContent(m.content)
+                  : [{ text: m.content }],
               })),
               system: systemParts.length ? systemParts.map((text) => ({ text })) : undefined,
               inferenceConfig: {

@@ -114,6 +114,61 @@ describe('fromGemini', () => {
     expect(config?.responseMimeType).toBe('application/json');
   });
 
+  it('translates ContentBlock[] userContent into Gemini text/inlineData parts', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('described');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        temperature: 0.2,
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: "what's in this image?" },
+              { type: 'image', data: 'ZmFrZWJhc2U2NA==', mimeType: 'image/png' },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].contents).toEqual([
+      {
+        role: 'user',
+        parts: [
+          { text: "what's in this image?" },
+          { inlineData: { mimeType: 'image/png', data: 'ZmFrZWJhc2U2NA==' } },
+        ],
+      },
+    ]);
+  });
+
+  it('throws a validation LLMError for an unsupported image mimeType', async () => {
+    const { client } = makeFakeGeminiClient('unused');
+    const adapted = fromGemini(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'gemini-2.5-flash',
+          temperature: 0.2,
+          max_tokens: 100,
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'image', data: 'ZmFrZQ==', mimeType: 'image/tiff' }],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
+
   it('omits systemInstruction when there is no system message', async () => {
     const { client, generateContent } = makeFakeGeminiClient('ok');
     const adapted = fromGemini(client);

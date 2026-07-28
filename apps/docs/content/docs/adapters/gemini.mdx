@@ -49,3 +49,30 @@ const llm = new VernLLM({
   providing provider-enforced structured output. `reasoning_effort` is dropped (Gemini's thinking
   models use a token budget instead).
 </Callout>
+
+## Multimodal input
+
+`fromGemini` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
+Image blocks are translated into Gemini's native `inlineData` parts automatically. The selected
+Gemini model must support image input for multimodal requests to succeed.
+
+```ts
+const result = await llm.call({
+  userContent: [
+    {
+      type: 'text',
+      text: 'Describe this image.',
+    },
+    {
+      type: 'image',
+      mimeType: 'image/png',
+      data: imageBase64,
+    },
+  ],
+});
+```
+
+Image data must be base64-encoded bytes without a `data:` URL prefix. Supported image types are
+`image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
+
+Plain string `userContent` remains unchanged for text-only requests.

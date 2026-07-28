@@ -1,4 +1,11 @@
-import type { LLMClient } from '../types/index.js';
+import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
+
+import type { ContentBlock, LLMClient } from '../types/index.js';
+
+/** Anthropic's native per-block content shape for a message. */
+type AnthropicContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
 /** Minimal structural type for the Anthropic SDKs `messages.create` */
 export interface AnthropicClient {
@@ -9,7 +16,7 @@ export interface AnthropicClient {
         max_tokens: number;
         temperature?: number;
         system?: string;
-        messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+        messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }>;
         tools?: Array<{
           name: string;
           description?: string;
@@ -23,6 +30,27 @@ export interface AnthropicClient {
       usage?: { input_tokens?: number; output_tokens?: number };
     }>;
   };
+}
+
+/**
+ * Translates a VernLLM `ContentBlock[]` (our provider-agnostic multimodal
+ * shape) into Anthropic's native content-block array: text blocks pass
+ * through as-is, image blocks become `{ type: 'image', source: { type:
+ * 'base64', media_type, data } }`.
+ */
+function toAnthropicContent(blocks: ContentBlock[]): AnthropicContentBlock[] {
+  return blocks.map((block) =>
+    block.type === 'image'
+      ? {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: assertSupportedImageMimeType(block.mimeType),
+            data: block.data,
+          },
+        }
+      : { type: 'text', text: block.text },
+  );
 }
 
 /**
@@ -83,7 +111,10 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
               max_tokens: params.max_tokens,
               temperature: params.temperature,
               system: system || undefined,
-              messages: conversationMessages.map((m) => ({ role: m.role, content: m.content })),
+              messages: conversationMessages.map((m) => ({
+                role: m.role,
+                content: Array.isArray(m.content) ? toAnthropicContent(m.content) : m.content,
+              })),
               ...(tools ? { tools, tool_choice: { type: 'tool' as const, name: toolName! } } : {}),
             },
             options,

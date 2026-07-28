@@ -1,3 +1,5 @@
+import type { ContentBlock } from './call.js';
+
 /**
  * Minimal shape compatible with the OpenAI SDKs chat.completions.create,
  * so consumers can pass an OpenAI client directly
@@ -27,7 +29,10 @@ export interface LLMClient {
               };
           /** OpenAI reasoning-model param (o-series, gpt-5), ignored by providers that don't support it */
           reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
-          messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+          messages: Array<
+            | { role: 'system' | 'assistant'; content: string }
+            | { role: 'user'; content: string | ContentBlock[] }
+          >;
         },
         options: { signal: AbortSignal },
       ): Promise<{
