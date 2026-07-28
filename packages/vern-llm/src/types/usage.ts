@@ -1,5 +1,9 @@
-export type ReserveUsage = () => Promise<void>;
-export type RefundUsage = () => Promise<void>;
+export interface UsageInfo {
+  coalesced: boolean;
+}
+
+export type ReserveUsage = (info: UsageInfo) => Promise<void>;
+export type RefundUsage = (info: UsageInfo) => Promise<void>;
 
 export interface TokenUsage {
   promptTokens: number;
