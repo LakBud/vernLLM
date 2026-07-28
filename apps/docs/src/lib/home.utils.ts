@@ -172,24 +172,6 @@ export const summary = await llm.cachedLLMCall({
   },
 });`;
 
-/**
- * Identifiers in `codeExample` that VernLLM itself introduces (as opposed to
- * plain OpenAI/Zod/JS syntax). Rendered in orange in the code block so the
- * library's surface area stands out at a glance.
- */
-export const codeHighlightKeywords = [
-  'VernLLM',
-  'vern-llm',
-  'maxRetries',
-  'timeoutMs',
-  'circuitBreaker',
-  'onUsage',
-  'totalTokens',
-  'cachedLLMCall',
-  'cacheKey',
-  'schema',
-];
-
 export const annotations = [
   { line: 'maxRetries: 3', note: '3 attempts with exponential backoff' },
   { line: 'timeoutMs: 10_000', note: '10s hard timeout per attempt' },

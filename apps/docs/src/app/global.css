@@ -16,6 +16,96 @@ html > body[data-scroll-locked] {
 }
 
 :root {
+  --shiki-background: var(--color-fd-card);
+  --shiki-foreground: var(--color-fd-card-foreground);
+
+  /* Vern expanded orange spectrum */
+  --shiki-ember: hsl(12, 82%, 42%);
+  --shiki-flame: hsl(18, 88%, 46%);
+  --shiki-fire: hsl(24, 92%, 50%);
+  --shiki-orange: hsl(30, 92%, 46%);
+  --shiki-amber: hsl(38, 92%, 45%);
+  --shiki-gold: hsl(46, 90%, 43%);
+  --shiki-honey: hsl(52, 82%, 40%);
+  --shiki-bronze: hsl(34, 70%, 36%);
+  --shiki-copper: hsl(28, 75%, 38%);
+
+  /* Core syntax */
+  --shiki-token-keyword: var(--shiki-orange);
+  --shiki-token-function: var(--shiki-fire);
+  --shiki-token-boolean: var(--shiki-ember);
+  --shiki-token-number: var(--shiki-gold);
+
+  /* Types */
+  --shiki-token-class-name: var(--shiki-bronze);
+  --shiki-token-type: var(--shiki-copper);
+  --shiki-token-constant: var(--shiki-amber);
+
+  /* Values */
+  --shiki-token-string: var(--shiki-honey);
+  --shiki-token-string-expression: var(--shiki-honey);
+  --shiki-token-regexp: var(--shiki-flame);
+
+  /* Metadata */
+  --shiki-token-attribute: var(--shiki-amber);
+
+  /* Neutral */
+  --shiki-token-variable: var(--color-fd-foreground);
+  --shiki-token-parameter: var(--color-fd-foreground);
+  --shiki-token-property: var(--color-fd-foreground);
+
+  --shiki-token-comment: var(--color-fd-muted-foreground);
+  --shiki-token-punctuation: var(--color-fd-muted-foreground);
+  --shiki-token-operator: var(--color-fd-muted-foreground);
+
+  --shiki-token-link: var(--shiki-orange);
+}
+
+.dark {
+  --shiki-background: var(--color-fd-card);
+  --shiki-foreground: var(--color-fd-card-foreground);
+
+  /* Brighter oscilloscope orange spectrum */
+  --shiki-ember: hsl(12, 90%, 58%);
+  --shiki-flame: hsl(18, 95%, 62%);
+  --shiki-fire: hsl(24, 98%, 66%);
+  --shiki-orange: hsl(30, 95%, 62%);
+  --shiki-amber: hsl(38, 95%, 64%);
+  --shiki-gold: hsl(46, 95%, 66%);
+  --shiki-honey: hsl(52, 90%, 64%);
+  --shiki-bronze: hsl(34, 80%, 58%);
+  --shiki-copper: hsl(28, 85%, 60%);
+
+  /* Core syntax */
+  --shiki-token-keyword: var(--shiki-orange);
+  --shiki-token-function: var(--shiki-fire);
+  --shiki-token-boolean: var(--shiki-ember);
+  --shiki-token-number: var(--shiki-gold);
+
+  /* Types */
+  --shiki-token-class-name: var(--shiki-bronze);
+  --shiki-token-type: var(--shiki-copper);
+  --shiki-token-constant: var(--shiki-amber);
+
+  /* Values */
+  --shiki-token-string: var(--shiki-honey);
+  --shiki-token-string-expression: var(--shiki-honey);
+  --shiki-token-regexp: var(--shiki-flame);
+
+  --shiki-token-attribute: var(--shiki-amber);
+
+  /* Neutral */
+  --shiki-token-variable: var(--color-fd-foreground);
+  --shiki-token-parameter: var(--color-fd-foreground);
+  --shiki-token-property: var(--color-fd-foreground);
+
+  --shiki-token-comment: var(--color-fd-muted-foreground);
+  --shiki-token-punctuation: var(--color-fd-muted-foreground);
+  --shiki-token-operator: var(--color-fd-muted-foreground);
+
+  --shiki-token-link: var(--shiki-orange);
+}
+:root {
   --color-fd-background: hsl(210, 24%, 95%);
   --color-fd-foreground: hsl(215, 32%, 12%);
 

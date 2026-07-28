@@ -1,10 +1,11 @@
+import { ServerCodeBlock } from '@fumadocs/base-ui/components/codeblock.rsc';
 import Link from 'next/link';
+import { createCssVariablesTheme } from 'shiki';
 
 import Squares from '../../components/squares';
 
 import { AuroraBarsClient } from '@/components/aurora-bars-client';
 import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
-import { renderHighlightedCode } from '@/lib/home.lib';
 import { annotations, codeExample, faqItems, features, providers } from '@/lib/home.utils';
 import { generateSoftwareApplication, JsonLd } from '@/lib/seo/jsonld';
 
@@ -72,24 +73,36 @@ export default function HomePage() {
 
       {/* CODE EXAMPLE */}
       <section className="px-6 lg:px-16 py-20">
-        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-10">
+        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
           <div className="lg:col-span-8">
-            <div className="rounded-lg border border-fd-border bg-fd-card overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-fd-border">
-                <span className="font-mono text-xs text-fd-muted-foreground">example.ts</span>
-              </div>
-              <pre className="p-5 overflow-x-auto text-sm leading-relaxed">
-                <code className="font-mono text-fd-card-foreground whitespace-pre">
-                  {renderHighlightedCode(codeExample)}
-                </code>
-              </pre>
-            </div>
+            <ServerCodeBlock
+              lang="ts"
+              code={codeExample}
+              themes={{
+                light: createCssVariablesTheme({
+                  name: 'vern',
+                  variablePrefix: '--shiki-',
+                  variableDefaults: {},
+                  fontStyle: true,
+                }),
+                dark: createCssVariablesTheme({
+                  name: 'vern',
+                  variablePrefix: '--shiki-',
+                  variableDefaults: {},
+                  fontStyle: true,
+                }),
+              }}
+              codeblock={{
+                className: 'rounded-lg border border-fd-border',
+              }}
+            />
           </div>
 
           <div className="lg:col-span-4 flex flex-col justify-center gap-5">
-            <h2 className="text-fd-foreground text-lg font-semibold text-[20px]">
+            <h2 className="text-fd-foreground text-[20px] font-semibold">
               What this call actually does.
             </h2>
+
             <ul className="flex flex-col gap-3">
               {annotations.map((a) => (
                 <li key={a.line} className="flex flex-col gap-0.5">
