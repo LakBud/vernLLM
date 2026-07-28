@@ -7,6 +7,81 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 1.4.0
+
+### Minor Changes
+
+- 95b1a36: Coalesce concurrent `cachedCall` misses for the same `cacheKey` into a single `fn()` call.
+
+  Previously, every concurrent request for the same `cacheKey` that missed the cache independently
+  called `fn()`, causing a cache stampede: N simultaneous callers could trigger N calls to the
+  underlying (possibly expensive) LLM call before any of them had a chance to populate the cache.
+
+  Now only the first caller (the "trigger") calls `fn()`; every other concurrent caller for the same
+  key waits on that same in-flight call and shares its result or failure.
+
+  `reserveUsage`/`refundUsage` now receive a `{ coalesced: boolean }` argument, so applications can
+  decide how coalesced callers are billed: full price, a reduced rate, or not billed at all. This is
+  backward compatible — existing `() => Promise<void>` implementations don't need to change.
+
+  Docs updated in `core/caching.mdx` to describe the coalescing behavior and the new `coalesced` flag.
+
+- 480e0c6: Honor a `Retry-After` header on retryable failures instead of always using exponential backoff.
+
+  **Changes:**
+
+  - **Core**: Added `extractRetryAfterMs()` in `internal/vernLLM.utils.ts`, which reads `.headers`
+    (fetch-style) or `.response.headers` (axios-style) off a thrown error and parses `Retry-After` in
+    either delta-seconds (`"30"`) or HTTP-date form. `getBackoffDelay`'s previously-inline `10_000`
+    default is now the shared `DEFAULT_MAX_DELAY_MS` constant, also used to cap the honored
+    `Retry-After` value so a misbehaving/adversarial header can't stall a caller indefinitely.
+
+  - **`recoverDelay`**: now uses `extractRetryAfterMs(error) ?? getBackoffDelay(...)`, falling back to
+    today's exponential-backoff-with-jitter exactly as before when no usable header is present. No
+    adapter changes needed — headers already flow through on thrown errors (fetch adapter via the
+    prior `request`/headers PR, SDK-based adapters natively).
+
+  - **Tests**: added `tests/unit/vernLLM.utils.unit.test.ts` for `extractRetryAfterMs` (delta-seconds,
+    HTTP-date, axios vs Headers-like shapes, capping, past-date clamping, missing/unparseable header),
+    plus end-to-end retry tests in `vernLLM.call.unit.test.ts` (honors Retry-After over a larger
+    configured backoff, caps an oversized Retry-After, falls back to backoff when absent).
+
+- eca6cf2: Improve the `fetch.ts` adapter: allow an injectable `request` function (defaults to native
+  `fetch`) typed against a `ResponseLike` interface for interop with axios/node-fetch/etc, skip
+  `body`/`Content-Type` for GET/HEAD requests, and attach `res.headers` to thrown errors so
+  downstream retry logic can read `Retry-After`.
+
+  Minor bump: fully additive, no changes to existing `fromFetch` call signatures or behavior for
+  POST/PUT/PATCH.
+
+- 06c5297: Add multimodal input support through `userContent`.
+
+  `userContent` now accepts either a plain string or a `ContentBlock[]` array containing text and image
+  blocks. Existing string-based calls continue to work unchanged.
+
+  Image blocks are translated automatically by provider adapters:
+
+  - OpenAI-compatible providers pass through native multimodal content.
+  - Anthropic converts image blocks to image source blocks.
+  - Gemini converts image blocks to inline data parts.
+  - AWS Bedrock converts image blocks to Converse image content blocks.
+
+  This enables sending images alongside text while keeping the existing text-only API backwards
+  compatible.
+
+### Patch Changes
+
+- 1ed6246: Fix circuit breaker allowing multiple concurrent trial calls during half-open.
+
+  `assertClosed()` transitioned the circuit to `half-open` once the cooldown elapsed, but every
+  concurrent caller after that point was also let through unblocked, since the guard only checked
+  for `state === 'open'`. This meant several "trial" calls could hit the provider at once right when
+  the cooldown ended, instead of the intended single trial.
+
+  Added a `trialInFlight` flag: only the first caller during half-open becomes the trial and reaches
+  the provider; every other concurrent caller is rejected immediately with `circuit_open` until the
+  trial's outcome is recorded via `recordSuccess`/`recordFailure`.
+
 ## 1.3.0
 
 ### Minor Changes
