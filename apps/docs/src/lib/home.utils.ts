@@ -110,7 +110,7 @@ export const features = [
     body: 'Trips after repeated failures and rejects immediately while open. Call getCircuitState() to inspect it.',
   },
   {
-    code: `nonRetryableStatus: [400, 401, 403]`,
+    code: `nonRetryableStatus: [400, 401, 403, 404]`,
     title: 'Fail-fast status codes',
     body: 'Status codes you mark as non-retryable skip the retry loop entirely.',
   },
