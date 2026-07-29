@@ -36,14 +36,13 @@ const result = await llm.call({
   error object, without burning a retry. Validation failures are deterministic.
 </Callout>
 
-<Callout type="warn">
+<Callout type="info">
   `schema` only runs if the call actually parses JSON, which happens when `jsonMode` is `true` (the
-  default) or `jsonSchema` is set. If you explicitly pass `jsonMode: false` alongside `schema`
-  without also setting `jsonSchema`, the schema is silently skipped: you get the raw string back
-  with no validation, cast as your schema's type with no runtime guarantee behind it. In practice
-  this only comes up if you set `jsonMode: false` on purpose while still passing `schema`, which
-  isn't a combination you'd reach for intentionally, but worth knowing if you're toggling `jsonMode`
-  dynamically per call.
+  default) or `jsonSchema` is set. If you pass `jsonMode: false` alongside `schema` without also
+  setting `jsonSchema`, `call` throws `LLMError('validation')` immediately, before any request is
+  sent, rather than silently skipping validation and returning an unvalidated string cast to your
+  schema's type. Set `jsonMode: true` (or provide `jsonSchema`) if you need `schema` to run, or drop
+  `schema` if you really want the raw string.
 </Callout>
 
 ## Provider-native JSON Schema mode
