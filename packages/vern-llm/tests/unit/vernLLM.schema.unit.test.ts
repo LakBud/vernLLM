@@ -37,7 +37,7 @@ describe('VernLLM.call — Zod schema validation', () => {
       .catch((e) => e);
 
     expect(err.type).toBe('validation');
-    expect(err.message).toMatch(/schema requires JSON parsing/);
+    expect(err.message).toMatch(/nothing would validate it/);
     expect(create).not.toHaveBeenCalled();
   });
 
