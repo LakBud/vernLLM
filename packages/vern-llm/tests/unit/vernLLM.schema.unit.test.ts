@@ -27,6 +27,34 @@ describe('VernLLM.call — Zod schema validation', () => {
     expect(err.issues).toBeDefined();
     expect(create).toHaveBeenCalledTimes(1);
   });
+
+  it('throws LLMError(validation) instead of silently skipping when schema is combined with jsonMode: false', async () => {
+    const { client, create } = createMockClient([jsonResponse({ name: 'Fammy', skills: [] })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const err = await llm
+      .call({ systemPrompt: 's', userContent: 'u', schema: Schema, jsonMode: false })
+      .catch((e) => e);
+
+    expect(err.type).toBe('validation');
+    expect(err.message).toMatch(/schema requires JSON parsing/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('still validates when jsonMode: false is combined with jsonSchema (JSON parsing enabled via jsonSchema)', async () => {
+    const { client } = createMockClient([jsonResponse({ name: 'Fammy', skills: ['ts'] })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const result = await llm.call({
+      systemPrompt: 's',
+      userContent: 'u',
+      schema: Schema,
+      jsonMode: false,
+      jsonSchema: { name: 'R', schema: {} },
+    });
+
+    expect(result).toEqual({ name: 'Fammy', skills: ['ts'] });
+  });
 });
 
 describe('VernLLM.call — provider-native jsonSchema mode', () => {

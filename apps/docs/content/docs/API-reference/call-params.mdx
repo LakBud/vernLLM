@@ -96,15 +96,16 @@ const result = await llm.call({
   <Card title="schema">
     A Zod (or Zod-compatible, anything exposing `safeParse`) schema, optional. Validates the parsed
     JSON client-side. On failure, throws `LLMError('validation')` with `.issues` set to the
-    validator's error object. Implies `jsonMode: true`. Can be combined with `jsonSchema` for
-    provider-level constraint plus client-side typing.
+    validator's error object. Requires JSON parsing to be enabled (`jsonMode: true`, the default, or
+    `jsonSchema` set) — see the callout below. Can be combined with `jsonSchema` for provider-level
+    constraint plus client-side typing.
   </Card>
 </Cards>
 
-<Callout type="warn">
-  `schema` only runs if the call actually parses JSON. If you explicitly pass `jsonMode: false`
-  without also setting `jsonSchema`, `schema` is silently skipped and you get the raw string back,
-  cast as your schema's type with no runtime guarantee behind it.
+<Callout type="info">
+  `schema` only runs if the call actually parses JSON. If you pass `jsonMode: false` without also
+  setting `jsonSchema`, `call` throws `LLMError('validation')` before sending the request, rather
+  than silently skipping validation and returning an unvalidated string cast to your schema's type.
 </Callout>
 
 ## Request lifecycle

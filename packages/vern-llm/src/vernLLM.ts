@@ -290,6 +290,14 @@ export class VernLLM {
     } = params;
 
     const useJson = jsonMode || Boolean(jsonSchema);
+
+    if (params.schema && !useJson) {
+      throw new LLMError(
+        'schema was provided but jsonMode: false disables JSON parsing, so nothing would validate it. Remove jsonMode: false, set jsonSchema, or remove schema.',
+        'validation',
+      );
+    }
+
     const responseFormat = this.buildResponseFormat(jsonSchema, useJson);
 
     this.validateHistory(history);
