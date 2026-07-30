@@ -1,4 +1,5 @@
 import { ServerCodeBlock } from '@fumadocs/base-ui/components/codeblock.rsc';
+import { transformerIcon } from 'fumadocs-core/mdx-plugins';
 import Link from 'next/link';
 import { createCssVariablesTheme } from 'shiki';
 
@@ -78,6 +79,7 @@ export default function HomePage() {
             <ServerCodeBlock
               lang="ts"
               code={codeExample}
+              transformers={[transformerIcon()]}
               themes={{
                 light: createCssVariablesTheme({
                   name: 'vern',
@@ -93,6 +95,7 @@ export default function HomePage() {
                 }),
               }}
               codeblock={{
+                title: 'index.ts',
                 className: 'rounded-lg border border-fd-border',
               }}
             />

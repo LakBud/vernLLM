@@ -110,7 +110,7 @@ export const features = [
     body: 'Trips after repeated failures and rejects immediately while open. Call getCircuitState() to inspect it.',
   },
   {
-    code: `nonRetryableStatus: [400, 401, 403, 404]`,
+    code: `nonRetryableStatus: [400, 401, 403, ...]`,
     title: 'Fail-fast status codes',
     body: 'Status codes you mark as non-retryable skip the retry loop entirely.',
   },
@@ -140,35 +140,26 @@ export const codeExample = `import OpenAI from 'openai';
 import { z } from 'zod';
 import { VernLLM } from 'vern-llm';
 
-const resumeId = 'candidate-123';
-const resumeText = 'Software engineer with 5 years of experience';
-
-const HiringSummarySchema = z.object({
-  strengths: z.array(z.string()),
-  concerns: z.array(z.string()),
-  recommendation: z.string(),
-});
-
 export const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
   model: 'gpt-4o',
-
   maxRetries: 3,
   timeoutMs: 10_000,
   circuitBreaker: true,
-
-  onUsage: ({ totalTokens }) => {
-    console.log(\`Used \${totalTokens} tokens\`);
-  },
+  onUsage: ({ totalTokens }) => console.log(\`Used \${totalTokens} tokens\`),
 });
 
 export const summary = await llm.cachedLLMCall({
-  cacheKey: \`resume:\${resumeId}\`,
+  cacheKey: 'resume:candidate-123',
   ttl: 3600,
   call: {
     systemPrompt: 'Analyze this resume and return structured hiring insights.',
-    userContent: resumeText,
-    schema: HiringSummarySchema,
+    userContent: 'Software engineer with 5 years of experience',
+    schema: z.object({
+      strengths: z.array(z.string()),
+      concerns: z.array(z.string()),
+      recommendation: z.string(),
+    }),
   },
 });`;
 
