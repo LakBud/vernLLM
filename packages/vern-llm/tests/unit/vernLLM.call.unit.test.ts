@@ -130,16 +130,64 @@ describe('VernLLM.call — retry & backoff', () => {
     });
   });
 
-  it('surfaces the last attempt Retry-After value on the final thrown LLMError', async () => {
-    const apiError = new FakeApiError('rate limited', 429, { 'Retry-After': '5' });
-    const { client } = createMockClient([apiError]);
-    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+  it('surfaces the Retry-After value from the final retry attempt', async () => {
+    const { client, create } = createMockClient([
+      new FakeApiError('rate limited first attempt', 429, { 'Retry-After': '5' }),
+      new FakeApiError('rate limited second attempt', 429, { 'Retry-After': '10' }),
+    ]);
 
-    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 1,
+    });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+
+    const assertion = expect(promise).rejects.toMatchObject({
       type: 'api',
       status: 429,
-      retryAfterMs: 5_000,
+      retryAfterMs: 10_000,
     });
+
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs request id and provider error details on failure when logger is provided', async () => {
+    const apiError = new FakeApiError('provider failed', 500, {
+      'x-request-id': 'provider-request-123',
+    });
+
+    const { client } = createMockClient([apiError]);
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      logger,
+    });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        requestId: 'request-123',
+      }),
+    ).rejects.toMatchObject({
+      type: 'api',
+      status: 500,
+    });
+
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('[vern:request-123]'));
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('provider failed'));
   });
 
   it('uses exponential backoff between retries', async () => {

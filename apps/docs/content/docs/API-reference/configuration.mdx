@@ -61,11 +61,11 @@ const llm = new VernLLM({
 
 ## Observability
 
-| Option    | Default                       | Notes                                                                                                                                                                                  |
-| --------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onUsage` | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response.                                                           |
-| `logger`  | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                            |
-| `debug`   | `false`                       | Controls `logger.debug` calls such as raw model output on success, the original provider error on failure, and retry attempts. `warn` and `error` always fire regardless of this flag. |
+| Option    | Default                       | Notes                                                                                                                                                                                                                                                                                    |
+| --------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onUsage` | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response.                                                                                                                                                             |
+| `logger`  | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                              |
+| `debug`   | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`. |
 
 ## Circuit breaker
 

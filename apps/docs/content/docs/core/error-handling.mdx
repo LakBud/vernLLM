@@ -3,9 +3,10 @@ title: Error Handling
 description: LLMError types, what triggers each, and what gets retried
 ---
 
-Failures from `call()` are surfaced as a normalized `LLMError` with a specific `type`. Check
-`err.type` to branch on what happened. The original error thrown by the provider client is preserved
-on `err.cause`, in case the normalized `type`/`status`/`issues` aren't enough to diagnose the failure:
+When a raw API error or unknown thrown error is normalized, the original error is preserved
+on `err.cause`, in case the normalized `type`/`status`/`issues` aren't enough to diagnose the
+failure. Existing `LLMError` instances are returned unchanged, so internally-created errors such
+as timeout, parse, and validation errors may not have a `cause`:
 
 ```ts
 import { isLLMError } from 'vern-llm';
@@ -79,9 +80,10 @@ Otherwise the wait falls back to exponential backoff with jitter.
 
 <Callout type="warn">
   Exhausting all retries also records a circuit breaker failure if one is configured and throws the
-  final normalized `LLMError`. The raw underlying error thrown by the provider client is preserved
-  on `err.cause`, so it's still available even though the top-level `message` is a generic `'LLM
-  request failed'`.
+  final normalized `LLMError`. For raw API or unknown thrown errors, the underlying error is
+  preserved on `err.cause`, so it's still available even though the top-level `message` is a generic
+  `'LLM request failed'`. Existing `LLMError` instances are not wrapped again, so some error types
+  (such as timeout, parse, and validation) may not have a `cause`.
 </Callout>
 
 ## Debugging a failed call

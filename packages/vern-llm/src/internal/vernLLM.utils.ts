@@ -28,29 +28,43 @@ export function extractStatus(err: unknown): number | undefined {
   return undefined;
 }
 
+function formatSafely(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return '[unprintable error]';
+    }
+  }
+}
+
 /**
  * Looks inside an unknown thrown value and pulls out a human-readable
  * description of it. Checks the `error` field first (the provider's raw
  * rejection body, JSON-stringified if possible) then falls back to the
- * `message` field. Returns `String(err)` when neither is present or the
- * value is not an object
+ * message` field. Always returns a safe string, even when the thrown value
+ * has hostile properties or cannot be serialized normally.
  */
 export function describeError(err: unknown): string {
-  if (!err || typeof err !== 'object') return String(err);
-
-  const error = err as { message?: unknown; error?: unknown };
-
-  if (error.error !== undefined) {
+  if (err && typeof err === 'object') {
     try {
-      return JSON.stringify(error.error, null, 2);
+      const error = err as { message?: unknown; error?: unknown };
+
+      if (error.error !== undefined) {
+        return formatSafely(error.error);
+      }
+
+      if (typeof error.message === 'string') {
+        return error.message;
+      }
     } catch {
-      return String(error.error);
+      // Fall through to safe string.
     }
   }
 
-  if (typeof error.message === 'string') return error.message;
-
-  return String(err);
+  return formatSafely(err);
 }
 
 /**
