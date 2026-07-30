@@ -13,6 +13,8 @@ export class LLMError extends Error {
     public type: LLMErrorType,
     public status?: number,
     public issues?: unknown,
+    public cause?: unknown,
+    public retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'LLMError';

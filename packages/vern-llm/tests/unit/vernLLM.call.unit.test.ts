@@ -107,6 +107,41 @@ describe('VernLLM.call — retry & backoff', () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
+  it('preserves the original provider error on .cause for api errors', async () => {
+    const apiError = new FakeApiError('invalid schema', 400);
+    const { client } = createMockClient([apiError]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+      type: 'api',
+      status: 400,
+      cause: apiError,
+    });
+  });
+
+  it('preserves the original error on .cause for unknown errors', async () => {
+    const genericError = new Error('boom');
+    const { client } = createMockClient([genericError]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+      type: 'unknown',
+      cause: genericError,
+    });
+  });
+
+  it('surfaces the last attempt Retry-After value on the final thrown LLMError', async () => {
+    const apiError = new FakeApiError('rate limited', 429, { 'Retry-After': '5' });
+    const { client } = createMockClient([apiError]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+      type: 'api',
+      status: 429,
+      retryAfterMs: 5_000,
+    });
+  });
+
   it('uses exponential backoff between retries', async () => {
     const { client } = createMockClient([
       new Error('fail 1'),

@@ -29,6 +29,31 @@ export function extractStatus(err: unknown): number | undefined {
 }
 
 /**
+ * Looks inside an unknown thrown value and pulls out a human-readable
+ * description of it. Checks the `error` field first (the provider's raw
+ * rejection body, JSON-stringified if possible) then falls back to the
+ * `message` field. Returns `String(err)` when neither is present or the
+ * value is not an object
+ */
+export function describeError(err: unknown): string {
+  if (!err || typeof err !== 'object') return String(err);
+
+  const error = err as { message?: unknown; error?: unknown };
+
+  if (error.error !== undefined) {
+    try {
+      return JSON.stringify(error.error, null, 2);
+    } catch {
+      return String(error.error);
+    }
+  }
+
+  if (typeof error.message === 'string') return error.message;
+
+  return String(err);
+}
+
+/**
  * Runs an async function and cancels it if it takes longer than the given
  * timeout. Creates an internal abort controller that fires after the
  * timeout elapses, and combines it with any external signal the caller

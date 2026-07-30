@@ -8,6 +8,7 @@ import {
   withTimeout,
   getBackoffDelay,
   waitForRetry,
+  describeError,
 } from './internal/vernLLM.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import {
@@ -140,7 +141,9 @@ export class VernLLM {
       return result;
     } catch (error) {
       this.breaker?.recordFailure();
-      throw this.normalizeError(error, params.signal);
+      const normalized = this.normalizeError(error, params.signal);
+      this.logger.debug(`[vern:${requestId}] error:\n${describeError(error)}`);
+      throw normalized;
     }
   }
 
@@ -191,12 +194,13 @@ export class VernLLM {
     }
 
     const status = extractStatus(error);
+    const retryAfterMs = extractRetryAfterMs(error);
 
     if (status !== undefined) {
-      return new LLMError('LLM request failed', 'api', status);
+      return new LLMError('LLM request failed', 'api', status, undefined, error, retryAfterMs);
     }
 
-    return new LLMError('LLM request failed', 'unknown');
+    return new LLMError('LLM request failed', 'unknown', undefined, undefined, error, retryAfterMs);
   }
 
   /**
