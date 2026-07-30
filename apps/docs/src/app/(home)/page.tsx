@@ -7,7 +7,7 @@ import Squares from '../../components/squares';
 
 import { AuroraBarsClient } from '@/components/aurora-bars-client';
 import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
-import { annotations, codeExample, faqItems, features, providers } from '@/lib/home.utils';
+import { annotations, codeExample, faqItems, providers } from '@/lib/home.utils';
 import { generateSoftwareApplication, JsonLd } from '@/lib/seo/jsonld';
 
 export default function HomePage() {
@@ -115,28 +115,6 @@ export default function HomePage() {
               ))}
             </ul>
           </div>
-        </div>
-      </section>
-
-      {/* FEATURE LIST */}
-      <section className="px-6 lg:px-16 py-20">
-        <div className="max-w-4xl mx-auto flex flex-col">
-          {features.map((f, i) => (
-            <div
-              key={f.code}
-              className={`grid grid-cols-1 sm:grid-cols-12 gap-3 sm:gap-6 py-6 ${
-                i !== 0 ? 'border-t border-fd-border' : ''
-              }`}
-            >
-              <code className="sm:col-span-5 font-mono text-sm text-fd-primary self-start break-all">
-                {f.code}
-              </code>
-              <div className="sm:col-span-7 flex flex-col gap-1">
-                <h3 className="text-fd-foreground font-semibold text-sm">{f.title}</h3>
-                <p className="text-sm text-fd-muted-foreground leading-relaxed">{f.body}</p>
-              </div>
-            </div>
-          ))}
         </div>
       </section>
 

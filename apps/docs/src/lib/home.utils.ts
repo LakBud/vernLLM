@@ -93,52 +93,9 @@ export const providers = [
   { name: 'Custom HTTPS API', Icon: Globe, href: '/docs/adapters/custom-fetch' },
 ];
 
-export const features = [
-  {
-    code: `maxRetries: 3`,
-    title: 'Retry with backoff',
-    body: 'Retries a failed call up to N times with exponential backoff and jitter between attempts.',
-  },
-  {
-    code: `timeoutMs: 10_000`,
-    title: 'Per-attempt timeout',
-    body: 'Each attempt is raced against a hard timeout, so no single request can hang the call.',
-  },
-  {
-    code: `circuitBreaker: true`,
-    title: 'Circuit breaker',
-    body: 'Trips after repeated failures and rejects immediately while open. Call getCircuitState() to inspect it.',
-  },
-  {
-    code: `nonRetryableStatus: [400, 401, 403, ...]`,
-    title: 'Fail-fast status codes',
-    body: 'Status codes you mark as non-retryable skip the retry loop entirely.',
-  },
-  {
-    code: `llm.cachedLLMCall({ cacheKey, ttl, call })`,
-    title: 'Caching',
-    body: 'Wraps call() with a pluggable cache adapter. Identical calls return without hitting the network.',
-  },
-  {
-    code: `schema: HiringSummarySchema`,
-    title: 'Structured output',
-    body: 'Pass a Zod schema inside call params and receive validated, typed JSON.',
-  },
-  {
-    code: `onUsage: ({ totalTokens }) => {}`,
-    title: 'Usage tracking',
-    body: 'Reports prompt, completion, and total tokens whenever the provider returns usage data.',
-  },
-  {
-    code: `logger: myLogger`,
-    title: 'Pluggable logger',
-    body: 'Bring your own Logger implementation or fall back to the built-in console logger.',
-  },
-];
-
 export const codeExample = `import OpenAI from 'openai';
 import { z } from 'zod';
-import { VernLLM } from 'vern-llm';
+import { InMemoryCacheAdapter, VernLLM } from 'vern-llm';
 
 export const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
@@ -146,32 +103,65 @@ export const llm = new VernLLM({
   maxRetries: 3,
   timeoutMs: 10_000,
   circuitBreaker: true,
-  onUsage: ({ totalTokens }) => console.log(\`Used \${totalTokens} tokens\`),
+  cache: new InMemoryCacheAdapter(),
+  onUsage: u => console.log(\`\${u.requestId}: \${u.totalTokens} tokens\`)
 });
 
 export const summary = await llm.cachedLLMCall({
   cacheKey: 'resume:candidate-123',
   ttl: 3600,
   call: {
+    requestId: 'resume-analysis-123',
+    temperature: 0.2,
+    maxTokens: 1000,
     systemPrompt: 'Analyze this resume and return structured hiring insights.',
     userContent: 'Software engineer with 5 years of experience',
     schema: z.object({
       strengths: z.array(z.string()),
       concerns: z.array(z.string()),
-      recommendation: z.string(),
-    }),
-  },
+      recommendation: z.string()
+    })
+  }
 });`;
 
 export const annotations = [
-  { line: 'maxRetries: 3', note: '3 attempts with exponential backoff' },
-  { line: 'timeoutMs: 10_000', note: '10s hard timeout per attempt' },
-  { line: 'circuitBreaker: true', note: 'Trips after repeated failures' },
-  { line: 'onUsage', note: 'Token usage reported per call' },
-  { line: 'cachedLLMCall', note: 'Identical calls skip the network' },
-  { line: 'schema', note: 'Response validated and typed via Zod' },
+  {
+    line: 'maxRetries: 3',
+    note: 'Retries transient failures with backoff and jitter',
+  },
+  {
+    line: 'timeoutMs: 10_000',
+    note: 'Prevents attempts from hanging indefinitely',
+  },
+  {
+    line: 'circuitBreaker: true',
+    note: 'Stops repeated failures from cascading',
+  },
+  {
+    line: 'cache: new InMemoryCacheAdapter()',
+    note: 'Adds caching with a swappable adapter',
+  },
+  {
+    line: 'onUsage',
+    note: 'Tracks tokens and request metadata',
+  },
+  {
+    line: 'cachedLLMCall',
+    note: 'Returns cached results without another API call',
+  },
+  {
+    line: 'cacheKey',
+    note: 'Identifies repeatable cached requests',
+  },
+  {
+    line: 'ttl: 3600',
+    note: 'Controls cache lifetime',
+  },
+  {
+    line: 'schema',
+    note: 'Returns validated, typed output with Zod',
+  },
 ];
-
 export const faqItems = [
   {
     question: 'Why use VernLLM instead of calling the client directly?',
