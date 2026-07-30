@@ -1,5 +1,11 @@
 {
   "title": "Guides",
   "icon": "BookOpen",
-  "pages": ["resume-parsing", "provider-fallback", "multi-turn-conversations", "per-call-overrides"]
+  "pages": [
+    "index",
+    "resume-parsing",
+    "provider-fallback",
+    "multi-turn-conversations",
+    "per-call-overrides"
+  ]
 }

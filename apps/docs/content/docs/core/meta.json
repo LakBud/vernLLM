@@ -2,6 +2,7 @@
   "title": "Core Features",
   "icon": "Layers",
   "pages": [
+    "index",
     "structured-output",
     "caching",
     "usage-tracking",

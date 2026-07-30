@@ -26,6 +26,20 @@ export function baseOptions(): BaseLayoutProps {
         url: '/docs',
         active: 'nested-url',
       },
+      {
+        text: 'Get Started',
+        url: '/docs/getting-started',
+      },
+      {
+        text: 'Features',
+        url: '/docs/core',
+        active: 'nested-url',
+      },
+      {
+        text: 'Adapters',
+        url: '/docs/adapters',
+        active: 'nested-url',
+      },
     ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
   };
