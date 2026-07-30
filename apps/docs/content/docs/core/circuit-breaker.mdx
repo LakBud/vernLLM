@@ -3,7 +3,7 @@ title: Circuit Breaker
 description: Stop hammering a provider that's down
 ---
 
-```ts
+```ts title="circuit-breaker-setup.ts"
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',

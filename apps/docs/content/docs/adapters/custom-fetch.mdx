@@ -5,7 +5,7 @@ description: Raw HTTP escape hatch for providers with no SDK
 
 For a provider with no SDK, or where pulling one in isn't worth it, `fromFetch` is a raw HTTP escape hatch; supply the URL, headers, and two small mapping functions, and retries/timeouts/circuit-breaker/JSON handling all still apply.
 
-```ts
+```ts title="fromfetch-basic-setup.ts"
 import { VernLLM, fromFetch } from 'vern-llm';
 
 const llm = new VernLLM({
@@ -34,7 +34,7 @@ For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-T
 
 By default `fromFetch` uses the global `fetch`. Pass `request` to swap in `axios`, `node-fetch`, `undici`, or anything else, as long as it resolves to a `Response`-compatible object (`ok`, `status`, `headers.get(name)`, `text()`, `json()`):
 
-```ts
+```ts title="fromfetch-custom-request.ts"
 import axios from 'axios';
 import { VernLLM, fromFetch } from 'vern-llm';
 

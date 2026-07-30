@@ -3,7 +3,7 @@ title: Anthropic
 description: Use the fromAnthropic adapter with the Anthropic API
 ---
 
-```ts
+```ts title="anthropic-basic-setup.ts"
 import Anthropic from '@anthropic-ai/sdk';
 import { VernLLM, fromAnthropic } from 'vern-llm';
 
@@ -28,7 +28,7 @@ const llm = new VernLLM({
 Image blocks are translated into Anthropic's native content blocks automatically. The selected
 Anthropic model must support vision/image input for multimodal requests to succeed.
 
-```ts
+```ts title="anthropic-multimodal-input.ts"
 const result = await llm.call({
   userContent: [
     {

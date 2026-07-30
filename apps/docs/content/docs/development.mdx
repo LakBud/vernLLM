@@ -1,0 +1,54 @@
+---
+title: Development
+description: Scripts, test layout, and contribution guidelines for vern-llm
+icon: Hammer
+---
+
+```bash title="dev-scripts.sh"
+pnpm install
+pnpm run build            # tsdown → dist (ESM + CJS + types)
+pnpm run typecheck        # tsc --noEmit on src, since tsdown doesn't fully type-check
+pnpm run typecheck:test   # tsc --noEmit on src + test (separate tsconfig, no rootDir conflict)
+pnpm run test             # vitest run (unit + integration)
+pnpm run test:unit        # vitest run --project unit
+pnpm run test:int         # vitest run --project integration
+pnpm run test:watch       # vitest, watch mode
+pnpm run test:coverage    # vitest run --coverage (v8 provider)
+pnpm run lint             # oxlint
+pnpm run format           # oxfmt
+pnpm run changeset        # record a change for the next release
+```
+
+## Test layout
+
+Tests live under `tests/unit/` and `tests/integration/`. No real API calls are made anywhere in the suite; everything runs against fakes and mocks.
+
+### `tests/unit/`
+
+| File                             | Covers                                                             |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `vernLLM.call`, `vernLLM.schema` | Retry, backoff, timeout, abort, schema, model override, usage      |
+| `circuitBreaker`                 | Breaker as a standalone unit                                       |
+| `cachedCall`                     | Caching, usage reservation/refund                                  |
+| `logger`                         | Injectable logger                                                  |
+| `vernLLM.history`                | Multi-turn history validation                                      |
+| `vernLLM.utils`                  | Internal helpers                                                   |
+| `index.exports`                  | Public export surface                                              |
+| `adapters/*`                     | Each provider's request/response translation against a fake client |
+
+### `tests/integration/`
+
+| File                                       | Covers                               |
+| ------------------------------------------ | ------------------------------------ |
+| `vernLLM`, `vernLLM.history`, `cachedCall` | Workflow-level behavior              |
+| `adapters/*`                               | Workflow-level behavior per provider |
+
+## Contributing
+
+Fork the repo and branch off `main`, then `pnpm install` to set up the workspace.
+
+Add or update tests alongside any change to `packages/vern-llm`: `tests/unit/` for isolated behavior, `tests/integration/` for cross-cutting workflows.
+
+Before opening a PR, run `pnpm run lint`, `pnpm run typecheck`, `pnpm run typecheck:test`, and `pnpm run test` locally. These match CI exactly (`.github/workflows/lint.yml`, `typecheck.yml`, `test.yml`).
+
+Record your change with `pnpm run changeset`; it drives versioned release notes. Releases themselves are automated through `.github/workflows/release.yml`, so no manual version bumps or publishing.

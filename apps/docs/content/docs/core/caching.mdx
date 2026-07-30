@@ -11,7 +11,7 @@ description: Wrap calls with cachedCall or cachedLLMCall
   is already updated; no action needed if you use it.
 </Callout>
 
-```ts
+```ts title="cached-call-setup.ts"
 import { InMemoryCacheAdapter } from 'vern-llm';
 
 const llm = new VernLLM({
@@ -91,7 +91,7 @@ await llm.deleteCache(`cv:${cvId}`);
 
 `cachedCall` is a thin cache wrapper; it doesn't apply retry/timeout/circuit-breaker behavior on its own. If `fn` is always going to be `() => llm.call(...)`, `cachedLLMCall` wires that up for you:
 
-```ts
+```ts title="cached-llm-call.ts"
 const result = await llm.cachedLLMCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
@@ -113,7 +113,7 @@ const cacheKey = `cv:${cvId}:${model}:v2`; // bump the version suffix when the p
 
 ## Custom cache adapter
 
-```ts
+```ts title="upstash-cache-adapter.ts"
 import type { CacheAdapter } from 'vern-llm';
 
 class UpstashCacheAdapter implements CacheAdapter {

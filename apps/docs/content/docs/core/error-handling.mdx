@@ -8,7 +8,7 @@ on `err.cause`, in case the normalized `type`/`status`/`issues` aren't enough to
 failure. Existing `LLMError` instances are returned unchanged, so internally-created errors such
 as timeout, parse, and validation errors may not have a `cause`:
 
-```ts
+```ts title="error-handling-example.ts"
 import { isLLMError } from 'vern-llm';
 
 try {
@@ -91,11 +91,11 @@ Otherwise the wait falls back to exponential backoff with jitter.
 When `debug: true` is set, a failure is also logged through the injected logger's `debug` method,
 independent of catching the thrown `LLMError` yourself:
 
-```ts
+```ts title="debug-logging-setup.ts"
 const llm = new VernLLM({ client, model, debug: true });
 ```
 
-```
+```console title="debug-log-output"
 [vern:<requestId>] error:
 <the provider's error message or response body>
 ```

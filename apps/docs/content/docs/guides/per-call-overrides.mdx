@@ -7,7 +7,7 @@ A `VernLLM` instance is configured once with a default `model` (and other option
 `defaultMaxTokens`), but almost every generation-related field on `CallParams` can be overridden
 for an individual `call()` without creating a second instance.
 
-```ts
+```ts title="per-call-model-override.ts"
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o-mini', // cheap default for most calls
@@ -49,7 +49,7 @@ instance level, you just set them on the calls that need them.
   <a href="/docs/getting-started#per-call-overrides">Getting Started</a> has a quick-start version of
   this same pattern, including switching to a reasoning model for a single call:
 
-```ts
+```ts title="reasoning-effort-override.ts"
 const llm = new VernLLM({ client: openai, model: 'gpt-4o-mini' });
 
 await llm.call({
@@ -76,7 +76,7 @@ This page goes into more depth on when and how to reach for overrides.
 A typical setup uses a fast/cheap model by default and escalates to a stronger model only for calls
 that need it, rather than paying for the expensive model on every request:
 
-```ts
+```ts title="cheap-default-escalation.ts"
 async function extractCandidate(resumeText: string) {
   return llm.call({
     model: 'gpt-4o-mini',
@@ -101,7 +101,7 @@ async function reviewFlaggedResume(resumeText: string) {
 Because `model` is just a string on `CallParams`, it can come from anywhere at call time &mdash; a
 config lookup, a feature flag, a per-tenant setting:
 
-```ts
+```ts title="per-tenant-model-selection.ts"
 async function callForTenant(tenantId: string, userContent: string) {
   const model = await getTenantModelPreference(tenantId); // e.g. 'gpt-4o' or 'gpt-4o-mini'
 
@@ -114,7 +114,7 @@ async function callForTenant(tenantId: string, userContent: string) {
 `onUsage` reports the model that actually served the request, including a per-call override, not
 the instance's default. This matters if you bill different models at different rates:
 
-```ts
+```ts title="usage-tracking-model-override.ts"
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o-mini',

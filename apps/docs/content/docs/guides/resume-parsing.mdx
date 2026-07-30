@@ -6,7 +6,7 @@ description: Combining schema validation and cachedLLMCall for a realistic extra
 A common pattern: extract structured data from unstructured text, validate it, and cache the result so
 re-processing the same input does not cost another API call.
 
-```ts
+```ts title="schemas-and-caching.ts"
 import OpenAI from 'openai';
 import { VernLLM, InMemoryCacheAdapter } from 'vern-llm';
 import { z } from 'zod';

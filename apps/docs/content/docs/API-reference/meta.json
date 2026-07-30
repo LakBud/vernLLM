@@ -1,5 +1,5 @@
 {
   "title": "API Reference",
   "icon": "FileCode",
-  "pages": ["index", "configuration", "call-params", "notes", "development"]
+  "pages": ["index", "configuration", "call-params", "notes"]
 }

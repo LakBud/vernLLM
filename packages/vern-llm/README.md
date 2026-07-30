@@ -64,19 +64,6 @@ const result = await llm.call({
 
 See the [docs](https://vernllm.vercel.app) for adapter setup, caching, the circuit breaker, and structured output in depth.
 
-## Development
-
-```bash
-pnpm install
-pnpm run build            # tsdown → dist (ESM + CJS + types)
-pnpm run typecheck        # tsc --noEmit on src, since tsdown doesn't fully type-check
-pnpm run test             # vitest run
-pnpm run test:coverage    # vitest run --coverage (v8 provider)
-pnpm run changeset        # record a change for the next release
-```
-
-Tests live in `tests/`, mirroring `src/`, and cover retry/backoff/timeout/abort/schema/model-override/usage behavior, the circuit breaker (unit + integration), caching, the injectable logger, and every provider adapter's request/response translation against a fake client — no real API calls anywhere in the suite.
-
 ## License
 
 [MIT](https://github.com/LakBud/vernLLM/blob/main/LICENSE.md) © LakBud

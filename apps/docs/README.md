@@ -33,14 +33,14 @@ Open [http://localhost:3000](http://localhost:3000) to see the site.
 
 Docs pages live in [`content/docs`](./content/docs) as MDX, organized by section:
 
-| Section                                                     | Contents                                                                                            |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| [`getting-started.mdx`](./content/docs/getting-started.mdx) | Install and make your first call.                                                                   |
-| [`core/`](./content/docs/core)                              | Structured output, caching, circuit breaker, error handling, cancellation, logging, usage tracking. |
-| [`adapters/`](./content/docs/adapters)                      | OpenAI-compatible providers, Anthropic, Gemini, Bedrock, and the raw-fetch escape hatch.            |
-| [`guides/`](./content/docs/guides)                          | End-to-end walkthroughs (resume parsing, provider fallback).                                        |
-| [`reference/`](./content/docs/reference)                    | Development setup notes and miscellaneous reference.                                                |
-| [`changelog.mdx`](./content/docs/changelog.mdx)             | Release notes.                                                                                      |
+| Section                                                     | Contents                                                                                                   |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| [`getting-started.mdx`](./content/docs/getting-started.mdx) | Install and make your first call.                                                                          |
+| [`core/`](./content/docs/core)                              | Structured output, caching, circuit breaker, error handling, cancellation, logging, usage tracking.        |
+| [`adapters/`](./content/docs/adapters)                      | OpenAI-compatible providers, Anthropic, Gemini, Bedrock, and the raw-fetch escape hatch.                   |
+| [`guides/`](./content/docs/guides)                          | End-to-end walkthroughs (resume parsing, provider fallback, multi-turn conversations, per-call overrides). |
+| [`API-reference/`](./content/docs/API-reference)            | Call params, instance configuration, development setup, and other reference notes.                         |
+| [`changelog.mdx`](./content/docs/changelog.mdx)             | Release notes.                                                                                             |
 
 Each folder has a `meta.json` controlling sidebar ordering. Edit or add `.mdx` files there and the site picks them up automatically.
 

@@ -58,7 +58,7 @@ Don't see your provider? If it advertises itself as **OpenAI-compatible** or a *
 
 Adding a named adapter is just a convenience alias around the same implementation. If your provider isn't listed, feel free to open a PR, it's usually a one-line addition.
 
-```ts
+```ts title="openai-compatible-setup.ts"
 import OpenAI from 'openai';
 import { VernLLM, fromOpenAICompatible } from 'vern-llm';
 
@@ -78,7 +78,7 @@ const llm = new VernLLM({
 OpenAI-compatible providers with vision-capable models can receive images through VernLLM's
 provider-independent `ContentBlock[]` format:
 
-```ts
+```ts title="openai-compatible-multimodal-input.ts"
 const result = await llm.call({
   userContent: [
     {

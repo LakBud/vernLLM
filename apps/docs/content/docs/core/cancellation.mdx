@@ -5,7 +5,7 @@ description: How AbortSignal, per-attempt timeouts, and retries interact
 
 `call()` accepts a standard `AbortSignal`, which composes with vern-llm's own per-attempt timeout rather than replacing it.
 
-```ts
+```ts title="abort.ts"
 const controller = new AbortController();
 
 const promise = llm.call({

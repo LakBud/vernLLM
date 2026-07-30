@@ -11,7 +11,7 @@ description: fromGemini adapter
 
 The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it:
 
-```ts
+```ts title="gemini-new-sdk-setup.ts"
 import { GoogleGenAI } from '@google/genai';
 import { VernLLM, fromGemini } from 'vern-llm';
 
@@ -27,7 +27,7 @@ const llm = new VernLLM({
 
 The older SDK bakes the model into `getGenerativeModel({ model })`, so its `generateContent` doesn't accept a `model` field per call — `fromGemini` still adapts it since it only calls `.generateContent`, but the `model` you pass to `VernLLM`/per-call override is effectively ignored by the underlying client. Whatever model you picked at `getGenerativeModel(...)` time is what actually runs:
 
-```ts
+```ts title="gemini-legacy-sdk-setup.ts"
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { VernLLM, fromGemini } from 'vern-llm';
 
@@ -56,7 +56,7 @@ const llm = new VernLLM({
 Image blocks are translated into Gemini's native `inlineData` parts automatically. The selected
 Gemini model must support image input for multimodal requests to succeed.
 
-```ts
+```ts title="gemini-multimodal-input.ts"
 const result = await llm.call({
   userContent: [
     {

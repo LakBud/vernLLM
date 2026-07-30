@@ -5,17 +5,29 @@ description: Every VernLLM constructor option and its default
 
 Everything below is set once on the `VernLLM` instance and applies to every `call()` unless overridden per request. Nothing is required beyond `client` and `model`; every other option has a sensible default.
 
-```ts
+```ts title="vernllm-instance-config.ts"
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
-  maxRetries: 3,
-  timeoutMs: 10_000,
+  maxRetries: 1,
+  timeoutMs: 25_000,
   baseDelayMs: 500,
   defaultMaxTokens: 1000,
-  nonRetryableStatus: [400, 401, 403],
+  nonRetryableStatus: [400, 401, 403, 404, 422],
   circuitBreaker: true,
   debug: false,
+  cache: new InMemoryCacheAdapter(), // optional, defaults to this anyway
+  parseJson: (content) => {
+    // must return undefined on failure, not throw — this is what
+    // the built-in defaultParseJson does internally
+    try {
+      return JSON.parse(content);
+    } catch {
+      return undefined;
+    }
+  },
+  onUsage: (usage) => billing.record(usage), // optional, no default
+  logger: myLogger, // optional, defaults to console-based logger gated by `debug`
 });
 ```
 
@@ -41,17 +53,12 @@ const llm = new VernLLM({
 | `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay). |
 | `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                |
 
-<Callout type="warn">
-  `maxRetries` defaults to `1`, not `3`. See <a href="/docs/core/error-handling">Error Handling</a>
-  for exactly which failures get retried.
-</Callout>
-
 ## Request defaults
 
 | Option             | Default            | Notes                                                                                                                                   |
 | ------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `defaultMaxTokens` | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                 |
-| `parseJson`        | `defaultParseJson` | Custom parser for non standard JSON responses. It should return `undefined` when parsing fails, which signals a parse error to VernLLM. |
+| `parseJson`        | `defaultParseJson` | Custom parser for non standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM. |
 
 ## Caching
 
@@ -69,9 +76,9 @@ const llm = new VernLLM({
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                        |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `circuitBreaker` | disabled | Pass `true` for default circuit breaker settings, or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. |
+| Option           | Default  | Notes                                                                                                                                                                               |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. |
 
 ## Per call defaults and overrides
 
@@ -87,3 +94,22 @@ The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `sch
 `signal`, and `requestId`, have no call-level default beyond falling back to the instance-level
 option or being undefined when omitted. `userContent` remains required and accepts either a plain
 `string` for text-only requests or a `ContentBlock[]` for multimodal input (text and images).
+
+## Multimodal `userContent`
+
+`ContentBlock` is the shape used when `userContent` is passed as an array instead of a plain string:
+
+```ts title="content-block-types.ts"
+interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+interface ImageBlock {
+  type: 'image';
+  data: string; // base64-encoded bytes, no `data:` prefix
+  mimeType: string; // e.g. 'image/png', 'image/jpeg', 'image/webp', 'image/gif'
+}
+
+type ContentBlock = TextBlock | ImageBlock;
+```

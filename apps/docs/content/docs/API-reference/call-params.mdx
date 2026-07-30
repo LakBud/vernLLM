@@ -6,7 +6,7 @@ description: Every field accepted by call(), cachedLLMCall(), and their defaults
 `call()` takes a single `CallParams<T>` object. `userContent` is the only required field; everything
 else has a default or is simply optional.
 
-```ts
+```ts title="call-params-basic-usage.ts"
 const result = await llm.call({
   systemPrompt: 'You are a helpful assistant.',
   userContent: 'Summarize this text.',
@@ -22,42 +22,43 @@ const result = await llm.call({
 
 ## Content
 
+### `userContent`
+
+**Required.** `string | ContentBlock[]`. The current user message. Always sent as the final
+user turn, after `history` if provided.
+
+A plain `string` is used for text-only prompts (the common case). For multimodal input, pass an
+array of text and image blocks:
+
+```ts title="multimodal-user-content.ts"
+const result = await llm.call({
+  userContent: [
+    {
+      type: 'text',
+      text: 'Describe this image.',
+    },
+    {
+      type: 'image',
+      mimeType: 'image/png',
+      data: imageBase64,
+    },
+  ],
+});
+```
+
+Image blocks use base64-encoded image bytes without a `data:` URL prefix. VernLLM translates
+them into each provider's native multimodal format automatically.
+
+Supported image MIME types:
+
+- `image/png`
+- `image/jpeg`
+- `image/gif`
+- `image/webp`
+
+Existing string-based calls remain fully compatible.
+
 <Cards>
-  <Card title="userContent">
-    <b>Required.</b> `string | ContentBlock[]`. The current user message. Always sent as the final
-    user turn, after `history` if provided.
-
-    A plain `string` is used for text-only prompts (the common case). For multimodal input, pass an
-    array of text and image blocks:
-
-    ```ts
-    const result = await llm.call({
-      userContent: [
-        {
-          type: 'text',
-          text: 'Describe this image.',
-        },
-        {
-          type: 'image',
-          mimeType: 'image/png',
-          data: imageBase64,
-        },
-      ],
-    });
-    ```
-
-    Image blocks use base64-encoded image bytes without a `data:` URL prefix. VernLLM translates
-    them into each provider's native multimodal format automatically.
-
-    Supported image MIME types:
-    - `image/png`
-    - `image/jpeg`
-    - `image/gif`
-    - `image/webp`
-
-    Existing string-based calls remain fully compatible.
-
-  </Card>
   <Card title="systemPrompt">
     `string`, optional. Sent as the system message. Omit it and the provider's own default system
     behavior applies.
@@ -133,7 +134,7 @@ const result = await llm.call({
 - Without `schema`, `T` defaults to `unknown` and you're responsible for narrowing the result
   yourself.
 
-```ts
+```ts title="generic-type-parameter.ts"
 // result: { name: string; skills: string[] }
 const result = await llm.call({
   userContent: resumeText,

@@ -11,7 +11,7 @@ This allows the model to continue a conversation while keeping context from earl
 
 ## Basic usage
 
-```ts
+```ts title="multi-turn-basic-usage.ts"
 await llm.call({
   systemPrompt: 'You are a helpful assistant.',
   history: [
@@ -66,7 +66,7 @@ Each conversation turn contains:
 
 Example:
 
-```ts
+```ts title="conversation-turn-example.ts"
 const history = [
   {
     role: 'user',
@@ -83,7 +83,7 @@ const history = [
 
 A typical chat application stores previous messages and sends them with every new request:
 
-```ts
+```ts title="continuing-conversation.ts"
 const history = [
   {
     role: 'user',
@@ -117,7 +117,7 @@ The current `userContent` is always appended after the history, so the final his
 
 ### Valid history
 
-```ts
+```ts title="valid-history-example.ts"
 history: [
   {
     role: 'user',
@@ -132,7 +132,7 @@ history: [
 
 ### Invalid history
 
-```ts
+```ts title="invalid-history-example.ts"
 history: [
   {
     role: 'user',
@@ -149,7 +149,7 @@ The invalid example would create two consecutive user messages after `userConten
 
 Omitting it or passing an empty array behaves the same:
 
-```ts
+```ts title="empty-history-example.ts"
 await llm.call({
   history: [],
   userContent: 'Hello!',

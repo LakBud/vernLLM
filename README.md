@@ -46,15 +46,7 @@ This is a pnpm monorepo with two workspaces:
 | [`packages/vern-llm`](./packages/vern-llm) | The `vern-llm` npm package — source, tests, and its own README with the full API reference. |
 | [`apps/docs`](./apps/docs)                 | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                            |
 
-## Getting started
-
-Requires Node 22.13+ and [pnpm](https://pnpm.io/) (this repo pins `pnpm@11.15.0`).
-
-```bash
-pnpm install
-```
-
-Common scripts, runnable from the repo root:
+## Root scripts
 
 | Command                        | Description                                          |
 | ------------------------------ | ---------------------------------------------------- |
@@ -70,14 +62,6 @@ Common scripts, runnable from the repo root:
 | `pnpm lint` / `lint:fix`       | Lint the whole repo with [oxlint](https://oxc.rs/).  |
 | `pnpm format` / `format:check` | Format the whole repo with [oxfmt](https://oxc.rs/). |
 | `pnpm changeset`               | Record a changeset for the next `vern-llm` release.  |
-
-## Contributing
-
-1. Fork and clone the repo, then `pnpm install` at the root.
-2. Make your change inside `packages/vern-llm` (library code) or `apps/docs` (documentation).
-3. Add tests for library changes — see the [Development section](./packages/vern-llm/README.md#development) of the package README for how the test suite is organized.
-4. Run `pnpm lint`, `pnpm typecheck`, and `pnpm test` before opening a PR.
-5. If your change affects the published package, add a changeset: `pnpm changeset`.
 
 ## License
 

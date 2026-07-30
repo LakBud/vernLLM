@@ -16,13 +16,73 @@ JSON handling depends on the requested format:
 
 Note: Tool-based structured output requires a Bedrock model that supports tool use. Models without tool support will return a provider error rather than falling back automatically.
 
+## Setup
+
+The AWS SDK v3 client exposes `.send(command)`, not a direct `.converse()` method, so wrap it to match `BedrockConverseClient` before passing it to `fromBedrock`:
+
+```ts title="bedrock-basic-setup.ts"
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { VernLLM, fromBedrock } from 'vern-llm';
+
+const client = new BedrockRuntimeClient({ region: 'us-east-1' });
+
+const converseClient = {
+  converse: (params, options) =>
+    client.send(new ConverseCommand(params), { abortSignal: options.signal }),
+};
+
+const llm = new VernLLM({
+  client: fromBedrock(converseClient),
+  model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+});
+```
+
+<Callout>
+  `fromBedrock` doesn't depend on `@aws-sdk/client-bedrock-runtime`'s types directly. It accepts
+  anything matching `BedrockConverseClient`'s minimal `.converse()` shape. Use
+  `BedrockConverseClient` from `vern-llm` to type your wrapper without pulling in the full AWS SDK
+  types.
+</Callout>
+
+## Structured output via tool use
+
+When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text. The tool-call's `input` is re-serialized to JSON so it flows through the same string-content contract every other adapter uses:
+
+```ts title="bedrock-structured-output.ts"
+import { z } from 'zod';
+
+const CandidateSchema = z.object({
+  name: z.string(),
+  skills: z.array(z.string()),
+});
+
+const result = await llm.call({
+  systemPrompt: 'Extract the candidate name and skills.',
+  userContent: resumeText,
+  jsonSchema: {
+    name: 'Candidate',
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        skills: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'skills'],
+    },
+  },
+  schema: CandidateSchema, // optional client-side type/validation on top
+});
+```
+
+Without `jsonSchema`, setting `jsonMode: true` (the default) falls back to a `json_object`-style prompt instruction telling the model to respond with valid JSON only, since there's no schema to build a tool from.
+
 ## Multimodal input
 
 `fromBedrock` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
 Image blocks are translated into Bedrock Converse's native image content blocks automatically. The
 selected Bedrock model must support image input for multimodal requests to succeed.
 
-```ts
+```ts title="bedrock-multimodal-input.ts"
 const result = await llm.call({
   userContent: [
     {

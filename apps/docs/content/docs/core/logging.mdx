@@ -5,7 +5,7 @@ description: Swap in your own logger implementation
 
 `VernLLM` accepts a custom logger through the `logger` option. The logger must implement the `Logger` interface.
 
-```ts
+```ts title="pluggable-logger-setup.ts"
 import type { Logger } from 'vern-llm';
 
 const pinoLogger: Logger = {

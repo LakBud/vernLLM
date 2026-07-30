@@ -15,7 +15,7 @@ description: Client-side validation with Zod and provider-native JSON Schema mod
 
 Pass a `schema` and get a typed, validated result. Works with any validator exposing `safeParse` (Zod v3/v4).
 
-```ts
+```ts title="candidate-schema-zod.ts"
 import { z } from 'zod';
 
 const CandidateSchema = z.object({
@@ -49,7 +49,7 @@ const result = await llm.call({
 
 `schema` validates client-side, after the model has already responded. `jsonSchema` sends the schema to the provider (OpenAI/Groq `response_format: { type: 'json_schema' }`), constraining generation itself.
 
-```ts
+```ts title="candidate-json-schema-mode.ts"
 const result = await llm.call({
   systemPrompt: 'Extract the candidate name and skills.',
   userContent: resumeText,

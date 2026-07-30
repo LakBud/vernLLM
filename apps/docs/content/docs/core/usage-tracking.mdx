@@ -3,7 +3,7 @@ title: Token Usage Tracking
 description: Hook into every call's usage data
 ---
 
-```ts
+```ts title="usage-tracking-setup.ts"
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
@@ -15,7 +15,7 @@ const llm = new VernLLM({
 
 `onUsage` fires after every successful call, with the following shape:
 
-```ts
+```ts title="token-usage-interface.ts"
 interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -41,7 +41,7 @@ interface TokenUsage {
 
 ## Example: per-request cost estimation
 
-```ts
+```ts title="usage-cost-estimation.ts"
 const PRICE_PER_1K_TOKENS = { prompt: 0.005, completion: 0.015 };
 
 const llm = new VernLLM({

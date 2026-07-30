@@ -60,7 +60,7 @@ yarn add openai
 
 ## Basic usage
 
-```ts
+```ts title="getting-started.ts"
 import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
 
@@ -81,7 +81,7 @@ const parsed = await llm.call({
 
 `systemPrompt` is optional, omit it and no system message is sent at all:
 
-```ts
+```ts title="system-prompt.ts"
 const answer = await llm.call({
   userContent: 'What is the capital of France?',
   jsonMode: false,
@@ -90,7 +90,7 @@ const answer = await llm.call({
 
 ## Per-call overrides
 
-```ts
+```ts title="call-overrides.ts"
 const llm = new VernLLM({ client: openai, model: 'gpt-4o-mini' });
 
 await llm.call({

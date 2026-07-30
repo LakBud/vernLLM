@@ -6,9 +6,9 @@ icon: CircleQuestionMark
 
 ## Get production-grade LLM calls, without any bloat
 
-**vern-llm** is a resilience layer for LLM applications. A lightweight wrapper that adds retries, timeouts, circuit breakers, caching, structured outputs, schema validation, usage tracking, and observability with sensible defaults and minimal dependencies.
+**VernLLM** is a resilience layer for LLM applications. A lightweight wrapper that adds retries, timeouts, circuit breakers, caching, structured outputs, schema validation, usage tracking, and observability with sensible defaults and minimal dependencies.
 
-```ts
+```ts title="example.ts"
 import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
 
@@ -56,7 +56,7 @@ const summary = await llm.cachedLLMCall({
   </Card>
 </Cards>
 
-## Why vern-llm?
+## Why VernLLM?
 
 - **Retries with backoff**: transient failures get retried automatically. Parse errors, validation errors, and non retryable status codes fail fast instead
 - **Structured output**: pass a Zod schema and get a typed, validated result back
