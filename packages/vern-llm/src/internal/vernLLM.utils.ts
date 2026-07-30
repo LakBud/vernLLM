@@ -28,6 +28,45 @@ export function extractStatus(err: unknown): number | undefined {
   return undefined;
 }
 
+function formatSafely(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return '[unprintable error]';
+    }
+  }
+}
+
+/**
+ * Looks inside an unknown thrown value and pulls out a human-readable
+ * description of it. Checks the `error` field first (the provider's raw
+ * rejection body, JSON-stringified if possible) then falls back to the
+ * message` field. Always returns a safe string, even when the thrown value
+ * has hostile properties or cannot be serialized normally.
+ */
+export function describeError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    try {
+      const error = err as { message?: unknown; error?: unknown };
+
+      if (error.error !== undefined) {
+        return formatSafely(error.error);
+      }
+
+      if (typeof error.message === 'string') {
+        return error.message;
+      }
+    } catch {
+      // Fall through to safe string.
+    }
+  }
+
+  return formatSafely(err);
+}
+
 /**
  * Runs an async function and cancels it if it takes longer than the given
  * timeout. Creates an internal abort controller that fires after the

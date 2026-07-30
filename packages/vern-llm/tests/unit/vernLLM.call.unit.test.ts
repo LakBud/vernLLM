@@ -107,6 +107,89 @@ describe('VernLLM.call — retry & backoff', () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
+  it('preserves the original provider error on .cause for api errors', async () => {
+    const apiError = new FakeApiError('invalid schema', 400);
+    const { client } = createMockClient([apiError]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+      type: 'api',
+      status: 400,
+      cause: apiError,
+    });
+  });
+
+  it('preserves the original error on .cause for unknown errors', async () => {
+    const genericError = new Error('boom');
+    const { client } = createMockClient([genericError]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+      type: 'unknown',
+      cause: genericError,
+    });
+  });
+
+  it('surfaces the Retry-After value from the final retry attempt', async () => {
+    const { client, create } = createMockClient([
+      new FakeApiError('rate limited first attempt', 429, { 'Retry-After': '5' }),
+      new FakeApiError('rate limited second attempt', 429, { 'Retry-After': '10' }),
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 1,
+    });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+
+    const assertion = expect(promise).rejects.toMatchObject({
+      type: 'api',
+      status: 429,
+      retryAfterMs: 10_000,
+    });
+
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs request id and provider error details on failure when logger is provided', async () => {
+    const apiError = new FakeApiError('provider failed', 500, {
+      'x-request-id': 'provider-request-123',
+    });
+
+    const { client } = createMockClient([apiError]);
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      logger,
+    });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        requestId: 'request-123',
+      }),
+    ).rejects.toMatchObject({
+      type: 'api',
+      status: 500,
+    });
+
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('[vern:request-123]'));
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('provider failed'));
+  });
+
   it('uses exponential backoff between retries', async () => {
     const { client } = createMockClient([
       new Error('fail 1'),

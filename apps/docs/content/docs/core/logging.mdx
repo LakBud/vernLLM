@@ -34,7 +34,7 @@ If no logger is provided, `VernLLM` uses a console-based logger.
 `warn` and `error` messages are always emitted regardless of the `debug` option.
 
 <Callout type="warn">
-  Debug logging outputs raw response content (up to 800 characters per call). It defaults to off so
-  response content isn't unintentionally written to logs — enable it explicitly with `debug: true`
-  when you need it.
+  Debug logging outputs raw response content on success (up to 800 characters per call), and the
+  original provider error on failure. It defaults to off so response content isn't unintentionally
+  written to logs — enable it explicitly with `debug: true` when you need it.
 </Callout>

@@ -71,8 +71,6 @@ Common scripts, runnable from the repo root:
 | `pnpm format` / `format:check` | Format the whole repo with [oxfmt](https://oxc.rs/). |
 | `pnpm changeset`               | Record a changeset for the next `vern-llm` release.  |
 
-See [`packages/vern-llm/README.md`](./packages/vern-llm/README.md) for the complete API — installation, structured output, provider adapters, caching, circuit breaker, and more — and the [docs site](https://vernllm.vercel.app) (or run `pnpm dev:docs` locally) for the full guided documentation.
-
 ## Contributing
 
 1. Fork and clone the repo, then `pnpm install` at the root.
