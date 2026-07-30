@@ -10,9 +10,17 @@ import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
 import { annotations, codeExample, faqItems, providers } from '@/lib/home.utils';
 import { generateSoftwareApplication, JsonLd } from '@/lib/seo/jsonld';
 
+const buttonGroupClass = 'flex gap-2';
+
+const primaryButtonClass =
+  'inline-flex items-center gap-1.5 rounded-md border border-fd-border bg-fd-primary px-3 py-1.5 text-sm font-medium text-fd-primary-foreground transition-opacity hover:opacity-90';
+
+const secondaryButtonClass =
+  'inline-flex items-center gap-1.5 rounded-md border border-fd-border bg-fd-card px-3 py-1.5 text-sm font-medium text-fd-foreground transition-colors hover:bg-fd-accent';
+
 export default function HomePage() {
   return (
-    <div className="flex flex-col flex-1 bg-fd-background">
+    <div className="flex flex-1 flex-col bg-fd-background">
       <JsonLd
         data={generateSoftwareApplication({
           name: 'VernLLM',
@@ -22,59 +30,59 @@ export default function HomePage() {
         })}
       />
 
-      {/* HERO  */}
-      <div className="relative overflow-hidden">
+      {/* HERO */}
+      <section className="relative overflow-hidden">
         <Squares squareSize={44} />
 
-        <section className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 px-6 lg:px-16 pt-24 pb-20 items-end">
+        <div className="relative z-10 grid grid-cols-1 items-end gap-8 px-6 pb-20 pt-24 lg:grid-cols-12 lg:px-16">
           <div className="lg:col-span-8">
-            <h1 className="font-bold leading-[0.95] text-fd-foreground text-[13vw] lg:text-[6.5vw] tracking-tight">
+            <h1 className="text-[13vw] font-bold leading-[0.95] tracking-tight text-fd-foreground lg:text-[6.5vw]">
               Reliable LLM calls,
               <br />
               by default.
             </h1>
-            <p className="mt-6 text-fd-muted-foreground text-base lg:text-lg max-w-xl">
+
+            <p className="mt-6 max-w-xl text-base text-fd-muted-foreground lg:text-lg">
               A lightweight resilience layer for LLM chat completions. Retries, timeouts, caching,
               and circuit breaking, dependency-light and typed from the start.
             </p>
           </div>
 
-          <div className="lg:col-span-4 flex flex-col items-start lg:items-end gap-6 lg:text-right">
-            <div className="flex gap-2">
-              <Link
-                href="/docs"
-                className="inline-flex items-center gap-1.5 rounded-md border border-fd-border px-3 py-1.5 text-sm font-medium  bg-fd-primary text-fd-primary-foreground hover:opacity-90 transition-opacity"
-              >
+          <div className="flex flex-col items-start gap-6 lg:col-span-4 lg:items-end lg:text-right">
+            <div className={buttonGroupClass}>
+              <Link href="/docs" className={primaryButtonClass}>
                 Read the docs
               </Link>
+
               <a
                 href="https://github.com/LakBud/vernLLM"
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border border-fd-border bg-fd-card px-3 py-1.5 text-sm font-medium text-fd-foreground hover:bg-fd-accent transition-colors"
+                className={secondaryButtonClass}
               >
                 Source
               </a>
             </div>
           </div>
-        </section>
-      </div>
+        </div>
+      </section>
 
-      {/* INSTALL STRIP */}
+      {/* INSTALL */}
       <section className="border-y border-fd-border">
-        <div className="px-6 lg:px-16 py-4 flex items-center justify-between max-w-5xl mx-auto w-full">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4 lg:px-16">
           <code className="font-mono text-sm text-fd-foreground">
             <span className="text-fd-muted-foreground">$</span> npm install vern-llm
           </code>
-          <span className="font-mono text-xs text-fd-muted-foreground hidden sm:inline">
+
+          <span className="hidden font-mono text-xs text-fd-muted-foreground sm:inline">
             built around the clients you already use
           </span>
         </div>
       </section>
 
-      {/* CODE EXAMPLE */}
-      <section className="px-6 lg:px-16 py-20">
-        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
+      {/* CODE */}
+      <section className="px-6 py-20 lg:px-16">
+        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-10 lg:grid-cols-12">
           <div className="lg:col-span-8">
             <ServerCodeBlock
               lang="ts"
@@ -101,8 +109,8 @@ export default function HomePage() {
             />
           </div>
 
-          <div className="lg:col-span-4 flex flex-col justify-center gap-5">
-            <h2 className="text-fd-foreground text-[20px] font-semibold">
+          <div className="flex flex-col justify-center gap-5 lg:col-span-4 text-center lg:text-left">
+            <h2 className="text-xl font-semibold text-fd-foreground">
               What this call actually does.
             </h2>
 
@@ -118,10 +126,10 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* PROVIDER STRIP */}
-      <section className="px-6 lg:px-16 py-20">
-        <div className="max-w-6xl mx-auto flex flex-col items-center gap-6">
-          <span className="text-4xl sm:text-5xl lg:text-[60px] font-semibold pb-4">Works with</span>
+      {/* PROVIDERS */}
+      <section className="px-6 py-20 lg:px-16">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-8">
+          <span className="pb-4 text-4xl font-semibold sm:text-5xl lg:text-[60px]">Works with</span>
 
           <div className="flex flex-wrap items-center justify-center gap-10">
             {providers.map(({ name, Icon, href }) =>
@@ -133,10 +141,10 @@ export default function HomePage() {
                 >
                   <Icon
                     aria-label={name}
-                    className={`h-12 w-12 text-fd-muted-foreground opacity-60 transition-colors hover:text-fd-card-foreground hover:opacity-100  md:h-14 md:w-14`}
+                    className="h-12 w-12 text-fd-muted-foreground opacity-60 transition-colors hover:text-fd-card-foreground hover:opacity-100 md:h-17 md:w-17"
                   />
 
-                  <span className="pointer-events-none absolute -bottom-10 z-10 whitespace-nowrap rounded-lg border bg-fd-background px-3 py-1.5 text-sm shadow-sm opacity-0 translate-y-1 transition-all group-hover:translate-y-0 group-hover:opacity-100">
+                  <span className="pointer-events-none absolute -bottom-10 z-10 whitespace-nowrap rounded-lg border bg-fd-background px-3 py-1.5 text-sm shadow-sm opacity-0 transition-all group-hover:translate-y-0 group-hover:opacity-100">
                     {name}
                   </span>
                 </Link>
@@ -147,13 +155,13 @@ export default function HomePage() {
       </section>
 
       {/* FAQ */}
-      <section className="px-6 lg:px-16 py-20">
-        <div className="max-w-2xl mx-auto flex flex-col gap-8">
+      <section className="px-6 py-20 lg:px-16">
+        <div className="mx-auto flex max-w-2xl flex-col gap-8">
           <MotionAccordion items={faqItems} gap={0} />
         </div>
       </section>
 
-      {/* VERY COOL BAR THING */}
+      {/* AURORA */}
       <AuroraBarsClient
         maxHeightRatio={1}
         minHeightRatio={0.2}
@@ -172,28 +180,24 @@ export default function HomePage() {
 
       {/* FOOTER */}
       <section className="border-t border-fd-border">
-        <div className="px-6 lg:px-16 py-16 max-w-6xl mx-auto w-full flex flex-col items-center text-center gap-6">
-          <h2 className="text-fd-foreground text-xl sm:text-3xl font-bold max-w-xl">
+        <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-6 py-16 text-center lg:px-16">
+          <h2 className="max-w-xl text-xl font-bold text-fd-foreground sm:text-3xl">
             Stop reinventing the resilience layer.
           </h2>
 
-          <div className="lg:col-span-4 flex flex-col items-start lg:items-end gap-6 lg:text-right">
-            <div className="flex gap-2">
-              <Link
-                href="/docs"
-                className="inline-flex items-center gap-1.5 rounded-md border border-fd-border px-3 py-1.5 text-sm font-medium bg-fd-primary text-fd-primary-foreground hover:opacity-90 transition-opacity"
-              >
-                Get started
-              </Link>
-              <a
-                href="https://github.com/LakBud/vernLLM"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border border-fd-border bg-fd-card px-3 py-1.5 text-sm font-medium text-fd-foreground hover:bg-fd-accent transition-colors"
-              >
-                Source
-              </a>
-            </div>
+          <div className={buttonGroupClass}>
+            <Link href="/docs/getting-started" className={primaryButtonClass}>
+              Get started
+            </Link>
+
+            <a
+              href="https://github.com/LakBud/vernLLM"
+              target="_blank"
+              rel="noreferrer"
+              className={secondaryButtonClass}
+            >
+              Source
+            </a>
           </div>
 
           <code className="font-mono text-xs text-fd-muted-foreground">npm install vern-llm</code>
