@@ -127,15 +127,69 @@ const llm = new VernLLM({
 
 See <a href="/docs/core/usage-tracking">Token Usage Tracking</a> for the full `onUsage` shape.
 
-## Interaction with caching
+## Interaction with usage tracking
 
-If you cache calls that use different `model` or `temperature` overrides under the same
-`cacheKey`, you'll get a cached result from whichever call happened to populate the cache first,
-regardless of which override the current call is using. Fold the override into the key if it
-affects the output you want back:
+`onUsage` reports the model that actually served the request, including a per-call override, not
+the instance's default. This matters if you bill different models at different rates:
 
-```ts
-const cacheKey = `analysis:${docId}:${model}`;
+```ts title="usage-tracking-model-override.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o-mini',
+  onUsage: ({ model, promptTokens, completionTokens }) => {
+    // `model` reflects the override, e.g. 'gpt-4o', not 'gpt-4o-mini'
+    billing.record({ model, promptTokens, completionTokens });
+  },
+});
 ```
 
-See <a href="/docs/core/caching">Caching &amp; Usage Metering</a> for more on choosing cache keys.
+See <a href="/docs/core/usage-tracking">Usage Tracking</a> for the full `onUsage` shape.
+
+## Interaction with caching
+
+Cache keys are entirely controlled by your application. VernLLM does not automatically derive a key
+from the call parameters.
+
+If the same `cacheKey` is reused with different generation settings, the first cached response will
+be returned even if a later call uses different parameters:
+
+```ts title="unsafe-cache-key.ts"
+await llm.cachedLLMCall({
+  cacheKey: `analysis:${docId}`,
+  call: {
+    model: 'gpt-4o',
+    temperature: 0.2,
+    userContent: document,
+  },
+  ttl: 3600,
+});
+```
+
+A later call with a different model or temperature would still receive the cached result:
+
+```ts title="cache-key-collision.ts"
+await llm.cachedLLMCall({
+  cacheKey: `analysis:${docId}`,
+  call: {
+    model: 'gpt-4o-mini',
+    temperature: 0.8,
+    userContent: document,
+  },
+  ttl: 3600,
+});
+```
+
+Include every value that affects the generated output in your cache key:
+
+```ts title="safe-cache-key.ts"
+const cacheKey = [
+  'analysis',
+  docId,
+  model,
+  temperature,
+  'v2', // bump when prompts or schemas change
+].join(':');
+```
+
+See <a href="/docs/core/caching">Caching</a> for cache adapters, TTL behavior, cache invalidation,
+and concurrent cache miss handling.

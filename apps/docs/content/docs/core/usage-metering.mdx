@@ -1,0 +1,232 @@
+---
+title: Usage Metering
+description: Reserve and track LLM usage with reserveUsage, refundUsage, and onUsage
+---
+
+## Overview
+
+VernLLM provides two different usage-related features:
+
+- **Usage reservations** with `reserveUsage` and `refundUsage` for quotas, credits, and billing systems.
+- **Token reporting** with `onUsage` for tracking provider-reported token consumption.
+
+These features are independent. You can use either one without the other.
+
+## Reserving usage
+
+`reserveUsage` runs before a request is sent to the provider.
+
+Use it to reserve quota, check limits, or charge a user before performing an LLM operation.
+
+```ts title="reserve-usage.ts"
+const result = await llm.call({
+  systemPrompt,
+  userContent,
+  reserveUsage: async () => {
+    await quota.reserve(userId);
+  },
+});
+```
+
+If `reserveUsage` throws:
+
+- the request is not sent
+- retries are not triggered
+- `refundUsage` is not called
+
+<Callout type="warn">
+  A failed reservation means nothing was consumed, so there is nothing to refund.
+</Callout>
+
+## Refunding failed requests
+
+`refundUsage` is called when a request fails after a successful reservation.
+
+```ts title="refund-usage.ts"
+const result = await llm.call({
+  systemPrompt,
+  userContent,
+
+  reserveUsage: async () => {
+    await quota.reserve(userId);
+  },
+
+  refundUsage: async () => {
+    await quota.refund(userId);
+  },
+});
+```
+
+The sequence is:
+
+1. `reserveUsage` succeeds.
+2. VernLLM performs the request.
+3. The request fails.
+4. `refundUsage` is called.
+5. The original request error is returned.
+
+<Callout type="info">
+  `refundUsage` only runs when the same caller's `reserveUsage` completed successfully first.
+</Callout>
+
+## Handling refund failures
+
+A failed refund does not replace the original request error.
+
+If `refundUsage` throws:
+
+- the failure is logged
+- the error is swallowed
+- the original LLM error is propagated
+
+This prevents billing cleanup problems from hiding the actual request failure.
+
+## Usage callbacks
+
+`onUsage` receives token information returned by the provider after a successful response.
+
+```ts title="on-usage.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+
+  onUsage: (usage) => {
+    console.log({
+      model: usage.model,
+      totalTokens: usage.totalTokens,
+    });
+  },
+});
+```
+
+The callback receives:
+
+```ts title="token-usage.ts"
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requestId: string;
+  model: string;
+}
+```
+
+<Callout type="info">
+  `onUsage` is only called when the provider returns usage information. A failing `onUsage` callback
+  is logged and ignored so metrics systems cannot break successful LLM requests.
+</Callout>
+
+## Reservation information
+
+Both `reserveUsage` and `refundUsage` receive information about whether the request was coalesced.
+
+```ts title="usage-info.ts"
+export interface UsageInfo {
+  coalesced: boolean;
+}
+```
+
+Example:
+
+```ts title="coalesced-usage.ts"
+reserveUsage: async ({ coalesced }) => {
+  if (coalesced) {
+    return;
+  }
+
+  await quota.reserve(userId);
+};
+```
+
+This allows applications to decide how concurrent requests should be billed.
+
+Possible strategies include:
+
+- charging every caller
+- charging only the triggering request
+- applying reduced costs for coalesced callers
+
+## Usage metering with cached calls
+
+Cached requests still run usage reservation hooks.
+
+When multiple requests share the same cache miss:
+
+```text
+Request A → reserveUsage({ coalesced: false })
+Request B → reserveUsage({ coalesced: true })
+Request C → reserveUsage({ coalesced: true })
+
+              ↓
+
+        one shared LLM request
+
+              ↓
+
+     all callers receive the result
+```
+
+Only the first caller executes the underlying LLM function, but each caller gets its own reservation callback.
+
+```ts title="cached-usage-metering.ts"
+const result = await llm.cachedLLMCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+
+  call: {
+    systemPrompt,
+    userContent,
+  },
+
+  reserveUsage: async ({ coalesced }) => {
+    await quota.reserve(userId, {
+      coalesced,
+    });
+  },
+
+  refundUsage: async ({ coalesced }) => {
+    await quota.refund(userId, {
+      coalesced,
+    });
+  },
+});
+```
+
+<Callout type="warn">
+  If the shared LLM request fails, each caller is refunded independently only when that caller's own
+  reservation succeeded.
+</Callout>
+
+## Recommended billing pattern
+
+A common production setup is:
+
+```ts title="billing-pattern.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+
+  onUsage: async (usage) => {
+    await usageStore.record(usage);
+  },
+});
+
+await llm.call({
+  systemPrompt,
+  userContent,
+
+  reserveUsage: async () => {
+    await quota.reserve(userId);
+  },
+
+  refundUsage: async () => {
+    await quota.refund(userId);
+  },
+});
+```
+
+This separates responsibilities:
+
+- `reserveUsage` handles authorization and limits before execution.
+- `refundUsage` handles failed requests.
+- `onUsage` records actual provider usage after completion.

@@ -19,6 +19,8 @@ import {
   type CallParams,
   type ConversationTurn,
   type LLMClient,
+  type RefundUsage,
+  type ReserveUsage,
   type VernLLMOptions,
 } from './types/index.js';
 
@@ -132,18 +134,36 @@ export class VernLLM {
     const requestId = params.requestId ?? randomUUID();
 
     try {
-      const result = await this.retryWithBackoff(
-        () => this.executeCall(params, requestId),
-        requestId,
-        params.signal,
-      );
-
-      return result;
+      return await this.withReservedUsage(params, false, async () => {
+        try {
+          return await this.retryWithBackoff(
+            () => this.executeCall(params, requestId),
+            requestId,
+            params.signal,
+          );
+        } catch (error) {
+          this.breaker?.recordFailure();
+          const normalized = this.normalizeError(error, params.signal);
+          this.logger.debug(`[vern:${requestId}] error:\n${describeError(error)}`);
+          throw normalized;
+        }
+      });
     } catch (error) {
-      this.breaker?.recordFailure();
-      const normalized = this.normalizeError(error, params.signal);
-      this.logger.debug(`[vern:${requestId}] error:\n${describeError(error)}`);
-      throw normalized;
+      if (error instanceof LLMError) {
+        throw error;
+      }
+
+      if (params.signal?.aborted) {
+        throw new LLMError('LLM request aborted', 'aborted');
+      }
+
+      throw new LLMError(
+        error instanceof Error ? error.message : 'Usage reservation failed',
+        'quota_exceeded',
+        undefined,
+        undefined,
+        error,
+      );
     }
   }
 
@@ -535,9 +555,12 @@ export class VernLLM {
    * i.e. `reserveUsage` was provided and it resolved successfully. If
    * `reserveUsage` is omitted entirely, or if it throws, there is nothing to
    * refund, so `refundUsage` is not invoked in either case.
+   *
+   * Shared by `call()` and `cachedCall()`/`registerTrigger()`, so it only
+   * depends on the two hooks rather than either params interface directly.
    */
   private async withReservedUsage<T>(
-    params: CachedCallParams<T>,
+    params: { reserveUsage?: ReserveUsage; refundUsage?: RefundUsage },
     coalesced: boolean,
     getResult: () => Promise<T>,
   ): Promise<T> {

@@ -214,6 +214,151 @@ describe('VernLLM.call — retry & backoff', () => {
   });
 });
 
+describe('VernLLM.call — reserve/refund usage', () => {
+  it('does not refund when the call succeeds', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn();
+
+    const { client } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        reserveUsage,
+        refundUsage,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(reserveUsage).toHaveBeenCalledWith({ coalesced: false });
+    expect(refundUsage).not.toHaveBeenCalled();
+  });
+
+  it('refunds when the call fails after reserving usage', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn().mockResolvedValue(undefined);
+
+    const { client } = createMockClient([new Error('boom')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        reserveUsage,
+        refundUsage,
+      }),
+    ).rejects.toMatchObject({
+      type: 'unknown',
+    });
+
+    expect(reserveUsage).toHaveBeenCalledWith({ coalesced: false });
+    expect(refundUsage).toHaveBeenCalledWith({ coalesced: false });
+  });
+
+  it('does not refund if reserveUsage itself fails', async () => {
+    const reserveUsage = vi.fn().mockRejectedValue(new Error('quota exceeded'));
+    const refundUsage = vi.fn();
+
+    const { client, create } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        reserveUsage,
+        refundUsage,
+      }),
+    ).rejects.toMatchObject({
+      type: 'quota_exceeded',
+    });
+
+    expect(create).not.toHaveBeenCalled();
+    expect(refundUsage).not.toHaveBeenCalled();
+  });
+
+  it('swallows refundUsage failures while preserving the original error', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn().mockRejectedValue(new Error('refund failed'));
+
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const { client } = createMockClient([new Error('boom')]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      logger,
+    });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        reserveUsage,
+        refundUsage,
+      }),
+    ).rejects.toMatchObject({
+      type: 'unknown',
+    });
+
+    expect(refundUsage).toHaveBeenCalledWith({ coalesced: false });
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VernLLM] refundUsage failed',
+      expect.objectContaining({
+        message: 'refund failed',
+      }),
+    );
+  });
+
+  it('reserves once and refunds once across retries', async () => {
+    vi.useFakeTimers();
+
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn().mockResolvedValue(undefined);
+
+    const { client, create } = createMockClient([
+      new Error('first failure'),
+      new Error('second failure'),
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 1,
+      baseDelayMs: 1,
+    });
+
+    const promise = llm.call({
+      systemPrompt: 's',
+      userContent: 'u',
+      reserveUsage,
+      refundUsage,
+    });
+
+    const assertion = expect(promise).rejects.toMatchObject({
+      type: 'unknown',
+    });
+
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(reserveUsage).toHaveBeenCalledTimes(1);
+    expect(reserveUsage).toHaveBeenCalledWith({ coalesced: false });
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+    expect(refundUsage).toHaveBeenCalledWith({ coalesced: false });
+
+    vi.useRealTimers();
+  });
+});
+
 describe('VernLLM.call — abort during backoff wait', () => {
   it('resolves the backoff wait immediately when aborted mid-delay, then reports aborted', async () => {
     const controller = new AbortController();

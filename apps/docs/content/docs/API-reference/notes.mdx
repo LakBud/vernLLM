@@ -6,6 +6,7 @@ description: Requirements, edge cases, and dependency behavior
 - Requires Node 20+ for `AbortSignal.any`.
 - Non retryable status codes (default `400, 401, 403, 404, 422`) fail fast instead of consuming a retry and are reported as `LLMError('api', status)`.
 - An already aborted `signal` rejects immediately with `LLMError('aborted')` before any request is dispatched.
-- Per attempt timeouts throw `LLMError('timeout')` and can be retried like other transient failures.
+- Per-attempt timeouts throw `LLMError('timeout')` and can be retried like other transient failures.
 - `jsonMode: false` skips JSON parsing entirely and returns the raw string.
-- `openai` is the only formal (optional) peer dependency. `zod` and other provider SDKs (`groq-sdk`, `@anthropic-ai/sdk`, etc) aren't declared as dependencies at all — this package only relies on their shapes structurally, so bring your own.
+- VernLLM does not require a specific provider SDK. The package operates against the `LLMClient` interface, so provider SDKs are brought by the consumer or accessed through adapters.
+- Validation libraries such as `zod` are optional. If using `schema`, provide a Zod-compatible validator exposing `safeParse`.

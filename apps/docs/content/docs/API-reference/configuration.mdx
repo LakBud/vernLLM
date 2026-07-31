@@ -18,8 +18,6 @@ const llm = new VernLLM({
   debug: false,
   cache: new InMemoryCacheAdapter(), // optional, defaults to this anyway
   parseJson: (content) => {
-    // must return undefined on failure, not throw — this is what
-    // the built-in defaultParseJson does internally
     try {
       return JSON.parse(content);
     } catch {
@@ -39,6 +37,7 @@ const llm = new VernLLM({
     adapter (`fromAnthropic`, `fromGemini`, `fromBedrock`, `fromFetch`, etc). See{' '}
     <a href="/docs/adapters">Adapters</a>.
   </Card>
+
   <Card title="model">
     The default model ID for calls that do not override it via `call({ model: '...' })`.
   </Card>
@@ -46,54 +45,56 @@ const llm = new VernLLM({
 
 ## Retry & timeout
 
-| Option               | Default                     | Notes                                                                                                                                                                                                     |
-| -------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                  |
-| `timeoutMs`          | `25000`                     | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window.                                                                                                          |
-| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay). |
-| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                |
+| Option               | Default                     | Notes                                                                                                                                       |
+| -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                    |
+| `timeoutMs`          | `25000`                     | Per-attempt timeout, not a total call timeout. Each retry receives its own timeout window.                                                  |
+| `baseDelayMs`        | `500`                       | Base delay for exponential backoff with jitter. Provider `Retry-After` values are honored when present and capped to the retry delay limit. |
+| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that skip retries because they are treated as permanent failures.                                                         |
 
 ## Request defaults
 
-| Option             | Default            | Notes                                                                                                                                   |
-| ------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `defaultMaxTokens` | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                 |
-| `parseJson`        | `defaultParseJson` | Custom parser for non standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM. |
+| Option             | Default            | Notes                                                                                                                                                                     |
+| ------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `defaultMaxTokens` | `1000`             | Used when a call does not provide `maxTokens`.                                                                                                                            |
+| `parseJson`        | `defaultParseJson` | Custom parser for responses. It may return `undefined` when parsing fails, which causes `LLMError('parse')`. Thrown parser errors are also converted into parse failures. |
 
 ## Caching
 
-| Option  | Default                      | Notes                                                                                                                                                                                                                                                     |
-| ------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall` and `cachedLLMCall`, not plain `call()`. The default in memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi process deployments. See <a href="/docs/core/caching">Caching</a>. |
+| Option  | Default                      | Notes                                                                                                                                                                                                                                                                                |
+| ------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall` and `cachedLLMCall`, not normal `call()`. The default cache is local to the current process and is not shared across instances. Use a shared adapter such as Redis or Upstash for multi-process deployments. See <a href="/docs/core/caching">Caching</a>. |
 
 ## Observability
 
-| Option    | Default                       | Notes                                                                                                                                                                                                                                                                                    |
-| --------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onUsage` | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response.                                                                                                                                                             |
-| `logger`  | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                              |
-| `debug`   | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`. |
+| Option    | Default                       | Notes                                                                                                                                                                                                       |
+| --------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onUsage` | none                          | Called after a successful provider response when usage data exists. It fires once per completed request, not once per retry attempt. Cached responses do not trigger it because no provider request occurs. |
+| `logger`  | console based `ConsoleLogger` | Implement the `Logger` interface to route logs elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                   |
+| `debug`   | `false`                       | Controls `logger.debug` output only. Warning and error logs are still emitted regardless of this flag.                                                                                                      |
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                               |
-| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. |
+| Option           | Default  | Notes                                                                                                                                                                                       |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or provide `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. |
 
 ## Per call defaults and overrides
 
-A handful of options are set per `call()` rather than on the instance. Three have their own defaults worth knowing:
+The following options are configured per `call()` and have defaults worth knowing:
 
-| Option         | Default | Notes                                                                                                                                  |
-| -------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `temperature`  | `0.2`   | Low by design. This library targets structured and deterministic extraction more than open-ended generation. Override freely per call. |
-| `jsonMode`     | `true`  | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing.                             |
-| `systemPrompt` | none    | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                              |
+| Option         | Default | Notes                                                                                                                                               |
+| -------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `temperature`  | `0.2`   | VernLLM always sends a temperature value unless overridden.                                                                                         |
+| `jsonMode`     | `true`  | Responses are parsed as JSON by default. Set `jsonMode: false` to return raw text. If `jsonSchema` is provided, JSON mode is enabled automatically. |
+| `systemPrompt` | none    | Omitting it skips the system message entirely rather than sending an empty one.                                                                     |
 
 The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`,
-`signal`, and `requestId`, have no call-level default beyond falling back to the instance-level
-option or being undefined when omitted. `userContent` remains required and accepts either a plain
-`string` for text-only requests or a `ContentBlock[]` for multimodal input (text and images).
+`signal`, and `requestId`, have no additional defaults beyond falling back to instance configuration
+where applicable or remaining undefined when omitted.
+
+`userContent` remains required and accepts either a plain `string` for text-only requests or a
+`ContentBlock[]` for multimodal input (text and images).
 
 ## Multimodal `userContent`
 
@@ -113,3 +114,8 @@ interface ImageBlock {
 
 type ContentBlock = TextBlock | ImageBlock;
 ```
+
+<Callout type="info">
+  Image blocks are validated before sending. Supported MIME types are `image/png`, `image/jpeg`,
+  `image/gif`, and `image/webp`.
+</Callout>

@@ -1,148 +1,241 @@
 ---
-title: Caching & Usage Metering
-description: Wrap calls with cachedCall or cachedLLMCall
+title: Caching
+description: Cache LLM responses with cachedCall and cachedLLMCall
 ---
 
-```ts title="cached-call-setup.ts"
-import { InMemoryCacheAdapter } from 'vern-llm';
+## Overview
+
+VernLLM provides an optional response cache for storing completed LLM results and reusing them on
+future requests.
+
+Caching is controlled through a `CacheAdapter`. The package includes an in-memory implementation
+that works without additional dependencies, while production applications can provide their own
+adapter backed by systems such as Redis or Upstash.
+
+```ts title="cache-setup.ts"
+import { InMemoryCacheAdapter, VernLLM } from 'vern-llm';
 
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
-  cache: new InMemoryCacheAdapter(), // swap for your own Redis/Upstash adapter
-});
-
-const result = await llm.cachedCall({
-  cacheKey: `cv:${cvId}`,
-  ttl: 3600,
-  fn: () => llm.call({ systemPrompt, userContent }),
-  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
-  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
+  cache: new InMemoryCacheAdapter(),
 });
 ```
 
-<Callout type="warn">
-  `ttl` is in seconds, not milliseconds. `ttl: 3600` caches for one hour. This differs from most
-  other timing options in the library (`timeoutMs`, `baseDelayMs`), which are milliseconds, so it's
-  worth double-checking if you're copying a value across.
+<Callout type="info">
+  `InMemoryCacheAdapter` stores values only inside the current process. When running multiple
+  instances, use a shared cache adapter so all instances can access the same entries.
 </Callout>
 
-<Callout>
-  `refundUsage` only runs if `reserveUsage` was provided and actually succeeded for that caller. If
-  `refundUsage` itself throws, that failure is logged and swallowed. Only an error from `fn`
-  propagates to the caller — a cache-write failure is logged and swallowed separately, and the
-  result is still returned.
-</Callout>
+## cachedCall
 
-## Concurrent misses are coalesced
+`cachedCall` adds caching around any async function.
 
-If several calls with the same `cacheKey` miss the cache at roughly the same time, only the first one (the "trigger") actually calls `fn`. Every other concurrent caller waits on that same in-flight call instead of starting its own, and all of them resolve (or reject) together once it settles. This prevents a cache stampede, where many simultaneous callers all trigger their own (possibly expensive) `fn()` call before the first one has had a chance to populate the cache.
+It checks the cache first and only executes `fn` when no cached value exists.
 
-Every caller still gets its own `reserveUsage`/`refundUsage` invocation — the trigger and each coalesced caller — but is told whether it was coalesced via the `coalesced` flag, so your application decides how coalesced callers are billed: full price, a reduced rate, or not billed at all.
+```ts title="cached-call.ts"
+const result = await llm.cachedCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  fn: () =>
+    llm.call({
+      systemPrompt,
+      userContent,
+    }),
+});
+```
 
-<Callout>
-  Although `fn` executes only once per in-flight window, `reserveUsage` and `refundUsage` are still
-  invoked once per caller. If `fn` fails, every caller is refunded independently.
-</Callout>
+The cache flow is:
 
-## How the cache/reserve/refund flow works
-
-On a cache miss, `cachedCall` runs in this order for the triggering caller:
-
-1. `reserveUsage({ coalesced: false })`, if provided. If this throws, the error propagates immediately and `refundUsage` is not called.
-2. `fn()`, the actual LLM call.
-3. On success, write the result to the cache (a failed cache write is logged and swallowed; the result is still returned).
-4. If step 2 fails (after step 1 succeeded), call `refundUsage({ coalesced: false })`, then rethrow the original error.
-
-Coalesced callers skip step 2 (they share the trigger's `fn()` call instead) but still run their own `reserveUsage({ coalesced: true })` before waiting on the shared result. Their own `refundUsage({ coalesced: true })` runs only if their own `reserveUsage` succeeded and the shared result then fails.
+1. Look up the provided `cacheKey`.
+2. Return the cached value if an entry exists.
+3. Execute `fn()` on a cache miss.
+4. Store the returned value.
+5. Return the result.
 
 <Callout type="warn">
-  `refundUsage` only runs for a given caller if that caller's own `reserveUsage` succeeded first. If
-  `reserveUsage` itself throws (e.g. the user is already out of quota), that error propagates
-  directly and `refundUsage` is **not** invoked — there was nothing reserved to give back. You don't
-  need to guard your `refundUsage` implementation against being called for a reservation that was
-  never made.
+  `ttl` values are seconds, not milliseconds. `ttl: 3600` caches an entry for one hour.
 </Callout>
 
+## cachedLLMCall
+
+`cachedLLMCall` combines `cachedCall` with VernLLM's normal `call` pipeline.
+
+Use it when the cached operation is always an LLM request.
+
+```ts title="cached-llm-call.ts"
+const result = await llm.cachedLLMCall({
+  cacheKey: `cv:${cvId}:v2`,
+  ttl: 3600,
+  call: {
+    systemPrompt,
+    userContent,
+  },
+});
+```
+
+This is equivalent to:
+
+```ts title="cached-llm-call-expanded.ts"
+const result = await llm.cachedCall({
+  cacheKey: `cv:${cvId}:v2`,
+  ttl: 3600,
+  fn: () =>
+    llm.call({
+      systemPrompt,
+      userContent,
+    }),
+});
+```
+
+Because it uses `call`, cached LLM requests still support:
+
+- retries
+- timeouts
+- circuit breakers
+- JSON parsing
+- schema validation
+- usage callbacks
+
+## Concurrent cache misses
+
+VernLLM coalesces concurrent cache misses for the same key.
+
+If multiple requests arrive with the same `cacheKey` while the value is missing:
+
+```text
+Request A → cache miss → executes fn()
+Request B → cache miss → waits for Request A
+Request C → cache miss → waits for Request A
+
+              ↓
+
+        one shared result
+
+              ↓
+
+      A, B, and C receive it
+```
+
+Only one execution of `fn()` happens during the in-flight window.
+
+<Callout type="info">
+  Coalescing prevents duplicate work during simultaneous requests. Once the request completes,
+  future requests use the stored cache entry normally.
+</Callout>
+
+## Cache keys
+
+VernLLM does not automatically generate cache keys.
+
+The cache key must represent everything that can change the generated result, including:
+
+- prompt contents
+- model
+- schema
+- response format
+- application version
+
+For example:
+
+```ts title="cache-key-versioning.ts"
+const cacheKey = `cv:${cvId}:${model}:v2`;
+```
+
+Increase the version when changing prompts or output requirements.
+
 <Callout type="warn">
-  Cache adapters use the `hit` field to indicate whether a value exists, not the presence of
-  `value` alone. This lets a legitimately cached `null` be served from cache instead of being
-  treated as a miss. `{ hit: true, value: null }` means "we have a cached result, and it's
-  `null`." `{ hit: false, value: null }` means "nothing is cached for this key."
+  Reusing the same cache key for different requests can return an older response that does not match
+  the new request.
 </Callout>
 
 ## Deleting cached entries
 
-Cache invalidation is application-specific, so VernLLM does not automatically
-decide when a cached response becomes stale. When your application knows that a
-cached response should no longer be used, you can remove the entry manually:
+Cache invalidation is controlled by the application.
 
-```ts
+When a cached value should no longer be used, remove it manually.
+
+```ts title="delete-cache.ts"
 await llm.deleteCache(`cv:${cvId}`);
 ```
 
-## `cachedLLMCall`: cached + retried in one call
+The cache adapter determines whether deletion is supported.
 
-`cachedCall` is a thin cache wrapper; it doesn't apply retry/timeout/circuit-breaker behavior on its own. If `fn` is always going to be `() => llm.call(...)`, `cachedLLMCall` wires that up for you:
+<Callout type="info">
+  `delete` is optional on `CacheAdapter`. If the configured adapter does not support deletion,
+  `deleteCache` safely does nothing.
+</Callout>
 
-```ts title="cached-llm-call.ts"
-const result = await llm.cachedLLMCall({
-  cacheKey: `cv:${cvId}`,
-  ttl: 3600,
-  call: { systemPrompt, userContent }, // same shape as call()'s params
-  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
-  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
-});
-```
+## CacheAdapter
 
-## Choosing a cache key
+Custom cache implementations must implement the `CacheAdapter` interface.
 
-There's no automatic key derivation from the call's contents. `cacheKey` is entirely up to you, which means it's also easy to get wrong: if you reuse a key across calls with a different `systemPrompt`, `schema`, or `model`, you'll get a cached result that doesn't match what the new call would have produced.
+```ts title="cache-adapter.ts"
+export interface CacheAdapter<T = unknown> {
+  get(key: string): Promise<{
+    hit: boolean;
+    value: T | null;
+  }>;
 
-A safer pattern is to fold the things that affect the output into the key itself:
+  set(key: string, value: T, ttl: number): Promise<void>;
 
-```ts
-const cacheKey = `cv:${cvId}:${model}:v2`; // bump the version suffix when the prompt/schema changes
-```
-
-## Custom cache adapter
-
-```ts title="upstash-cache-adapter.ts"
-import type { CacheAdapter } from 'vern-llm';
-
-class UpstashCacheAdapter implements CacheAdapter {
-  async get(key: string) {
-    const raw = await redis.get(key);
-
-    if (raw === null) {
-      return { hit: false, value: null };
-    }
-
-    return { hit: true, value: JSON.parse(raw) };
-  }
-
-  async set(key: string, value: unknown, ttl: number) {
-    await redis.set(key, JSON.stringify(value), { ex: ttl });
-  }
-
-  async delete(key: string) {
-    await redis.del(key);
-  }
+  delete?(key: string): Promise<void>;
 }
 ```
 
-<Callout>
-  The key thing to get right when migrating: `hit` should be `true` whenever the key existed in your
-  underlying store, even if the stored value itself is `null`. `hit` should only be `false` when
-  nothing was found for that key. Most stores already give you this signal for free — e.g. Redis's
-  `GET` returning `null` for "key doesn't exist" is different from a `null` you stored yourself, so
-  make sure your adapter checks existence rather than just checking `value !== null`.
+## Cache hits and null values
+
+Cache adapters use the `hit` field to indicate whether an entry exists.
+
+The presence of `value` alone is not enough because `null` is a valid cached value.
+
+```ts title="cache-results.ts"
+{
+  hit: true,
+  value: null,
+}
+```
+
+This means:
+
+> A cached entry exists and its stored value is `null`.
+
+A cache miss looks like:
+
+```ts title="cache-miss.ts"
+{
+  hit: false,
+  value: null,
+}
+```
+
+This means:
+
+> No entry exists for this key.
+
+<Callout type="warn">
+  Do not implement cache adapters by checking only whether `value !== null`. A stored `null` value
+  must still be treated as a cache hit.
 </Callout>
 
+## Built-in InMemoryCacheAdapter
+
+The built-in adapter:
+
+- requires no external dependencies
+- stores values inside memory
+- supports TTL expiration
+- supports deletion
+- limits memory usage with `maxSize`
+
+```ts title="memory-cache-options.ts"
+const cache = new InMemoryCacheAdapter({
+  maxSize: 1000,
+});
+```
+
+When the size limit is reached, the oldest entries are removed first.
+
 <Callout>
-  The built-in `InMemoryCacheAdapter` treats `ttl` as seconds, supports deletion, and accepts an
-  optional `maxSize` limit to prevent unbounded memory growth. When the limit is reached, the oldest
-  entries are removed first. Custom adapters should keep the same `ttl` convention (rather than
-  milliseconds) so behavior stays consistent across adapters. Implement `delete` if your storage
-  backend supports explicit cache invalidation.
+  All cache adapters should follow the same TTL convention: seconds, not milliseconds.
 </Callout>

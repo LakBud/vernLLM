@@ -77,6 +77,20 @@ export interface CallParams<T = unknown> {
    * Can be combined with `jsonSchema` for provider-level constraint + client-side typing.
    */
   schema?: SchemaLike<T>;
+
+  /**
+   * Called once before the first request attempt is dispatched.
+   * It wraps the whole logical call, not individual retry attempts.
+   * If it throws, the call is rejected with LLMError('quota_exceeded')
+   * and no provider request is sent.
+   */
+  reserveUsage?: ReserveUsage;
+
+  /**
+   * Called once if the call ultimately fails, but only if `reserveUsage`
+   * was provided and succeeded first
+   */
+  refundUsage?: RefundUsage;
 }
 
 export interface CachedCallParams<T> {

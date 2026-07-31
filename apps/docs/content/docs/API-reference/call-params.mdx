@@ -16,8 +16,9 @@ const result = await llm.call({
 ```
 
 <Callout>
-  `cachedLLMCall`'s `call` field accepts this exact same shape. `cachedCall`'s `fn` is a plain
-  function, so it's up to you to pass these through to `llm.call()` yourself.
+  `cachedLLMCall`'s `call` field accepts this exact same shape. It combines these call parameters
+  with caching options like `cacheKey` and `ttl`. `cachedCall`'s `fn` is a plain function, so it's
+  up to you to pass these through to `llm.call()` yourself.
 </Callout>
 
 ## Content
@@ -90,8 +91,9 @@ Existing string-based calls remain fully compatible.
   </Card>
   <Card title="jsonSchema">
     `JsonSchemaSpec`, optional. Provider-native JSON Schema structured-output mode
-    (`{ name, schema, strict?, description? }`). Constrains generation itself rather than just
-    validating after the fact. Implies `jsonMode: true`. See{' '}
+    (`{ name, schema, strict?, description? }`). Where supported, sends the schema to the provider
+    to constrain generation instead of only validating after the response. Implies `jsonMode: true`.
+    See{' '}
     <a href="/docs/core/structured-output">Structured Output</a>.
   </Card>
   <Card title="schema">
@@ -109,13 +111,39 @@ Existing string-based calls remain fully compatible.
   than silently skipping validation and returning an unvalidated string cast to your schema's type.
 </Callout>
 
+## Usage metering hooks
+
+<Cards>
+  <Card title="reserveUsage">
+    Optional async callback that runs before a request is dispatched. If it throws, the call is
+    rejected with `LLMError('quota_exceeded')` and no provider request is made.
+  </Card>
+  <Card title="refundUsage">
+    Optional async callback that runs when a reserved call fails. It only runs if `reserveUsage` was
+    provided and completed successfully first.
+  </Card>
+</Cards>
+
+These hooks receive:
+
+```ts title="usage-hook-info.ts"
+interface UsageInfo {
+  coalesced: boolean;
+}
+```
+
+For normal `call()` usage, `coalesced` is always `false`. Cached calls can receive `true` when
+multiple callers share the same in-flight cache miss.
+
+See <a href="/docs/core/usage-metering">Usage Metering</a> for details.
+
 ## Request lifecycle
 
 <Cards>
   <Card title="requestId">
-    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage` so you can
-    correlate a usage record back to the call that produced it. See{' '}
-    <a href="/docs/core/usage-tracking">Token Usage Tracking</a>.
+    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage` after a
+    successful provider response so you can correlate a usage record back to the call that produced
+    it. See <a href="/docs/core/usage-tracking">Usage Tracking</a>.
   </Card>
   <Card title="signal">
     `AbortSignal`, optional. If already aborted when `call()` is invoked, it throws
