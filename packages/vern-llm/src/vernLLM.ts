@@ -513,7 +513,7 @@ export class VernLLM {
     const coalesced = existing !== undefined;
 
     if (coalesced) {
-      return this.withReservedUsage(params, coalesced, () => existing, undefined);
+      return this.withReservedUsage(params, coalesced, () => existing, params.signal);
     }
 
     return this.registerTrigger(params, coalesced);
@@ -521,9 +521,15 @@ export class VernLLM {
 
   /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */
   private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
-    const resultPromise = this.withReservedUsage(params, coalesced, () => this.runAndCache(params));
+    const resultPromise = this.withReservedUsage(
+      params,
+      coalesced,
+      () => this.runAndCache(params),
+      params.signal,
+    );
 
     this.inFlight.set(params.cacheKey, resultPromise);
+
     // Cleanup runs regardless of outcome
     void resultPromise
       .catch(() => {})
@@ -572,7 +578,7 @@ export class VernLLM {
 
     try {
       if (params.reserveUsage) {
-        await params.reserveUsage({ coalesced });
+        await params.reserveUsage({ coalesced, signal });
         reserved = true;
       }
     } catch (error) {
@@ -588,7 +594,7 @@ export class VernLLM {
     if (signal?.aborted) {
       if (reserved) {
         try {
-          await params.refundUsage?.({ coalesced });
+          await params.refundUsage?.({ coalesced, signal });
         } catch (refundError) {
           this.logger.error('[VernLLM] refundUsage failed after abort', {
             message: refundError instanceof Error ? refundError.message : 'unknown',
@@ -604,7 +610,7 @@ export class VernLLM {
     } catch (error) {
       if (reserved) {
         try {
-          await params.refundUsage?.({ coalesced });
+          await params.refundUsage?.({ coalesced, signal });
         } catch (refundError) {
           this.logger.error('[VernLLM] refundUsage failed', {
             message: refundError instanceof Error ? refundError.message : 'unknown',
