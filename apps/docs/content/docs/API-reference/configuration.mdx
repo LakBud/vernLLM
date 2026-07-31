@@ -1,11 +1,13 @@
 ---
 title: Configuration
-description: Every VernLLM constructor option and its default
+description: Every VernLLM constructor option and per call option
 ---
 
 Everything below is set once on the `VernLLM` instance and applies to every `call()` unless overridden per request. Nothing is required beyond `client` and `model`; every other option has a sensible default.
 
 ```ts title="vernllm-instance-config.ts"
+import { InMemoryCacheAdapter } from 'vern-llm';
+
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
@@ -16,7 +18,7 @@ const llm = new VernLLM({
   nonRetryableStatus: [400, 401, 403, 404, 422],
   circuitBreaker: true,
   debug: false,
-  cache: new InMemoryCacheAdapter(), // optional, defaults to this anyway
+  cache: new InMemoryCacheAdapter(), // optional; in-memory, not shared across processes
   parseJson: (content) => {
     // must return undefined on failure, not throw — this is what
     // the built-in defaultParseJson does internally
@@ -27,7 +29,7 @@ const llm = new VernLLM({
     }
   },
   onUsage: (usage) => billing.record(usage), // optional, no default
-  logger: myLogger, // optional, defaults to console-based logger gated by `debug`
+  logger: myLogger, // optional, defaults to console-based logger gated by debug
 });
 ```
 
@@ -62,9 +64,21 @@ const llm = new VernLLM({
 
 ## Caching
 
+The `cache` option controls the adapter used by `cachedCall` and `cachedLLMCall`.
+
+By default, VernLLM creates an `InMemoryCacheAdapter`. This stores cached responses in the current
+process memory using a bounded in-memory map. It is useful for local development and single-process
+deployments, but entries are not shared between multiple application instances.
+
+For distributed deployments, provide your own adapter backed by shared storage such as Redis or
+Upstash.
+
+`InMemoryCacheAdapter` accepts an optional `maxSize` argument to limit the number of entries kept
+in memory. When the limit is reached, the oldest entries are removed first.
+
 | Option  | Default                      | Notes                                                                                                                                                                                                                                                     |
 | ------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall` and `cachedLLMCall`, not plain `call()`. The default in memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi process deployments. See <a href="/docs/core/caching">Caching</a>. |
+| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall` and `cachedLLMCall`, not plain `call()`. The default in-memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi-process deployments. See <a href="/docs/core/caching">Caching</a>. |
 
 ## Observability
 
@@ -90,10 +104,30 @@ A handful of options are set per `call()` rather than on the instance. Three hav
 | `jsonMode`     | `true`  | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing.                             |
 | `systemPrompt` | none    | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                              |
 
+## Usage metering
+
+`reserveUsage` and `refundUsage` are provided per call, not on the `VernLLM` instance.
+
+| Option         | Default | Notes                                                                                                                                      |
+| -------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reserveUsage` | none    | Runs before the provider request. If it throws, the call fails with `LLMError('quota_exceeded')` and no request is sent.                   |
+| `refundUsage`  | none    | Runs after a successful reservation if the call ultimately fails. It is not called when `reserveUsage` fails because nothing was reserved. |
+
+These hooks are application controlled. VernLLM only manages the reservation lifecycle; it does
+not decide quota rules or billing policy.
+
 The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`,
 `signal`, and `requestId`, have no call-level default beyond falling back to the instance-level
-option or being undefined when omitted. `userContent` remains required and accepts either a plain
-`string` for text-only requests or a `ContentBlock[]` for multimodal input (text and images).
+option or being undefined when omitted.
+
+`requestId` is an optional identifier you can provide per call:
+
+```ts title="request-id.ts"
+const result = await llm.call({
+  userContent: 'Generate a summary',
+  requestId: `document-summary:${documentId}`,
+});
+```
 
 ## Multimodal `userContent`
 
@@ -113,3 +147,8 @@ interface ImageBlock {
 
 type ContentBlock = TextBlock | ImageBlock;
 ```
+
+Image blocks validate `mimeType` against VernLLM's supported image set before a provider request
+is created. Supported values are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
+
+Unsupported values fail with `LLMError('validation')`.

@@ -49,7 +49,12 @@ try {
   </Card>
   <Card title="validation">
     JSON parsed successfully but failed `schema.safeParse`. Never retried for the same reason as
-    `parse`. Carries `.issues` with the validator's error object.
+    `parse`. Carries `.issues` with the validator's error object. Note that usage tracking may have
+    already reported the provider response before this validation failure occurs.
+  </Card>
+  <Card title="quota_exceeded">
+    The usage reservation failed before the request was sent. This happens when `reserveUsage`
+    rejects and the original error is preserved on `err.cause`.
   </Card>
   <Card title="circuit_open">
     The circuit breaker is open because the provider has failed too many times in a row. Fails
@@ -70,7 +75,7 @@ try {
 `shouldRetry` skips a retry when any of these are true:
 
 - The signal has already aborted
-- `error.type` is `'parse'` or `'validation'` because these come from the response content rather than a transient fault, so retrying will not help
+- `error.type` is `'parse'` or `'validation'` because these are deterministic response-processing failures rather than transient provider faults, so retrying will not help
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to

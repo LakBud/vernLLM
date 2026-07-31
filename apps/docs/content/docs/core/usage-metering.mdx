@@ -1,0 +1,142 @@
+---
+title: Usage Metering
+description: Reserve and refund usage before LLM calls
+---
+
+Usage metering lets you control whether a request is allowed to run before it reaches the
+provider. Use `reserveUsage` to reserve quota or budget before dispatch, and `refundUsage` to
+release that reservation when a call fails after reservation succeeded.
+
+```ts title="usage-metering-setup.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+});
+
+await llm.call({
+  userContent: 'Summarize this document',
+  reserveUsage: async () => {
+    await billing.reserve();
+  },
+  refundUsage: async () => {
+    await billing.refund();
+  },
+});
+```
+
+## How it works
+
+<Cards>
+  <Card title="Before the request">
+    `reserveUsage` runs before any provider request is dispatched. If it fails, the call stops
+    immediately.
+  </Card>
+  <Card title="After a successful reservation">
+    The LLM request proceeds normally. Retries do not trigger `reserveUsage` again because it wraps
+    the logical call.
+  </Card>
+  <Card title="After a failed call">
+    `refundUsage` runs when a reservation succeeded but the call ultimately fails.
+  </Card>
+</Cards>
+
+## Reservation failures
+
+<Callout type="warn">
+  If `reserveUsage` throws, the call fails with `LLMError('quota_exceeded')` and no request is sent
+  to the provider. The original error is preserved on `err.cause`.
+</Callout>
+
+```ts title="handling-reservation-errors.ts"
+try {
+  await llm.call({
+    userContent: 'Generate a report',
+    reserveUsage: async () => {
+      await billing.reserve();
+    },
+  });
+} catch (err) {
+  if (isLLMError(err) && err.type === 'quota_exceeded') {
+    console.log(err.cause);
+  }
+}
+```
+
+## With caching
+
+Usage metering also works with `cachedCall` and `cachedLLMCall`.
+
+On a cache miss, the usage flow runs around the underlying call. A cache hit skips the LLM call
+entirely, so no new reservation or usage record is created.
+
+```ts title="cached-call-metering.ts"
+const result = await llm.cachedCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  fn: () =>
+    llm.call({
+      systemPrompt,
+      userContent,
+      reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
+      refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
+    }),
+});
+```
+
+## Concurrent cached calls
+
+When multiple callers request the same cache key at the same time, only the first caller runs the
+underlying `fn`. Other callers share the same in-flight result.
+
+Each caller still gets its own `reserveUsage` and `refundUsage` lifecycle. The `coalesced` flag
+lets your application decide how shared requests should be metered.
+
+<Callout>
+  Although `fn` executes only once per in-flight window, `reserveUsage` and `refundUsage` are still
+  invoked once per caller. If `fn` fails, every caller is refunded independently.
+</Callout>
+
+## cachedLLMCall
+
+When using `cachedLLMCall`, provide usage hooks at the cache level. The inner `call()` options are
+stripped automatically to prevent reserving usage twice for the same logical request.
+
+```ts title="cached-llm-metering.ts"
+const result = await llm.cachedLLMCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  call: { systemPrompt, userContent },
+  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
+  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
+});
+```
+
+## Relationship with usage tracking
+
+Usage metering controls whether a request can start.
+
+Usage tracking reports provider usage after a provider response through `onUsage`.
+
+See <a href="/docs/core/usage-tracking">Usage Tracking</a> for token reporting details.
+
+A typical billing flow uses both:
+
+```ts title="billing-flow.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  onUsage: (usage) => {
+    billing.record(usage);
+  },
+});
+
+await llm.call({
+  userContent: 'Write a summary',
+  reserveUsage: async () => {
+    await billing.reserve();
+  },
+  refundUsage: async () => {
+    await billing.refund();
+  },
+});
+```

@@ -34,49 +34,49 @@ export type ContentBlock = TextBlock | ImageBlock;
 
 export interface CallParams<T = unknown> {
   systemPrompt?: string;
-  /**
-   * The current user turn. A plain string for text-only prompts (the common
-   * case), or an array of `ContentBlock`s (text and/or image) for multimodal
-   * input. Each adapter translates image blocks into its provider's native
-   * shape; providers/models that don't support image input will reject or
-   * ignore them.
-   */
+
+  /** Current user message, as text or multimodal content blocks. */
   userContent: string | ContentBlock[];
+
   /**
-   * Prior turns in the conversation, oldest first, NOT including the current
-   * `userContent` (that's appended automatically as the final user turn).
-   * Passed straight through to the provider so follow-up questions have
-   * access to earlier context. Must strictly alternate user/assistant and
-   * end on an assistant turn; validated up front and rejected with an
-   * LLMError('validation') before any request is made if malformed.
+   * Previous conversation turns. Must alternate user/assistant and end with
+   * an assistant turn; invalid history throws LLMError('validation').
    */
   history?: ConversationTurn[];
+
   temperature?: number;
   jsonMode?: boolean;
   maxTokens?: number;
   requestId?: string;
   signal?: AbortSignal;
-  /** Overrides the model set on the VernLLM instance for this call only */
+
+  /** Overrides the instance model for this call. */
   model?: string;
-  /**
-   * OpenAI-style reasoning effort for reasoning models (o-series, gpt-5, etc).
-   * Passed through as-is, providers/models that don't support it ignore it
-   */
+
+  /** Reasoning effort for supported reasoning models. */
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+
   /**
-   * Provider-native JSON Schema structured-output mode. When set, this is sent
-   * as `response_format: { type: 'json_schema', json_schema: ... }` instead of
-   * the looser `json_object` mode, constraining the models output shape at
-   * generation time (not just validating it after the fact). Implies jsonMode: true.
+   * Provider-native JSON Schema output constraint. Implies jsonMode: true.
    */
   jsonSchema?: JsonSchemaSpec;
+
   /**
-   * Optional Zod (or Zod-compatible) schema. When provided, the parsed JSON
-   * is validated against it; on failure an LLMError('validation') is thrown
-   * with `.issues` set to the schema's error object. Implies jsonMode: true.
-   * Can be combined with `jsonSchema` for provider-level constraint + client-side typing.
+   * Validates parsed JSON output. Failure throws LLMError('validation').
+   * Implies jsonMode: true.
    */
   schema?: SchemaLike<T>;
+
+  /**
+   * Reserves usage before the request. Failures become
+   * LLMError('quota_exceeded').
+   */
+  reserveUsage?: ReserveUsage;
+
+  /**
+   * Refunds usage after a failed call if reservation succeeded.
+   */
+  refundUsage?: RefundUsage;
 }
 
 export interface CachedCallParams<T> {

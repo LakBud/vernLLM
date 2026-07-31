@@ -1,5 +1,5 @@
 ---
-title: Token Usage Tracking
+title: Usage Tracking
 description: Hook into every call's usage data
 ---
 
@@ -25,7 +25,7 @@ interface TokenUsage {
 }
 ```
 
-- **`requestId`** is whatever you passed to `call({ requestId: '...' })`, or an auto-generated UUID if you didn't. Useful for correlating a usage record back to the call that produced it, joining against your own logs, or deduplicating.
+- **`requestId`** is whatever you passed to `call({ requestId: '...' })`, or an auto-generated UUID if you didn't. It is included in usage callbacks and internal logging, making it useful for correlating a usage record back to the originating request, joining usage data with application logs, tracing a request across services, or implementing your own billing reconciliation/deduplication logic.
 - **`model`** reflects the model that actually served the request, including a per-call `model` override, not just the instance's default. Important if you bill different models at different rates.
 
 ## When it does and doesn't fire
@@ -36,9 +36,7 @@ interface TokenUsage {
   validation fails on the content. If the `onUsage` callback itself throws, that failure is logged
   and swallowed rather than propagated — it can't fail or retrigger retries on an
   otherwise-successful call. If you need to gate a call *before* it's dispatched (e.g. enforcing a
-  quota), see
-  [`reserveUsage`/`refundUsage`](/docs/core/caching#how-the-cache-reserve-refund-flow-works),
-  currently available on `cachedCall`/`cachedLLMCall`.
+  quota), see [`reserveUsage`/`refundUsage`](/docs/core/usage-metering).
 </Callout>
 
 <Callout type="warn">
@@ -48,7 +46,7 @@ interface TokenUsage {
 
 - **On success**, once per completed call, after retries have finished (not once per retry attempt).
 - **On failure**, `onUsage` never fires, even if some of the exhausted retry attempts consumed provider tokens before ultimately failing. There's no way to recover partial usage after all retries are exhausted; the provider response that would have carried it was never successfully returned.
-- **With caching**, a cache hit in `cachedCall`/`cachedLLMCall` skips the underlying `call()` entirely, so `onUsage` doesn't fire for cached results, only for the call that actually populated the cache.
+- **With caching**, a cache hit in `cachedCall`/`cachedLLMCall` does not run the underlying LLM call, so `onUsage` does not fire for cached results. It only fires when a provider response is actually received.
 
 ## Example: per-request cost estimation
 
