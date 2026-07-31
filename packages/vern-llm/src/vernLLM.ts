@@ -481,24 +481,16 @@ export class VernLLM {
 
     const existing = this.inFlight.get(params.cacheKey) as Promise<T> | undefined;
     const coalesced = existing !== undefined;
-    const resultPromise = existing ?? this.registerTrigger(params, coalesced);
 
     if (coalesced) {
-      return this.withRefundOnFailure(params, coalesced, async () => {
-        await params.reserveUsage?.({ coalesced });
-        return resultPromise;
-      });
+      return this.withReservedUsage(params, coalesced, () => existing);
     }
 
-    return this.withRefundOnFailure(params, coalesced, () => resultPromise);
+    return this.registerTrigger(params, coalesced);
   }
-
   /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */
   private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
-    const resultPromise = (async () => {
-      await params.reserveUsage?.({ coalesced });
-      return this.runAndCache(params);
-    })();
+    const resultPromise = this.withReservedUsage(params, coalesced, () => this.runAndCache(params));
 
     this.inFlight.set(params.cacheKey, resultPromise);
     // Cleanup runs regardless of outcome
@@ -526,23 +518,27 @@ export class VernLLM {
     return result;
   }
 
-  /** Awaits `run`, calling this caller's own refundUsage (tagged with whether it was coalesced) if it rejects, then rethrows the original error */
-  private async withRefundOnFailure<T>(
+  /** Runs `getResult` after reserving usage. Refunds only if the reservation itself succeeded — a failed reserveUsage means nothing was taken, so there's nothing to give back. */
+  private async withReservedUsage<T>(
     params: CachedCallParams<T>,
     coalesced: boolean,
-    run: () => Promise<T>,
+    getResult: () => Promise<T>,
   ): Promise<T> {
+    let reserved = false;
     try {
-      return await run();
+      await params.reserveUsage?.({ coalesced });
+      reserved = true;
+      return await getResult();
     } catch (error) {
-      try {
-        await params.refundUsage?.({ coalesced });
-      } catch (refundError) {
-        this.logger.error('[VernLLM] refundUsage failed', {
-          message: refundError instanceof Error ? refundError.message : 'unknown',
-        });
+      if (reserved) {
+        try {
+          await params.refundUsage?.({ coalesced });
+        } catch (refundError) {
+          this.logger.error('[VernLLM] refundUsage failed', {
+            message: refundError instanceof Error ? refundError.message : 'unknown',
+          });
+        }
       }
-
       throw error;
     }
   }

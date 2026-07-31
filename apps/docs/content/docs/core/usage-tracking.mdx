@@ -30,6 +30,13 @@ interface TokenUsage {
 
 ## When it does and doesn't fire
 
+<Callout>
+  `onUsage` is purely observational and fires after a call succeeds — it can't prevent a call from
+  happening. If you need to enforce a quota or limit *before* a call is dispatched, see
+  [`reserveUsage`/`refundUsage`](/docs/core/caching#how-the-cache-reserve-refund-flow-works),
+  currently available on `cachedCall`/`cachedLLMCall`.
+</Callout>
+
 <Callout type="warn">
   `onUsage` only fires when the provider's response actually includes usage data. Not every adapter
   surfaces this identically, check your provider's response shape if usage isn't showing up.
