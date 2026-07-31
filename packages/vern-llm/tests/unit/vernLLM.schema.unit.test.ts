@@ -210,4 +210,20 @@ describe('VernLLM.call — usage tracking', () => {
     await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
     expect(onUsage).not.toHaveBeenCalled();
   });
+
+  it('swallows a throwing onUsage callback instead of failing the call or triggering a retry', async () => {
+    const onUsage = vi.fn(() => {
+      throw new Error('onUsage boom');
+    });
+    const { client, calls } = createMockClient([
+      jsonResponse({ ok: true }, { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', onUsage });
+
+    const result = await llm.call({ systemPrompt: 's', userContent: 'u' });
+
+    expect(result).toEqual({ ok: true });
+    expect(onUsage).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1); // no retry triggered by the callback's own failure
+  });
 });
