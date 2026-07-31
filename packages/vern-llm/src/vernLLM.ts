@@ -349,6 +349,10 @@ export class VernLLM {
    * Reports token usage to the caller supplied onUsage callback, when
    * both a callback was configured and the provider actually returned
    * usage data on this response. A no op otherwise.
+   *
+   * A throwing onUsage callback is logged and swallowed rather than
+   * propagated, so a broken billing/metrics hook can't fail or retrigger
+   * retries on an otherwise-successful call.
    */
   private recordUsage(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
@@ -357,13 +361,19 @@ export class VernLLM {
   ): void {
     if (!response.usage || !this.onUsage) return;
 
-    this.onUsage({
-      promptTokens: response.usage.prompt_tokens ?? 0,
-      completionTokens: response.usage.completion_tokens ?? 0,
-      totalTokens: response.usage.total_tokens ?? 0,
-      requestId,
-      model,
-    });
+    try {
+      this.onUsage({
+        promptTokens: response.usage.prompt_tokens ?? 0,
+        completionTokens: response.usage.completion_tokens ?? 0,
+        totalTokens: response.usage.total_tokens ?? 0,
+        requestId,
+        model,
+      });
+    } catch (error) {
+      this.logger.error('[VernLLM] onUsage failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
   }
 
   /**
@@ -481,24 +491,17 @@ export class VernLLM {
 
     const existing = this.inFlight.get(params.cacheKey) as Promise<T> | undefined;
     const coalesced = existing !== undefined;
-    const resultPromise = existing ?? this.registerTrigger(params, coalesced);
 
     if (coalesced) {
-      return this.withRefundOnFailure(params, coalesced, async () => {
-        await params.reserveUsage?.({ coalesced });
-        return resultPromise;
-      });
+      return this.withReservedUsage(params, coalesced, () => existing);
     }
 
-    return this.withRefundOnFailure(params, coalesced, () => resultPromise);
+    return this.registerTrigger(params, coalesced);
   }
 
   /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */
   private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
-    const resultPromise = (async () => {
-      await params.reserveUsage?.({ coalesced });
-      return this.runAndCache(params);
-    })();
+    const resultPromise = this.withReservedUsage(params, coalesced, () => this.runAndCache(params));
 
     this.inFlight.set(params.cacheKey, resultPromise);
     // Cleanup runs regardless of outcome
@@ -526,21 +529,36 @@ export class VernLLM {
     return result;
   }
 
-  /** Awaits `run`, calling this caller's own refundUsage (tagged with whether it was coalesced) if it rejects, then rethrows the original error */
-  private async withRefundOnFailure<T>(
+  /**
+   * Runs `getResult` after reserving usage, if a `reserveUsage` hook was
+   * provided. `refundUsage` fires only if a reservation was actually made,
+   * i.e. `reserveUsage` was provided and it resolved successfully. If
+   * `reserveUsage` is omitted entirely, or if it throws, there is nothing to
+   * refund, so `refundUsage` is not invoked in either case.
+   */
+  private async withReservedUsage<T>(
     params: CachedCallParams<T>,
     coalesced: boolean,
-    run: () => Promise<T>,
+    getResult: () => Promise<T>,
   ): Promise<T> {
+    let reserved = false;
+
     try {
-      return await run();
+      if (params.reserveUsage) {
+        await params.reserveUsage({ coalesced });
+        reserved = true;
+      }
+
+      return await getResult();
     } catch (error) {
-      try {
-        await params.refundUsage?.({ coalesced });
-      } catch (refundError) {
-        this.logger.error('[VernLLM] refundUsage failed', {
-          message: refundError instanceof Error ? refundError.message : 'unknown',
-        });
+      if (reserved) {
+        try {
+          await params.refundUsage?.({ coalesced });
+        } catch (refundError) {
+          this.logger.error('[VernLLM] refundUsage failed', {
+            message: refundError instanceof Error ? refundError.message : 'unknown',
+          });
+        }
       }
 
       throw error;

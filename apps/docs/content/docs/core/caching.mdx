@@ -3,14 +3,6 @@ title: Caching & Usage Metering
 description: Wrap calls with cachedCall or cachedLLMCall
 ---
 
-<Callout type="warn">
-  **Breaking change (v1.0.0 major):** `CacheAdapter.get()` now returns
-  `Promise<{ hit: boolean; value: T | null }>` instead of `Promise<T | null>`. If you have a
-  custom adapter (Redis, Upstash, etc.), you'll need to update it. See
-  [Custom cache adapter](#custom-cache-adapter) below. The built-in `InMemoryCacheAdapter`
-  is already updated; no action needed if you use it.
-</Callout>
-
 ```ts title="cached-call-setup.ts"
 import { InMemoryCacheAdapter } from 'vern-llm';
 
@@ -36,8 +28,10 @@ const result = await llm.cachedCall({
 </Callout>
 
 <Callout>
-  If `refundUsage` itself throws, that failure is logged and swallowed. The original error from `fn`
-  (or the cache write) is what propagates, so a broken refund path never masks the real failure.
+  `refundUsage` only runs if `reserveUsage` was provided and actually succeeded for that caller. If
+  `refundUsage` itself throws, that failure is logged and swallowed. Only an error from `fn`
+  propagates to the caller — a cache-write failure is logged and swallowed separately, and the
+  result is still returned.
 </Callout>
 
 ## Concurrent misses are coalesced
@@ -55,19 +49,19 @@ Every caller still gets its own `reserveUsage`/`refundUsage` invocation — the 
 
 On a cache miss, `cachedCall` runs in this order for the triggering caller:
 
-1. `reserveUsage({ coalesced: false })`, if provided.
+1. `reserveUsage({ coalesced: false })`, if provided. If this throws, the error propagates immediately and `refundUsage` is not called.
 2. `fn()`, the actual LLM call.
 3. On success, write the result to the cache (a failed cache write is logged and swallowed; the result is still returned).
-4. On any failure in steps 1 or 2, call `refundUsage({ coalesced: false })`, then rethrow the original error.
+4. If step 2 fails (after step 1 succeeded), call `refundUsage({ coalesced: false })`, then rethrow the original error.
 
-Coalesced callers skip step 2 (they share the trigger's `fn()` call instead) but still run their own `reserveUsage({ coalesced: true })` before waiting on the shared result, and their own `refundUsage({ coalesced: true })` if it fails.
+Coalesced callers skip step 2 (they share the trigger's `fn()` call instead) but still run their own `reserveUsage({ coalesced: true })` before waiting on the shared result. Their own `refundUsage({ coalesced: true })` runs only if their own `reserveUsage` succeeded and the shared result then fails.
 
 <Callout type="warn">
-  For a given caller, `refundUsage` runs on a failure from *either* its own `reserveUsage` or the
-  underlying `fn` call, since both feed into the same try block. If `reserveUsage` itself throws
-  (e.g. the user is already out of quota), `refundUsage` still fires, refunding a reservation that
-  was never actually made. Make sure your `refundUsage` implementation is safe to call in that case
-  (e.g. a no-op if there's nothing to refund, rather than an unconditional decrement).
+  `refundUsage` only runs for a given caller if that caller's own `reserveUsage` succeeded first. If
+  `reserveUsage` itself throws (e.g. the user is already out of quota), that error propagates
+  directly and `refundUsage` is **not** invoked — there was nothing reserved to give back. You don't
+  need to guard your `refundUsage` implementation against being called for a reservation that was
+  never made.
 </Callout>
 
 <Callout type="warn">

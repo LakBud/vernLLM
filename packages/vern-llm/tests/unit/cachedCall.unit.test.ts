@@ -94,7 +94,21 @@ describe('VernLLM.cachedCall', () => {
     expect(refundUsage).not.toHaveBeenCalled();
   });
 
-  it('calls refundUsage when fn throws, and rethrows the original error', async () => {
+  it('calls refundUsage when fn throws and reserveUsage succeeded first, and rethrows the original error', async () => {
+    const reserveUsage = vi.fn();
+    const refundUsage = vi.fn();
+    const fn = vi.fn(async () => {
+      throw new Error('fn failed');
+    });
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }),
+    ).rejects.toThrow('fn failed');
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call refundUsage when fn throws and no reserveUsage was provided — nothing was reserved', async () => {
     const refundUsage = vi.fn();
     const fn = vi.fn(async () => {
       throw new Error('fn failed');
@@ -104,21 +118,87 @@ describe('VernLLM.cachedCall', () => {
     await expect(llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, refundUsage })).rejects.toThrow(
       'fn failed',
     );
-    expect(refundUsage).toHaveBeenCalledTimes(1);
+    expect(refundUsage).not.toHaveBeenCalled();
   });
 
   it('does not throw if refundUsage itself throws — original error still propagates', async () => {
     const fn = vi.fn(async () => {
       throw new Error('original failure');
     });
+    const reserveUsage = vi.fn();
     const refundUsage = vi.fn(async () => {
       throw new Error('refund also failed');
     });
     const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
 
-    await expect(llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, refundUsage })).rejects.toThrow(
-      'original failure',
-    );
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }),
+    ).rejects.toThrow('original failure');
+  });
+
+  it('does not call refundUsage when reserveUsage itself rejects (e.g. quota already exhausted)', async () => {
+    const reserveUsage = vi.fn(async () => {
+      throw new Error('quota exceeded');
+    });
+    const refundUsage = vi.fn();
+    const fn = vi.fn(async () => 'result');
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }),
+    ).rejects.toThrow('quota exceeded');
+
+    expect(fn).not.toHaveBeenCalled(); // never should have run — reservation failed first
+    expect(refundUsage).not.toHaveBeenCalled(); // nothing was reserved, so nothing to refund
+  });
+
+  it('propagates reserveUsage failure directly without invoking refundUsage, even if refundUsage would also throw', async () => {
+    const fn = vi.fn(async () => 'result');
+    const reserveUsage = vi.fn(async () => {
+      throw new Error('reserve failed');
+    });
+    const refundUsage = vi.fn(async () => {
+      throw new Error('refund also throws');
+    });
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }),
+    ).rejects.toThrow('reserve failed'); // not masked by refund, because refund never runs
+
+    expect(refundUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not call refundUsage for a coalesced caller whose own reserveUsage rejects, and does not affect the trigger', async () => {
+    let resolveFn!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      resolveFn = resolve;
+    });
+    const fn = vi.fn(() => gate);
+
+    let callCount = 0;
+    const reserveUsage = vi.fn(async () => {
+      callCount++;
+      if (callCount === 2) throw new Error('quota exceeded'); // the coalesced caller is out of quota
+    });
+    const refundUsage = vi.fn();
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    const trigger = llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage });
+    await Promise.resolve();
+    const coalescedCaller = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      fn,
+      reserveUsage,
+      refundUsage,
+    });
+
+    await expect(coalescedCaller).rejects.toThrow('quota exceeded');
+    expect(refundUsage).not.toHaveBeenCalled(); // this caller's reservation never succeeded
+
+    resolveFn('shared result');
+    await expect(trigger).resolves.toBe('shared result'); // trigger is unaffected by the other caller's rejection
   });
 
   it('still returns the result if the cache write fails', async () => {
@@ -223,14 +303,15 @@ describe('VernLLM.cachedCall', () => {
       rejectFn = reject;
     });
     const fn = vi.fn(() => gate);
+    const reserveUsage = vi.fn();
     const refundCalls: boolean[] = [];
     const refundUsage = vi.fn(async (info: { coalesced: boolean }) => {
       refundCalls.push(info.coalesced);
     });
     const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
     const calls = [
-      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, refundUsage }).catch(() => {}),
-      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, refundUsage }).catch(() => {}),
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }).catch(() => {}),
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }).catch(() => {}),
     ];
     await Promise.resolve();
     rejectFn(new Error('shared failure'));
