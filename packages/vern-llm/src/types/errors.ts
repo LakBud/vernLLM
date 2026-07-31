@@ -4,6 +4,7 @@ export type LLMErrorType =
   | 'parse'
   | 'validation'
   | 'circuit_open'
+  | 'quota_exceeded'
   | 'unknown'
   | 'aborted';
 

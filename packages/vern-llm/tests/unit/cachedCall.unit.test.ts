@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { type CacheAdapter, InMemoryCacheAdapter } from '../../src/types/index.js';
+import { type CacheAdapter, InMemoryCacheAdapter, LLMError } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
@@ -91,6 +91,33 @@ describe('VernLLM.cachedCall', () => {
     await llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage });
 
     expect(order).toEqual(['reserve', 'fn']);
+    expect(refundUsage).not.toHaveBeenCalled();
+  });
+
+  it('normalizes reserveUsage failures as quota_exceeded LLMError and preserves the original cause', async () => {
+    const originalError = new Error('quota backend unavailable');
+    const reserveUsage = vi.fn(async () => {
+      throw originalError;
+    });
+    const refundUsage = vi.fn();
+    const fn = vi.fn(async () => 'result');
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    const error = await llm
+      .cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage })
+      .catch((err) => err);
+
+    expect(error).toBeInstanceOf(LLMError);
+
+    if (!(error instanceof LLMError)) {
+      throw new Error('Expected LLMError');
+    }
+
+    expect(error.type).toBe('quota_exceeded');
+    expect(error.message).toBe('quota backend unavailable');
+    expect(error.cause).toBe(originalError);
+
+    expect(fn).not.toHaveBeenCalled();
     expect(refundUsage).not.toHaveBeenCalled();
   });
 
@@ -431,5 +458,56 @@ describe('VernLLM.deleteCache', () => {
     await cache.delete('k');
 
     expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+});
+
+describe('VernLLM.cachedLLMCall — reserveUsage/refundUsage dedup', () => {
+  it('reserves and refunds exactly once when only the top-level hooks are provided', async () => {
+    const reserveUsage = vi.fn();
+    const refundUsage = vi.fn();
+    const { client } = createMockClient([new Error('fail')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await llm
+      .cachedLLMCall({
+        cacheKey: 'k',
+        ttl: 60,
+        call: { systemPrompt: 's', userContent: 'u' },
+        reserveUsage,
+        refundUsage,
+      })
+      .catch(() => {});
+
+    expect(reserveUsage).toHaveBeenCalledTimes(1);
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores reserveUsage/refundUsage set on the inner call object — top-level hooks win, no double reservation', async () => {
+    const outerReserve = vi.fn();
+    const outerRefund = vi.fn();
+    const innerReserve = vi.fn();
+    const innerRefund = vi.fn();
+    const { client } = createMockClient([new Error('fail')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await llm
+      .cachedLLMCall({
+        cacheKey: 'k',
+        ttl: 60,
+        call: {
+          systemPrompt: 's',
+          userContent: 'u',
+          reserveUsage: innerReserve,
+          refundUsage: innerRefund,
+        },
+        reserveUsage: outerReserve,
+        refundUsage: outerRefund,
+      })
+      .catch(() => {});
+
+    expect(outerReserve).toHaveBeenCalledTimes(1);
+    expect(outerRefund).toHaveBeenCalledTimes(1);
+    expect(innerReserve).not.toHaveBeenCalled();
+    expect(innerRefund).not.toHaveBeenCalled();
   });
 });

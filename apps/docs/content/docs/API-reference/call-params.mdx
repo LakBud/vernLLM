@@ -97,9 +97,8 @@ Existing string-based calls remain fully compatible.
   <Card title="schema">
     A Zod (or Zod-compatible, anything exposing `safeParse`) schema, optional. Validates the parsed
     JSON client-side. On failure, throws `LLMError('validation')` with `.issues` set to the
-    validator's error object. Requires JSON parsing to be enabled (`jsonMode: true`, the default, or
-    `jsonSchema` set) — see the callout below. Can be combined with `jsonSchema` for provider-level
-    constraint plus client-side typing.
+    validator's error object. Usage tracking may already have reported the provider response before
+    this validation step runs.
   </Card>
 </Cards>
 
@@ -124,6 +123,25 @@ Existing string-based calls remain fully compatible.
     <a href="/docs/core/cancellation">Cancellation</a>.
   </Card>
 </Cards>
+
+## Usage metering
+
+<Cards>
+  <Card title="reserveUsage">
+    Optional. Runs before any provider request is dispatched. If it throws, the call stops and
+    surfaces `LLMError('quota_exceeded')`. Retries do not call it again because it wraps the logical
+    request, not individual attempts.
+  </Card>
+  <Card title="refundUsage">
+    Optional. Runs when `reserveUsage` succeeded but the call ultimately fails. It is not called
+    when `reserveUsage` itself fails because there was no reservation to refund.
+  </Card>
+</Cards>
+
+<Callout>
+  `reserveUsage` and `refundUsage` are application supplied hooks. VernLLM does not decide quota
+  rules or billing policy; it only guarantees the reservation lifecycle around the request.
+</Callout>
 
 ## Type parameter
 

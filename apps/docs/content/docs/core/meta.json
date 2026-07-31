@@ -5,6 +5,7 @@
     "index",
     "structured-output",
     "caching",
+    "usage-metering",
     "usage-tracking",
     "circuit-breaker",
     "logging",

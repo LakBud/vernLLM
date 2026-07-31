@@ -19,6 +19,8 @@ import {
   type CallParams,
   type ConversationTurn,
   type LLMClient,
+  type RefundUsage,
+  type ReserveUsage,
   type VernLLMOptions,
 } from './types/index.js';
 
@@ -131,18 +133,49 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
+    let reserved = false;
     try {
-      const result = await this.retryWithBackoff(
+      if (params.reserveUsage) {
+        await params.reserveUsage({ coalesced: false });
+        reserved = true;
+      }
+    } catch (error) {
+      // `reserveUsage` represents quota reservation, so any failure is surfaced
+      // as `quota_exceeded` regardless of what the hook throws.
+      if (params.signal?.aborted) {
+        throw new LLMError('LLM request aborted', 'aborted');
+      }
+
+      throw new LLMError(
+        error instanceof Error ? error.message : 'Usage reservation failed',
+        'quota_exceeded',
+        undefined,
+        undefined,
+        error,
+      );
+    }
+
+    try {
+      return await this.retryWithBackoff(
         () => this.executeCall(params, requestId),
         requestId,
         params.signal,
       );
-
-      return result;
     } catch (error) {
       this.breaker?.recordFailure();
       const normalized = this.normalizeError(error, params.signal);
       this.logger.debug(`[vern:${requestId}] error:\n${describeError(error)}`);
+
+      if (reserved) {
+        try {
+          await params.refundUsage?.({ coalesced: false });
+        } catch (refundError) {
+          this.logger.error('[VernLLM] refundUsage failed', {
+            message: refundError instanceof Error ? refundError.message : 'unknown',
+          });
+        }
+      }
+
       throw normalized;
     }
   }
@@ -535,9 +568,12 @@ export class VernLLM {
    * i.e. `reserveUsage` was provided and it resolved successfully. If
    * `reserveUsage` is omitted entirely, or if it throws, there is nothing to
    * refund, so `refundUsage` is not invoked in either case.
+   *
+   * Shared by `cachedCall()`/`registerTrigger()` and `cachedLLMCall()`, so it
+   * only depends on the two hooks rather than either params interface directly.
    */
   private async withReservedUsage<T>(
-    params: CachedCallParams<T>,
+    params: { reserveUsage?: ReserveUsage; refundUsage?: RefundUsage },
     coalesced: boolean,
     getResult: () => Promise<T>,
   ): Promise<T> {
@@ -548,7 +584,17 @@ export class VernLLM {
         await params.reserveUsage({ coalesced });
         reserved = true;
       }
+    } catch (error) {
+      throw new LLMError(
+        error instanceof Error ? error.message : 'Usage reservation failed',
+        'quota_exceeded',
+        undefined,
+        undefined,
+        error,
+      );
+    }
 
+    try {
       return await getResult();
     } catch (error) {
       if (reserved) {
@@ -568,16 +614,32 @@ export class VernLLM {
   /**
    * Convenience wrapper composing `call` + `cachedCall`, so cached LLM calls
    * automatically get retry/timeout/circuit-breaker behavior without callers
-   * having to remember to wire `fn: () => this.call(...)` themselves
+   * having to remember to wire `fn: () => this.call(...)` themselves.
+   *
+   * `reserveUsage`/`refundUsage` are read from the top-level params only — if
+   * `call` also sets them, they're ignored, since `call()` now performs its
+   * own reservation. Honoring both would reserve/refund twice per logical
+   * cachedLLMCall (once via cachedCall's wrapping, once via the inner call()).
    */
   async cachedLLMCall<T>(
     params: Omit<CachedCallParams<T>, 'fn'> & { call: CallParams<T> },
   ): Promise<T> {
     const { call: callParams, ...cacheParams } = params;
+    const {
+      reserveUsage: _innerReserveUsage,
+      refundUsage: _innerRefundUsage,
+      ...restCallParams
+    } = callParams;
+
+    if (_innerReserveUsage || _innerRefundUsage) {
+      this.logger.warn(
+        '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedLLMCall; set them at the top level instead.',
+      );
+    }
 
     return this.cachedCall({
       ...cacheParams,
-      fn: () => this.call(callParams),
+      fn: () => this.call(restCallParams),
     });
   }
 

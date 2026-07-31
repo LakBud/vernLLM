@@ -1,7 +1,11 @@
 ---
-title: Caching & Usage Metering
+title: Caching
 description: Wrap calls with cachedCall or cachedLLMCall
 ---
+
+The built-in `InMemoryCacheAdapter` provides a simple in-memory cache with no external dependencies.
+It is useful for local development or single-process deployments; use a shared adapter such as Redis
+or Upstash when multiple processes need the same cache.
 
 ```ts title="cached-call-setup.ts"
 import { InMemoryCacheAdapter } from 'vern-llm';
@@ -9,15 +13,13 @@ import { InMemoryCacheAdapter } from 'vern-llm';
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
-  cache: new InMemoryCacheAdapter(), // swap for your own Redis/Upstash adapter
+  cache: new InMemoryCacheAdapter(1000), // maxSize limit; defaults to 1000
 });
 
 const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
   fn: () => llm.call({ systemPrompt, userContent }),
-  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
-  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
 });
 ```
 
@@ -27,41 +29,24 @@ const result = await llm.cachedCall({
   worth double-checking if you're copying a value across.
 </Callout>
 
-<Callout>
-  `refundUsage` only runs if `reserveUsage` was provided and actually succeeded for that caller. If
-  `refundUsage` itself throws, that failure is logged and swallowed. Only an error from `fn`
-  propagates to the caller — a cache-write failure is logged and swallowed separately, and the
-  result is still returned.
-</Callout>
-
 ## Concurrent misses are coalesced
 
-If several calls with the same `cacheKey` miss the cache at roughly the same time, only the first one (the "trigger") actually calls `fn`. Every other concurrent caller waits on that same in-flight call instead of starting its own, and all of them resolve (or reject) together once it settles. This prevents a cache stampede, where many simultaneous callers all trigger their own (possibly expensive) `fn()` call before the first one has had a chance to populate the cache.
+If several calls with the same `cacheKey` miss the cache at roughly the same time, only the first one
+(the "trigger") actually calls `fn`. Every other concurrent caller waits on that same in-flight call
+instead of starting its own, and all of them resolve (or reject) together once it settles.
 
-Every caller still gets its own `reserveUsage`/`refundUsage` invocation — the trigger and each coalesced caller — but is told whether it was coalesced via the `coalesced` flag, so your application decides how coalesced callers are billed: full price, a reduced rate, or not billed at all.
+This prevents a cache stampede where many simultaneous callers trigger their own expensive `fn()`
+operation before the first one has populated the cache.
 
 <Callout>
-  Although `fn` executes only once per in-flight window, `reserveUsage` and `refundUsage` are still
-  invoked once per caller. If `fn` fails, every caller is refunded independently.
-</Callout>
+Although `fn` executes only once per in-flight window, usage metering still runs per caller. Each
+caller performs its own `reserveUsage` and, if that reservation succeeds, gets its own
+`refundUsage` lifecycle.
 
-## How the cache/reserve/refund flow works
+A coalesced caller can fail with `LLMError('quota_exceeded')` if its own reservation is rejected,
+while the original trigger caller continues with the shared `fn` operation. Successful callers
+still receive the same resolved value or error from the shared operation.
 
-On a cache miss, `cachedCall` runs in this order for the triggering caller:
-
-1. `reserveUsage({ coalesced: false })`, if provided. If this throws, the error propagates immediately and `refundUsage` is not called.
-2. `fn()`, the actual LLM call.
-3. On success, write the result to the cache (a failed cache write is logged and swallowed; the result is still returned).
-4. If step 2 fails (after step 1 succeeded), call `refundUsage({ coalesced: false })`, then rethrow the original error.
-
-Coalesced callers skip step 2 (they share the trigger's `fn()` call instead) but still run their own `reserveUsage({ coalesced: true })` before waiting on the shared result. Their own `refundUsage({ coalesced: true })` runs only if their own `reserveUsage` succeeded and the shared result then fails.
-
-<Callout type="warn">
-  `refundUsage` only runs for a given caller if that caller's own `reserveUsage` succeeded first. If
-  `reserveUsage` itself throws (e.g. the user is already out of quota), that error propagates
-  directly and `refundUsage` is **not** invoked — there was nothing reserved to give back. You don't
-  need to guard your `refundUsage` implementation against being called for a reservation that was
-  never made.
 </Callout>
 
 <Callout type="warn">
@@ -73,36 +58,73 @@ Coalesced callers skip step 2 (they share the trigger's `fn()` call instead) but
 
 ## Deleting cached entries
 
-Cache invalidation is application-specific, so VernLLM does not automatically
-decide when a cached response becomes stale. When your application knows that a
-cached response should no longer be used, you can remove the entry manually:
+Cache invalidation is application-specific, so VernLLM does not automatically decide when a cached
+response becomes stale. When your application knows that a cached response should no longer be used,
+you can remove the entry manually:
 
 ```ts
 await llm.deleteCache(`cv:${cvId}`);
 ```
 
+## `cachedCall`: cache wrapper
+
+`cachedCall` manages cache lookup, cache writes, concurrent miss coalescing, and optional usage
+metering. It does not apply retry, timeout, or circuit-breaker behavior by itself.
+
+When `reserveUsage` and `refundUsage` are provided, they run once per caller on cache misses,
+including coalesced callers. The `coalesced` value passed to the hooks indicates whether the
+caller joined an existing in-flight operation.
+
+Put whatever operation you want cached inside `fn`. If that operation is a VernLLM request, call
+`llm.call()` inside it so the normal retry, timeout, and circuit-breaker pipeline still applies:
+
+```ts title="cached-call-custom.ts"
+const result = await llm.cachedCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  fn: async () => {
+    return llm.call({
+      systemPrompt,
+      userContent,
+    });
+  },
+});
+```
+
 ## `cachedLLMCall`: cached + retried in one call
 
-`cachedCall` is a thin cache wrapper; it doesn't apply retry/timeout/circuit-breaker behavior on its own. If `fn` is always going to be `() => llm.call(...)`, `cachedLLMCall` wires that up for you:
+`cachedLLMCall` is a convenience wrapper for the common case where the cached operation is a
+`llm.call()` invocation.
+
+Usage hooks are applied at the cache level. Do not also provide `reserveUsage` or `refundUsage`
+inside the nested `call` options; those are ignored to avoid reserving twice for the same logical
+request.
+
+It combines cache lookup, cache writes, concurrent miss coalescing, and the normal
+retry/timeout/circuit-breaker behavior from `call()`:
 
 ```ts title="cached-llm-call.ts"
 const result = await llm.cachedLLMCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
-  call: { systemPrompt, userContent }, // same shape as call()'s params
-  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
-  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
+  call: {
+    systemPrompt,
+    userContent,
+  },
 });
 ```
 
 ## Choosing a cache key
 
-There's no automatic key derivation from the call's contents. `cacheKey` is entirely up to you, which means it's also easy to get wrong: if you reuse a key across calls with a different `systemPrompt`, `schema`, or `model`, you'll get a cached result that doesn't match what the new call would have produced.
+There's no automatic key derivation from the call's contents. `cacheKey` is entirely up to you.
 
-A safer pattern is to fold the things that affect the output into the key itself:
+If you reuse a key across calls with different `systemPrompt`, `schema`, or `model`, you may receive
+a cached result that does not match what the new request would have produced.
+
+A safer pattern is to include values that affect the output:
 
 ```ts
-const cacheKey = `cv:${cvId}:${model}:v2`; // bump the version suffix when the prompt/schema changes
+const cacheKey = `cv:${cvId}:${model}:v2`; // bump version when prompt/schema changes
 ```
 
 ## Custom cache adapter
@@ -134,15 +156,15 @@ class UpstashCacheAdapter implements CacheAdapter {
 <Callout>
   The key thing to get right when migrating: `hit` should be `true` whenever the key existed in your
   underlying store, even if the stored value itself is `null`. `hit` should only be `false` when
-  nothing was found for that key. Most stores already give you this signal for free — e.g. Redis's
-  `GET` returning `null` for "key doesn't exist" is different from a `null` you stored yourself, so
-  make sure your adapter checks existence rather than just checking `value !== null`.
+  nothing was found for that key.
 </Callout>
 
 <Callout>
   The built-in `InMemoryCacheAdapter` treats `ttl` as seconds, supports deletion, and accepts an
   optional `maxSize` limit to prevent unbounded memory growth. When the limit is reached, the oldest
-  entries are removed first. Custom adapters should keep the same `ttl` convention (rather than
-  milliseconds) so behavior stays consistent across adapters. Implement `delete` if your storage
-  backend supports explicit cache invalidation.
+  entries are removed first.
+
+Custom adapters should keep the same `ttl` convention (seconds, not milliseconds) so behavior
+stays consistent across adapters.
+
 </Callout>

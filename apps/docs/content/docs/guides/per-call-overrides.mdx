@@ -125,17 +125,20 @@ const llm = new VernLLM({
 });
 ```
 
-See <a href="/docs/core/usage-tracking">Token Usage Tracking</a> for the full `onUsage` shape.
+See <a href="/docs/core/usage-tracking">Usage Tracking</a> for the full `onUsage` shape.
 
 ## Interaction with caching
 
 If you cache calls that use different `model` or `temperature` overrides under the same
 `cacheKey`, you'll get a cached result from whichever call happened to populate the cache first,
-regardless of which override the current call is using. Fold the override into the key if it
-affects the output you want back:
+regardless of which override the current call is using. Fold all inputs that affect the output into
+the key:
 
 ```ts
-const cacheKey = `analysis:${docId}:${model}`;
+const cacheKey = `analysis:${docId}:${documentHash}:${model}:${temperature}:schema-v2`;
 ```
 
-See <a href="/docs/core/caching">Caching &amp; Usage Metering</a> for more on choosing cache keys.
+Include a stable document revision/content hash and any generation settings that affect the output,
+such as model, temperature, and schema version.
+
+See <a href="/docs/core/caching">Caching</a> for more on choosing cache keys.
