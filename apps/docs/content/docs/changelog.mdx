@@ -1,12 +1,37 @@
 ---
 title: Changelog
 description: Release history for vern-llm
-icon: History
 ---
 
 vern-llm uses Changesets for versioning. The release history below is generated automatically.
 
 # vern-llm
+
+## 1.6.0
+
+### Minor Changes
+
+- 09b75c0: Improve usage metering, cancellation handling, and reliability across call paths.
+
+  - Add abort signal support to cached call flows and usage metering hooks.
+  - Expose `{ coalesced, signal }` to usage reservation and refund callbacks.
+  - Ensure reservations are only refunded when successfully created, including cancelled requests.
+  - Centralize usage reservation and refund handling across `call()`, `cachedCall()`, and `cachedLLMCall()`.
+  - Fix circuit breaker accounting so validation, parsing, and caller cancellation failures do not count as provider failures.
+
+- babe641: Improve usage metering lifecycle handling across request paths.
+
+  - Add usage reservation and refund support to cached call flows without duplicating logic.
+  - Add abort-aware usage hooks with `{ coalesced, signal }` context.
+  - Refund successful reservations when requests are cancelled before execution begins.
+  - Improve reservation and refund failure handling without changing call error semantics.
+  - Prevent validation, parsing, and caller cancellation errors from being recorded as circuit breaker failures.
+
+### Patch Changes
+
+- bdee813: Fix `refundUsage` being called even when the corresponding `reserveUsage` call itself failed.
+
+  Previously, if `reserveUsage` threw (e.g. quota already exhausted), `refundUsage` would still fire for that caller, incorrectly refunding a reservation that was never actually made. `refundUsage` is now only invoked if `reserveUsage` succeeded, for both the triggering caller and coalesced callers in `cachedCall`/`cachedLLMCall`.
 
 ## 1.5.0
 
@@ -264,3 +289,4 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 ### Minor Changes
 
 - dbce6e2: created a `tsconfig.base.json` which the `tsconfig.json` extends from
+
