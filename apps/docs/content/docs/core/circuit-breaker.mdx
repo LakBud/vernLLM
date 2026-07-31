@@ -20,12 +20,12 @@ Once `threshold` consecutive failures occur, further calls fail immediately with
 <Callout type="warn">
   The circuit breaker only tracks provider and transport-level health, not response correctness.
   Success is recorded as soon as the provider returns usable content, before JSON parsing or schema
-  validation runs. A call that fails `schema.safeParse` still resets the failure counter to zero,
-  since as far as the breaker is concerned, the provider itself worked fine.
+  validation runs. A call that fails `schema.safeParse` or JSON parsing does not count as a provider
+  failure, because the provider returned a usable response.
 </Callout>
 
 - **Counts as a failure**: timeouts, non-2xx responses, network errors, an empty response body. Anything that means the provider itself didn't come through.
-- **Does not count as a failure**: `validation` and `parse` type errors. Those happen after the breaker has already recorded success for that call.
+- **Does not count as a failure**: `validation` and `parse` type errors. Those happen after the breaker has already recorded success for that call. Caller aborts (`LLMError('aborted')`) also do not count as provider failures.
 - **Counted per completed `call()`, not per HTTP attempt.** `recordFailure()` only fires once all of that call's own retries (`maxRetries`) are exhausted. With `maxRetries: 3` and `threshold: 5`, the breaker opens after 5 fully-retried calls fail, which is up to 20 raw attempts against the provider, not 5.
 
 ## Half-open behavior

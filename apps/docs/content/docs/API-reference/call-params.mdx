@@ -17,7 +17,8 @@ const result = await llm.call({
 
 <Callout>
   `cachedLLMCall`'s `call` field accepts this exact same shape. `cachedCall`'s `fn` is a plain
-  function, so it's up to you to pass these through to `llm.call()` yourself.
+  function, so it's up to you to pass these through to `llm.call()` yourself. Both `cachedCall` and
+  `cachedLLMCall` also accept a top-level `signal` for the caller's cancellation lifecycle.
 </Callout>
 
 ## Content
@@ -119,7 +120,9 @@ Existing string-based calls remain fully compatible.
   <Card title="signal">
     `AbortSignal`, optional. If already aborted when `call()` is invoked, it throws
     `LLMError('aborted')` immediately without making a request. If it aborts mid-flight, the
-    in-flight attempt and any pending retry delay are cancelled. See{' '}
+    in-flight attempt and any pending retry delay are cancelled. For `cachedCall` and
+    `cachedLLMCall`, each caller has its own signal. Aborting one coalesced caller does not cancel
+    the shared in-flight operation for other callers. See{' '}
     <a href="/docs/core/cancellation">Cancellation</a>.
   </Card>
 </Cards>
@@ -128,13 +131,17 @@ Existing string-based calls remain fully compatible.
 
 <Cards>
   <Card title="reserveUsage">
-    Optional. Runs before any provider request is dispatched. If it throws, the call stops and
-    surfaces `LLMError('quota_exceeded')`. Retries do not call it again because it wraps the logical
-    request, not individual attempts.
+    Optional. Runs before any provider request is dispatched. Receives
+    `{ coalesced, signal }`, where `coalesced` indicates whether the caller joined an existing
+    cached in-flight operation and `signal` is the caller-supplied `AbortSignal` when provided.
+    If it throws, the call stops and surfaces `LLMError('quota_exceeded')`. Retries do not call it
+    again because it wraps the logical request, not individual attempts.
   </Card>
   <Card title="refundUsage">
-    Optional. Runs when `reserveUsage` succeeded but the call ultimately fails. It is not called
-    when `reserveUsage` itself fails because there was no reservation to refund.
+    Optional. Runs when `reserveUsage` succeeded but the call ultimately fails. It receives the
+    same `{ coalesced, signal }` shape. If a reservation succeeds and the request is aborted before
+    the wrapped operation starts, the reservation is refunded. It is not called when
+    `reserveUsage` itself fails because there was no reservation to refund.
   </Card>
 </Cards>
 

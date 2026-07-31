@@ -108,10 +108,10 @@ A handful of options are set per `call()` rather than on the instance. Three hav
 
 `reserveUsage` and `refundUsage` are provided per call, not on the `VernLLM` instance.
 
-| Option         | Default | Notes                                                                                                                                      |
-| -------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `reserveUsage` | none    | Runs before the provider request. If it throws, the call fails with `LLMError('quota_exceeded')` and no request is sent.                   |
-| `refundUsage`  | none    | Runs after a successful reservation if the call ultimately fails. It is not called when `reserveUsage` fails because nothing was reserved. |
+| Option         | Default | Notes                                                                                                                                                                                                                                                                                                                    |
+| -------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reserveUsage` | none    | Runs before the provider request. Receives `{ coalesced, signal }`, where `coalesced` indicates whether the caller joined an existing cached in-flight operation and `signal` is the caller-supplied `AbortSignal` when provided. If it throws, the call fails with `LLMError('quota_exceeded')` and no request is sent. |
+| `refundUsage`  | none    | Runs after a successful reservation if the call ultimately fails. Receives `{ coalesced, signal }` with the same meaning. A successful reservation is also refunded if the request is aborted before the wrapped operation starts. It is not called when `reserveUsage` fails because nothing was reserved.              |
 
 These hooks are application controlled. VernLLM only manages the reservation lifecycle; it does
 not decide quota rules or billing policy.

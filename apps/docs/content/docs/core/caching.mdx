@@ -38,6 +38,9 @@ instead of starting its own, and all of them resolve (or reject) together once i
 This prevents a cache stampede where many simultaneous callers trigger their own expensive `fn()`
 operation before the first one has populated the cache.
 
+Each coalesced caller has its own `signal` and its own usage-hook lifecycle. Aborting one coalesced
+caller does not cancel the shared in-flight `fn` operation for other callers.
+
 <Callout>
 Although `fn` executes only once per in-flight window, usage metering still runs per caller. Each
 caller performs its own `reserveUsage` and, if that reservation succeeds, gets its own
@@ -75,6 +78,10 @@ When `reserveUsage` and `refundUsage` are provided, they run once per caller on 
 including coalesced callers. The `coalesced` value passed to the hooks indicates whether the
 caller joined an existing in-flight operation.
 
+`signal` can be provided to cancel that caller's cached operation. The caller's signal is passed to
+`reserveUsage` and `refundUsage` as part of the hook context. Aborting one coalesced caller does not
+cancel the shared in-flight operation used by other callers.
+
 Put whatever operation you want cached inside `fn`. If that operation is a VernLLM request, call
 `llm.call()` inside it so the normal retry, timeout, and circuit-breaker pipeline still applies:
 
@@ -82,6 +89,7 @@ Put whatever operation you want cached inside `fn`. If that operation is a VernL
 const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
+  signal,
   fn: async () => {
     return llm.call({
       systemPrompt,
@@ -100,6 +108,10 @@ Usage hooks are applied at the cache level. Do not also provide `reserveUsage` o
 inside the nested `call` options; those are ignored to avoid reserving twice for the same logical
 request.
 
+`signal` can be provided at the top level to cancel that caller's cached operation. Each coalesced
+caller has its own signal and usage-hook lifecycle. Aborting one coalesced caller does not cancel
+the shared in-flight operation for other callers.
+
 It combines cache lookup, cache writes, concurrent miss coalescing, and the normal
 retry/timeout/circuit-breaker behavior from `call()`:
 
@@ -107,6 +119,7 @@ retry/timeout/circuit-breaker behavior from `call()`:
 const result = await llm.cachedLLMCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
+  signal,
   call: {
     systemPrompt,
     userContent,

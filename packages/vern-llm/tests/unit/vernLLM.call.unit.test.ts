@@ -529,4 +529,72 @@ describe('VernLLM.call — reserveUsage/refundUsage', () => {
       expect(refundUsage).toHaveBeenCalledTimes(1);
     });
   });
+
+  it('passes the exact signal to reserveUsage and refundUsage, refunds once after abort, and does not dispatch the provider request', async () => {
+    const controller = new AbortController();
+    const reserveUsage = vi.fn(async () => {
+      controller.abort();
+    });
+    const refundUsage = vi.fn();
+
+    const { client, create } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        signal: controller.signal,
+        reserveUsage,
+        refundUsage,
+      }),
+    ).rejects.toMatchObject({ type: 'aborted' });
+
+    expect(reserveUsage).toHaveBeenCalledTimes(1);
+    expect(reserveUsage).toHaveBeenCalledWith({
+      coalesced: false,
+      signal: controller.signal,
+    });
+
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+    expect(refundUsage).toHaveBeenCalledWith({
+      coalesced: false,
+      signal: controller.signal,
+    });
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not open or increment the circuit breaker when abort happens after reservation', async () => {
+    const controller = new AbortController();
+
+    const reserveUsage = vi.fn(async () => {
+      controller.abort();
+    });
+
+    const refundUsage = vi.fn();
+
+    const { client } = createMockClient([jsonResponse({ ok: true })]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      circuitBreaker: {
+        threshold: 1,
+        cooldownMs: 10_000,
+      },
+    });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        signal: controller.signal,
+        reserveUsage,
+        refundUsage,
+      }),
+    ).rejects.toMatchObject({ type: 'aborted' });
+
+    expect(llm.getCircuitState()).toBe('closed');
+  });
 });

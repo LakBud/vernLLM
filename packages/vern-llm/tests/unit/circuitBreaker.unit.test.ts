@@ -230,4 +230,69 @@ describe('VernLLM — circuit breaker integration', () => {
 
     vi.useRealTimers();
   });
+
+  it('does not open the breaker on a parse failure', async () => {
+    const { client } = createMockClient([{ choices: [{ message: { content: '{invalid json' } }] }]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+    });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+      }),
+    ).rejects.toMatchObject({
+      type: 'parse',
+    });
+
+    expect(llm.getCircuitState()).toBe('closed');
+  });
+
+  it('does not open the breaker on a schema-validation failure', async () => {
+    const { client } = createMockClient([jsonResponse({ wrong: 'shape' })]);
+
+    const schema = {
+      safeParse(
+        value: unknown,
+      ):
+        | { success: true; data: object & { expected: unknown } }
+        | { success: false; error: unknown } {
+        if (typeof value === 'object' && value !== null && 'expected' in value) {
+          return {
+            success: true,
+            data: value as object & { expected: unknown },
+          };
+        }
+
+        return {
+          success: false,
+          error: { message: 'missing expected field' },
+        };
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+    });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        schema,
+      }),
+    ).rejects.toMatchObject({
+      type: 'validation',
+    });
+
+    expect(llm.getCircuitState()).toBe('closed');
+  });
 });
