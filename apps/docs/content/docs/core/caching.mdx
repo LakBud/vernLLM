@@ -79,8 +79,10 @@ including coalesced callers. The `coalesced` value passed to the hooks indicates
 caller joined an existing in-flight operation.
 
 `signal` can be provided to cancel that caller's cached operation. The caller's signal is passed to
-`reserveUsage` and `refundUsage` as part of the hook context. Aborting one coalesced caller does not
-cancel the shared in-flight operation used by other callers.
+`reserveUsage` and `refundUsage` as part of the hook context. For `cachedCall`, a top-level
+`signal` does not automatically cancel the operation inside `fn`; pass it to the wrapped operation
+as well if it should be cancelled. Aborting one coalesced caller does not cancel the shared
+in-flight operation used by other callers.
 
 Put whatever operation you want cached inside `fn`. If that operation is a VernLLM request, call
 `llm.call()` inside it so the normal retry, timeout, and circuit-breaker pipeline still applies:
@@ -94,6 +96,7 @@ const result = await llm.cachedCall({
     return llm.call({
       systemPrompt,
       userContent,
+      signal,
     });
   },
 });
@@ -108,9 +111,12 @@ Usage hooks are applied at the cache level. Do not also provide `reserveUsage` o
 inside the nested `call` options; those are ignored to avoid reserving twice for the same logical
 request.
 
-`signal` can be provided at the top level to cancel that caller's cached operation. Each coalesced
-caller has its own signal and usage-hook lifecycle. Aborting one coalesced caller does not cancel
-the shared in-flight operation for other callers.
+`signal` can be provided at the top level to cancel that caller's cached operation lifecycle. Each
+coalesced caller has its own signal and usage-hook lifecycle. Aborting one coalesced caller does not
+cancel the shared in-flight operation for other callers.
+
+The top-level `signal` only controls the cached wrapper lifecycle. If `fn` starts a request that
+should be cancellable, pass the same signal into that operation explicitly.
 
 It combines cache lookup, cache writes, concurrent miss coalescing, and the normal
 retry/timeout/circuit-breaker behavior from `call()`:
@@ -123,6 +129,7 @@ const result = await llm.cachedLLMCall({
   call: {
     systemPrompt,
     userContent,
+    signal,
   },
 });
 ```

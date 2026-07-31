@@ -51,10 +51,10 @@ const controller = new AbortController();
 const result = await llm.cachedLLMCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
-  signal: controller.signal,
   call: {
     systemPrompt,
     userContent,
+    signal: controller.signal,
   },
 });
 ```

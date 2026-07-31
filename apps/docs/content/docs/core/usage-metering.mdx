@@ -43,7 +43,9 @@ await llm.call({
     the logical call.
   </Card>
   <Card title="After a failed call">
-    `refundUsage` runs when a reservation succeeded but the call ultimately fails.
+    `refundUsage` runs when a reservation succeeded but the call ultimately fails. Errors from
+    `refundUsage` are caught and logged, then swallowed without changing the original call error or
+    rejection. Monitor refund failures separately if failed refunds require follow-up.
   </Card>
 </Cards>
 
