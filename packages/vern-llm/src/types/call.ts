@@ -85,4 +85,5 @@ export interface CachedCallParams<T> {
   fn: () => Promise<T>;
   reserveUsage?: ReserveUsage;
   refundUsage?: RefundUsage;
+  signal?: AbortSignal;
 }

@@ -2,8 +2,9 @@ export interface UsageInfo {
   coalesced: boolean;
 }
 
-export type ReserveUsage = (info: UsageInfo) => Promise<void>;
-export type RefundUsage = (info: UsageInfo) => Promise<void>;
+export type ReserveUsage = (params: { coalesced: boolean; signal?: AbortSignal }) => Promise<void>;
+
+export type RefundUsage = (params: { coalesced: boolean; signal?: AbortSignal }) => Promise<void>;
 
 export interface TokenUsage {
   promptTokens: number;
