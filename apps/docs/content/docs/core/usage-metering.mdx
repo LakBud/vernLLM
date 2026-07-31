@@ -73,13 +73,9 @@ entirely, so no new reservation or usage record is created.
 const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
-  fn: () =>
-    llm.call({
-      systemPrompt,
-      userContent,
-      reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
-      refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
-    }),
+  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
+  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
+  fn: () => llm.call({ systemPrompt, userContent }),
 });
 ```
 

@@ -54,7 +54,8 @@ try {
   </Card>
   <Card title="quota_exceeded">
     The usage reservation failed before the request was sent. This happens when `reserveUsage`
-    rejects and the original error is preserved on `err.cause`.
+    rejects and the original error is preserved on `err.cause`. It is raised before retry handling
+    and is not retried.
   </Card>
   <Card title="circuit_open">
     The circuit breaker is open because the provider has failed too many times in a row. Fails

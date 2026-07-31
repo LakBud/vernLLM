@@ -569,8 +569,8 @@ export class VernLLM {
    * `reserveUsage` is omitted entirely, or if it throws, there is nothing to
    * refund, so `refundUsage` is not invoked in either case.
    *
-   * Shared by `call()` and `cachedCall()`/`registerTrigger()`, so it only
-   * depends on the two hooks rather than either params interface directly.
+   * Shared by `cachedCall()`/`registerTrigger()` and `cachedLLMCall()`, so it
+   * only depends on the two hooks rather than either params interface directly.
    */
   private async withReservedUsage<T>(
     params: { reserveUsage?: ReserveUsage; refundUsage?: RefundUsage },
@@ -584,7 +584,17 @@ export class VernLLM {
         await params.reserveUsage({ coalesced });
         reserved = true;
       }
+    } catch (error) {
+      throw new LLMError(
+        error instanceof Error ? error.message : 'Usage reservation failed',
+        'quota_exceeded',
+        undefined,
+        undefined,
+        error,
+      );
+    }
 
+    try {
       return await getResult();
     } catch (error) {
       if (reserved) {
@@ -620,6 +630,12 @@ export class VernLLM {
       refundUsage: _innerRefundUsage,
       ...restCallParams
     } = callParams;
+
+    if (_innerReserveUsage || _innerRefundUsage) {
+      this.logger.warn(
+        '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedLLMCall; set them at the top level instead.',
+      );
+    }
 
     return this.cachedCall({
       ...cacheParams,

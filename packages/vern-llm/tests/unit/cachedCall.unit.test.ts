@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { type CacheAdapter, InMemoryCacheAdapter } from '../../src/types/index.js';
+import { type CacheAdapter, InMemoryCacheAdapter, LLMError } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
@@ -91,6 +91,33 @@ describe('VernLLM.cachedCall', () => {
     await llm.cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage });
 
     expect(order).toEqual(['reserve', 'fn']);
+    expect(refundUsage).not.toHaveBeenCalled();
+  });
+
+  it('normalizes reserveUsage failures as quota_exceeded LLMError and preserves the original cause', async () => {
+    const originalError = new Error('quota backend unavailable');
+    const reserveUsage = vi.fn(async () => {
+      throw originalError;
+    });
+    const refundUsage = vi.fn();
+    const fn = vi.fn(async () => 'result');
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    const error = await llm
+      .cachedCall({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage })
+      .catch((err) => err);
+
+    expect(error).toBeInstanceOf(LLMError);
+
+    if (!(error instanceof LLMError)) {
+      throw new Error('Expected LLMError');
+    }
+
+    expect(error.type).toBe('quota_exceeded');
+    expect(error.message).toBe('quota backend unavailable');
+    expect(error.cause).toBe(originalError);
+
+    expect(fn).not.toHaveBeenCalled();
     expect(refundUsage).not.toHaveBeenCalled();
   });
 

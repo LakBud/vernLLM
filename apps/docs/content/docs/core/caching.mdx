@@ -39,8 +39,14 @@ This prevents a cache stampede where many simultaneous callers trigger their own
 operation before the first one has populated the cache.
 
 <Callout>
-  Although `fn` executes only once per in-flight window, every caller receives the same resolved
-  value or error from the shared operation.
+Although `fn` executes only once per in-flight window, usage metering still runs per caller. Each
+caller performs its own `reserveUsage` and, if that reservation succeeds, gets its own
+`refundUsage` lifecycle.
+
+A coalesced caller can fail with `LLMError('quota_exceeded')` if its own reservation is rejected,
+while the original trigger caller continues with the shared `fn` operation. Successful callers
+still receive the same resolved value or error from the shared operation.
+
 </Callout>
 
 <Callout type="warn">
@@ -62,8 +68,12 @@ await llm.deleteCache(`cv:${cvId}`);
 
 ## `cachedCall`: cache wrapper
 
-`cachedCall` only manages cache lookup, cache writes, and concurrent miss coalescing. It does not
-apply retry, timeout, or circuit-breaker behavior by itself.
+`cachedCall` manages cache lookup, cache writes, concurrent miss coalescing, and optional usage
+metering. It does not apply retry, timeout, or circuit-breaker behavior by itself.
+
+When `reserveUsage` and `refundUsage` are provided, they run once per caller on cache misses,
+including coalesced callers. The `coalesced` value passed to the hooks indicates whether the
+caller joined an existing in-flight operation.
 
 Put whatever operation you want cached inside `fn`. If that operation is a VernLLM request, call
 `llm.call()` inside it so the normal retry, timeout, and circuit-breaker pipeline still applies:
@@ -85,6 +95,10 @@ const result = await llm.cachedCall({
 
 `cachedLLMCall` is a convenience wrapper for the common case where the cached operation is a
 `llm.call()` invocation.
+
+Usage hooks are applied at the cache level. Do not also provide `reserveUsage` or `refundUsage`
+inside the nested `call` options; those are ignored to avoid reserving twice for the same logical
+request.
 
 It combines cache lookup, cache writes, concurrent miss coalescing, and the normal
 retry/timeout/circuit-breaker behavior from `call()`:
