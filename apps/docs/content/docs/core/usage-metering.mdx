@@ -7,6 +7,13 @@ Usage metering lets you control whether a request is allowed to run before it re
 provider. Use `reserveUsage` to reserve quota or budget before dispatch, and `refundUsage` to
 release that reservation when a call fails after reservation succeeded.
 
+`reserveUsage` and `refundUsage` receive `{ coalesced, signal }`.
+
+- `coalesced` is `true` when the caller is sharing an existing in-flight cached request.
+- `signal` is the caller-supplied `AbortSignal`, when one was provided.
+- A successful reservation is refunded if the request is aborted before the wrapped operation starts.
+- If `reserveUsage` fails, no refund is performed because no reservation was created.
+
 ```ts title="usage-metering-setup.ts"
 const llm = new VernLLM({
   client: openai,
@@ -15,11 +22,11 @@ const llm = new VernLLM({
 
 await llm.call({
   userContent: 'Summarize this document',
-  reserveUsage: async () => {
-    await billing.reserve();
+  reserveUsage: async ({ signal }) => {
+    await billing.reserve({ signal });
   },
-  refundUsage: async () => {
-    await billing.refund();
+  refundUsage: async ({ signal }) => {
+    await billing.refund({ signal });
   },
 });
 ```
@@ -36,7 +43,9 @@ await llm.call({
     the logical call.
   </Card>
   <Card title="After a failed call">
-    `refundUsage` runs when a reservation succeeded but the call ultimately fails.
+    `refundUsage` runs when a reservation succeeded but the call ultimately fails. Errors from
+    `refundUsage` are caught and logged, then swallowed without changing the original call error or
+    rejection. Monitor refund failures separately if failed refunds require follow-up.
   </Card>
 </Cards>
 
@@ -44,23 +53,9 @@ await llm.call({
 
 <Callout type="warn">
   If `reserveUsage` throws, the call fails with `LLMError('quota_exceeded')` and no request is sent
-  to the provider. The original error is preserved on `err.cause`.
+  to the provider. The original error is preserved on `err.cause`. A failed reservation is never
+  refunded because no usage was reserved.
 </Callout>
-
-```ts title="handling-reservation-errors.ts"
-try {
-  await llm.call({
-    userContent: 'Generate a report',
-    reserveUsage: async () => {
-      await billing.reserve();
-    },
-  });
-} catch (err) {
-  if (isLLMError(err) && err.type === 'quota_exceeded') {
-    console.log(err.cause);
-  }
-}
-```
 
 ## With caching
 
@@ -73,8 +68,8 @@ entirely, so no new reservation or usage record is created.
 const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
-  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
-  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
+  reserveUsage: ({ coalesced, signal }) => quota.reserve(userId, { coalesced, signal }),
+  refundUsage: ({ coalesced, signal }) => quota.refund(userId, { coalesced, signal }),
   fn: () => llm.call({ systemPrompt, userContent }),
 });
 ```
@@ -84,12 +79,14 @@ const result = await llm.cachedCall({
 When multiple callers request the same cache key at the same time, only the first caller runs the
 underlying `fn`. Other callers share the same in-flight result.
 
-Each caller still gets its own `reserveUsage` and `refundUsage` lifecycle. The `coalesced` flag
-lets your application decide how shared requests should be metered.
+Each caller still gets its own `reserveUsage` and `refundUsage` lifecycle, its own `signal`, and
+its own cancellation behavior. The `coalesced` flag lets your application decide how shared
+requests should be metered.
 
 <Callout>
   Although `fn` executes only once per in-flight window, `reserveUsage` and `refundUsage` are still
-  invoked once per caller. If `fn` fails, every caller is refunded independently.
+  invoked once per caller. If `fn` fails, every caller is refunded independently. Aborting one
+  coalesced caller does not cancel the shared in-flight `fn` for other callers.
 </Callout>
 
 ## cachedLLMCall
@@ -102,8 +99,8 @@ const result = await llm.cachedLLMCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
   call: { systemPrompt, userContent },
-  reserveUsage: ({ coalesced }) => quota.reserve(userId, { coalesced }),
-  refundUsage: ({ coalesced }) => quota.refund(userId, { coalesced }),
+  reserveUsage: ({ coalesced, signal }) => quota.reserve(userId, { coalesced, signal }),
+  refundUsage: ({ coalesced, signal }) => quota.refund(userId, { coalesced, signal }),
 });
 ```
 
@@ -128,11 +125,11 @@ const llm = new VernLLM({
 
 await llm.call({
   userContent: 'Write a summary',
-  reserveUsage: async () => {
-    await billing.reserve();
+  reserveUsage: async ({ signal }) => {
+    await billing.reserve({ signal });
   },
-  refundUsage: async () => {
-    await billing.refund();
+  refundUsage: async ({ signal }) => {
+    await billing.refund({ signal });
   },
 });
 ```

@@ -133,51 +133,34 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
-    let reserved = false;
-    try {
-      if (params.reserveUsage) {
-        await params.reserveUsage({ coalesced: false });
-        reserved = true;
-      }
-    } catch (error) {
-      // `reserveUsage` represents quota reservation, so any failure is surfaced
-      // as `quota_exceeded` regardless of what the hook throws.
-      if (params.signal?.aborted) {
-        throw new LLMError('LLM request aborted', 'aborted');
-      }
-
-      throw new LLMError(
-        error instanceof Error ? error.message : 'Usage reservation failed',
-        'quota_exceeded',
-        undefined,
-        undefined,
-        error,
-      );
-    }
-
-    try {
-      return await this.retryWithBackoff(
-        () => this.executeCall(params, requestId),
-        requestId,
-        params.signal,
-      );
-    } catch (error) {
-      this.breaker?.recordFailure();
-      const normalized = this.normalizeError(error, params.signal);
-      this.logger.debug(`[vern:${requestId}] error:\n${describeError(error)}`);
-
-      if (reserved) {
+    return this.withReservedUsage(
+      params,
+      false,
+      async () => {
         try {
-          await params.refundUsage?.({ coalesced: false });
-        } catch (refundError) {
-          this.logger.error('[VernLLM] refundUsage failed', {
-            message: refundError instanceof Error ? refundError.message : 'unknown',
-          });
-        }
-      }
+          return await this.retryWithBackoff(
+            () => this.executeCall(params, requestId),
+            requestId,
+            params.signal,
+          );
+        } catch (error) {
+          const normalized = this.normalizeError(error, params.signal);
 
-      throw normalized;
-    }
+          if (
+            normalized.type !== 'validation' &&
+            normalized.type !== 'parse' &&
+            normalized.type !== 'aborted'
+          ) {
+            this.breaker?.recordFailure();
+          }
+
+          this.logger.debug(`[vern:${requestId}] error:\n${describeError(error)}`);
+
+          throw normalized;
+        }
+      },
+      params.signal,
+    );
   }
 
   /**
@@ -261,13 +244,17 @@ export class VernLLM {
 
     this.recordUsage(response, requestId, model);
 
-    this.breaker?.recordSuccess();
-
     if (!useJson) {
+      this.breaker?.recordSuccess();
+
       return content as T;
     }
 
-    return this.parseAndValidate(content, params.schema);
+    const result = this.parseAndValidate(content, params.schema);
+
+    this.breaker?.recordSuccess();
+
+    return result;
   }
 
   /**
@@ -526,7 +513,7 @@ export class VernLLM {
     const coalesced = existing !== undefined;
 
     if (coalesced) {
-      return this.withReservedUsage(params, coalesced, () => existing);
+      return this.withReservedUsage(params, coalesced, () => existing, params.signal);
     }
 
     return this.registerTrigger(params, coalesced);
@@ -534,9 +521,15 @@ export class VernLLM {
 
   /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */
   private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
-    const resultPromise = this.withReservedUsage(params, coalesced, () => this.runAndCache(params));
+    const resultPromise = this.withReservedUsage(
+      params,
+      coalesced,
+      () => this.runAndCache(params),
+      params.signal,
+    );
 
     this.inFlight.set(params.cacheKey, resultPromise);
+
     // Cleanup runs regardless of outcome
     void resultPromise
       .catch(() => {})
@@ -569,19 +562,23 @@ export class VernLLM {
    * `reserveUsage` is omitted entirely, or if it throws, there is nothing to
    * refund, so `refundUsage` is not invoked in either case.
    *
-   * Shared by `cachedCall()`/`registerTrigger()` and `cachedLLMCall()`, so it
-   * only depends on the two hooks rather than either params interface directly.
+   * Shared by `cachedCall()`/`registerTrigger()` and `call()`, so it only
+   * depends on the usage hooks rather than LLM request concerns.
    */
   private async withReservedUsage<T>(
-    params: { reserveUsage?: ReserveUsage; refundUsage?: RefundUsage },
+    params: {
+      reserveUsage?: ReserveUsage;
+      refundUsage?: RefundUsage;
+    },
     coalesced: boolean,
     getResult: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     let reserved = false;
 
     try {
       if (params.reserveUsage) {
-        await params.reserveUsage({ coalesced });
+        await params.reserveUsage({ coalesced, signal });
         reserved = true;
       }
     } catch (error) {
@@ -594,12 +591,26 @@ export class VernLLM {
       );
     }
 
+    if (signal?.aborted) {
+      if (reserved) {
+        try {
+          await params.refundUsage?.({ coalesced, signal });
+        } catch (refundError) {
+          this.logger.error('[VernLLM] refundUsage failed after abort', {
+            message: refundError instanceof Error ? refundError.message : 'unknown',
+          });
+        }
+      }
+
+      throw new LLMError('LLM request aborted', 'aborted');
+    }
+
     try {
       return await getResult();
     } catch (error) {
       if (reserved) {
         try {
-          await params.refundUsage?.({ coalesced });
+          await params.refundUsage?.({ coalesced, signal });
         } catch (refundError) {
           this.logger.error('[VernLLM] refundUsage failed', {
             message: refundError instanceof Error ? refundError.message : 'unknown',

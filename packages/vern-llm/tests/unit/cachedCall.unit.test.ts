@@ -377,6 +377,124 @@ describe('VernLLM.cachedCall', () => {
     expect(result).toBe('recovered');
     expect(fn).toHaveBeenCalledTimes(2);
   });
+
+  it('passes each coalesced caller its own signal in reserveUsage and refundUsage hooks', async () => {
+    let resolveFn!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      resolveFn = resolve;
+    });
+
+    const fn = vi.fn(() => gate);
+
+    const controllerA = new AbortController();
+    const controllerB = new AbortController();
+
+    const reserveUsage = vi.fn();
+    const refundUsage = vi.fn();
+
+    const llm = new VernLLM({
+      client: createMockClient([]).client,
+      model: 'm',
+    });
+
+    const trigger = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      fn,
+      signal: controllerA.signal,
+      reserveUsage,
+      refundUsage,
+    });
+
+    await Promise.resolve();
+
+    const coalesced = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      fn,
+      signal: controllerB.signal,
+      reserveUsage,
+      refundUsage,
+    });
+
+    resolveFn('shared result');
+
+    await Promise.all([trigger, coalesced]);
+
+    expect(reserveUsage).toHaveBeenCalledTimes(2);
+
+    expect(reserveUsage).toHaveBeenNthCalledWith(1, {
+      coalesced: false,
+      signal: controllerA.signal,
+    });
+
+    expect(reserveUsage).toHaveBeenNthCalledWith(2, {
+      coalesced: true,
+      signal: controllerB.signal,
+    });
+  });
+
+  it('refunds an aborted coalesced caller once without cancelling shared fn or trigger caller', async () => {
+    let resolveFn!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      resolveFn = resolve;
+    });
+
+    const fn = vi.fn(() => gate);
+
+    const triggerController = new AbortController();
+    const coalescedController = new AbortController();
+
+    const reserveUsage = vi.fn();
+    const refundUsage = vi.fn();
+
+    const llm = new VernLLM({
+      client: createMockClient([]).client,
+      model: 'm',
+    });
+
+    const trigger = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      fn,
+      signal: triggerController.signal,
+      reserveUsage,
+      refundUsage,
+    });
+
+    await Promise.resolve();
+
+    const coalesced = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      fn,
+      signal: coalescedController.signal,
+      reserveUsage,
+      refundUsage,
+    });
+
+    await Promise.resolve();
+
+    coalescedController.abort();
+
+    await expect(coalesced).rejects.toMatchObject({
+      type: 'aborted',
+    });
+
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+    expect(refundUsage).toHaveBeenCalledWith({
+      coalesced: true,
+      signal: coalescedController.signal,
+    });
+
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    resolveFn('shared result');
+
+    await expect(trigger).resolves.toBe('shared result');
+
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('VernLLM.deleteCache', () => {
