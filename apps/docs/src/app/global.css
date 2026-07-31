@@ -293,3 +293,24 @@ html > body[data-scroll-locked] {
     @apply font-sans;
   }
 }
+
+/* Fumadocs navigation icons */
+#nd-subnav svg,
+#nd-docs-layout nav svg,
+[data-sidebar] svg {
+  color: var(--color-fd-muted-foreground) !important;
+}
+
+/* Active Fumadocs item */
+#nd-subnav a.text-fd-primary svg,
+#nd-subnav a.text-primary svg,
+#nd-subnav a[data-active='true'] svg,
+#nd-docs-layout nav a.text-fd-primary svg,
+[data-sidebar] a.text-fd-primary svg {
+  color: var(--color-fd-primary) !important;
+}
+
+/* Fumadocs theme/nav active icons */
+svg.text-fd-accent-foreground {
+  color: var(--color-fd-primary) !important;
+}
