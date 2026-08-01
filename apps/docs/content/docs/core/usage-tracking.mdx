@@ -31,12 +31,12 @@ interface TokenUsage {
 ## When it does and doesn't fire
 
 <Callout>
-  `onUsage` fires after the raw completion succeeds, but *before* JSON parsing and schema validation
-  — so `call()` can still reject after `onUsage` has already fired, if `jsonMode`/`schema`
+  `onUsage` fires after the raw completion succeeds, but *before* JSON parsing and schema
+  validation, so `call()` can still reject after `onUsage` has already fired, if `jsonMode`/`schema`
   validation fails on the content. If the `onUsage` callback itself throws, that failure is logged
-  and swallowed rather than propagated — it can't fail or retrigger retries on an
-  otherwise-successful call. If you need to gate a call *before* it's dispatched (e.g. enforcing a
-  quota), see [`reserveUsage`/`refundUsage`](/docs/core/usage-metering).
+  and swallowed rather than propagate, it can't fail or retrigger retries on an otherwise-successful
+  call. If you need to gate a call *before* it's dispatched (e.g. enforcing a quota), see
+  [`reserveUsage`/`refundUsage`](/docs/core/usage-metering).
 </Callout>
 
 <Callout type="warn">

@@ -45,7 +45,7 @@ immediately visible to both a local `get()` and any other process reading L2 dir
 ## Controlling L1's TTL separately
 
 By default, `TieredCacheAdapter` uses the same `ttl` for both tiers. Pass a third constructor
-argument to give L1 a shorter lifetime than L2 — useful when L1 is memory-constrained and you'd
+argument to give L1 a shorter lifetime than L2, useful when L1 is memory-constrained and you'd
 rather it churn faster than the shared store:
 
 ```ts
@@ -58,13 +58,13 @@ const cache = new TieredCacheAdapter(
 
 <Callout type="warn">
   `TieredCacheAdapter` does not implement `resolveKey`. Wrapping it doesn't give you non-exact
-  matching for free — see below for how to combine tiering with normalized or semantic matching.
+  matching for free, see below for how to combine tiering with normalized or semantic matching.
 </Callout>
 
 ## Combining with `resolveKey`-based matching
 
-Since `resolveKey` is resolved once, up front, by `cachedCall` itself — not by whichever adapter
-happens to be on top — the way to combine tiering with normalized or semantic matching is to put
+Since `resolveKey` is resolved once, up front, by `cachedCall` itself, not by whichever adapter
+happens to be on top, the way to combine tiering with normalized or semantic matching is to put
 the matching adapter _outermost_, wrapping the tiered pair as its inner store:
 
 ```ts title="normalized-plus-tiered.ts"
@@ -75,13 +75,13 @@ const cache = new NormalizedCacheAdapter(tiered); // resolveKey lives here, stor
 ```
 
 `cachedCall` calls `cache.resolveKey(key)` once (implemented by `NormalizedCacheAdapter`), then
-calls `cache.get`/`cache.set` with the resolved key — which `NormalizedCacheAdapter` normalizes
-again internally and forwards to `tiered`, which does its usual L1-then-L2 lookup. The same pattern
+calls `cache.get`/`cache.set` with the resolved key, which `NormalizedCacheAdapter` normalizes
+again internally and forwards to `tiered`. This is where it does its usual L1-then-L2 lookup. The same pattern
 works for a custom semantic adapter: wrap the tiered pair the same way, rather than trying to make
 `TieredCacheAdapter` itself embedding-aware.
 
 <Callout>
   This layering rule generalizes: any adapter that implements `resolveKey` should be the outermost
   layer, since `cachedCall` only ever checks `resolveKey` on the adapter passed directly to
-  `VernLLM`'s `cache` option — it does not recurse into wrapped adapters looking for one.
+  `VernLLM`'s `cache` option, it does not recurse into wrapped adapters looking for one.
 </Callout>

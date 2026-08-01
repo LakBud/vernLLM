@@ -8,7 +8,7 @@ concurrent-miss coalescing, and the `CacheAdapter` interface itself. These guide
 narrower question that page only touches on: once you have caching wired up, which _kind_ of
 matching should the cache actually do?
 
-By default, `cacheKey` is matched exactly — two calls only share a cache entry if their keys are
+By default, `cacheKey` is matched exactly, two calls only share a cache entry if their keys are
 identical strings. That's the right choice for most cases (it's predictable and needs no extra
 dependencies), but it means near-duplicate inputs miss the cache and trigger another LLM call. The
 guides in this section cover the built-in and DIY options for closing that gap, in roughly
@@ -16,16 +16,16 @@ increasing order of what they can catch and what they cost:
 
 <Cards>
   <Card title="Normalized Caching" href="/docs/guides/caching-methods/normalized">
-    Match keys that differ only in case, whitespace, or punctuation — using the built-in
+    Match keys that differ only in case, whitespace, or punctuation, using the built-in
     `NormalizedCacheAdapter`, no external dependencies or network calls.
   </Card>
   <Card title="Tiered Caching" href="/docs/guides/caching-methods/tiered">
-    Combine a fast local cache with a shared backing store using `TieredCacheAdapter` — this one's
+    Combine a fast local cache with a shared backing store using `TieredCacheAdapter`, this one's
     about *where* entries live, not *how* keys match, and composes with the other two.
   </Card>
   <Card title="Semantic Caching" href="/docs/guides/caching-methods/semantic">
     Match prompts by meaning instead of exact text, using a custom adapter built on `resolveKey`
-    plus an embedding function you provide. Not a package export — this is a worked example you
+    plus an embedding function you provide. Not a package export, this is a worked example you
     adapt, since it needs an injected embedder and a vector store that fits your scale.
   </Card>
 </Cards>
@@ -42,7 +42,7 @@ increasing order of what they can catch and what they cost:
   already using.
 
 These aren't mutually exclusive. `TieredCacheAdapter` in particular is meant to be combined with
-one of the matching adapters — see [Tiered Caching](/docs/guides/caching/tiered#combining-with-resolvekey-based-matching)
+one of the matching adapters, see [Tiered Caching](/docs/guides/caching/tiered#combining-with-resolvekey-based-matching)
 for how the layering works.
 
 <Callout>

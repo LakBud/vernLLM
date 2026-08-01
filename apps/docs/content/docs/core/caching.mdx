@@ -3,9 +3,9 @@ title: Caching
 description: Wrap calls with cachedCall or cachedLLMCall
 ---
 
-vern-llm ships three cache adapters out of the box — `InMemoryCacheAdapter` (exact match),
+vern-llm ships three cache adapters out of the box: `InMemoryCacheAdapter` (exact match),
 `NormalizedCacheAdapter` (normalized/fuzzy match), and `TieredCacheAdapter` (two-tier
-local + shared cache) — plus a `CacheAdapter` interface for bringing your own.
+local + shared cache), plus a `CacheAdapter` interface for bringing your own.
 
 The built-in `InMemoryCacheAdapter` provides a simple in-memory cache with no external dependencies.
 It is useful for local development or single-process deployments; use a shared adapter such as Redis
@@ -65,7 +65,7 @@ still receive the same resolved value or error from the shared operation.
 
 ## Non-exact matching with `resolveKey`
 
-By default, `cacheKey` is matched exactly — `get`/`set` receive whatever string you pass in, and
+By default, `cacheKey` is matched exactly, `get`/`set` receive whatever string you pass in, and
 concurrent calls only coalesce if their `cacheKey` values are identical.
 
 If your adapter matches on something other than exact string equality (a normalized/fuzzy key, an
@@ -81,13 +81,13 @@ interface CacheAdapter<T = unknown> {
 ```
 
 When present, `resolveKey` runs once at the start of `cachedCall`/`cachedLLMCall`, before the cache
-lookup and before the in-flight coalescing check. Its return value — not the original `cacheKey` —
+lookup and before the in-flight coalescing check. Its return value, not the original `cacheKey`,
 is what gets used for both. This means concurrent calls that `resolveKey` maps to the same string
 share one in-flight `fn()` call, the same way exact-match callers already do; without it, two calls
 that your adapter would consider "the same" for lookup purposes could still each trigger their own
 `fn()` if they happened to race.
 
-Adapters that don't implement `resolveKey` are unaffected — the caller-supplied `cacheKey` is used
+Adapters that don't implement `resolveKey` are unaffected, the caller-supplied `cacheKey` is used
 as-is, exactly like before.
 
 <Callout>
@@ -278,7 +278,7 @@ class UpstashCacheAdapter implements CacheAdapter {
 
 <Callout>
   This adapter matches `cacheKey` exactly, same as `InMemoryCacheAdapter`. If you want lookups based
-  on something other than exact string equality, implement `resolveKey` as well — see [Non-exact
+  on something other than exact string equality, implement `resolveKey` as well, see [Non-exact
   matching with `resolveKey`](#non-exact-matching-with-resolvekey) above.
 </Callout>
 

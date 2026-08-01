@@ -3,14 +3,14 @@ title: Semantic Caching
 description: Matching prompts by meaning instead of exact text, using a custom CacheAdapter
 ---
 
-vern-llm's built-in cache adapters match `cacheKey` exactly. That's the right default — it's
-predictable and has no extra dependencies — but it means two prompts that mean the same thing
+VernLLM's built-in cache adapters match `cacheKey` exactly. That's the right default, it's
+predictable and has no extra dependencies, but it means two prompts that mean the same thing
 ("What's the capital of France?" vs "capital of france?") are treated as unrelated cache entries.
 
 Semantic caching fixes that by embedding the prompt and matching against previously-cached
-embeddings within some similarity threshold, instead of matching the raw string. vern-llm doesn't
+embeddings within some similarity threshold, instead of matching the raw string. VernLLM doesn't
 ship this out of the box, but the `CacheAdapter` interface is small enough that you can implement
-it yourself as a normal adapter, with no changes to vern-llm's core.
+it yourself as a normal adapter, with no changes to VernLLM's core.
 
 <Callout type="warn">
   Semantic caching trades exactness for hit rate. A high similarity threshold (0.95+) is fairly
@@ -55,7 +55,7 @@ export class SemanticCacheAdapter<T = unknown> implements CacheAdapter<T> {
   /**
    * Runs once per cachedCall/cachedLLMCall, before the cache lookup and
    * before in-flight coalescing. Embeds the incoming key, finds the closest
-   * existing entry, and returns its key if it's within threshold — so a
+   * existing entry, and returns its key if it's within threshold, so a
    * semantically equivalent call reuses the exact same cache entry, and
    * concurrent equivalent calls coalesce into one in-flight request.
    */
@@ -83,7 +83,7 @@ export class SemanticCacheAdapter<T = unknown> implements CacheAdapter<T> {
       return bestKey;
     }
 
-    // No close match — this key becomes its own canonical entry once set()
+    // No close match, this key becomes its own canonical entry once set()
     // is called. Cache the embedding now so later resolveKey calls for
     // near-duplicates of *this* key can still match it, even before it's
     // actually written via set().
@@ -128,13 +128,13 @@ export class SemanticCacheAdapter<T = unknown> implements CacheAdapter<T> {
   This in-memory version does a linear scan over every stored embedding on each lookup, which is
   fine for prototypes or low-volume caches but won't scale past a few thousand entries. For
   production, swap the `Map` + `cosineSimilarity` loop for a real vector store (Pinecone, Qdrant,
-  pgvector, or Redis with a vector index) behind the same `CacheAdapter` interface — nothing else
+  pgvector, or Redis with a vector index) behind the same `CacheAdapter` interface, nothing else
   about this adapter needs to change.
 </Callout>
 
 ## Wiring it up
 
-Pass an embedding function — any provider works, this example uses OpenAI's:
+Pass an embedding function, any provider works, this example uses OpenAI's:
 
 ```ts title="use-semantic-cache.ts"
 import OpenAI from 'openai';
@@ -169,7 +169,7 @@ const result = await llm.cachedLLMCall({
 ```
 
 The important difference from exact-match caching: `cacheKey` here is the actual prompt text, not
-an id like `resume:${resumeId}`. `resolveKey` needs the real content to embed and compare — a
+an id like `resume:${resumeId}`. `resolveKey` needs the real content to embed and compare, a
 hand-picked id has nothing for it to match against.
 
 <Callout type="warn">
@@ -188,7 +188,7 @@ equivalent prompts would each start their own `fn()` instead of sharing one, eve
 would eventually consider them the same entry.
 
 `resolveKey` runs before both the cache lookup and the in-flight check, and its return value is
-used for both — so semantically-equivalent concurrent calls coalesce into a single in-flight
+used for both, so semantically-equivalent concurrent calls coalesce into a single in-flight
 request the same way exact-match calls already do. See
 [Non-exact matching with `resolveKey`](/docs/core/caching#non-exact-matching-with-resolvekey) for
 how this fits into `cachedCall` generally.

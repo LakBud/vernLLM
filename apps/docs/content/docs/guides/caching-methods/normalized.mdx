@@ -3,7 +3,7 @@ title: Normalized Caching
 description: Matching keys that differ only in case, whitespace, or punctuation
 ---
 
-A lot of "these should be the same cache entry" cases aren't semantic at all — they're just
+A lot of "these should be the same cache entry" cases aren't semantic at all, they're just
 formatting differences. `"What is 2+2?"`, `"what is 2+2"`, and `"  WHAT IS 2+2?  "` mean the same
 thing and differ only in case, punctuation, and whitespace. `NormalizedCacheAdapter` handles this
 class of duplicate for free, with no embedding calls and no external dependencies.
@@ -27,7 +27,7 @@ await llm.cachedLLMCall({
 ```
 
 Like `SemanticCacheAdapter` (see [Semantic Caching](/docs/guides/caching/semantic)), `cacheKey`
-here should be the actual prompt text, not a hand-picked id — normalization needs real content to
+here should be the actual prompt text, not a hand-picked id, normalization needs real content to
 operate on.
 
 ## What it normalizes
@@ -38,27 +38,27 @@ The default normalization is intentionally simple:
 key
   .toLowerCase()
   .trim()
-  .replace(/[^\w\s]/g, '')
+  .replace(/[^\p{L}\p{N}\s]/gu, '')
   .replace(/\s+/g, ' ');
 ```
 
 Lowercases, trims leading/trailing whitespace, strips punctuation, and collapses repeated
-whitespace into single spaces. This catches formatting noise but nothing more — `"2+2"` and
+whitespace into single spaces. This catches formatting noise but nothing more, `"2+2"` and
 `"2 + 2"` still normalize differently, because stripping `+` without a surrounding space collapses
 the digits together (`"22"`) while stripping it with spaces around it leaves them separate
 (`"2 2"`). Normalization is a text transform, not a parser; it doesn't understand what the text
 means.
 
 <Callout type="warn">
-  If your inputs vary in more than surface formatting — different word choice, different phrasing,
-  different language — normalization won't catch it. That's the line between this and semantic
+  If your inputs vary in more than surface formatting, different word choice, different phrasing,
+  different language, normalization won't catch it. That's the line between this and semantic
   caching: normalization handles "same words, different formatting"; semantic caching handles
   "different words, same meaning."
 </Callout>
 
 ## Wrapping a different inner adapter
 
-`NormalizedCacheAdapter` doesn't do its own storage — it normalizes the key, then delegates to
+`NormalizedCacheAdapter` doesn't do its own storage, it normalizes the key, then delegates to
 whatever adapter you pass it. Swap in Redis, Upstash, or any other `CacheAdapter` without changing
 the normalization logic:
 
@@ -68,8 +68,8 @@ const cache = new NormalizedCacheAdapter(new UpstashCacheAdapter());
 
 ## Custom normalization
 
-The shipped normalization is deliberately generic. If your domain needs something different —
-stemming, stripping filler words, normalizing numbers written as words vs digits — write your own
+The shipped normalization is deliberately generic. If your domain needs something different,
+stemming, stripping filler words, normalizing numbers written as words vs digits, write your own
 adapter with a custom `resolveKey` rather than trying to configure `NormalizedCacheAdapter`
 further:
 
@@ -106,5 +106,5 @@ class DomainNormalizedAdapter<T> implements CacheAdapter<T> {
 }
 ```
 
-This is the same shape as `NormalizedCacheAdapter` itself — the built-in version is just one
+This is the same shape as `NormalizedCacheAdapter` itself, the built-in version is just one
 reasonable default, not the only option.
