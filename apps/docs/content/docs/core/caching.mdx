@@ -91,8 +91,8 @@ Adapters that don't implement `resolveKey` are unaffected — the caller-supplie
 as-is, exactly like before.
 
 <Callout>
-  See [Semantic Caching](/docs/guides/caching/semantic) for a full worked example using `resolveKey`
-  to match prompts by meaning instead of exact text.
+  See [Semantic Caching](/docs/guides/caching-methods/semantic) for a full worked example using
+  `resolveKey` to match prompts by meaning instead of exact text.
 </Callout>
 
 ## Built-in adapters beyond `InMemoryCacheAdapter`
@@ -129,7 +129,7 @@ Pass any other adapter to normalize keys in front of it instead of the in-memory
 const cache = new NormalizedCacheAdapter(new UpstashCacheAdapter());
 ```
 
-See [Normalized Caching](/docs/guides/caching/normalized) for more on when this is (and isn't)
+See [Normalized Caching](/docs/guides/caching-methods/normalized) for more on when this is (and isn't)
 enough, versus reaching for semantic matching.
 
 ### `TieredCacheAdapter`
@@ -153,7 +153,7 @@ const llm = new VernLLM({ client: openai, model: 'gpt-4o', cache });
   `TieredCacheAdapter` does not implement `resolveKey`. If you want tiering *and* non-exact
   matching, wrap in the other order: `new TieredCacheAdapter(l1, new NormalizedCacheAdapter(l2))`
   won't propagate `resolveKey` either, since `TieredCacheAdapter` itself doesn't forward it. See
-  [Tiered Caching](/docs/guides/caching/tiered) for the pattern that combines both.
+  [Tiered Caching](/docs/guides/caching-methods/tiered) for the pattern that combines both.
 </Callout>
 
 ## Deleting cached entries
