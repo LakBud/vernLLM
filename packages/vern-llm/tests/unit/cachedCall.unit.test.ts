@@ -148,6 +148,18 @@ describe('TieredCacheAdapter', () => {
     expect(await l1.get('k')).toEqual({ hit: false, value: null });
     expect(await l2.get('k')).toEqual({ hit: false, value: null });
   });
+
+  it('backfills L1 when L2 has a cached null value', async () => {
+    const l1 = new InMemoryCacheAdapter<null>();
+    const l2 = new InMemoryCacheAdapter<null>();
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    await l2.set('k', null, 60);
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: null });
+
+    expect(await l1.get('k')).toEqual({ hit: true, value: null });
+  });
 });
 
 describe('VernLLM.cachedCall', () => {

@@ -78,6 +78,14 @@ export class VernLLM {
   }
 
   /**
+   * Resolves cache keys through the adapter when supported.
+   * Keeps all cache operations using the same key normalization path.
+   */
+  private async resolveCacheKey(key: string): Promise<string> {
+    return this.cache.resolveKey ? await this.cache.resolveKey(key) : key;
+  }
+
+  /**
    * Resolves retry/timeout/token defaults from the given options,
    * falling back to the librarys built-in defaults for anything unset
    */
@@ -490,7 +498,7 @@ export class VernLLM {
       return;
     }
 
-    await this.cache.delete(key);
+    await this.cache.delete(await this.resolveCacheKey(key));
   }
 
   /**
@@ -503,9 +511,7 @@ export class VernLLM {
    * `reserveUsage`/`refundUsage` callbacks with coalescing metadata.
    */
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
-    const resolvedKey = this.cache.resolveKey
-      ? await this.cache.resolveKey(params.cacheKey)
-      : params.cacheKey;
+    const resolvedKey = await this.resolveCacheKey(params.cacheKey);
 
     const resolvedParams =
       resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };

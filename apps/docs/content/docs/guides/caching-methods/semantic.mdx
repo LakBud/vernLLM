@@ -67,7 +67,10 @@ export class SemanticCacheAdapter<T = unknown> implements CacheAdapter<T> {
     let bestScore = -Infinity;
 
     for (const [existingKey, entry] of this.store) {
-      if (now >= entry.expiresAt) continue;
+      if (now >= entry.expiresAt) {
+        this.store.delete(existingKey);
+        continue;
+      }
 
       const score = cosineSimilarity(embedding, entry.embedding);
       if (score > bestScore) {

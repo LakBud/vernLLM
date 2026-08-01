@@ -99,10 +99,7 @@ as-is, exactly like before.
 
 ### `NormalizedCacheAdapter`
 
-Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys — lowercase, trim,
-strip punctuation, collapse whitespace — before every lookup, so differently-formatted-but-equivalent
-keys share one cache entry. No external dependencies, no network calls, implemented entirely via
-`resolveKey`.
+Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys with lowercase, trim, punctuation removal, and whitespace collapsing. Normalization is applied by `normalize()` across `get`, `set`, `delete`, and `resolveKey`. No external dependencies or network calls.
 
 ```ts title="normalized-cache.ts"
 import { NormalizedCacheAdapter } from 'vern-llm';

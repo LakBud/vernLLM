@@ -73,7 +73,7 @@ export class NormalizedCacheAdapter<T = unknown> implements CacheAdapter<T> {
     return key
       .toLowerCase()
       .trim()
-      .replace(/[^\w\s]/g, '')
+      .replace(/[^\p{L}\p{N}\s]/gu, '')
       .replace(/\s+/g, ' ');
   }
 
@@ -110,8 +110,9 @@ export class TieredCacheAdapter<T = unknown> implements CacheAdapter<T> {
     if (l1Result.hit) return l1Result;
 
     const l2Result = await this.l2.get(key);
-    if (l2Result.hit && l2Result.value !== null) {
-      await this.l1.set(key, l2Result.value, this.l1Ttl ?? 60);
+
+    if (l2Result.hit) {
+      await this.l1.set(key, l2Result.value as T, this.l1Ttl ?? 60);
     }
 
     return l2Result;

@@ -100,8 +100,8 @@ class DomainNormalizedAdapter<T> implements CacheAdapter<T> {
     return this.inner.set(this.normalize(key), value, ttl);
   }
 
-  delete(key: string) {
-    return this.inner.delete?.(this.normalize(key));
+  async delete(key: string): Promise<void> {
+    await this.inner.delete?.(this.normalize(key));
   }
 }
 ```
