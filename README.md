@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/pnpm-monorepo-F69220?logo=pnpm&logoColor=white" alt="pnpm monorepo" />
 </p>
 
-<p align="center">A lightweight resilience layer for LLM chat completions; retries, timeouts, circuit breaking, caching, structured output, and usage tracking, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
+<p align="center">A lightweight resilience layer for LLM chat completions; retries, timeouts, circuit breaking, caching, structured output, usage metering, usage tracking and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
 
 ```ts
 import OpenAI from 'openai';
@@ -26,12 +26,31 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   maxRetries: 3,
   timeoutMs: 10_000,
-  circuitBreaker: true,
+  baseDelayMs: 500,
+  nonRetryableStatus: [400, 401, 403, 404, 422],
+  defaultMaxTokens: 1000,
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+  },
+  onUsage: (u) => {
+    console.log(`${u.requestId}: ${u.totalTokens} tokens used`);
+  },
+  debug: false,
 });
 
-const result = await llm.call({
-  systemPrompt: 'Return JSON: { "skills": string[] }',
-  userContent: 'Extract skills from: ...',
+const result = await cachedLLMCall({
+  key: 'resume-demo-001',
+  ttl: 60,
+  call: {
+    requestId: 'resume-demo-001',
+    systemPrompt: 'Extract resume data.',
+    userContent: `
+      Senior TypeScript engineer,
+      6 years, React + Node + AWS.
+    `,
+    schema: ResumeSchema,
+  },
 });
 ```
 
