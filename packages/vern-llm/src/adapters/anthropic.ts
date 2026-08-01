@@ -61,10 +61,8 @@ function toAnthropicContent(blocks: ContentBlock[]): AnthropicContentBlock[] {
  * `response_format: json_schema` is mapped to Anthropic's forced tool-use:
  * a single tool is defined with `input_schema` set to the caller's schema,
  * `description` forwarded when provided, and `strict` forwarded when set.
- * `tool_choice` forces the model to call it, so the output is
- * provider-constrained to match the schema rather than merely instructed
- * to via prompt text (the same guarantee OpenAI's native `json_schema` mode
- * gives, built on Anthropic's tool-calling primitive instead).
+ * `tool_choice` forces the model to call it. Provider-constrained schema
+ * matching applies only when `strict: true` is forwarded and supported.
  *
  * `response_format: json_object` (no schema to build a tool from) falls
  * back to a system-prompt instruction, since there's nothing to constrain

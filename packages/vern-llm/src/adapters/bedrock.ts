@@ -109,8 +109,8 @@ function toBedrockContent(blocks: ContentBlock[]): BedrockContentBlock[] {
  *
  * `response_format: json_schema` is mapped to Converse's `toolConfig`: a
  * single tool is defined from the schema, description, and strictness settings,
- * and `toolChoice` forces the model to call it, constraining output at
- * generation time rather than merely instructing for it via prompt text.
+ * and `toolChoice` forces the model to call it. Provider-constrained schema
+ * matching applies only when `strict: true` is forwarded and supported.
  * Native tool support varies by model family (most current-generation ones
  * support it via Converse; check your specific `modelId` if a call fails
  * with an unsupported-parameter error).

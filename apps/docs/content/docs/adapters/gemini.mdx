@@ -24,10 +24,10 @@ const llm = new VernLLM({
 ```
 
 <Callout>
-  `jsonSchema` uses Gemini's native `responseSchema` + `responseMimeType: 'application/json'`. The
-  adapter forwards the schema and description into `generationConfig.responseSchema`. Gemini
-  enforces the provided schema without a separate `strict` flag. `reasoning_effort` is dropped
-  (Gemini's thinking models use a token budget instead).
+  `jsonSchema` uses Gemini's native `responseSchema` + `responseMimeType: 'application/json'`.
+  Gemini supports only its own JSON Schema subset rather than the full JSON Schema specification.
+  Use the client-side schema option when validation guarantees are required. `reasoning_effort` is
+  dropped (Gemini's thinking models use a token budget instead).
 </Callout>
 
 ## Multimodal input
