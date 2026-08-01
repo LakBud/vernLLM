@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { type CacheAdapter, InMemoryCacheAdapter, LLMError } from '../../src/types/index.js';
+import {
+  type CacheAdapter,
+  InMemoryCacheAdapter,
+  NormalizedCacheAdapter,
+  TieredCacheAdapter,
+  LLMError,
+} from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
@@ -46,6 +52,113 @@ describe('InMemoryCacheAdapter', () => {
     expect(await cache.get('a')).toEqual({ hit: false, value: null });
     expect(await cache.get('b')).toEqual({ hit: true, value: 2 });
     expect(await cache.get('c')).toEqual({ hit: true, value: 3 });
+  });
+});
+
+describe('NormalizedCacheAdapter', () => {
+  it('treats differently-formatted keys as the same entry', async () => {
+    const cache = new NormalizedCacheAdapter<string>();
+
+    await cache.set('  What is the Capital of France?  ', 'Paris', 60);
+
+    expect(await cache.get('what is the capital of france')).toEqual({
+      hit: true,
+      value: 'Paris',
+    });
+    expect(await cache.get('  WHAT IS THE CAPITAL OF FRANCE?  ')).toEqual({
+      hit: true,
+      value: 'Paris',
+    });
+  });
+
+  it('resolveKey returns the normalized key', async () => {
+    const cache = new NormalizedCacheAdapter<string>();
+    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('hello world');
+  });
+
+  it('deletes through to the wrapped adapter using the normalized key', async () => {
+    const cache = new NormalizedCacheAdapter<string>();
+
+    await cache.set('Hello World', 'v', 60);
+    await cache.delete('  hello   world  ');
+
+    expect(await cache.get('Hello World')).toEqual({ hit: false, value: null });
+  });
+
+  it('wraps a custom inner adapter instead of the default InMemoryCacheAdapter', async () => {
+    const inner = new InMemoryCacheAdapter<string>();
+    const setSpy = vi.spyOn(inner, 'set');
+    const cache = new NormalizedCacheAdapter<string>(inner);
+
+    await cache.set('Hello World', 'v', 60);
+
+    expect(setSpy).toHaveBeenCalledWith('hello world', 'v', 60);
+  });
+});
+
+describe('TieredCacheAdapter', () => {
+  it('reads from L1 first without touching L2 on an L1 hit', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const l2GetSpy = vi.spyOn(l2, 'get');
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    await l1.set('k', 'from-l1', 60);
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: 'from-l1' });
+    expect(l2GetSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to L2 on an L1 miss and backfills L1', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    await l2.set('k', 'from-l2', 60);
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: 'from-l2' });
+    // L1 should now be populated so the next read skips L2 entirely
+    expect(await l1.get('k')).toEqual({ hit: true, value: 'from-l2' });
+  });
+
+  it('returns a miss when neither tier has the key', async () => {
+    const cache = new TieredCacheAdapter(new InMemoryCacheAdapter(), new InMemoryCacheAdapter());
+    expect(await cache.get('missing')).toEqual({ hit: false, value: null });
+  });
+
+  it('writes to both tiers on set', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    await cache.set('k', 'v', 60);
+
+    expect(await l1.get('k')).toEqual({ hit: true, value: 'v' });
+    expect(await l2.get('k')).toEqual({ hit: true, value: 'v' });
+  });
+
+  it('deletes from both tiers', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    await cache.set('k', 'v', 60);
+    await cache.delete('k');
+
+    expect(await l1.get('k')).toEqual({ hit: false, value: null });
+    expect(await l2.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('backfills L1 when L2 has a cached null value', async () => {
+    const l1 = new InMemoryCacheAdapter<null>();
+    const l2 = new InMemoryCacheAdapter<null>();
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    await l2.set('k', null, 60);
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: null });
+
+    expect(await l1.get('k')).toEqual({ hit: true, value: null });
   });
 });
 
@@ -271,6 +384,53 @@ describe('VernLLM.cachedCall', () => {
 
     for (let i = 0; i < 5; i++) await Promise.resolve(); // flush microtasks so all three reach the in-flight check
     expect(fn).toHaveBeenCalledTimes(1);
+
+    resolveFn('shared result');
+    const results = await Promise.all(calls);
+    expect(results).toEqual(['shared result', 'shared result', 'shared result']);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces concurrent misses with different cacheKeys when the adapter resolves them to the same key', async () => {
+    // Simulates a semantic-cache adapter: any key containing "hello" is
+    // treated as equivalent, regardless of exact wording.
+    class FakeSemanticAdapter implements CacheAdapter<string> {
+      private store = new Map<string, string>();
+
+      async resolveKey(key: string): Promise<string> {
+        return key.toLowerCase().includes('hello') ? 'canonical:hello' : key;
+      }
+
+      async get(key: string) {
+        const value = this.store.get(key);
+        return value === undefined ? { hit: false, value: null } : { hit: true, value };
+      }
+
+      async set(key: string, value: string) {
+        this.store.set(key, value);
+      }
+    }
+
+    let resolveFn!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      resolveFn = resolve;
+    });
+    const fn = vi.fn(() => gate);
+    const llm = new VernLLM({
+      client: createMockClient([]).client,
+      model: 'm',
+      cache: new FakeSemanticAdapter(),
+    });
+
+    // Three differently-worded but "semantically" equivalent prompts.
+    const calls = [
+      llm.cachedCall({ cacheKey: 'Hello there', ttl: 60, fn }),
+      llm.cachedCall({ cacheKey: 'hello, friend!', ttl: 60, fn }),
+      llm.cachedCall({ cacheKey: 'HELLO world', ttl: 60, fn }),
+    ];
+
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(fn).toHaveBeenCalledTimes(1); // would be 3 without resolveKey
 
     resolveFn('shared result');
     const results = await Promise.all(calls);

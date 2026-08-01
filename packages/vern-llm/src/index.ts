@@ -55,6 +55,8 @@ export {
   LLMError,
   isLLMError,
   InMemoryCacheAdapter,
+  NormalizedCacheAdapter,
+  TieredCacheAdapter,
   type LLMErrorType,
   type CacheAdapter,
   type LLMClient,

@@ -1,0 +1,216 @@
+---
+title: Semantic Caching
+description: Matching prompts by meaning instead of exact text, using a custom CacheAdapter
+---
+
+vern-llm's built-in cache adapters match `cacheKey` exactly. That's the right default — it's
+predictable and has no extra dependencies — but it means two prompts that mean the same thing
+("What's the capital of France?" vs "capital of france?") are treated as unrelated cache entries.
+
+Semantic caching fixes that by embedding the prompt and matching against previously-cached
+embeddings within some similarity threshold, instead of matching the raw string. vern-llm doesn't
+ship this out of the box, but the `CacheAdapter` interface is small enough that you can implement
+it yourself as a normal adapter, with no changes to vern-llm's core.
+
+<Callout type="warn">
+  Semantic caching trades exactness for hit rate. A high similarity threshold (0.95+) is fairly
+  safe; a low one (0.85 and under) will start returning answers to questions that are only loosely
+  related to what was actually asked. Tune this against your own data before shipping it, and prefer
+  a conservative threshold if wrong answers are costly.
+</Callout>
+
+## The adapter
+
+```ts title="semantic-cache-adapter.ts"
+import type { CacheAdapter } from 'vern-llm';
+
+interface Entry<T> {
+  embedding: number[];
+  value: T;
+  expiresAt: number;
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+export class SemanticCacheAdapter<T = unknown> implements CacheAdapter<T> {
+  private store = new Map<string, Entry<T>>();
+
+  constructor(
+    private embed: (text: string) => Promise<number[]>,
+    private threshold = 0.92,
+  ) {}
+
+  /**
+   * Runs once per cachedCall/cachedLLMCall, before the cache lookup and
+   * before in-flight coalescing. Embeds the incoming key, finds the closest
+   * existing entry, and returns its key if it's within threshold — so a
+   * semantically equivalent call reuses the exact same cache entry, and
+   * concurrent equivalent calls coalesce into one in-flight request.
+   */
+  async resolveKey(key: string): Promise<string> {
+    const embedding = await this.embed(key);
+    const now = Date.now();
+
+    let bestKey: string | null = null;
+    let bestScore = -Infinity;
+
+    for (const [existingKey, entry] of this.store) {
+      if (now >= entry.expiresAt) {
+        this.store.delete(existingKey);
+        continue;
+      }
+
+      const score = cosineSimilarity(embedding, entry.embedding);
+      if (score > bestScore) {
+        bestScore = score;
+        bestKey = existingKey;
+      }
+    }
+
+    if (bestKey !== null && bestScore >= this.threshold) {
+      return bestKey;
+    }
+
+    // No close match — this key becomes its own canonical entry once set()
+    // is called. Cache the embedding now so later resolveKey calls for
+    // near-duplicates of *this* key can still match it, even before it's
+    // actually written via set().
+    this.store.set(key, { embedding, value: undefined as T, expiresAt: now + this.pendingTtlMs });
+
+    return key;
+  }
+
+  async get(key: string): Promise<{ hit: boolean; value: T | null }> {
+    const entry = this.store.get(key);
+
+    if (!entry || entry.value === undefined) {
+      return { hit: false, value: null };
+    }
+
+    if (Date.now() >= entry.expiresAt) {
+      this.store.delete(key);
+      return { hit: false, value: null };
+    }
+
+    return { hit: true, value: entry.value };
+  }
+
+  async set(key: string, value: T, ttl: number): Promise<void> {
+    const existing = this.store.get(key);
+    const embedding = existing?.embedding ?? (await this.embed(key));
+
+    this.store.set(key, { embedding, value, expiresAt: Date.now() + ttl * 1000 });
+  }
+
+  async delete(key: string): Promise<void> {
+    this.store.delete(key);
+  }
+
+  /** Short-lived placeholder so a resolveKey call and the set() that follows
+   * it a moment later can still find each other before either has a real ttl */
+  private pendingTtlMs = 30_000;
+}
+```
+
+<Callout>
+  This in-memory version does a linear scan over every stored embedding on each lookup, which is
+  fine for prototypes or low-volume caches but won't scale past a few thousand entries. For
+  production, swap the `Map` + `cosineSimilarity` loop for a real vector store (Pinecone, Qdrant,
+  pgvector, or Redis with a vector index) behind the same `CacheAdapter` interface — nothing else
+  about this adapter needs to change.
+</Callout>
+
+## Wiring it up
+
+Pass an embedding function — any provider works, this example uses OpenAI's:
+
+```ts title="use-semantic-cache.ts"
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+import { SemanticCacheAdapter } from './semantic-cache-adapter.js';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function embed(text: string): Promise<number[]> {
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: text,
+  });
+
+  return response.data[0].embedding;
+}
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  cache: new SemanticCacheAdapter(embed, 0.92),
+});
+
+const result = await llm.cachedLLMCall({
+  cacheKey: userQuestion, // the raw prompt itself, not a hand-picked id
+  ttl: 3600,
+  call: {
+    systemPrompt: 'Answer concisely.',
+    userContent: userQuestion,
+  },
+});
+```
+
+The important difference from exact-match caching: `cacheKey` here is the actual prompt text, not
+an id like `resume:${resumeId}`. `resolveKey` needs the real content to embed and compare — a
+hand-picked id has nothing for it to match against.
+
+<Callout type="warn">
+  Because `resolveKey` embeds on every call, it adds one embedding-API round trip to every cache
+  lookup, hit or miss. For latency-sensitive paths, consider a cheaper/faster embedding model than
+  the one you'd use for retrieval quality elsewhere, or batch-embed where the surrounding code
+  allows it.
+</Callout>
+
+## Why `resolveKey` instead of just embedding inside `get`
+
+An earlier version of this pattern might embed the prompt inside `get()` alone. That gets the
+lookup right, but not the concurrency behavior: `cachedCall`'s in-flight coalescing map is keyed on
+the literal `cacheKey` string, so two concurrent calls with differently-worded but semantically
+equivalent prompts would each start their own `fn()` instead of sharing one, even though `get()`
+would eventually consider them the same entry.
+
+`resolveKey` runs before both the cache lookup and the in-flight check, and its return value is
+used for both — so semantically-equivalent concurrent calls coalesce into a single in-flight
+request the same way exact-match calls already do. See
+[Non-exact matching with `resolveKey`](/docs/core/caching#non-exact-matching-with-resolvekey) for
+how this fits into `cachedCall` generally.
+
+## Combining strategies
+
+Nothing forces one adapter per `VernLLM` instance. If only some calls in your app benefit from
+semantic matching, create two instances that share a client and swap between them per call site:
+
+```ts
+const exactLLM = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  cache: new InMemoryCacheAdapter(),
+});
+const semanticLLM = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  cache: new SemanticCacheAdapter(embed),
+});
+```
+
+Use `exactLLM` for calls where the input has a natural id (structured extraction keyed by document
+id, for example) and `semanticLLM` for free-text queries where users are likely to phrase the same
+question differently.

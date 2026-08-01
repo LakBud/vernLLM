@@ -78,6 +78,14 @@ export class VernLLM {
   }
 
   /**
+   * Resolves cache keys through the adapter when supported.
+   * Keeps all cache operations using the same key normalization path.
+   */
+  private async resolveCacheKey(key: string): Promise<string> {
+    return this.cache.resolveKey ? await this.cache.resolveKey(key) : key;
+  }
+
+  /**
    * Resolves retry/timeout/token defaults from the given options,
    * falling back to the librarys built-in defaults for anything unset
    */
@@ -490,7 +498,7 @@ export class VernLLM {
       return;
     }
 
-    await this.cache.delete(key);
+    await this.cache.delete(await this.resolveCacheKey(key));
   }
 
   /**
@@ -503,20 +511,24 @@ export class VernLLM {
    * `reserveUsage`/`refundUsage` callbacks with coalescing metadata.
    */
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
-    const cached = await this.cache.get(params.cacheKey);
+    const resolvedKey = await this.resolveCacheKey(params.cacheKey);
+
+    const resolvedParams =
+      resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
+
+    const cached = await this.cache.get(resolvedKey);
 
     if (cached.hit) {
       return cached.value as T;
     }
 
-    const existing = this.inFlight.get(params.cacheKey) as Promise<T> | undefined;
-    const coalesced = existing !== undefined;
+    const existing = this.inFlight.get(resolvedKey) as Promise<T> | undefined;
 
-    if (coalesced) {
-      return this.withReservedUsage(params, coalesced, () => existing, params.signal);
+    if (existing) {
+      return this.withReservedUsage(resolvedParams, true, () => existing, params.signal);
     }
 
-    return this.registerTrigger(params, coalesced);
+    return this.registerTrigger(resolvedParams, false);
   }
 
   /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */

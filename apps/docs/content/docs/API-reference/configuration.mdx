@@ -76,6 +76,12 @@ Upstash.
 `InMemoryCacheAdapter` accepts an optional `maxSize` argument to limit the number of entries kept
 in memory. When the limit is reached, the oldest entries are removed first.
 
+Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
+(normalizes keys before matching — case, whitespace, punctuation) and `TieredCacheAdapter`
+(checks a fast local adapter first, falling back to a shared one). See
+
+<a href="/docs/core/caching">Caching</a> for usage.
+
 | Option  | Default                      | Notes                                                                                                                                                                                                                                                     |
 | ------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall` and `cachedLLMCall`, not plain `call()`. The default in-memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi-process deployments. See <a href="/docs/core/caching">Caching</a>. |
