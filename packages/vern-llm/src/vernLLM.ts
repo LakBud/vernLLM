@@ -503,20 +503,26 @@ export class VernLLM {
    * `reserveUsage`/`refundUsage` callbacks with coalescing metadata.
    */
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
-    const cached = await this.cache.get(params.cacheKey);
+    const resolvedKey = this.cache.resolveKey
+      ? await this.cache.resolveKey(params.cacheKey)
+      : params.cacheKey;
+
+    const resolvedParams =
+      resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
+
+    const cached = await this.cache.get(resolvedKey);
 
     if (cached.hit) {
       return cached.value as T;
     }
 
-    const existing = this.inFlight.get(params.cacheKey) as Promise<T> | undefined;
-    const coalesced = existing !== undefined;
+    const existing = this.inFlight.get(resolvedKey) as Promise<T> | undefined;
 
-    if (coalesced) {
-      return this.withReservedUsage(params, coalesced, () => existing, params.signal);
+    if (existing) {
+      return this.withReservedUsage(resolvedParams, true, () => existing, params.signal);
     }
 
-    return this.registerTrigger(params, coalesced);
+    return this.registerTrigger(resolvedParams, false);
   }
 
   /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */

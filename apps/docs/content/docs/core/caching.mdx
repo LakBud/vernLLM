@@ -3,6 +3,10 @@ title: Caching
 description: Wrap calls with cachedCall or cachedLLMCall
 ---
 
+vern-llm ships three cache adapters out of the box — `InMemoryCacheAdapter` (exact match),
+`NormalizedCacheAdapter` (normalized/fuzzy match), and `TieredCacheAdapter` (two-tier
+local + shared cache) — plus a `CacheAdapter` interface for bringing your own.
+
 The built-in `InMemoryCacheAdapter` provides a simple in-memory cache with no external dependencies.
 It is useful for local development or single-process deployments; use a shared adapter such as Redis
 or Upstash when multiple processes need the same cache.
@@ -57,6 +61,102 @@ still receive the same resolved value or error from the shared operation.
   `value` alone. This lets a legitimately cached `null` be served from cache instead of being
   treated as a miss. `{ hit: true, value: null }` means "we have a cached result, and it's
   `null`." `{ hit: false, value: null }` means "nothing is cached for this key."
+</Callout>
+
+## Non-exact matching with `resolveKey`
+
+By default, `cacheKey` is matched exactly — `get`/`set` receive whatever string you pass in, and
+concurrent calls only coalesce if their `cacheKey` values are identical.
+
+If your adapter matches on something other than exact string equality (a normalized/fuzzy key, an
+embedding-based semantic match, etc.), implement the optional `resolveKey` method on your adapter:
+
+```ts
+interface CacheAdapter<T = unknown> {
+  get(key: string): Promise<{ hit: boolean; value: T | null }>;
+  set(key: string, value: T, ttl: number): Promise<void>;
+  delete?(key: string): Promise<void>;
+  resolveKey?(key: string): Promise<string>;
+}
+```
+
+When present, `resolveKey` runs once at the start of `cachedCall`/`cachedLLMCall`, before the cache
+lookup and before the in-flight coalescing check. Its return value — not the original `cacheKey` —
+is what gets used for both. This means concurrent calls that `resolveKey` maps to the same string
+share one in-flight `fn()` call, the same way exact-match callers already do; without it, two calls
+that your adapter would consider "the same" for lookup purposes could still each trigger their own
+`fn()` if they happened to race.
+
+Adapters that don't implement `resolveKey` are unaffected — the caller-supplied `cacheKey` is used
+as-is, exactly like before.
+
+<Callout>
+  See [Semantic Caching](/docs/guides/caching/semantic) for a full worked example using `resolveKey`
+  to match prompts by meaning instead of exact text.
+</Callout>
+
+## Built-in adapters beyond `InMemoryCacheAdapter`
+
+### `NormalizedCacheAdapter`
+
+Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys — lowercase, trim,
+strip punctuation, collapse whitespace — before every lookup, so differently-formatted-but-equivalent
+keys share one cache entry. No external dependencies, no network calls, implemented entirely via
+`resolveKey`.
+
+```ts title="normalized-cache.ts"
+import { NormalizedCacheAdapter } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  cache: new NormalizedCacheAdapter(), // wraps InMemoryCacheAdapter by default
+});
+
+// These two calls share one cache entry:
+await llm.cachedLLMCall({
+  cacheKey: '  What is the capital of France?  ',
+  ttl: 3600,
+  call: { userContent: q1 },
+});
+await llm.cachedLLMCall({
+  cacheKey: 'what is the capital of france',
+  ttl: 3600,
+  call: { userContent: q2 },
+});
+```
+
+Pass any other adapter to normalize keys in front of it instead of the in-memory default:
+
+```ts
+const cache = new NormalizedCacheAdapter(new UpstashCacheAdapter());
+```
+
+See [Normalized Caching](/docs/guides/caching/normalized) for more on when this is (and isn't)
+enough, versus reaching for semantic matching.
+
+### `TieredCacheAdapter`
+
+Composes two adapters into an L1/L2 cache: checks a fast local adapter first, falls back to a
+shared/slower adapter on a miss, and writes the result back into L1 so the next lookup on this
+process skips L2 entirely.
+
+```ts title="tiered-cache.ts"
+import { InMemoryCacheAdapter, TieredCacheAdapter } from 'vern-llm';
+
+const cache = new TieredCacheAdapter(
+  new InMemoryCacheAdapter(), // L1: fast, per-process
+  new UpstashCacheAdapter(), // L2: shared across processes, slower
+);
+
+const llm = new VernLLM({ client: openai, model: 'gpt-4o', cache });
+```
+
+<Callout type="warn">
+  `TieredCacheAdapter` does not implement `resolveKey`. If you want tiering *and* non-exact
+  matching, wrap in the other order: `new TieredCacheAdapter(l1, new NormalizedCacheAdapter(l2))`
+  won't propagate `resolveKey` either, since `TieredCacheAdapter` itself doesn't forward it. See
+  [Tiered Caching](/docs/guides/caching/tiered) for the pattern that combines both.
 </Callout>
 
 ## Deleting cached entries
@@ -177,6 +277,12 @@ class UpstashCacheAdapter implements CacheAdapter {
   The key thing to get right when migrating: `hit` should be `true` whenever the key existed in your
   underlying store, even if the stored value itself is `null`. `hit` should only be `false` when
   nothing was found for that key.
+</Callout>
+
+<Callout>
+  This adapter matches `cacheKey` exactly, same as `InMemoryCacheAdapter`. If you want lookups based
+  on something other than exact string equality, implement `resolveKey` as well — see [Non-exact
+  matching with `resolveKey`](#non-exact-matching-with-resolvekey) above.
 </Callout>
 
 <Callout>

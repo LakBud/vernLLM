@@ -4,6 +4,7 @@
   "pages": [
     "index",
     "resume-parsing",
+    "caching",
     "provider-fallback",
     "multi-turn-conversations",
     "per-call-overrides"

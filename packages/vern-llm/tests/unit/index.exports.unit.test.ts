@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest';
 import {
   fromAnthropic,
   fromOpenAICompatible,
+  NormalizedCacheAdapter,
+  TieredCacheAdapter,
   type AnthropicClient,
   type BedrockConverseClient,
   type GeminiClient,
@@ -14,6 +16,11 @@ describe('package entrypoint exports', () => {
   it('exports adapters at runtime', () => {
     expect(fromAnthropic).toBeDefined();
     expect(fromOpenAICompatible).toBeDefined();
+  });
+
+  it('exports cache adapters at runtime', () => {
+    expect(NormalizedCacheAdapter).toBeDefined();
+    expect(TieredCacheAdapter).toBeDefined();
   });
 
   it('exports public client and schema types', () => {

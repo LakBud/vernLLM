@@ -1,0 +1,5 @@
+{
+  "title": "Caching Methods",
+  "icon": "Database",
+  "pages": ["index", "normalized", "tiered", "semantic"]
+}

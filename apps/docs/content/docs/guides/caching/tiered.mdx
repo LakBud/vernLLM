@@ -1,0 +1,87 @@
+---
+title: Tiered Caching
+description: Combining a fast local cache with a shared backing store
+---
+
+`InMemoryCacheAdapter` is fast but per-process; a Redis/Upstash-backed adapter is shared across
+processes but adds network latency on every lookup. `TieredCacheAdapter` gets both: it checks a
+fast local cache first, and only falls through to the shared store on a local miss.
+
+## Usage
+
+```ts title="tiered-cache.ts"
+import { InMemoryCacheAdapter, TieredCacheAdapter, VernLLM } from 'vern-llm';
+
+const cache = new TieredCacheAdapter(
+  new InMemoryCacheAdapter(), // L1: fast, per-process
+  new UpstashCacheAdapter(), // L2: shared across processes, slower
+);
+
+const llm = new VernLLM({ client: openai, model: 'gpt-4o', cache });
+```
+
+## How lookups flow
+
+```ts title="conceptual-get.ts"
+async get(key) {
+  const l1 = await this.l1.get(key);
+  if (l1.hit) return l1; // fast path, no L2 round trip
+
+  const l2 = await this.l2.get(key);
+  if (l2.hit) await this.l1.set(key, l2.value, l1Ttl); // backfill so next lookup is fast
+
+  return l2;
+}
+```
+
+- **L1 hit**: returns immediately, no L2 call at all.
+- **L1 miss, L2 hit**: value is written back into L1 before returning, so the _next_ lookup for
+  that key on this process hits L1 and skips L2 entirely.
+- **Both miss**: returns a miss, same as any other adapter.
+
+`set()` writes to both tiers at once (in parallel, via `Promise.all`), so a fresh write is
+immediately visible to both a local `get()` and any other process reading L2 directly.
+
+## Controlling L1's TTL separately
+
+By default, `TieredCacheAdapter` uses the same `ttl` for both tiers. Pass a third constructor
+argument to give L1 a shorter lifetime than L2 — useful when L1 is memory-constrained and you'd
+rather it churn faster than the shared store:
+
+```ts
+const cache = new TieredCacheAdapter(
+  new InMemoryCacheAdapter(),
+  new UpstashCacheAdapter(),
+  60, // L1 entries expire after 60s regardless of the ttl passed to cachedLLMCall
+);
+```
+
+<Callout type="warn">
+  `TieredCacheAdapter` does not implement `resolveKey`. Wrapping it doesn't give you non-exact
+  matching for free — see below for how to combine tiering with normalized or semantic matching.
+</Callout>
+
+## Combining with `resolveKey`-based matching
+
+Since `resolveKey` is resolved once, up front, by `cachedCall` itself — not by whichever adapter
+happens to be on top — the way to combine tiering with normalized or semantic matching is to put
+the matching adapter _outermost_, wrapping the tiered pair as its inner store:
+
+```ts title="normalized-plus-tiered.ts"
+import { InMemoryCacheAdapter, NormalizedCacheAdapter, TieredCacheAdapter } from 'vern-llm';
+
+const tiered = new TieredCacheAdapter(new InMemoryCacheAdapter(), new UpstashCacheAdapter());
+const cache = new NormalizedCacheAdapter(tiered); // resolveKey lives here, storage happens in `tiered`
+```
+
+`cachedCall` calls `cache.resolveKey(key)` once (implemented by `NormalizedCacheAdapter`), then
+calls `cache.get`/`cache.set` with the resolved key — which `NormalizedCacheAdapter` normalizes
+again internally and forwards to `tiered`, which does its usual L1-then-L2 lookup. The same pattern
+works for a custom semantic adapter: wrap the tiered pair the same way, rather than trying to make
+`TieredCacheAdapter` itself embedding-aware.
+
+<Callout>
+  This layering rule generalizes: any adapter that implements `resolveKey` should be the outermost
+  layer, since `cachedCall` only ever checks `resolveKey` on the adapter passed directly to
+  `VernLLM`'s `cache` option — it does not recurse into wrapped adapters looking for one.
+</Callout>
