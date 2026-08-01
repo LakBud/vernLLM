@@ -94,6 +94,15 @@ describe('NormalizedCacheAdapter', () => {
 
     expect(setSpy).toHaveBeenCalledWith('hello world', 'v', 60);
   });
+
+  it('normalizes keys that differ only in punctuation spacing to the same entry', async () => {
+    const cache = new NormalizedCacheAdapter<string>();
+
+    await cache.set('2+2', '4', 60);
+
+    expect(await cache.get('2 + 2')).toEqual({ hit: true, value: '4' });
+    expect(await cache.resolveKey?.('2+2')).toBe(await cache.resolveKey?.('2 + 2'));
+  });
 });
 
 describe('TieredCacheAdapter', () => {
@@ -159,6 +168,43 @@ describe('TieredCacheAdapter', () => {
     expect(await cache.get('k')).toEqual({ hit: true, value: null });
 
     expect(await l1.get('k')).toEqual({ hit: true, value: null });
+  });
+
+  it('forwards resolveKey to L1 when L1 implements it', async () => {
+    const l1 = new NormalizedCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('hello world');
+  });
+
+  it('falls back to L2 resolveKey when L1 has none', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new NormalizedCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('hello world');
+  });
+
+  it('returns the key unchanged when neither tier implements resolveKey', async () => {
+    const cache = new TieredCacheAdapter(new InMemoryCacheAdapter(), new InMemoryCacheAdapter());
+    expect(await cache.resolveKey?.('Some Key')).toBe('Some Key');
+  });
+
+  it('prefers L1 resolveKey over L2 when both implement it', async () => {
+    const l1: CacheAdapter<string> = {
+      get: async () => ({ hit: false, value: null }),
+      set: async () => {},
+      resolveKey: async () => 'from-l1',
+    };
+    const l2: CacheAdapter<string> = {
+      get: async () => ({ hit: false, value: null }),
+      set: async () => {},
+      resolveKey: async () => 'from-l2',
+    };
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    expect(await cache.resolveKey?.('anything')).toBe('from-l1');
   });
 });
 

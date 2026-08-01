@@ -64,7 +64,7 @@ const result = await llm.call({
       required: ['name', 'skills'],
     },
     // strict?: boolean, defaults to true
-    // description?: string, OpenAI-shaped providers only, see note below
+    // description?: string
   },
   schema: CandidateSchema, // optional client-side type/validation on top
 });
@@ -72,7 +72,7 @@ const result = await llm.call({
 
 - **`jsonSchema` implies (and overrides) JSON mode.** Even an explicit `jsonMode: false` is overridden if `jsonSchema` is also set; the request is still sent, and parsed, as JSON.
 - **`strict` defaults to `true`.** This is an OpenAI-specific flag; providers that don't recognize `response_format.json_schema.strict` just ignore it.
-- **`description` doesn't reach every provider.** OpenAI-shaped providers get it as part of the `json_schema` object. The Anthropic adapter only embeds `name` and `schema` into its system-prompt instruction; `description` is dropped for Anthropic specifically.
+- **`description` is forwarded by every adapter.** OpenAI-shaped providers get it as part of the `json_schema` object. The Anthropic and Bedrock adapters include it on the tool spec they build from your schema (`{ name, description, input_schema }` / `{ name, description, inputSchema }`).
 
 <Callout>
   The Anthropic adapter has no native structured-output equivalent, so it embeds the schema in the

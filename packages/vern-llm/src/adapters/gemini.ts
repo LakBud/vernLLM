@@ -6,10 +6,8 @@ import type { ContentBlock, LLMClient } from '../types/index.js';
 type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
 
 /**
- * Minimal structural type for Geminis `generateContent`, matching both the
- * legacy `@google/generative-ai` SDKs `model.generateContent(...)` and the
- * newer `@google/genai` SDKs `ai.models.generateContent({ model, ... })`
- * closely enough to adapt either — pass whichever `.generateContent` you have.
+ * Minimal structural type for Geminis `generateContent`, matching the
+ * `@google/genai` SDKs `ai.models.generateContent({ model, ... })` shape.
  */
 export interface GeminiClient {
   generateContent(
@@ -51,8 +49,8 @@ function toGeminiParts(blocks: ContentBlock[]): GeminiPart[] {
 
 /**
  * Wraps a Gemini client so it satisfies the `LLMClient` interface VernLLM
- * uses for OpenAI/Groq. Geminis shape differs on nearly every axis: a
- * `contents` array instead of `messages`, a separate `systemInstruction`
+ * uses for OpenAI-compatible APIs. Geminis shape differs on nearly every axis:
+ * a `contents` array instead of `messages`, a separate `systemInstruction`
  * field instead of a `system` role message, `generationConfig` instead of
  * top-level `temperature`/`max_tokens`, and native JSON Schema support via
  * `responseMimeType: 'application/json'` + `responseSchema` (so `jsonSchema`

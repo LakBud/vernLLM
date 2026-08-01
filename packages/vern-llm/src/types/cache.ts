@@ -73,8 +73,9 @@ export class NormalizedCacheAdapter<T = unknown> implements CacheAdapter<T> {
     return key
       .toLowerCase()
       .trim()
-      .replace(/[^\p{L}\p{N}\s]/gu, '')
-      .replace(/\s+/g, ' ');
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   async resolveKey(key: string): Promise<string> {
@@ -104,6 +105,17 @@ export class TieredCacheAdapter<T = unknown> implements CacheAdapter<T> {
     private readonly l2: CacheAdapter<T>,
     private readonly l1Ttl?: number,
   ) {}
+
+  /**
+   * Forwards to L1's `resolveKey` if it has one, otherwise L2's. L1 is
+   * preferred since `get()` checks L1 first, so its notion of "the same
+   * key" is the one that determines whether a lookup can skip L2 entirely.
+   */
+  async resolveKey(key: string): Promise<string> {
+    if (this.l1.resolveKey) return this.l1.resolveKey(key);
+    if (this.l2.resolveKey) return this.l2.resolveKey(key);
+    return key;
+  }
 
   async get(key: string): Promise<{ hit: boolean; value: T | null }> {
     const l1Result = await this.l1.get(key);
