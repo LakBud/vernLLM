@@ -99,7 +99,7 @@ as-is, exactly like before.
 
 ### `NormalizedCacheAdapter`
 
-Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys with lowercase, trim, punctuation removal, and whitespace collapsing. Normalization is applied by `normalize()` across `get`, `set`, `delete`, and `resolveKey`. No external dependencies or network calls.
+Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys with lowercase, trim, punctuation-to-space replacement, and whitespace collapsing. Normalization is applied by `normalize()` across `get`, `set`, `delete`, and `resolveKey`. No external dependencies or network calls.
 
 ```ts title="normalized-cache.ts"
 import { NormalizedCacheAdapter } from 'vern-llm';
@@ -149,11 +149,21 @@ const cache = new TieredCacheAdapter(
 const llm = new VernLLM({ client: openai, model: 'gpt-4o', cache });
 ```
 
-<Callout type="warn">
-  `TieredCacheAdapter` does not implement `resolveKey`. If you want tiering *and* non-exact
-  matching, wrap in the other order: `new TieredCacheAdapter(l1, new NormalizedCacheAdapter(l2))`
-  won't propagate `resolveKey` either, since `TieredCacheAdapter` itself doesn't forward it. See
-  [Tiered Caching](/docs/guides/caching-methods/tiered) for the pattern that combines both.
+`TieredCacheAdapter` forwards `resolveKey` to whichever tier implements it, preferring L1 since
+`get()` checks L1 first. This means it composes with `NormalizedCacheAdapter` (or any other
+adapter that implements `resolveKey`) in either position:
+
+```ts
+// L1 normalizes; TieredCacheAdapter forwards L1's resolveKey automatically
+const cache = new TieredCacheAdapter(new NormalizedCacheAdapter(), new UpstashCacheAdapter());
+```
+
+<Callout>
+  If both L1 and L2 implement `resolveKey`, L1's is used, since it's checked first in `get()` and
+  its notion of "the same key" is what determines whether a lookup can skip L2 entirely. If neither
+  tier implements `resolveKey`, the caller-supplied `cacheKey` is used as-is, same as any other
+  adapter without one. See [Tiered Caching](/docs/guides/caching-methods/tiered) for the pattern
+  that combines both.
 </Callout>
 
 ## Deleting cached entries

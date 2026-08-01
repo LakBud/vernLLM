@@ -23,7 +23,6 @@ const CandidateSchema = z.object({
   skills: z.array(z.string()),
 });
 
-// result is typed as z.infer<typeof CandidateSchema>
 const result = await llm.call({
   systemPrompt: 'Extract the candidate name and skills as JSON.',
   userContent: resumeText,
@@ -33,21 +32,18 @@ const result = await llm.call({
 
 <Callout type="warn">
   On a schema mismatch, `call` throws `LLMError('validation')` with `.issues` set to the validator's
-  error object, without burning a retry. Validation failures are deterministic.
+  error object, without burning a retry.
 </Callout>
 
 <Callout type="info">
   `schema` only runs if the call actually parses JSON, which happens when `jsonMode` is `true` (the
   default) or `jsonSchema` is set. If you pass `jsonMode: false` alongside `schema` without also
-  setting `jsonSchema`, `call` throws `LLMError('validation')` immediately, before any request is
-  sent, rather than silently skipping validation and returning an unvalidated string cast to your
-  schema's type. Set `jsonMode: true` (or provide `jsonSchema`) if you need `schema` to run, or drop
-  `schema` if you really want the raw string.
+  setting `jsonSchema`, `call` throws `LLMError('validation')` immediately.
 </Callout>
 
 ## Provider-native JSON Schema mode
 
-`schema` validates client-side, after the model has already responded. `jsonSchema` sends the schema to the provider (OpenAI/Groq `response_format: { type: 'json_schema' }`), constraining generation itself.
+`schema` validates client-side after generation. `jsonSchema` sends the schema to the provider using its native structured-output mechanism.
 
 ```ts title="candidate-json-schema-mode.ts"
 const result = await llm.call({
@@ -63,20 +59,19 @@ const result = await llm.call({
       },
       required: ['name', 'skills'],
     },
-    // strict?: boolean, defaults to true
-    // description?: string, OpenAI-shaped providers only, see note below
+    strict: true,
+    description: 'A candidate profile',
   },
-  schema: CandidateSchema, // optional client-side type/validation on top
+  schema: CandidateSchema,
 });
 ```
 
-- **`jsonSchema` implies (and overrides) JSON mode.** Even an explicit `jsonMode: false` is overridden if `jsonSchema` is also set; the request is still sent, and parsed, as JSON.
-- **`strict` defaults to `true`.** This is an OpenAI-specific flag; providers that don't recognize `response_format.json_schema.strict` just ignore it.
-- **`description` doesn't reach every provider.** OpenAI-shaped providers get it as part of the `json_schema` object. The Anthropic adapter only embeds `name` and `schema` into its system-prompt instruction; `description` is dropped for Anthropic specifically.
+- **`jsonSchema` implies JSON mode.** It overrides `jsonMode: false` and sends the request as structured JSON.
+  **`strict` is forwarded when supported by the adapter.** Enforcement depends on the adapter: OpenAI/Groq use JSON Schema mode, Anthropic uses tool strictness, Bedrock forwards tool strictness where supported, and Gemini uses schema-based structured output without relying on `strict`.
+- **`description` is forwarded where supported.** OpenAI-shaped providers receive it in the schema object. Anthropic and Bedrock include it in generated tool definitions. Gemini includes it in `responseSchema`.
 
 <Callout>
-  The Anthropic adapter has no native structured-output equivalent, so it embeds the schema in the
-  system prompt as an instruction instead of provider-enforcing it. Combining `jsonSchema` with a
-  client-side `schema` is especially worth doing on Anthropic, since the provider-side constraint
-  there is a suggestion, not a guarantee, and the client-side `safeParse` is your actual safety net.
+  Anthropic uses native tool use for structured output. The schema is passed as the tool
+  `input_schema` and `tool_choice` forces the model to call it. A client-side `schema` is still
+  recommended when you need validation guarantees across providers.
 </Callout>

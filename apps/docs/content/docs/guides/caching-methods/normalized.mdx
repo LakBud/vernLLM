@@ -38,16 +38,18 @@ The default normalization is intentionally simple:
 key
   .toLowerCase()
   .trim()
-  .replace(/[^\p{L}\p{N}\s]/gu, '')
-  .replace(/\s+/g, ' ');
+  .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 ```
 
-Lowercases, trims leading/trailing whitespace, strips punctuation, and collapses repeated
-whitespace into single spaces. This catches formatting noise but nothing more, `"2+2"` and
-`"2 + 2"` still normalize differently, because stripping `+` without a surrounding space collapses
-the digits together (`"22"`) while stripping it with spaces around it leaves them separate
-(`"2 2"`). Normalization is a text transform, not a parser; it doesn't understand what the text
-means.
+Lowercases, trims leading/trailing whitespace, replaces punctuation with a space, and collapses
+repeated whitespace into single spaces (with a final trim to clean up any edge space left behind
+by that replacement). This catches formatting noise but nothing more; `"2+2"` and `"2 + 2"` both
+normalize to `"2 2"`, since punctuation is replaced with a space rather than deleted outright, so
+stripping `+` never collapses adjacent characters together the way outright deletion would.
+Normalization is a text transform, not a parser; it doesn't understand what the text means, so
+`"2+2"` and `"four"` still normalize differently even though they mean the same thing.
 
 <Callout type="warn">
   If your inputs vary in more than surface formatting, different word choice, different phrasing,
@@ -80,12 +82,15 @@ class DomainNormalizedAdapter<T> implements CacheAdapter<T> {
   constructor(private inner: CacheAdapter<T>) {}
 
   private normalize(key: string): string {
-    return key
-      .toLowerCase()
-      .replace(/\b(please|could you|can you)\b/g, '') // strip filler phrases
-      .replace(/[^\w\s]/g, '')
-      .trim()
-      .replace(/\s+/g, ' ');
+    return (
+      key
+        .toLowerCase()
+        .replace(/\b(please|could you|can you)\b/g, '') // strip filler phrases
+        .replace(/[^\w\s]/g, ' ') // replace punctuation with a space, not delete, so adjacent
+        // characters/digits don't get glued together (e.g. "2+2" vs "2 + 2")
+        .trim()
+        .replace(/\s+/g, ' ')
+    );
   }
 
   async resolveKey(key: string) {

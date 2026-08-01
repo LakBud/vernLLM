@@ -92,7 +92,7 @@ describe('fromGemini', () => {
     );
   });
 
-  it('maps json_schema natively into responseSchema (provider-enforced)', async () => {
+  it('maps json_schema natively into responseSchema with description (provider-enforced)', async () => {
     const { client, generateContent } = makeFakeGeminiClient('{}');
     const adapted = fromGemini(client);
     const schema = { type: 'object', properties: { ok: { type: 'boolean' } } };
@@ -102,7 +102,14 @@ describe('fromGemini', () => {
         model: 'm',
         temperature: 0.2,
         max_tokens: 10,
-        response_format: { type: 'json_schema', json_schema: { name: 'R', schema } },
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'R',
+            description: 'A response object containing an ok flag.',
+            schema,
+          },
+        },
         messages: [{ role: 'user', content: 'hi' }],
       },
       { signal: new AbortController().signal },
@@ -110,7 +117,10 @@ describe('fromGemini', () => {
 
     const config = generateContent.mock.calls[0]![0].generationConfig;
 
-    expect(config?.responseSchema).toEqual(schema);
+    expect(config?.responseSchema).toEqual({
+      ...schema,
+      description: 'A response object containing an ok flag.',
+    });
     expect(config?.responseMimeType).toBe('application/json');
   });
 

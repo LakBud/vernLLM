@@ -16,10 +16,12 @@ const llm = new VernLLM({
 `AnthropicClient` is the public client type exported by `vern-llm` and accepted by `fromAnthropic`. It allows TypeScript users to type their Anthropic SDK client without depending on adapter internals.
 
 <Callout type="warn">
-  Anthropic does not support OpenAI's `response_format` or `reasoning_effort` parameters directly.
-  JSON schema responses are mapped to Anthropic's native tool-use mechanism for provider-enforced
-  structured output. Plain JSON mode (`json_object`) uses prompt-based JSON instructions.
-  `reasoning_effort` is dropped.
+  Anthropic does not support OpenAI's `response_format` directly. JSON schema responses are mapped
+  to Anthropic's native tool-use mechanism: the schema becomes the tool `input_schema`, and
+  `tool_choice` forces the model to call that tool. `description` and `strict` are forwarded when
+  provided. Tool input is converted back into JSON text for the standard `LLMClient` response shape.
+  Plain JSON mode (`json_object`) uses prompt-based JSON instructions. `reasoning_effort` is
+  dropped.
 </Callout>
 
 ## Multimodal input
