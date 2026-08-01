@@ -6,8 +6,11 @@ import type { ContentBlock, LLMClient } from '../types/index.js';
 type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
 
 /**
- * Minimal structural type for Geminis `generateContent`, matching the
- * `@google/genai` SDKs `ai.models.generateContent({ model, ... })` shape.
+ * Minimal structural type for VernLLM's two-argument wrapper around Gemini
+ * `generateContent`. The request object mirrors the native
+ * `@google/genai` SDK request shape, including top-level
+ * `systemInstruction` and `generationConfig`, while transport options
+ * (such as `AbortSignal`) are passed separately as the second argument.
  */
 export interface GeminiClient {
   generateContent(
@@ -81,8 +84,14 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
           if (wantsJson) {
             generationConfig.responseMimeType = 'application/json';
           }
+
           if (params.response_format?.type === 'json_schema') {
-            generationConfig.responseSchema = params.response_format.json_schema.schema;
+            const { schema, description } = params.response_format.json_schema;
+
+            generationConfig.responseSchema = {
+              ...schema,
+              ...(description ? { description } : {}),
+            };
           }
 
           const response = await geminiClient.generateContent(

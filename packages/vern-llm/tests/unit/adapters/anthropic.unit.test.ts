@@ -191,6 +191,51 @@ describe('fromAnthropic', () => {
     expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
   });
 
+  it('forwards json_schema name and description into the Anthropic tool definition', async () => {
+    const { client, create } = makeFakeAnthropicToolClient('Profile', { ok: true });
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'Profile',
+            description: 'A user profile payload',
+            schema: {
+              type: 'object',
+              properties: {
+                ok: { type: 'boolean' },
+              },
+            },
+            strict: true,
+          },
+        },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(create.mock.calls, 0)[0];
+
+    expect(sentParams.tools).toEqual([
+      {
+        name: 'Profile',
+        description: 'A user profile payload',
+        input_schema: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+          },
+        },
+        strict: true,
+      },
+    ]);
+  });
+
   it('falls back to a prompt instruction for json_object mode (no schema to build a tool from)', async () => {
     const { client, create } = makeFakeAnthropicClient('{}');
     const adapted = fromAnthropic(client);

@@ -11,7 +11,7 @@ type BedrockContentBlock =
   | { image: { format: BedrockImageFormat; source: { bytes: Uint8Array } } };
 
 /**
- * Minimal structural type matching AWS Bedrocks Converse API. This is
+ * Minimal structural type matching AWS Bedrock's Converse API. This is
  * intentionally NOT `BedrockRuntimeClient` itself, the AWS SDK v3 client
  * exposes `.send(command)`, not a direct `.converse()` method, and pulling
  * in `@aws-sdk/client-bedrock-runtime` as a dependency just for its types
@@ -39,6 +39,7 @@ export interface BedrockConverseClient {
             name: string;
             description?: string;
             inputSchema: { json: Record<string, unknown> };
+            strict?: boolean;
           };
         }>;
         toolChoice?: { tool: { name: string } };
@@ -101,17 +102,19 @@ function toBedrockContent(blocks: ContentBlock[]): BedrockContentBlock[] {
 /**
  * Wraps a Bedrock Converse-API client so it satisfies the `LLMClient`
  * interface VernLLM uses for OpenAI/Groq. The Converse API is unified
- * across Bedrocks model families (Anthropic, Titan, Llama, Mistral, etc.),
+ * across Bedrock's model families (Anthropic, Titan, Llama, Mistral, etc.),
  * so unlike raw per-model Bedrock invocation, this one adapter works
  * regardless of which underlying model `modelId` points at, as long as
  * that model supports Converse (most current-generation ones do)
  *
- * `response_format: json_schema` is mapped to Converses `toolConfig`: a
- * single tool is defined from the schema and `toolChoice` forces the model
- * to call it, constraining output at generation time rather than merely
- * instructing for it via prompt text. Native tool support varies by model
- * family (most current-generation ones support it via Converse; check your
- * specific `modelId` if a call fails with an unsupported-parameter error).
+ * `response_format: json_schema` is mapped to Converse's `toolConfig`: a
+ * single tool is defined from the schema, description, and strictness settings,
+ * and `toolChoice` forces the model to call it, constraining output at
+ * generation time rather than merely instructing for it via prompt text.
+ * Native tool support varies by model family (most current-generation ones
+ * support it via Converse; check your specific `modelId` if a call fails
+ * with an unsupported-parameter error).
+ *
  * `response_format: json_object` (no schema to build a tool from) and
  * `reasoning_effort` (no Converse equivalent) fall back to a system-prompt
  * instruction and are dropped respectively.
@@ -122,6 +125,7 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
       completions: {
         async create(params, options) {
           const systemMessage = params.messages.find((m) => m.role === 'system');
+
           // Keep both user and assistant turns, in order, so conversation
           // history survives instead of collapsing to consecutive user turns.
           const conversationMessages = params.messages.filter(
@@ -140,9 +144,19 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
             | undefined;
 
           if (params.response_format?.type === 'json_schema' && toolName) {
-            const { schema, description } = params.response_format.json_schema;
+            const { schema, description, strict } = params.response_format.json_schema;
+
             toolConfig = {
-              tools: [{ toolSpec: { name: toolName, description, inputSchema: { json: schema } } }],
+              tools: [
+                {
+                  toolSpec: {
+                    name: toolName,
+                    description,
+                    inputSchema: { json: schema },
+                    strict,
+                  },
+                },
+              ],
               toolChoice: { tool: { name: toolName } },
             };
           } else if (params.response_format?.type === 'json_object') {
@@ -174,6 +188,7 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
           );
 
           let text: string;
+
           if (toolName) {
             // Forced tool-use: the schema-conforming payload arrives as the
             // toolUse content block's already-parsed `input`, not as text.
@@ -182,6 +197,7 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
             const toolUseBlock = response.output?.message?.content?.find(
               (block) => block.toolUse?.name === toolName,
             );
+
             text = toolUseBlock?.toolUse ? JSON.stringify(toolUseBlock.toolUse.input) : '';
           } else {
             text = response.output?.message?.content?.map((c) => c.text ?? '').join('') ?? '';

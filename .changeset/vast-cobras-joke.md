@@ -2,15 +2,21 @@
 'vern-llm': patch
 ---
 
-Fix `NormalizedCacheAdapter` treating punctuation-adjacent keys as different entries, and add `resolveKey` forwarding to `TieredCacheAdapter`.
+Fix cache key normalization, tiered cache key resolution, and structured output adapter metadata forwarding.
 
-- **`NormalizedCacheAdapter`**: punctuation is now replaced with a space instead of being deleted outright. Previously `"2+2"` and `"2 + 2"` normalized to different strings (`"22"` vs `"2 2"`) since stripping `+` without surrounding whitespace collapsed adjacent characters together. Both now normalize to `"2 2"`.
-- **`TieredCacheAdapter`**: now implements `resolveKey`, forwarding to L1's implementation if present, otherwise L2's, otherwise returning the key unchanged. This means a `resolveKey`-implementing adapter (e.g. `NormalizedCacheAdapter`) can now be passed directly as a tier and get non-exact matching without needing to be wrapped around the tiered pair as a workaround.
+- **`NormalizedCacheAdapter`**: punctuation is now replaced with a space instead of being removed outright. Previously `"2+2"` and `"2 + 2"` normalized differently (`"22"` vs `"2 2"`) because removing punctuation collapsed adjacent characters. Both now normalize consistently to `"2 2"`.
 
-Also removes references to the deprecated `@google/generative-ai` SDK from `fromGemini`'s docs and internal comments, since it's no longer published and the adapter's structural typing was never actually SDK-specific.
+- **`TieredCacheAdapter`**: now implements `resolveKey`, forwarding to L1's implementation if present, otherwise L2's, otherwise returning the original key unchanged.
 
-Corrects a stale doc claim that `jsonSchema.description` is dropped for Anthropic — the adapter already forwards it to the tool spec it builds (`{ name, description, input_schema }`), same as Bedrock.
+- **`fromAnthropic`**: `jsonSchema` now forwards schema metadata into Anthropic tool use. The adapter passes `name`, `description`, `input_schema`, and `strict` into the generated tool definition and continues using forced tool calls for structured output.
 
-Docs updated in `core/caching.mdx`, `guides/caching-methods/normalized.mdx`, `guides/caching-methods/tiered.mdx`, `core/structured-output.mdx`, and `adapters/gemini.mdx` to match.
+- **`fromBedrock`**: `jsonSchema` now forwards schema metadata into Bedrock Converse tool use. The adapter passes `name`, `description`, `inputSchema`, and `strict` into the generated tool spec and forces tool selection through `toolChoice`. Strict enforcement depends on the selected Bedrock model's tool support.
 
-Tests added in `cachedCall.unit.test.ts` covering the punctuation normalization fix and `TieredCacheAdapter`'s `resolveKey` forwarding (L1 preferred, L2 fallback, no-op when neither tier implements it).
+- **`fromGemini`**: `jsonSchema` now forwards schema descriptions into Gemini's `generationConfig.responseSchema`. Structured output uses `responseMimeType: 'application/json'` with `responseSchema`; Gemini does not use a separate `strict` flag.
+
+- Removed references to the deprecated `@google/generative-ai` SDK from Gemini adapter docs and comments. The adapter uses structural typing and is not SDK-specific.
+
+Docs updated in:
+`core/caching.mdx`, `guides/caching-methods/normalized.mdx`, `guides/caching-methods/tiered.mdx`, `core/structured-output.mdx`, and `adapters/gemini.mdx`.
+
+Tests added covering punctuation normalization, `TieredCacheAdapter.resolveKey` forwarding, and structured output adapter behavior.

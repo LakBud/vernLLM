@@ -8,7 +8,7 @@ Uses Bedrock's Converse API, which provides a unified request/response interface
 JSON handling depends on the requested format:
 
 - `json_object` uses prompt-based JSON instructions.
-- `json_schema` uses Bedrock Converse tool use for native schema enforcement when supported by the selected model.
+- `json_schema` uses Bedrock Converse tool use. The adapter forwards the schema name, description, and strict setting into the tool spec. Strict enforcement depends on the selected Bedrock model's tool-use capabilities.
 
 `reasoning_effort` is not forwarded because Bedrock does not expose an equivalent option through Converse.
 
@@ -46,7 +46,7 @@ const llm = new VernLLM({
 
 ## Structured output via tool use
 
-When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text. The tool-call's `input` is re-serialized to JSON so it flows through the same string-content contract every other adapter uses:
+When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text.
 
 ```ts title="bedrock-structured-output.ts"
 import { z } from 'zod';
@@ -70,7 +70,7 @@ const result = await llm.call({
       required: ['name', 'skills'],
     },
   },
-  schema: CandidateSchema, // optional client-side type/validation on top
+  schema: CandidateSchema,
 });
 ```
 

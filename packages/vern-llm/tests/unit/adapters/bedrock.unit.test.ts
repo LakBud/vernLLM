@@ -201,6 +201,58 @@ describe('fromBedrock', () => {
     expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
   });
 
+  it('forwards json_schema name and description into Bedrock toolSpec', async () => {
+    const { client, converse } = makeFakeBedrockToolClient('Profile', { ok: true });
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'anthropic.claude-test',
+        temperature: 0.2,
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'Profile',
+            description: 'A user profile payload',
+            schema: {
+              type: 'object',
+              properties: {
+                ok: { type: 'boolean' },
+              },
+            },
+            strict: true,
+          },
+        },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+
+    expect(sentParams.toolConfig).toEqual({
+      tools: [
+        {
+          toolSpec: {
+            name: 'Profile',
+            description: 'A user profile payload',
+            inputSchema: {
+              json: {
+                type: 'object',
+                properties: {
+                  ok: { type: 'boolean' },
+                },
+              },
+            },
+            strict: true,
+          },
+        },
+      ],
+      toolChoice: { tool: { name: 'Profile' } },
+    });
+  });
+
   it('leaves system undefined when there is no system message and no JSON mode', async () => {
     const { client, converse } = makeFakeBedrockClient('ok');
     const adapted = fromBedrock(client);
