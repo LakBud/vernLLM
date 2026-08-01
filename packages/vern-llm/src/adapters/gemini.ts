@@ -7,10 +7,10 @@ type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: str
 
 /**
  * Minimal structural type for VernLLM's two-argument wrapper around Gemini
- * `generateContent`. The request object mirrors the native
- * `@google/genai` SDK request shape, including top-level
- * `systemInstruction` and `generationConfig`, while transport options
- * (such as `AbortSignal`) are passed separately as the second argument.
+ * `generateContent`. The wrapper exposes a request shape aligned with the
+ * adapter interface, with top-level `systemInstruction` and
+ * `generationConfig` fields, while transport options (such as `AbortSignal`)
+ * are passed separately as the second argument.
  */
 export interface GeminiClient {
   generateContent(
@@ -39,7 +39,7 @@ export interface GeminiClient {
 /**
  * Translates a VernLLM `ContentBlock[]` into Gemini's native `parts` array:
  * text blocks become `{ text }`, image blocks become inline data parts
- * (`{ inlineData: { mimeType, data } }`), Geminis shape for embedding raw
+ * (`{ inlineData: { mimeType, data } }`), Gemini's shape for embedding raw
  * base64 image bytes directly in the request.
  */
 function toGeminiParts(blocks: ContentBlock[]): GeminiPart[] {
@@ -52,14 +52,14 @@ function toGeminiParts(blocks: ContentBlock[]): GeminiPart[] {
 
 /**
  * Wraps a Gemini client so it satisfies the `LLMClient` interface VernLLM
- * uses for OpenAI-compatible APIs. Geminis shape differs on nearly every axis:
- * a `contents` array instead of `messages`, a separate `systemInstruction`
- * field instead of a `system` role message, `generationConfig` instead of
- * top-level `temperature`/`max_tokens`, and native JSON Schema support via
- * `responseMimeType: 'application/json'` + `responseSchema` (so `jsonSchema`
- * is provider-enforced here, unlike the Anthropic adapters prompt-embedding
- * fallback). `reasoning_effort` has no equivalent. Geminis thinking models
- * use a token budget, not an effort tier, so its dropped, same as Anthropic.
+ * uses for OpenAI-compatible APIs. Gemini's shape differs on nearly every
+ * axis: a `contents` array instead of `messages`, a separate
+ * `systemInstruction` field instead of a `system` role message,
+ * `generationConfig` instead of top-level `temperature`/`max_tokens`, and
+ * native JSON Schema support via `responseMimeType: 'application/json'` +
+ * `responseSchema`. `reasoning_effort` has no equivalent. Gemini's thinking
+ * models use a token budget, not an effort tier, so it's dropped, same as
+ * Anthropic.
  */
 export function fromGemini(geminiClient: GeminiClient): LLMClient {
   return {
