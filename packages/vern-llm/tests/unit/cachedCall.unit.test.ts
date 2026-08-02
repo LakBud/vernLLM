@@ -668,7 +668,7 @@ describe('VernLLM.cachedCall', () => {
     });
   });
 
-  it('refunds an aborted coalesced caller once without cancelling shared fn or trigger caller', async () => {
+  it('rejects an already-aborted coalesced caller without reserving/refunding usage, and does not affect the shared fn or trigger caller', async () => {
     let resolveFn!: (value: string) => void;
     const gate = new Promise<string>((resolve) => {
       resolveFn = resolve;
@@ -715,8 +715,14 @@ describe('VernLLM.cachedCall', () => {
       type: 'aborted',
     });
 
-    expect(refundUsage).toHaveBeenCalledTimes(1);
-    expect(refundUsage).toHaveBeenCalledWith({
+    // The signal is already aborted by the time this coalesced caller's
+    // withReservedUsage runs, so it short-circuits before ever reserving —
+    // meaning there's nothing to refund either.
+    expect(reserveUsage).not.toHaveBeenCalledWith({
+      coalesced: true,
+      signal: coalescedController.signal,
+    });
+    expect(refundUsage).not.toHaveBeenCalledWith({
       coalesced: true,
       signal: coalescedController.signal,
     });
@@ -727,7 +733,7 @@ describe('VernLLM.cachedCall', () => {
 
     await expect(trigger).resolves.toBe('shared result');
 
-    expect(refundUsage).toHaveBeenCalledTimes(1);
+    expect(refundUsage).not.toHaveBeenCalled();
   });
 });
 
