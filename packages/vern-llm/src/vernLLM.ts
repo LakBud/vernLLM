@@ -19,8 +19,7 @@ import {
   type CallParams,
   type ConversationTurn,
   type LLMClient,
-  type RefundUsage,
-  type ReserveUsage,
+  type UsageHooks,
   type VernLLMOptions,
 } from './types/index.js';
 
@@ -52,6 +51,12 @@ export class VernLLM {
   private readonly logger: Logger;
   private readonly breaker?: CircuitBreaker;
 
+  /**
+   * @param options - Client, model, and tunables. Notable defaults:
+   * `maxRetries` 1, `timeoutMs` 25000, `baseDelayMs` 500 (exponential backoff
+   * base), `defaultMaxTokens` 1000, `cache` an in-memory adapter,
+   * `nonRetryableStatus` `[400, 401, 403, 404, 422]`, `debug` false.
+   */
   constructor(options: VernLLMOptions) {
     this.client = options.client;
     this.model = options.model;
@@ -83,6 +88,11 @@ export class VernLLM {
    * policy. Fails fast if the breaker is open or the signal is already
    * aborted. On exhausting retries, records a breaker failure and rejects
    * with a normalized LLMError.
+   *
+   * @param params - System/user content plus per-call overrides (model,
+   * temperature, jsonMode, schema, signal, etc). See `CallParams`.
+   * @returns The parsed (and optionally schema-validated) response, or the
+   * raw string content when `jsonMode` is false and no `jsonSchema` is set.
    */
   async call<T = unknown>(params: CallParams<T>): Promise<T> {
     this.breaker?.assertClosed();
@@ -277,7 +287,12 @@ export class VernLLM {
     return { useJson, model, request };
   }
 
-  /** Chooses the response format: native json schema, plain json mode, or none. */
+  /**
+   * Chooses the response format: a provider-native `jsonSchema` takes
+   * priority when supplied (constrains generation directly), otherwise
+   * falls back to the looser `json_object` mode when JSON output is
+   * requested, or no format at all for plain text responses.
+   */
   private buildResponseFormat(jsonSchema: CallParams<unknown>['jsonSchema'], useJson: boolean) {
     if (jsonSchema) {
       return {
@@ -342,7 +357,12 @@ export class VernLLM {
     return result.data;
   }
 
-  /** Waits out the backoff delay for a retry attempt, honoring Retry-After when present. */
+  /**
+   * Waits out the backoff delay for a retry attempt, honoring a
+   * Retry-After header on the failed attempt's error when present.
+   * Both Retry-After and plain exponential backoff are capped at the same
+   * max delay (see `DEFAULT_MAX_DELAY_MS` in `vernLLM.utils.ts`).
+   */
   private async recoverDelay(
     requestId: string,
     attempt: number,
@@ -373,7 +393,14 @@ export class VernLLM {
     return !(status !== undefined && this.nonRetryableStatus.includes(status));
   }
 
-  /** Removes a cached response by key when the configured cache adapter supports deletion. */
+  /**
+   * Removes a cached response by key when the configured cache adapter
+   * supports deletion. Cache invalidation is the caller's responsibility;
+   * only the application knows when cached data is stale.
+   *
+   * @param key - The raw cache key (resolved through the adapter's
+   * `resolveKey`, if any, before deletion).
+   */
   async deleteCache(key: string): Promise<void> {
     if (!this.cache.delete) return;
 
@@ -383,6 +410,11 @@ export class VernLLM {
   /**
    * Cache wrapper around caller-supplied logic. Concurrent misses for the
    * same `cacheKey` share a single in-flight call, avoiding cache stampedes.
+   *
+   * @param params - `cacheKey`, `ttl`, `fn` (the work to run on a cache
+   * miss, typically `() => this.call(...)`), and optional
+   * `reserveUsage`/`refundUsage`/`signal`. See `CachedCallParams`.
+   * @returns The cached value on a hit, or the result of `fn()` on a miss.
    */
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
     const resolvedKey = await this.resolveCacheKey(params.cacheKey);
@@ -438,12 +470,11 @@ export class VernLLM {
   }
 
   /**
-   * Runs getResult after reserving usage.
-   * Reservations are refunded when execution fails or is aborted before completion.
-   * The refund hook is best-effort and never masks the original failure.
+   * Runs `getResult` after reserving usage, if a `reserveUsage` hook was
+   * provided. `refundUsage` fires only if a reservation was actually made.
    */
   private async withReservedUsage<T>(
-    params: { reserveUsage?: ReserveUsage; refundUsage?: RefundUsage },
+    params: UsageHooks,
     coalesced: boolean,
     getResult: () => Promise<T>,
     signal?: AbortSignal,
@@ -480,18 +511,31 @@ export class VernLLM {
       throw new LLMError('LLM request aborted', 'aborted');
     }
 
+    let result: T;
+
     try {
-      return await getResult();
+      result = await getResult();
     } catch (error) {
       if (reserved) await refund('[VernLLM] refundUsage failed');
       throw error;
     }
+
+    if (signal?.aborted) {
+      if (reserved) await refund('[VernLLM] refundUsage failed after abort');
+      throw new LLMError('LLM request aborted', 'aborted');
+    }
+
+    return result;
   }
 
   /**
    * Convenience wrapper composing `call` + `cachedCall`, so cached LLM calls
    * automatically get retry/timeout/circuit-breaker behavior. `reserveUsage`/
    * `refundUsage` are read from the top-level params only.
+   *
+   * @param params - `cachedCall` params (`cacheKey`, `ttl`, etc, minus `fn`)
+   * plus `call`, the `CallParams` to pass through to `this.call(...)`.
+   * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
   async cachedLLMCall<T>(
     params: Omit<CachedCallParams<T>, 'fn'> & { call: CallParams<T> },
@@ -512,7 +556,10 @@ export class VernLLM {
     return this.cachedCall({ ...cacheParams, fn: () => this.call(restCallParams) });
   }
 
-  /** Returns the current circuit breaker state, or undefined if none was configured. */
+  /**
+   * @returns The current circuit breaker state (`'closed' | 'open' |
+   * 'half-open'`), or undefined if no circuit breaker was configured.
+   */
   getCircuitState() {
     return this.breaker?.getState();
   }

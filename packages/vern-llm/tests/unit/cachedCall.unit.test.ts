@@ -322,6 +322,34 @@ describe('VernLLM.cachedCall', () => {
     ).rejects.toThrow('original failure');
   });
 
+  it('refunds and throws aborted, not the resolved value, when the signal aborts while an abort-insensitive fn is still in flight', async () => {
+    const reserveUsage = vi.fn();
+    const refundUsage = vi.fn();
+    const controller = new AbortController();
+
+    // Deliberately ignores the signal, unlike a well-behaved fn — resolves
+    // successfully regardless of whether the caller aborted mid-flight.
+    const fn = vi.fn(async () => {
+      controller.abort();
+      return 'stale result';
+    });
+
+    const llm = new VernLLM({ client: createMockClient([]).client, model: 'm' });
+
+    await expect(
+      llm.cachedCall({
+        cacheKey: 'k',
+        ttl: 60,
+        fn,
+        reserveUsage,
+        refundUsage,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'aborted' });
+
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('does not call refundUsage when reserveUsage itself rejects (e.g. quota already exhausted)', async () => {
     const reserveUsage = vi.fn(async () => {
       throw new Error('quota exceeded');

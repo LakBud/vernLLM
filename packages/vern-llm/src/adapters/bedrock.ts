@@ -157,38 +157,44 @@ export function fromBedrock(
               m.role === 'user' || m.role === 'assistant',
           );
 
-          const toolName =
+          const jsonSchema =
             params.response_format?.type === 'json_schema'
-              ? params.response_format.json_schema.name
+              ? params.response_format.json_schema
               : undefined;
+
+          const toolName = jsonSchema?.name.trim();
+
+          if (jsonSchema && !toolName) {
+            throw new LLMError('json_schema.name must not be empty.', 'validation');
+          }
 
           let jsonInstruction: string | undefined;
           let toolConfig:
             | NonNullable<Parameters<BedrockConverseClient['converse']>[0]['toolConfig']>
             | undefined;
 
-          if (params.response_format?.type === 'json_schema' && toolName) {
-            const { schema, description, strict } = params.response_format.json_schema;
+          if (jsonSchema) {
+            const { schema, description, strict } = jsonSchema;
 
             toolConfig = {
               tools: [
                 {
                   toolSpec: {
-                    name: toolName,
+                    name: toolName!,
                     description,
                     inputSchema: { json: schema },
                     strict,
                   },
                 },
               ],
-              toolChoice: { tool: { name: toolName } },
+              toolChoice: { tool: { name: toolName! } },
             };
           } else if (params.response_format?.type === 'json_object') {
             // No schema to build a tool from, fall back to a prompt instruction
             jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
           }
 
-          if (toolConfig && toolUseSupportedModels) {
+          if (jsonSchema && toolUseSupportedModels) {
             const isSupported = Array.isArray(toolUseSupportedModels)
               ? toolUseSupportedModels.includes(params.model)
               : toolUseSupportedModels(params.model);

@@ -81,6 +81,16 @@ Without `jsonSchema`, setting `jsonMode: true` (the default) falls back to a `js
 `toolUseSupportedModels`, passed as the second argument to `fromBedrock`, lets you reject `jsonSchema` calls to models you know don't support Converse tool use, before the request is ever sent, with a clear `LLMError('validation')` instead of Bedrock's raw error:
 
 ```ts title="bedrock-preflight.ts"
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { VernLLM, fromBedrock } from 'vern-llm';
+
+const client = new BedrockRuntimeClient({ region: 'us-east-1' });
+
+const converseClient = {
+  converse: (params, options) =>
+    client.send(new ConverseCommand(params), { abortSignal: options.signal }),
+};
+
 const llm = new VernLLM({
   client: fromBedrock(converseClient, {
     // A static allowlist...

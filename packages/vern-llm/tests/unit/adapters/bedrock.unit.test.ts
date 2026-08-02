@@ -393,6 +393,29 @@ describe('fromBedrock', () => {
       expect(converse).not.toHaveBeenCalled();
     });
 
+    it('proceeds normally and passes the model ID to a predicate that returns true', async () => {
+      const { client, converse } = makeFakeBedrockClient('ok');
+      const predicate = vi.fn((modelId: string) => modelId.startsWith('anthropic.'));
+      const adapted = fromBedrock(client, { toolUseSupportedModels: predicate });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          temperature: 0.2,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'extract data' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(predicate).toHaveBeenCalledWith('anthropic.claude-test');
+      expect(converse).toHaveBeenCalledOnce();
+    });
+
     it('does not preflight-check calls that are not json_schema, even with an allowlist configured', async () => {
       const { client, converse } = makeFakeBedrockClient('plain text reply');
       const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
@@ -408,7 +431,7 @@ describe('fromBedrock', () => {
       );
 
       expect(converse).toHaveBeenCalledOnce();
-      expect(result.choices?.[0]?.message?.content).toBe('plain text reply');
+      expect(at(result.choices ?? [], 0).message?.content).toBe('plain text reply');
     });
 
     it('skips the preflight check entirely when no toolUseSupportedModels is configured', async () => {
