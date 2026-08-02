@@ -1,5 +1,5 @@
 import type { JsonSchemaSpec, SchemaLike } from './schema.js';
-import type { RefundUsage, ReserveUsage } from './usage.js';
+import type { UsageHooks } from './usage.js';
 
 /** A single prior turn in a multi-turn conversation, passed via `history`. */
 export interface ConversationTurn {
@@ -32,7 +32,7 @@ export interface ImageBlock {
 /** A single segment of multimodal `userContent`. */
 export type ContentBlock = TextBlock | ImageBlock;
 
-export interface CallParams<T = unknown> {
+export interface CallParams<T = unknown> extends UsageHooks {
   systemPrompt?: string;
 
   /** Current user message, as text or multimodal content blocks. */
@@ -66,24 +66,11 @@ export interface CallParams<T = unknown> {
    * Implies jsonMode: true.
    */
   schema?: SchemaLike<T>;
-
-  /**
-   * Reserves usage before the request. Failures become
-   * LLMError('quota_exceeded').
-   */
-  reserveUsage?: ReserveUsage;
-
-  /**
-   * Refunds usage after a failed call if reservation succeeded.
-   */
-  refundUsage?: RefundUsage;
 }
 
-export interface CachedCallParams<T> {
+export interface CachedCallParams<T> extends UsageHooks {
   cacheKey: string;
   ttl: number;
   fn: () => Promise<T>;
-  reserveUsage?: ReserveUsage;
-  refundUsage?: RefundUsage;
   signal?: AbortSignal;
 }

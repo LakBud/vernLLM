@@ -19,18 +19,17 @@ import {
   type CallParams,
   type ConversationTurn,
   type LLMClient,
-  type RefundUsage,
-  type ReserveUsage,
+  type UsageHooks,
   type VernLLMOptions,
 } from './types/index.js';
 
 /**
- * A resilient wrapper around an LLM chat completions client, this is VernLLM!
+ * A resilient layer around an LLM chat completions client, this is VernLLM!
  *
- * Adds retry with exponential backoff and jitter, per-attempt timeouts,
- * an optional circuit breaker, JSON parsing with optional schema
- * validation, usage tracking, and an optional response cache, all
- * configurable, all opt-in beyond sensible defaults
+ * Adds retry with backoff/jitter, per-attempt timeouts, an optional circuit breaker,
+ * JSON parsing with optional schema validation, usage tracking, and an
+ * optional response cache, all configurable, all opt-in beyond sensible
+ * defaults.
  */
 export class VernLLM {
   private readonly client: LLMClient;
@@ -53,19 +52,19 @@ export class VernLLM {
   private readonly breaker?: CircuitBreaker;
 
   /**
-   * @param options: Client, model, and all tunables (retries, timeout,
-   * backoff, cache, circuit breaker, logger, etc). See VernLLMOptions in `types.ts`
-   * for individual defaults
+   * @param options - Client, model, and tunables. Notable defaults:
+   * `maxRetries` 1, `timeoutMs` 25000, `baseDelayMs` 500 (exponential backoff
+   * base), `defaultMaxTokens` 1000, `cache` an in-memory adapter,
+   * `nonRetryableStatus` `[400, 401, 403, 404, 422]`, `debug` false.
    */
   constructor(options: VernLLMOptions) {
     this.client = options.client;
     this.model = options.model;
 
-    const retryConfig = this.resolveRetryConfig(options);
-    this.maxRetries = retryConfig.maxRetries;
-    this.timeoutMs = retryConfig.timeoutMs;
-    this.baseDelayMs = retryConfig.baseDelayMs;
-    this.defaultMaxTokens = retryConfig.defaultMaxTokens;
+    this.maxRetries = options.maxRetries ?? 1;
+    this.timeoutMs = options.timeoutMs ?? 25_000;
+    this.baseDelayMs = options.baseDelayMs ?? 500;
+    this.defaultMaxTokens = options.defaultMaxTokens ?? 1000;
 
     this.cache = options.cache ?? new InMemoryCacheAdapter();
     this.nonRetryableStatus = options.nonRetryableStatus ?? [400, 401, 403, 404, 422];
@@ -73,64 +72,27 @@ export class VernLLM {
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.onUsage = options.onUsage;
 
-    this.logger = this.resolveLogger(options);
-    this.breaker = this.resolveCircuitBreaker(options);
+    this.logger = options.logger ?? new ConsoleLogger(options.debug ?? false);
+    this.breaker = options.circuitBreaker
+      ? new CircuitBreaker(options.circuitBreaker === true ? undefined : options.circuitBreaker)
+      : undefined;
   }
 
-  /**
-   * Resolves cache keys through the adapter when supported.
-   * Keeps all cache operations using the same key normalization path.
-   */
+  /** Resolves a cache key through the adapter when it supports normalization. */
   private async resolveCacheKey(key: string): Promise<string> {
     return this.cache.resolveKey ? await this.cache.resolveKey(key) : key;
   }
 
   /**
-   * Resolves retry/timeout/token defaults from the given options,
-   * falling back to the librarys built-in defaults for anything unset
-   */
-  private resolveRetryConfig(options: VernLLMOptions) {
-    return {
-      maxRetries: options.maxRetries ?? 1,
-      timeoutMs: options.timeoutMs ?? 25_000,
-      baseDelayMs: options.baseDelayMs ?? 500,
-      defaultMaxTokens: options.defaultMaxTokens ?? 1000,
-    };
-  }
-
-  /**
-   * Returns the caller supplied logger, or a console-based logger whose
-   * debug output is gated by the `debug` option (defaulting to off,
-   * so response content isn't unintentionally written to logs)
-   */
-  private resolveLogger(options: VernLLMOptions): Logger {
-    return options.logger ?? new ConsoleLogger(options.debug ?? false);
-  }
-
-  /**
-   * Builds a circuit breaker if `circuitBreaker` is truthy on the
-   * options. Passing `true` uses default thresholds, passing an options
-   * object tunes them. Returns undefined when the breaker is disabled
-   */
-  private resolveCircuitBreaker(options: VernLLMOptions): CircuitBreaker | undefined {
-    if (!options.circuitBreaker) return undefined;
-
-    return new CircuitBreaker(options.circuitBreaker === true ? undefined : options.circuitBreaker);
-  }
-
-  /**
-   * Makes a single logical LLM call, transparently retrying on failure
-   * according to the configured retry policy
+   * Makes a single logical LLM call, retrying on failure per the configured
+   * policy. Fails fast if the breaker is open or the signal is already
+   * aborted. On exhausting retries, records a breaker failure and rejects
+   * with a normalized LLMError.
    *
-   * Fails fast if the circuit breaker is open or the signal is already
-   * aborted, before any request is dispatched. On exhausting all
-   * retries, records a circuit breaker failure and rejects with a
-   * normalized LLMError
-   *
-   * @param params : System/user content plus per call overrides
-   * (model, temperature, jsonMode, schema, signal, etc)
-   * @returns The parsed and optionally schema-validated response, or
-   * the raw string content when jsonMode is disabled
+   * @param params - System/user content plus per-call overrides (model,
+   * temperature, jsonMode, schema, signal, etc). See `CallParams`.
+   * @returns The parsed (and optionally schema-validated) response, or the
+   * raw string content when `jsonMode` is false and no `jsonSchema` is set.
    */
   async call<T = unknown>(params: CallParams<T>): Promise<T> {
     this.breaker?.assertClosed();
@@ -171,11 +133,7 @@ export class VernLLM {
     );
   }
 
-  /**
-   * Runs `fn`, retrying with backoff according to `shouldRetry` policy
-   * Purely mechanical: knows nothing about LLM specifics beyond the retry
-   * predicate, so its testable independent of request/response shaping
-   */
+  /** Runs `fn`, retrying with backoff according to `shouldRetry`. */
   private async retryWithBackoff<T>(
     fn: () => Promise<T>,
     requestId: string,
@@ -193,29 +151,20 @@ export class VernLLM {
       } catch (error) {
         lastError = error;
 
-        if (!this.shouldRetry(error, signal)) {
-          break;
-        }
+        if (!this.shouldRetry(error, signal)) break;
       }
     }
 
     throw lastError;
   }
 
-  /**
-   * Converts any thrown value into a well-typed LLMError for the public
-   * API surface. Preserves an existing LLMError as is, reports aborted
-   * signals as such, classifies errors carrying an http status as
-   * type api, and otherwise falls back to a generic unknown error.
-   */
+  /** Converts any thrown value into a well-typed LLMError. */
   private normalizeError(error: unknown, signal?: AbortSignal): LLMError {
     if (signal?.aborted) {
       return new LLMError('LLM request aborted', 'aborted');
     }
 
-    if (error instanceof LLMError) {
-      return error;
-    }
+    if (error instanceof LLMError) return error;
 
     const status = extractStatus(error);
     const retryAfterMs = extractRetryAfterMs(error);
@@ -229,9 +178,8 @@ export class VernLLM {
 
   /**
    * Performs a single attempt: builds the request, dispatches it with a
-   * timeout, and shapes the response. Throws on an empty response so
-   * the retry loop treats it like any other transient failure. Records
-   * usage and a circuit breaker success before returning
+   * timeout, and shapes the response. Throws on an empty response so the
+   * retry loop treats it like any other transient failure.
    */
   private async executeCall<T>(params: CallParams<T>, requestId: string): Promise<T> {
     const { useJson, model, request } = this.buildRequestPayload(params);
@@ -254,24 +202,18 @@ export class VernLLM {
 
     if (!useJson) {
       this.breaker?.recordSuccess();
-
       return content as T;
     }
 
     const result = this.parseAndValidate(content, params.schema);
-
     this.breaker?.recordSuccess();
 
     return result;
   }
 
   /**
-   * Anthropic and Gemini both require strict user/assistant alternation
-   * (and reject or silently mishandle two consecutive same-role turns), so
-   * this validates `history` up front rather than letting a malformed
-   * request surface as a confusing provider-side error. Thrown as a
-   * validation LLMError, which `shouldRetry` never retries, since retrying
-   * the same malformed input can't succeed
+   * Validates `history` alternates user/assistant turns, since providers
+   * like Anthropic/Gemini reject or mishandle consecutive same-role turns.
    */
   private validateHistory(history: ConversationTurn[]): void {
     let previousRole: 'user' | 'assistant' | undefined;
@@ -302,12 +244,7 @@ export class VernLLM {
     }
   }
 
-  /**
-   * Applies per call defaults and shapes the params into the request
-   * object expected by the underlying client, including the resolved
-   * response format. Also returns whether JSON parsing should be
-   * applied to the response and which model was ultimately used
-   */
+  /** Applies per-call defaults and shapes params into the client's request object. */
   private buildRequestPayload<T>(params: CallParams<T>) {
     const {
       systemPrompt,
@@ -351,11 +288,10 @@ export class VernLLM {
   }
 
   /**
-   * Chooses the response format to send to the provider. A provider
-   * native json schema takes priority when supplied, constraining
-   * generation directly, otherwise falls back to the looser json
-   * object mode when JSON output is requested, or no format at all
-   * for plain text responses
+   * Chooses the response format: a provider-native `jsonSchema` takes
+   * priority when supplied (constrains generation directly), otherwise
+   * falls back to the looser `json_object` mode when JSON output is
+   * requested, or no format at all for plain text responses.
    */
   private buildResponseFormat(jsonSchema: CallParams<unknown>['jsonSchema'], useJson: boolean) {
     if (jsonSchema) {
@@ -373,15 +309,7 @@ export class VernLLM {
     return useJson ? { type: 'json_object' as const } : undefined;
   }
 
-  /**
-   * Reports token usage to the caller supplied onUsage callback, when
-   * both a callback was configured and the provider actually returned
-   * usage data on this response. A no op otherwise.
-   *
-   * A throwing onUsage callback is logged and swallowed rather than
-   * propagated, so a broken billing/metrics hook can't fail or retrigger
-   * retries on an otherwise-successful call.
-   */
+  /** Reports token usage to `onUsage`, swallowing and logging any error it throws. */
   private recordUsage(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
     requestId: string,
@@ -404,12 +332,7 @@ export class VernLLM {
     }
   }
 
-  /**
-   * Parses the raw response content as JSON and, when a schema is
-   * supplied, validates the parsed value against it. Throws a parse
-   * type LLMError on malformed JSON and a validation type LLMError,
-   * carrying the schemas issues, on a failed validation
-   */
+  /** Parses response content as JSON and validates it against `schema` when supplied. */
   private parseAndValidate<T>(content: string, schema?: CallParams<T>['schema']): T {
     let parsed: unknown;
 
@@ -423,9 +346,7 @@ export class VernLLM {
       throw new LLMError('Invalid JSON response', 'parse');
     }
 
-    if (!schema) {
-      return parsed as T;
-    }
+    if (!schema) return parsed as T;
 
     const result = schema.safeParse(parsed);
 
@@ -437,12 +358,10 @@ export class VernLLM {
   }
 
   /**
-   * Waits out the backoff delay for a given retry attempt, logging the
-   * attempt for observability before the wait begins. Honors a
-   * Retry-After header on the failed attempt's error when present
-   * (capped at the same maxDelayMs as backoff), otherwise falls back to
-   * exponential backoff exactly as before. Rejects early if the signal
-   * aborts during the wait
+   * Waits out the backoff delay for a retry attempt, honoring a
+   * Retry-After header on the failed attempt's error when present.
+   * Both Retry-After and plain exponential backoff are capped at the same
+   * max delay (see `DEFAULT_MAX_DELAY_MS` in `vernLLM.utils.ts`).
    */
   private async recoverDelay(
     requestId: string,
@@ -461,17 +380,9 @@ export class VernLLM {
     await waitForRetry(delay, signal);
   }
 
-  /**
-   * Decides whether a failed attempt is worth retrying. Never retries
-   * once the signal has aborted, never retries a parse or validation
-   * failure since those stem from the response content rather than a
-   * transient fault, and never retries a status code the caller has
-   * marked as non retryable. Retries everything else
-   */
+  /** Decides whether a failed attempt is worth retrying. */
   private shouldRetry(error: unknown, signal?: AbortSignal): boolean {
-    if (signal?.aborted) {
-      return false;
-    }
+    if (signal?.aborted) return false;
 
     if (error instanceof LLMError && (error.type === 'parse' || error.type === 'validation')) {
       return false;
@@ -479,48 +390,40 @@ export class VernLLM {
 
     const status = extractStatus(error);
 
-    if (status !== undefined && this.nonRetryableStatus.includes(status)) {
-      return false;
-    }
-
-    return true;
+    return !(status !== undefined && this.nonRetryableStatus.includes(status));
   }
 
   /**
    * Removes a cached response by key when the configured cache adapter
-   * supports deletion.
-   *
-   * Cache invalidation remains the responsibility of the caller because
+   * supports deletion. Cache invalidation is the caller's responsibility;
    * only the application knows when cached data is stale.
+   *
+   * @param key - The raw cache key (resolved through the adapter's
+   * `resolveKey`, if any, before deletion).
    */
   async deleteCache(key: string): Promise<void> {
-    if (!this.cache.delete) {
-      return;
-    }
+    if (!this.cache.delete) return;
 
     await this.cache.delete(await this.resolveCacheKey(key));
   }
 
   /**
-   * Cache wrapper around caller-supplied logic. `params.fn` should invoke
-   * `this.call(...)` (see `cachedLLMCall`); retry/timeout handling is left
-   * to the caller.
+   * Cache wrapper around caller-supplied logic. Concurrent misses for the
+   * same `cacheKey` share a single in-flight call, avoiding cache stampedes.
    *
-   * Concurrent misses for the same `cacheKey` share a single in-flight call,
-   * avoiding cache stampedes. Each caller still receives its own
-   * `reserveUsage`/`refundUsage` callbacks with coalescing metadata.
+   * @param params - `cacheKey`, `ttl`, `fn` (the work to run on a cache
+   * miss, typically `() => this.call(...)`), and optional
+   * `reserveUsage`/`refundUsage`/`signal`. See `CachedCallParams`.
+   * @returns The cached value on a hit, or the result of `fn()` on a miss.
    */
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
     const resolvedKey = await this.resolveCacheKey(params.cacheKey);
-
     const resolvedParams =
       resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
 
     const cached = await this.cache.get(resolvedKey);
 
-    if (cached.hit) {
-      return cached.value as T;
-    }
+    if (cached.hit) return cached.value as T;
 
     const existing = this.inFlight.get(resolvedKey) as Promise<T> | undefined;
 
@@ -531,7 +434,7 @@ export class VernLLM {
     return this.registerTrigger(resolvedParams, false);
   }
 
-  /** Starts the shared fn() call for a cache miss, reserving usage first, and registers it in the in-flight map until it settles */
+  /** Starts the shared fn() call for a cache miss and tracks it in the in-flight map until it settles. */
   private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
     const resultPromise = this.withReservedUsage(
       params,
@@ -542,7 +445,6 @@ export class VernLLM {
 
     this.inFlight.set(params.cacheKey, resultPromise);
 
-    // Cleanup runs regardless of outcome
     void resultPromise
       .catch(() => {})
       .finally(() => {
@@ -552,7 +454,7 @@ export class VernLLM {
     return resultPromise;
   }
 
-  /** Runs `fn` and writes its result to the cache. Only ever called once per cacheKey per in-flight window, from registerTrigger */
+  /** Runs `fn` and writes its result to the cache. */
   private async runAndCache<T>(params: CachedCallParams<T>): Promise<T> {
     const result = await params.fn();
 
@@ -569,19 +471,10 @@ export class VernLLM {
 
   /**
    * Runs `getResult` after reserving usage, if a `reserveUsage` hook was
-   * provided. `refundUsage` fires only if a reservation was actually made,
-   * i.e. `reserveUsage` was provided and it resolved successfully. If
-   * `reserveUsage` is omitted entirely, or if it throws, there is nothing to
-   * refund, so `refundUsage` is not invoked in either case.
-   *
-   * Shared by `cachedCall()`/`registerTrigger()` and `call()`, so it only
-   * depends on the usage hooks rather than LLM request concerns.
+   * provided. `refundUsage` fires only if a reservation was actually made.
    */
   private async withReservedUsage<T>(
-    params: {
-      reserveUsage?: ReserveUsage;
-      refundUsage?: RefundUsage;
-    },
+    params: UsageHooks,
     coalesced: boolean,
     getResult: () => Promise<T>,
     signal?: AbortSignal,
@@ -603,72 +496,69 @@ export class VernLLM {
       );
     }
 
-    if (signal?.aborted) {
-      if (reserved) {
-        try {
-          await params.refundUsage?.({ coalesced, signal });
-        } catch (refundError) {
-          this.logger.error('[VernLLM] refundUsage failed after abort', {
-            message: refundError instanceof Error ? refundError.message : 'unknown',
-          });
-        }
+    const refund = async (logMessage: string) => {
+      try {
+        await params.refundUsage?.({ coalesced, signal });
+      } catch (refundError) {
+        this.logger.error(logMessage, {
+          message: refundError instanceof Error ? refundError.message : 'unknown',
+        });
       }
+    };
 
+    if (signal?.aborted) {
+      if (reserved) await refund('[VernLLM] refundUsage failed after abort');
       throw new LLMError('LLM request aborted', 'aborted');
     }
 
-    try {
-      return await getResult();
-    } catch (error) {
-      if (reserved) {
-        try {
-          await params.refundUsage?.({ coalesced, signal });
-        } catch (refundError) {
-          this.logger.error('[VernLLM] refundUsage failed', {
-            message: refundError instanceof Error ? refundError.message : 'unknown',
-          });
-        }
-      }
+    let result: T;
 
+    try {
+      result = await getResult();
+    } catch (error) {
+      if (reserved) await refund('[VernLLM] refundUsage failed');
       throw error;
     }
+
+    if (signal?.aborted) {
+      if (reserved) await refund('[VernLLM] refundUsage failed after abort');
+      throw new LLMError('LLM request aborted', 'aborted');
+    }
+
+    return result;
   }
 
   /**
    * Convenience wrapper composing `call` + `cachedCall`, so cached LLM calls
-   * automatically get retry/timeout/circuit-breaker behavior without callers
-   * having to remember to wire `fn: () => this.call(...)` themselves.
+   * automatically get retry/timeout/circuit-breaker behavior. `reserveUsage`/
+   * `refundUsage` are read from the top-level params only.
    *
-   * `reserveUsage`/`refundUsage` are read from the top-level params only — if
-   * `call` also sets them, they're ignored, since `call()` now performs its
-   * own reservation. Honoring both would reserve/refund twice per logical
-   * cachedLLMCall (once via cachedCall's wrapping, once via the inner call()).
+   * @param params - `cachedCall` params (`cacheKey`, `ttl`, etc, minus `fn`)
+   * plus `call`, the `CallParams` to pass through to `this.call(...)`.
+   * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
   async cachedLLMCall<T>(
     params: Omit<CachedCallParams<T>, 'fn'> & { call: CallParams<T> },
   ): Promise<T> {
     const { call: callParams, ...cacheParams } = params;
     const {
-      reserveUsage: _innerReserveUsage,
-      refundUsage: _innerRefundUsage,
+      reserveUsage: innerReserveUsage,
+      refundUsage: innerRefundUsage,
       ...restCallParams
     } = callParams;
 
-    if (_innerReserveUsage || _innerRefundUsage) {
+    if (innerReserveUsage || innerRefundUsage) {
       this.logger.warn(
         '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedLLMCall; set them at the top level instead.',
       );
     }
 
-    return this.cachedCall({
-      ...cacheParams,
-      fn: () => this.call(restCallParams),
-    });
+    return this.cachedCall({ ...cacheParams, fn: () => this.call(restCallParams) });
   }
 
   /**
-   * Returns the current circuit breaker state, or undefined when no
-   * circuit breaker was configured on this instance
+   * @returns The current circuit breaker state (`'closed' | 'open' |
+   * 'half-open'`), or undefined if no circuit breaker was configured.
    */
   getCircuitState() {
     return this.breaker?.getState();
