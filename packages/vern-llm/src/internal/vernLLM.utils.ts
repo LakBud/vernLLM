@@ -233,6 +233,10 @@ export async function withReservedUsage<T>(
   signal: AbortSignal | undefined,
   onRefundError: (logMessage: string, error: unknown) => void,
 ): Promise<T> {
+  if (signal?.aborted) {
+    throw new LLMError('LLM request aborted', 'aborted');
+  }
+
   let reserved = false;
 
   try {
@@ -241,6 +245,10 @@ export async function withReservedUsage<T>(
       reserved = true;
     }
   } catch (error) {
+    if (signal?.aborted) {
+      throw new LLMError('LLM request aborted', 'aborted');
+    }
+
     throw new LLMError(
       error instanceof Error ? error.message : 'Usage reservation failed',
       'quota_exceeded',

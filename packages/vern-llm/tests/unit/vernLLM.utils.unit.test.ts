@@ -216,7 +216,22 @@ describe('withReservedUsage', () => {
     expect(onRefundError).toHaveBeenCalledWith('[VernLLM] refundUsage failed', expect.any(Error));
   });
 
-  it('short-circuits with an aborted LLMError, and refunds, when the signal is already aborted before getResult runs', async () => {
+  it('classifies as aborted, not quota_exceeded, when the signal aborts while reserveUsage is pending', async () => {
+    const controller = new AbortController();
+    const reserveUsage = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      throw new Error('reservation rejected after abort');
+    });
+    const getResult = vi.fn();
+
+    await expect(
+      withReservedUsage({ reserveUsage }, false, getResult, controller.signal, vi.fn()),
+    ).rejects.toMatchObject({ type: 'aborted' });
+
+    expect(getResult).not.toHaveBeenCalled();
+  });
+
+  it('short-circuits with an aborted LLMError before reserveUsage runs at all, when the signal is already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
 
@@ -234,8 +249,9 @@ describe('withReservedUsage', () => {
       ),
     ).rejects.toMatchObject({ type: 'aborted' });
 
+    expect(reserveUsage).not.toHaveBeenCalled();
     expect(getResult).not.toHaveBeenCalled();
-    expect(refundUsage).toHaveBeenCalledOnce();
+    expect(refundUsage).not.toHaveBeenCalled();
   });
 
   it('refunds and reports aborted when the signal fires while getResult is in flight', async () => {
