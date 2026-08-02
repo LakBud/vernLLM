@@ -1,6 +1,5 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-
-import type { ContentBlock, LLMClient } from '../types/index.js';
+import { LLMError, type ContentBlock, type LLMClient } from '../types/index.js';
 
 /** Bedrock Converse's supported inline image formats. */
 type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
@@ -100,6 +99,25 @@ function toBedrockContent(blocks: ContentBlock[]): BedrockContentBlock[] {
 }
 
 /**
+ * Optional configuration for `fromBedrock`.
+ */
+export interface BedrockAdapterOptions {
+  /**
+   * Optional preflight check for tool-use support, needed for `jsonSchema`
+   * structured output. VernLLM never guesses capability from a failed
+   * call's error message (AWS's error text isn't a documented, stable
+   * contract), so this is opt-in: pass either a static list of tool-use
+   * -capable model IDs, or a predicate function, and VernLLM will reject
+   * unsupported models with a clear `LLMError('validation')` *before*
+   * dispatching the request, instead of on the wire.
+   *
+   * Left unset (default), no preflight check runs, and a `jsonSchema` call
+   * to an unsupported model surfaces Bedrock's raw `converse` error as-is.
+   */
+  toolUseSupportedModels?: string[] | ((modelId: string) => boolean);
+}
+
+/**
  * Wraps a Bedrock Converse-API client so it satisfies the `LLMClient`
  * interface VernLLM uses for OpenAI/Groq. The Converse API is unified
  * across Bedrock's model families (Anthropic, Titan, Llama, Mistral, etc.),
@@ -111,19 +129,25 @@ function toBedrockContent(blocks: ContentBlock[]): BedrockContentBlock[] {
  * single tool is defined from the schema, description, and strictness settings,
  * and `toolChoice` forces the model to call it. Provider-constrained schema
  * matching applies only when `strict: true` is forwarded and supported.
- * Native tool support varies by model family (most current-generation ones
- * support it via Converse; check your specific `modelId` if a call fails
- * with an unsupported-parameter error).
+ * Native tool support varies by model family; pass
+ * `toolUseSupportedModels` to preflight-check it (see
+ * `BedrockAdapterOptions`), otherwise a `jsonSchema` call to an
+ * unsupported model surfaces Bedrock's raw error unchanged.
  *
  * `response_format: json_object` (no schema to build a tool from) and
  * `reasoning_effort` (no Converse equivalent) fall back to a system-prompt
  * instruction and are dropped respectively.
  */
-export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
+export function fromBedrock(
+  bedrockClient: BedrockConverseClient,
+  options?: BedrockAdapterOptions,
+): LLMClient {
+  const toolUseSupportedModels = options?.toolUseSupportedModels;
+
   return {
     chat: {
       completions: {
-        async create(params, options) {
+        async create(params, requestOptions) {
           const systemMessage = params.messages.find((m) => m.role === 'system');
 
           // Keep both user and assistant turns, in order, so conversation
@@ -164,6 +188,19 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
             jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
           }
 
+          if (toolConfig && toolUseSupportedModels) {
+            const isSupported = Array.isArray(toolUseSupportedModels)
+              ? toolUseSupportedModels.includes(params.model)
+              : toolUseSupportedModels(params.model);
+
+            if (!isSupported) {
+              throw new LLMError(
+                `Bedrock model "${params.model}" is not listed in toolUseSupportedModels, but jsonSchema structured output requires Converse tool use.`,
+                'validation',
+              );
+            }
+          }
+
           const systemParts = [systemMessage?.content, jsonInstruction].filter((s): s is string =>
             Boolean(s),
           );
@@ -184,7 +221,7 @@ export function fromBedrock(bedrockClient: BedrockConverseClient): LLMClient {
               },
               ...(toolConfig ? { toolConfig } : {}),
             },
-            options,
+            requestOptions,
           );
 
           let text: string;

@@ -290,4 +290,146 @@ describe('fromBedrock', () => {
       { role: 'user', content: [{ text: "What's its population?" }] },
     ]);
   });
+
+  it('propagates Bedrock errors as-is for json_schema calls, without reclassification', async () => {
+    // Converse rejects tool-use for an unsupported model. VernLLM doesn't
+    // attempt to guess this from the error text (see the fromBedrock doc
+    // comment); the raw error should surface unchanged.
+    const error = new Error('ValidationException: tool use is not supported for this model');
+
+    const converse = vi.fn<BedrockConverseClient['converse']>(async () => {
+      throw error;
+    });
+
+    const adapted = fromBedrock({ converse });
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'unsupported-model',
+          temperature: 0.2,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'Candidate',
+              schema: { type: 'object' },
+            },
+          },
+          messages: [{ role: 'user', content: 'extract data' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toBe(error);
+  });
+
+  describe('toolUseSupportedModels preflight', () => {
+    it('rejects with a validation LLMError, without calling converse, when the model is not in the allowlist', async () => {
+      const { client, converse } = makeFakeBedrockClient('unused');
+      const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'unsupported-model',
+            temperature: 0.2,
+            max_tokens: 10,
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'Candidate', schema: { type: 'object' } },
+            },
+            messages: [{ role: 'user', content: 'extract data' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+
+      expect(converse).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally when the model is in the allowlist', async () => {
+      const { client, converse } = makeFakeBedrockClient('ok');
+      const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'supported-model',
+          temperature: 0.2,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'extract data' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(converse).toHaveBeenCalledOnce();
+    });
+
+    it('supports a predicate function instead of a static list', async () => {
+      const { client, converse } = makeFakeBedrockClient('unused');
+      const adapted = fromBedrock(client, {
+        toolUseSupportedModels: (modelId) => modelId.startsWith('anthropic.'),
+      });
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'amazon.titan-text',
+            temperature: 0.2,
+            max_tokens: 10,
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'Candidate', schema: { type: 'object' } },
+            },
+            messages: [{ role: 'user', content: 'extract data' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+
+      expect(converse).not.toHaveBeenCalled();
+    });
+
+    it('does not preflight-check calls that are not json_schema, even with an allowlist configured', async () => {
+      const { client, converse } = makeFakeBedrockClient('plain text reply');
+      const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
+
+      const result = await adapted.chat.completions.create(
+        {
+          model: 'not-in-the-list',
+          temperature: 0.2,
+          max_tokens: 10,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(converse).toHaveBeenCalledOnce();
+      expect(result.choices?.[0]?.message?.content).toBe('plain text reply');
+    });
+
+    it('skips the preflight check entirely when no toolUseSupportedModels is configured', async () => {
+      const { client, converse } = makeFakeBedrockClient('ok');
+      const adapted = fromBedrock(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'any-model',
+          temperature: 0.2,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'extract data' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(converse).toHaveBeenCalledOnce();
+    });
+  });
 });
