@@ -82,11 +82,11 @@ Without `jsonSchema`, setting `jsonMode: true` (the default) falls back to a `js
 
 ```ts title="bedrock-preflight.ts"
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
-import { VernLLM, fromBedrock } from 'vern-llm';
+import { VernLLM, fromBedrock, type BedrockConverseClient } from 'vern-llm';
 
 const client = new BedrockRuntimeClient({ region: 'us-east-1' });
 
-const converseClient = {
+const converseClient: BedrockConverseClient = {
   converse: (params, options) =>
     client.send(new ConverseCommand(params), { abortSignal: options.signal }),
 };
