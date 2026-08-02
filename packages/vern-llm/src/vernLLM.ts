@@ -9,6 +9,8 @@ import {
   getBackoffDelay,
   waitForRetry,
   describeError,
+  withReservedUsage,
+  normalizeError,
 } from './internal/vernLLM.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import {
@@ -19,7 +21,6 @@ import {
   type CallParams,
   type ConversationTurn,
   type LLMClient,
-  type UsageHooks,
   type VernLLMOptions,
 } from './types/index.js';
 
@@ -103,7 +104,7 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
-    return this.withReservedUsage(
+    return withReservedUsage(
       params,
       false,
       async () => {
@@ -114,7 +115,7 @@ export class VernLLM {
             params.signal,
           );
         } catch (error) {
-          const normalized = this.normalizeError(error, params.signal);
+          const normalized = normalizeError(error, params.signal);
 
           if (
             normalized.type !== 'validation' &&
@@ -130,6 +131,7 @@ export class VernLLM {
         }
       },
       params.signal,
+      (logMessage, error) => this.logRefundError(logMessage, error),
     );
   }
 
@@ -156,24 +158,6 @@ export class VernLLM {
     }
 
     throw lastError;
-  }
-
-  /** Converts any thrown value into a well-typed LLMError. */
-  private normalizeError(error: unknown, signal?: AbortSignal): LLMError {
-    if (signal?.aborted) {
-      return new LLMError('LLM request aborted', 'aborted');
-    }
-
-    if (error instanceof LLMError) return error;
-
-    const status = extractStatus(error);
-    const retryAfterMs = extractRetryAfterMs(error);
-
-    if (status !== undefined) {
-      return new LLMError('LLM request failed', 'api', status, undefined, error, retryAfterMs);
-    }
-
-    return new LLMError('LLM request failed', 'unknown', undefined, undefined, error, retryAfterMs);
   }
 
   /**
@@ -428,7 +412,13 @@ export class VernLLM {
     const existing = this.inFlight.get(resolvedKey) as Promise<T> | undefined;
 
     if (existing) {
-      return this.withReservedUsage(resolvedParams, true, () => existing, params.signal);
+      return withReservedUsage(
+        resolvedParams,
+        true,
+        () => existing,
+        params.signal,
+        (logMessage, error) => this.logRefundError(logMessage, error),
+      );
     }
 
     return this.registerTrigger(resolvedParams, false);
@@ -436,11 +426,12 @@ export class VernLLM {
 
   /** Starts the shared fn() call for a cache miss and tracks it in the in-flight map until it settles. */
   private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
-    const resultPromise = this.withReservedUsage(
+    const resultPromise = withReservedUsage(
       params,
       coalesced,
       () => this.runAndCache(params),
       params.signal,
+      (logMessage, error) => this.logRefundError(logMessage, error),
     );
 
     this.inFlight.set(params.cacheKey, resultPromise);
@@ -469,63 +460,11 @@ export class VernLLM {
     return result;
   }
 
-  /**
-   * Runs `getResult` after reserving usage, if a `reserveUsage` hook was
-   * provided. `refundUsage` fires only if a reservation was actually made.
-   */
-  private async withReservedUsage<T>(
-    params: UsageHooks,
-    coalesced: boolean,
-    getResult: () => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    let reserved = false;
-
-    try {
-      if (params.reserveUsage) {
-        await params.reserveUsage({ coalesced, signal });
-        reserved = true;
-      }
-    } catch (error) {
-      throw new LLMError(
-        error instanceof Error ? error.message : 'Usage reservation failed',
-        'quota_exceeded',
-        undefined,
-        undefined,
-        error,
-      );
-    }
-
-    const refund = async (logMessage: string) => {
-      try {
-        await params.refundUsage?.({ coalesced, signal });
-      } catch (refundError) {
-        this.logger.error(logMessage, {
-          message: refundError instanceof Error ? refundError.message : 'unknown',
-        });
-      }
-    };
-
-    if (signal?.aborted) {
-      if (reserved) await refund('[VernLLM] refundUsage failed after abort');
-      throw new LLMError('LLM request aborted', 'aborted');
-    }
-
-    let result: T;
-
-    try {
-      result = await getResult();
-    } catch (error) {
-      if (reserved) await refund('[VernLLM] refundUsage failed');
-      throw error;
-    }
-
-    if (signal?.aborted) {
-      if (reserved) await refund('[VernLLM] refundUsage failed after abort');
-      throw new LLMError('LLM request aborted', 'aborted');
-    }
-
-    return result;
+  /** Logs a failed refundUsage attempt via the configured logger. */
+  private logRefundError(logMessage: string, error: unknown): void {
+    this.logger.error(logMessage, {
+      message: error instanceof Error ? error.message : 'unknown',
+    });
   }
 
   /**

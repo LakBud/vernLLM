@@ -1,5 +1,7 @@
 import { LLMError } from '../types/errors.js';
 
+import type { UsageHooks } from '../types/usage.js';
+
 export function defaultParseJson(content: string): unknown {
   try {
     return JSON.parse(content);
@@ -163,6 +165,24 @@ export function extractRetryAfterMs(
   return undefined;
 }
 
+/** Converts any thrown value into a well-typed LLMError. */
+export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
+  if (signal?.aborted) {
+    return new LLMError('LLM request aborted', 'aborted');
+  }
+
+  if (error instanceof LLMError) return error;
+
+  const status = extractStatus(error);
+  const retryAfterMs = extractRetryAfterMs(error);
+
+  if (status !== undefined) {
+    return new LLMError('LLM request failed', 'api', status, undefined, error, retryAfterMs);
+  }
+
+  return new LLMError('LLM request failed', 'unknown', undefined, undefined, error, retryAfterMs);
+}
+
 /**
  * Exponential backoff with jitter, capped at maxDelayMs.
  * Jitter avoids thundering-herd retries when many callers back off in lockstep,
@@ -198,4 +218,64 @@ export async function waitForRetry(delay: number, signal?: AbortSignal): Promise
 
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+/**
+ * Runs `getResult` after reserving usage, if a `reserveUsage` hook was
+ * provided. `refundUsage` fires only if a reservation was actually made.
+ * `onRefundError` is called (instead of throwing) whenever a refund attempt
+ * itself fails, so a broken refund hook never masks the original error.
+ */
+export async function withReservedUsage<T>(
+  params: UsageHooks,
+  coalesced: boolean,
+  getResult: () => Promise<T>,
+  signal: AbortSignal | undefined,
+  onRefundError: (logMessage: string, error: unknown) => void,
+): Promise<T> {
+  let reserved = false;
+
+  try {
+    if (params.reserveUsage) {
+      await params.reserveUsage({ coalesced, signal });
+      reserved = true;
+    }
+  } catch (error) {
+    throw new LLMError(
+      error instanceof Error ? error.message : 'Usage reservation failed',
+      'quota_exceeded',
+      undefined,
+      undefined,
+      error,
+    );
+  }
+
+  const refund = async (logMessage: string) => {
+    try {
+      await params.refundUsage?.({ coalesced, signal });
+    } catch (refundError) {
+      onRefundError(logMessage, refundError);
+    }
+  };
+
+  if (signal?.aborted) {
+    if (reserved) await refund('[VernLLM] refundUsage failed after abort');
+    throw new LLMError('LLM request aborted', 'aborted');
+  }
+
+  let result: T;
+
+  try {
+    result = await getResult();
+  } catch (error) {
+    if (reserved) await refund('[VernLLM] refundUsage failed');
+    throw error;
+  }
+
+  if (signal?.aborted) {
+    if (reserved) await refund('[VernLLM] refundUsage failed after abort');
+    throw new LLMError('LLM request aborted', 'aborted');
+  }
+
+  return result;
 }
