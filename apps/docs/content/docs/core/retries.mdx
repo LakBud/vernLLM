@@ -1,0 +1,73 @@
+---
+title: Retries
+description: Exponential backoff with jitter, Retry-After awareness, and what gets retried
+---
+
+```ts title="retries-setup.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  maxRetries: 3, // retries after the first attempt, so 4 attempts total
+  baseDelayMs: 500, // base for exponential backoff between retries
+});
+```
+
+Every `call()` retries transient failures automatically. `maxRetries` defaults to `1` (2 attempts total), so this is active even if you never touch the option.
+
+## Backoff and jitter
+
+Each retry waits longer than the last, and the exact wait is randomized within a range rather than fixed:
+
+```ts
+exp = min(baseDelayMs * 2 ** attempt, maxDelayMs);
+delay = exp / 2 + random() * (exp / 2);
+```
+
+This is full jitter: the delay lands somewhere between half and all of the computed exponential value, instead of every caller waiting the identical amount. When many callers hit a failure at the same time, full jitter spreads their retries out instead of having them all retry in lockstep and hit the provider again at the same instant.
+
+The delay is capped at `DEFAULT_MAX_DELAY_MS` (10 seconds) regardless of `attempt`, so a high `maxRetries` never produces an unbounded wait.
+
+## Honoring Retry-After
+
+If the failed attempt's error carries a `Retry-After` header, that value is used for the wait instead of the computed backoff:
+
+```ts
+recoverDelay = retryAfterMs ?? getBackoffDelay(baseDelayMs, attempt);
+```
+
+<Callout>
+  `Retry-After` is parsed from both delta-seconds form (`"30"`) and HTTP-date form (`"Wed, 21 Oct
+  2015 07:28:00 GMT"`), checking `.headers` (fetch-style) then `.response.headers` (axios-style) so
+  it works across client libraries. The honored value is capped at the same max delay as backoff, so
+  a misbehaving or adversarial header can't stall a caller indefinitely.
+</Callout>
+
+## What gets retried
+
+`shouldRetry` skips a retry when any of these are true:
+
+- The signal has already aborted
+- `error.type` is `parse` or `validation`, since these are deterministic response processing failures that a retry will not fix
+- `error.status` is in `nonRetryableStatus` (default `400, 401, 403, 404, 422`)
+
+Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to `maxRetries`.
+
+<Callout type="warn">
+  Exhausting all retries also records a circuit breaker failure if one is configured, and throws the
+  final normalized `LLMError`. See <a href="/docs/core/error-handling">Error Handling</a> for the
+  full list of error types and how each one is normalized.
+</Callout>
+
+## Cancelling mid retry
+
+If a `signal` fires while a retry is waiting out its backoff delay, the pending wait is cancelled immediately rather than sitting idle until the delay finishes. An abort during backoff is never retried, it is treated as a deliberate cancellation. See <a href="/docs/core/cancellation">Cancellation & Timeouts</a> for the full abort lifecycle.
+
+## Options reference
+
+| Option               | Default                     | Notes                                                                                                                    |
+| -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `maxRetries`         | `1`                         | Retries after the first attempt. `maxRetries: 3` means up to 4 attempts.                                                 |
+| `baseDelayMs`        | `500`                       | Base for exponential backoff. Actual delay grows per attempt with jitter, and is overridden by an honored `Retry-After`. |
+| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | Status codes that fail immediately instead of retrying.                                                                  |
+
+See <a href="/docs/API-reference/configuration">Configuration</a> for every option alongside timeout and circuit breaker settings.

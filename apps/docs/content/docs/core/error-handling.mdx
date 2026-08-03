@@ -109,3 +109,10 @@ const llm = new VernLLM({ client, model, debug: true });
 This is useful when a failure happens somewhere you aren't directly awaiting the `call()` (for
 example, inside `cachedCall`'s coalesced callers), since the log fires regardless of which caller
 ends up seeing the thrown error.
+
+<Callout>
+  The logged description is built defensively: it prefers the provider's raw `error` body, JSON
+  stringified when possible, then falls back to `.message`, then to a plain string conversion of the
+  thrown value. A thrown value that cannot be serialized or stringified at all still produces a safe
+  placeholder instead of throwing a second error while trying to log the first one.
+</Callout>

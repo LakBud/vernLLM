@@ -3,6 +3,7 @@
   "icon": "Layers",
   "pages": [
     "index",
+    "retries",
     "structured-output",
     "caching",
     "usage-metering",

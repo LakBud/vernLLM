@@ -48,11 +48,11 @@ const summary = await llm.cachedLLMCall({
   <Card title="Adapters" href="/docs/adapters">
     Connect OpenAI, Groq, Anthropic, Gemini, Bedrock, or anything with a fetch endpoint
   </Card>
-  <Card title="Structured Output" href="/docs/core/structured-output">
-    Zod validation + provider-native JSON Schema mode
+  <Card title="Retries" href="/docs/core/retries">
+    Exponential backoff with jitter and Retry-After awareness
   </Card>
-  <Card title="Circuit Breaker" href="/docs/core/circuit-breaker">
-    Stop hammering a provider that is already failing
+  <Card title="Caching" href="/docs/core/caching">
+    Wrap calls with cachedCall or cachedLLMCall, stampede-safe by default
   </Card>
 </Cards>
 
