@@ -45,10 +45,4 @@ Tests live under `tests/unit/` and `tests/integration/`. No real API calls are m
 
 ## Contributing
 
-Fork the repo and branch off `main`, then `pnpm install` to set up the workspace.
-
-Add or update tests alongside any change to `packages/vern-llm`: `tests/unit/` for isolated behavior, `tests/integration/` for cross-cutting workflows.
-
-Before opening a PR, run `pnpm run lint`, `pnpm run typecheck`, `pnpm run typecheck:test`, and `pnpm run test` locally. These match CI exactly (`.github/workflows/lint.yml`, `typecheck.yml`, `test.yml`).
-
-Record your change with `pnpm run changeset`; it drives versioned release notes. Releases themselves are automated through `.github/workflows/release.yml`, so no manual version bumps or publishing.
+See [Contributing](/docs/contributing) for the full guide: forking, branch setup, test expectations, and the pre-PR checklist.

@@ -1,0 +1,19 @@
+name: General Issue
+description: Something that doesn't fit a bug report or feature request (docs issue, question, etc.)
+labels: []
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What's going on?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, code snippets, screenshots, anything relevant
+    validations:
+      required: false

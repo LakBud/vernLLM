@@ -1,0 +1,77 @@
+name: Bug Report
+description: Something isn't working as expected
+labels: ['bug']
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What's the issue?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal repro steps or code snippet
+      render: ts
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages/stack traces if any
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: vern-llm version
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+    validations:
+      required: true
+
+  - type: dropdown
+    id: adapter
+    attributes:
+      label: Adapter in use
+      options:
+        - OpenAI-compatible
+        - Anthropic
+        - Gemini
+        - Bedrock
+        - fetch
+        - Other / not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+    validations:
+      required: false

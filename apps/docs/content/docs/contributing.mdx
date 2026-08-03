@@ -1,0 +1,53 @@
+---
+title: Contributing
+description: How to set up the workspace, run the checks, and open a PR
+icon: GitPullRequest
+---
+
+Thanks for considering a contribution to VernLLM! This page covers workspace setup, expectations for tests, and the pre-PR checklist.
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+## Tests
+
+Add or update tests alongside any change to `packages/vern-llm`:
+
+- `tests/unit/` for isolated behavior
+- `tests/integration/` for cross-cutting workflows
+
+No real API calls are made anywhere in the suite; everything runs against fakes and mocks. See [Development](/docs/development) for the full test layout.
+
+## Before opening a PR
+
+Run these locally, they match CI exactly (`.github/workflows/lint.yml`, `typecheck.yml`, `test.yml`):
+
+```bash
+pnpm run lint
+pnpm run typecheck
+pnpm run typecheck:test
+pnpm run test
+```
+
+## Changesets
+
+Record your change with:
+
+```bash
+pnpm run changeset
+```
+
+This drives versioned release notes. Releases themselves are automated through `.github/workflows/release.yml`, so there are no manual version bumps or publishing steps.
+
+## Code of Conduct
+
+Participation in this project is governed by our [Code of Conduct](/docs/code-of-conduct).
+
+## Security issues
+
+Please don't open a public issue for a security vulnerability. See [Security](/docs/security) for how to report one privately.
