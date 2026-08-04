@@ -1,5 +1,11 @@
 # vern-llm
 
+## 1.7.1
+
+### Patch Changes
+
+- 2eff4ac: Removed openai as a peer dependency
+
 ## 1.7.0
 
 ### Minor Changes
