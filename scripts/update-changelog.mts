@@ -5,6 +5,7 @@ const changelog = await readFile('packages/vern-llm/CHANGELOG.md', 'utf8');
 const output = `---
 title: Changelog
 description: Release history for vern-llm
+icon: History
 ---
 
 vern-llm uses Changesets for versioning. The release history below is generated automatically.
