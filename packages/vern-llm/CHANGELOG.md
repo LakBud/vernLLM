@@ -1,5 +1,60 @@
 # vern-llm
 
+## 1.7.0
+
+### Minor Changes
+
+- 837d9d1: Added an opt-in preflight check for Bedrock tool use support.
+
+  `fromBedrock` now accepts a second `options` argument with `toolUseSupportedModels`, either a static list of model IDs or a predicate function. When set, a `jsonSchema` call to a model not covered by it fails fast with `LLMError('validation')` before the request is sent.
+
+  Left unset, the default, no preflight check runs and a `jsonSchema` call to an unsupported model still surfaces Bedrock's raw error unchanged. `fromBedrock` does not try to reclassify or guess at that error from its text, since AWS's error message for an unsupported model is not a documented, stable contract.
+
+  Also refactored `VernLLM.ts` internally: inlined several small constructor only helper methods, tightened redundant logic, and expanded JSDoc coverage across the public API (constructor, `call`, `cachedCall`, `cachedLLMCall`, `deleteCache`, `getCircuitState`) with clearer parameter and return descriptions. No public behavior changed.
+
+  Docs updated in `adapters/bedrock.mdx` with a new "Preflighting tool use support" section.
+
+  Tests added covering the allowlist and predicate forms of `toolUseSupportedModels`, confirming `converse` is never called on a rejected preflight, and confirming non `jsonSchema` calls and the no option default skip the check entirely.
+
+- 52d5f74: Added an extensible cache adapter framework that allows applications to customize and compose caching strategies.
+
+  Added `resolveKey` support to `CacheAdapter` for canonicalizing cache keys before lookups and in-flight request coalescing.
+  Cache adapters can now transform equivalent but differently formatted keys into a shared canonical key, allowing requests such as normalized, semantic, or fuzzy matches to reuse the same cached response and active generation.
+  This enables advanced cache matching strategies without changing VernLLM's core caching flow, while keeping existing adapters fully compatible through the optional `resolveKey` method.
+
+  Included built-in adapters:
+
+  - `InMemoryCacheAdapter` for zero-dependency local caching with TTL support and bounded memory usage.
+  - `NormalizedCacheAdapter` for normalizing cache keys to avoid duplicate entries caused by formatting differences.
+  - `TieredCacheAdapter` for multi-level caching with fast local L1 caches and shared L2 caches, including promotion of L2 hits back into L1.
+
+  This enables support for advanced caching architectures such as local + distributed caches, custom cache providers (Redis, Upstash, databases, etc.), and future semantic or fuzzy cache implementations without changing VernLLM's core execution flow.
+
+  Docs has been update within guides to showcase these new adapters.
+  Tests has been added on `cachedCall.unit.test.ts` and `index.exports.unit.test.ts`
+
+### Patch Changes
+
+- 426d48e: Internal refactor: extract `withReservedUsage` and `normalizeError` out of `VernLLM` into `internal/vernLLM.utils.ts` as standalone functions, with added unit test coverage. No public API or behavior changes.
+- 02e8df9: Fix cache key normalization, tiered cache key resolution, and structured output adapter metadata forwarding.
+
+  - **`NormalizedCacheAdapter`**: punctuation is now replaced with a space instead of being removed outright. Previously `"2+2"` and `"2 + 2"` normalized differently (`"22"` vs `"2 2"`) because removing punctuation collapsed adjacent characters. Both now normalize consistently to `"2 2"`.
+
+  - **`TieredCacheAdapter`**: now implements `resolveKey`, forwarding to L1's implementation if present, otherwise L2's, otherwise returning the original key unchanged.
+
+  - **`fromAnthropic`**: `jsonSchema` now forwards schema metadata into Anthropic tool use. The adapter passes `name`, `description`, `input_schema`, and `strict` into the generated tool definition and continues using forced tool calls for structured output.
+
+  - **`fromBedrock`**: `jsonSchema` now forwards schema metadata into Bedrock Converse tool use. The adapter passes `name`, `description`, `inputSchema`, and `strict` into the generated tool spec and forces tool selection through `toolChoice`. Strict enforcement depends on the selected Bedrock model's tool support.
+
+  - **`fromGemini`**: `jsonSchema` now forwards schema descriptions into Gemini's `generationConfig.responseSchema`. Structured output uses `responseMimeType: 'application/json'` with `responseSchema`; Gemini does not use a separate `strict` flag.
+
+  - Removed references to the deprecated `@google/generative-ai` SDK from Gemini adapter docs and comments. The adapter uses structural typing and is not SDK-specific.
+
+  Docs updated in:
+  `core/caching.mdx`, `guides/caching-methods/normalized.mdx`, `guides/caching-methods/tiered.mdx`, `core/structured-output.mdx`, and `adapters/gemini.mdx`.
+
+  Tests added covering punctuation normalization, `TieredCacheAdapter.resolveKey` forwarding, and structured output adapter behavior.
+
 ## 1.6.0
 
 ### Minor Changes
