@@ -1,0 +1,52 @@
+{
+  "extends": ["config:recommended"],
+
+  "dependencyDashboard": true,
+
+  "rangeStrategy": "bump",
+
+  "timezone": "Europe/Oslo",
+
+  "schedule": ["weekend"],
+
+  "labels": ["dependencies"],
+
+  "commitMessagePrefix": "chore(deps):",
+
+  "packageRules": [
+    {
+      "description": "Group TypeScript ecosystem updates",
+      "groupName": "typescript tooling",
+      "matchPackageNames": ["typescript", "tsdown", "vitest", "@vitest/**", "@types/node"]
+    },
+
+    {
+      "description": "Keep OpenAI SDK updates visible",
+      "groupName": "openai sdk",
+      "matchPackageNames": ["openai"],
+      "rangeStrategy": "replace"
+    },
+
+    {
+      "description": "Do not auto merge risky dependencies",
+      "matchPackageNames": ["openai", "typescript", "tsdown", "vitest"],
+      "automerge": false
+    },
+
+    {
+      "description": "Auto merge safe patches",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+
+    {
+      "description": "Disable major version auto updates",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ],
+
+  "ignorePresets": ["workarounds:javaLTSVersions"],
+
+  "postUpdateOptions": ["pnpmDedupe"]
+}

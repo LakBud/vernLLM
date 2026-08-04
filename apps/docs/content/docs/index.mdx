@@ -64,7 +64,7 @@ const summary = await llm.cachedLLMCall({
 - **Caching**: wrap any call with `cachedCall` or `cachedLLMCall`, and bring your own adapter such as Redis or Upstash
 - **Circuit breaker**: trips after repeated failures and recovers automatically once the provider is healthy again
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP through `fromFetch`
-- **Zero bundled dependencies**: `zod` and provider SDKs are peer dependencies. The package only depends on compatible interfaces rather than specific provider implementations
+- **Zero runtime dependencies**: VernLLM is provider- and validator-agnostic. It works with compatible LLM clients and any schema validator exposing a safeParse interface, such as Zod.
 
 ## Who's using VernLLM?
 

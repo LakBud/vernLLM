@@ -60,7 +60,7 @@ const result = await llm.call({
 - **Caching**: wrap any call with `cachedCall`/`cachedLLMCall`, bring your own cache adapter
 - **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
-- **Zero bundled deps**: `zod` and provider SDKs are peer dependencies; this package only relies on their shapes structurally
+- **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; VernLLM relies on compatible interfaces rather than specific implementations.
 
 See the [docs](https://vernllm.vercel.app) for adapter setup, caching, the circuit breaker, and structured output in depth.
 

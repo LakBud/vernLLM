@@ -9,6 +9,4 @@ description: Requirements, edge cases, and dependency behavior
 - Per attempt timeouts throw `LLMError('timeout')` and can be retried like other transient failures.
 - `jsonMode: false` skips JSON parsing entirely and returns the raw string.
 - `reserveUsage` failures stop the call before a provider request is sent and surface as `LLMError('quota_exceeded')`. VernLLM does not decide quota rules; the application controls the reservation logic.
-- `openai` is the only formal (optional) peer dependency. `zod` and other provider SDKs
-  (`groq-sdk`, `@anthropic-ai/sdk`, etc.) are not runtime dependencies. This package only relies on
-  their shapes structurally, so bring your own.
+- Provider SDKs and validation libraries are not runtime dependencies. VernLLM relies on compatible interfaces rather than specific implementations, so users bring their own provider clients and schema validators (such as Zod-compatible validators).

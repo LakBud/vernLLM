@@ -186,12 +186,12 @@ export const faqItems = [
   {
     question: 'How many dependencies does it add to my project?',
     answer:
-      'Zero bundled dependencies. Zod and provider SDKs are peer dependencies, and VernLLM only relies on their shapes structurally, so it stays dependency-light and typed from the start.',
+      'Zero runtime dependencies. VernLLM does not bundle Zod or provider SDKs; it relies on compatible interfaces instead, so you bring your own provider clients and schema validators while keeping your dependency tree minimal.',
   },
   {
     question: 'How big is the bundle?',
     answer:
-      '12.1 kB minified, 4.4 kB minified and gzipped. Small enough to drop into a project without thinking twice about it.',
+      '17.4+ kB minified, 6.1+ kB minified and gzipped. Small enough to drop into a project without thinking twice about it.',
   },
   {
     question: 'Is it open source?',
