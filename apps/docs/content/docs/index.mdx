@@ -65,3 +65,7 @@ const summary = await llm.cachedLLMCall({
 - **Circuit breaker**: trips after repeated failures and recovers automatically once the provider is healthy again
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP through `fromFetch`
 - **Zero bundled dependencies**: `zod` and provider SDKs are peer dependencies. The package only depends on compatible interfaces rather than specific provider implementations
+
+## Who's using VernLLM?
+
+- **[Applera](https://www.applera.site)** uses VernLLM as its primary LLM call layer, backed by the [Groq](/docs/adapters/openai-compatible) adapter and a custom Upstash cache adapter, for structured resume/job matching and application generation.
