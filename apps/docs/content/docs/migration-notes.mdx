@@ -110,9 +110,9 @@ temperature?: number;
 <Callout type="warn">
   Same narrow scope as the `LLMClient.messages` change above: this only affects code that implements
   `LLMClient` by hand. If your custom implementation reads `params.temperature` assuming it's always
-  a `number`, for example calling a method on it without a null check, it no longer compiles under
-  `strict`. Every built-in adapter and every normal `call()` caller is unaffected, VernLLM still
-  sends `0.2` by default exactly as before unless you opt out.
+  a `number`, for example calling a method on it without checking whether it's `undefined` first, it
+  no longer compiles under `strict`. Every built-in adapter and every normal `call()` caller is
+  unaffected, VernLLM still sends `0.2` by default exactly as before unless you opt out.
 </Callout>
 
 To update a custom `LLMClient`, handle `params.temperature` being `undefined` the same way you'd

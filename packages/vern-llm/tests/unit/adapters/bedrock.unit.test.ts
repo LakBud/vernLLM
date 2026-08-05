@@ -64,7 +64,7 @@ describe('fromBedrock', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(converse.mock.calls[0]![0].inferenceConfig?.temperature).toBeUndefined();
+    expect('temperature' in (converse.mock.calls[0]![0].inferenceConfig ?? {})).toBe(false);
   });
 
   it('translates ContentBlock[] userContent into Converse image/text blocks, decoding base64 to bytes', async () => {

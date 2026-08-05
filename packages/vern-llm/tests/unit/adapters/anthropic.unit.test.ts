@@ -33,7 +33,7 @@ describe('fromAnthropic', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(create.mock.calls[0]![0].temperature).toBeUndefined();
+    expect('temperature' in create.mock.calls[0]![0]).toBe(false);
   });
 
   it('maps system + user messages into Anthropic system/messages shape', async () => {

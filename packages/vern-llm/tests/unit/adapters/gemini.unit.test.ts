@@ -29,7 +29,7 @@ describe('fromGemini', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(generateContent.mock.calls[0]![0].generationConfig?.temperature).toBeUndefined();
+    expect('temperature' in (generateContent.mock.calls[0]![0].generationConfig ?? {})).toBe(false);
   });
 
   it('maps messages into contents + systemInstruction', async () => {

@@ -196,9 +196,6 @@ export class VernLLM {
 
     if (wireToolCalls?.length) {
       if (!params.tools) {
-        // A provider returning tool_calls when no tools were offered would
-        // be a provider bug, not a normal outcome — surfaced as an API
-        // error rather than silently coerced into a text response.
         throw new LLMError(
           'Provider returned tool_calls but no `tools` were sent with this call.',
           'api',
@@ -414,7 +411,7 @@ export class VernLLM {
     if (tools && tools.length === 0) {
       throw new LLMError(
         '`tools` was an empty array. This is almost always a bug (e.g. a filtered tool list ' +
-          'that ended up empty) — an empty `tools` array still switches on tool-call mode ' +
+          'that ended up empty). An empty `tools` array still switches on tool-call mode ' +
           '(response shape, jsonMode default, wire format) with nothing for the model to call. ' +
           'Omit `tools` entirely for a normal call, or make sure the array is non-empty.',
         'validation',

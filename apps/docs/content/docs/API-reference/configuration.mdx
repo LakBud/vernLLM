@@ -61,7 +61,7 @@ const llm = new VernLLM({
 | -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                                          |
 | `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` from every call by default, so the provider applies its own default. |
-| `parseJson`          | `defaultParseJson` | Custom parser for non standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM.                          |
+| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM.                          |
 
 ## Caching
 

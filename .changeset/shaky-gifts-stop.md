@@ -8,4 +8,4 @@ Pass `temperature: null` on a call, or `defaultTemperature: null` on the `VernLL
 
 This is purely additive for normal `call()` usage. Omitting `temperature` everywhere keeps sending `0.2` exactly as before, no behavior changes for existing callers.
 
-One narrow caveat: making this work required widening `LLMClient`'s wire-level `temperature: number` to `temperature?: number`. This only affects hand-written `LLMClient` implementations that assume `params.temperature` is always a `number` without a null check, every built-in adapter (`fromAnthropic`, `fromBedrock`, `fromGemini`, `fromFetch`, OpenAI-compatible) is unaffected. See Migration Notes for details.
+One narrow caveat: making this work required widening `LLMClient`'s wire-level `temperature: number` to `temperature?: number`. This only affects hand-written `LLMClient` implementations that assume `params.temperature` is always a `number` without checking whether it's `undefined`, every built-in adapter (`fromAnthropic`, `fromBedrock`, `fromGemini`, `fromFetch`, OpenAI-compatible) is unaffected. See Migration Notes for details.
