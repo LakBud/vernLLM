@@ -73,6 +73,14 @@ const llm = new VernLLM({
 });
 ```
 
+## Tool calling
+
+`tools`, `tool_choice`, and `tool_calls` already match the OpenAI Chat Completions shape, so this
+adapter passes them through unchanged. The one normalization it applies is stripping
+`is_error` from outgoing `tool` messages, since that field is an Anthropic-only concept with no
+OpenAI-compatible equivalent. See <a href="/docs/core/tool-calling">Tool Calling</a> for the full
+reference.
+
 ## Multimodal input
 
 OpenAI-compatible providers with vision-capable models can receive images through VernLLM's

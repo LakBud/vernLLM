@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 
+import { type AnthropicClient } from '../src/adapters/anthropic.js';
 import { type LLMClient } from '../src/types/index.js';
 
 type CreateResult = Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
@@ -19,6 +20,30 @@ export function jsonResponse(
 /** Builds a successful chat-completion response with raw text content. */
 export function textResponse(text: string): CreateResult {
   return { choices: [{ message: { content: text } }] };
+}
+
+/** Builds a response where the model requests one or more tool calls. */
+export function toolCallResponse(
+  calls: Array<{ id: string; name: string; arguments: unknown; rawArguments?: string }>,
+  content?: string,
+): CreateResult {
+  return {
+    choices: [
+      {
+        message: {
+          content: content ?? null,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: 'function' as const,
+            function: {
+              name: c.name,
+              arguments: c.rawArguments ?? JSON.stringify(c.arguments),
+            },
+          })),
+        },
+      },
+    ],
+  };
 }
 
 /** An error carrying an HTTP-style status, as SDK errors typically do. */
@@ -89,21 +114,10 @@ export function makeFakeAnthropicClient(
   responseText: string,
   usage = { input_tokens: 10, output_tokens: 5 },
 ) {
-  const create = vi.fn(
-    async (
-      _params: {
-        model: string;
-        max_tokens: number;
-        temperature?: number;
-        system?: string;
-        messages: Array<{ role: 'user' | 'assistant'; content: string }>;
-      },
-      _options: { signal: AbortSignal },
-    ) => ({
-      content: [{ type: 'text', text: responseText }],
-      usage,
-    }),
-  );
+  const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+    content: [{ type: 'text', text: responseText }],
+    usage,
+  }));
 
   return { client: { messages: { create } }, create };
 }

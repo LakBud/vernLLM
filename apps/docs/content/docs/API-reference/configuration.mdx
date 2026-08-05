@@ -102,13 +102,14 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 ## Per call defaults and overrides
 
-A handful of options are set per `call()` rather than on the instance. Three have their own defaults worth knowing:
+A handful of options are set per `call()` rather than on the instance. The following options have their own defaults worth knowing:
 
-| Option         | Default | Notes                                                                                                                                  |
-| -------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `temperature`  | `0.2`   | Low by design. This library targets structured and deterministic extraction more than open-ended generation. Override freely per call. |
-| `jsonMode`     | `true`  | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing.                             |
-| `systemPrompt` | none    | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                              |
+| Option         | Default                                  | Notes                                                                                                                                                                                                                                             |
+| -------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `temperature`  | `0.2`                                    | Low by design. This library targets structured and deterministic extraction more than open-ended generation. Override freely per call.                                                                                                            |
+| `jsonMode`     | `true`, except `false` if `tools` is set | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing. Forcing JSON output alongside tool calling is unreliable across providers, so the default flips off automatically once `tools` is set. |
+| `systemPrompt` | none                                     | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                                                                                                                                         |
+| `toolChoice`   | `'auto'` when `tools` is set             | Controls whether and which tool the model must call. See <a href="/docs/core/tool-calling">Tool Calling</a>.                                                                                                                                      |
 
 ## Usage metering
 
@@ -122,9 +123,10 @@ A handful of options are set per `call()` rather than on the instance. Three hav
 These hooks are application controlled. VernLLM only manages the reservation lifecycle; it does
 not decide quota rules or billing policy.
 
-The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`,
-`signal`, and `requestId`, have no call-level default beyond falling back to the instance-level
-option or being undefined when omitted.
+`userContent`, `model`, `maxTokens`, and `reasoningEffort` have no call-level default beyond
+falling back to the corresponding instance-level `VernLLMOptions` field, or being undefined when
+omitted. `schema`, `jsonSchema`, `tools`, `signal`, and `requestId` have no instance-level
+equivalent at all, they're undefined unless set on the call itself.
 
 `requestId` is an optional identifier you can provide per call:
 

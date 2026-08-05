@@ -3,8 +3,6 @@ title: Multi-turn Conversations
 description: Learn how to maintain context across multiple LLM calls using conversation history.
 ---
 
-# Multi-turn Conversations
-
 VernLLM supports multi-turn conversations by allowing you to provide previous user and assistant messages through the `history` option.
 
 This allows the model to continue a conversation while keeping context from earlier messages.
@@ -48,16 +46,35 @@ user: Who created it?
 
 ## History format
 
-The `history` option accepts an array of conversation turns:
+`ConversationTurn` is a discriminated union keyed on `role`, not a single flat shape. This is a
+breaking change from earlier versions, where every turn was `{ role: 'user' | 'assistant';
+content: string }` regardless of what it represented.
 
 ```ts
-type ConversationTurn = {
-  role: 'user' | 'assistant';
-  content: string;
-};
+type ConversationTurn =
+  | {
+      role: 'user';
+      content: string;
+    }
+  | {
+      role: 'assistant';
+      content?: string;
+      toolCalls?: ToolCall[];
+    }
+  | {
+      role: 'tool';
+      toolResults: ToolResult[];
+    };
 ```
 
-Each conversation turn contains:
+<Callout type="warn">
+  `user` turns still require `content`. `assistant` turns no longer require it, since an assistant
+  turn that only requested tools has no text of its own. Plain user/assistant history exactly like
+  before still works unchanged, this only adds the `tool` role and the optional `toolCalls` field on
+  top.
+</Callout>
+
+For plain conversations without tools, only the `user` and `assistant` cases apply:
 
 | Field     | Description                                       |
 | --------- | ------------------------------------------------- |
@@ -109,11 +126,24 @@ VernLLM validates history before sending a request.
 
 History must:
 
-- Only contain `user` and `assistant` roles.
-- Alternate between user and assistant messages.
-- End with an `assistant` message.
+- Only contain `user`, `assistant`, and `tool` roles.
+- Alternate between user and assistant turns, the same as before.
+- End with either an `assistant` turn without tool calls, or a completed `tool` turn.
 
-The current `userContent` is always appended after the history, so the final history entry cannot be a user message.
+The current `userContent` is always appended after the history, so the final history entry cannot
+be a user turn.
+
+A `tool` turn has its own rules on top of the alternation check:
+
+- It must immediately follow an `assistant` turn that set `toolCalls`.
+- It must include exactly one `ToolResult` for every requested `toolCallId`, no more, no fewer.
+- An assistant turn that requested tools cannot be followed by anything except its matching `tool`
+  turn, including the final entry in `history` itself.
+
+Any violation throws `LLMError('validation')` before a request is sent. See{' '}
+
+<a href="/docs/core/tool-calling">Tool Calling</a> for how this fits into a full request, execute,
+continue loop.
 
 ### Valid history
 
@@ -160,4 +190,8 @@ await llm.call({
 
 Conversation history is handled by VernLLM's core layer and converted into the correct format for each provider adapter.
 
-Both user and assistant messages are preserved, allowing multi-turn conversations to work consistently across supported LLM providers.
+User, assistant, and tool turns are all preserved, allowing multi-turn conversations, including
+tool call continuations, to work consistently across supported LLM providers. Each adapter maps
+`tool` turns onto whatever shape that provider expects, for example Anthropic's `tool_result`
+content blocks or Gemini's `functionResponse` parts, so you write `history` once in VernLLM's
+shape regardless of which provider is behind `llm`.

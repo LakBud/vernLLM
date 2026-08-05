@@ -1,11 +1,37 @@
 import type { JsonSchemaSpec, SchemaLike } from './schema.js';
+import type {
+  CallWithToolsResult,
+  ToolCall,
+  ToolChoice,
+  ToolDefinition,
+  ToolResult,
+} from './tools.js';
 import type { UsageHooks } from './usage.js';
 
-/** A single prior turn in a multi-turn conversation, passed via `history`. */
-export interface ConversationTurn {
-  role: 'user' | 'assistant';
-  content: string;
-}
+/**
+ * A single prior turn in a multi-turn conversation, passed via `history`.
+ *
+ * Supports normal user/assistant messages and tool continuations:
+ * - assistant turns may include `toolCalls` when the model requested tools.
+ * - tool turns include the matching `toolResults`.
+ *
+ * Tool turns must immediately follow an assistant tool call turn, and every
+ * requested tool call must have a result.
+ */
+export type ConversationTurn =
+  | {
+      role: 'user';
+      content: string;
+    }
+  | {
+      role: 'assistant';
+      content?: string;
+      toolCalls?: ToolCall[];
+    }
+  | {
+      role: 'tool';
+      toolResults: ToolResult[];
+    };
 
 /** A plain text segment of a multimodal `userContent` array. */
 export interface TextBlock {
@@ -39,8 +65,8 @@ export interface CallParams<T = unknown> extends UsageHooks {
   userContent: string | ContentBlock[];
 
   /**
-   * Previous conversation turns. Must alternate user/assistant and end with
-   * an assistant turn; invalid history throws LLMError('validation').
+   * Previous conversation turns. Must alternate roles; tool turns must follow
+   * assistant tool calls. Invalid history throws LLMError('validation').
    */
   history?: ConversationTurn[];
 
@@ -66,11 +92,68 @@ export interface CallParams<T = unknown> extends UsageHooks {
    * Implies jsonMode: true.
    */
   schema?: SchemaLike<T>;
+
+  /**
+   * Tools the model may call. When set, `call()` always returns a
+   * `CallWithToolsResult<T>` discriminated union instead of `T` directly
+   * (see `CallWithToolsResult`) — this is a breaking-change point:
+   * omitting `tools` keeps `call()`'s old `Promise<T>` behavior exactly.
+   *
+   * Mutually exclusive with `jsonSchema`/`schema`: on Anthropic and
+   * Bedrock, `jsonSchema` is implemented internally as a forced single-tool
+   * call, which would collide with real tools. Setting both throws
+   * `LLMError('validation')`.
+   */
+  tools?: ToolDefinition[];
+
+  /** Defaults to `'auto'` when `tools` is set. */
+  toolChoice?: ToolChoice;
 }
 
+/**
+ * Parameters for a generic cached operation.
+ *
+ * `cachedCall()` uses `cacheKey` to look up existing results and runs `fn`
+ * only on cache misses. Concurrent misses for the same key are coalesced
+ * into a single in-flight operation.
+ */
 export interface CachedCallParams<T> extends UsageHooks {
   cacheKey: string;
   ttl: number;
   fn: () => Promise<T>;
   signal?: AbortSignal;
 }
+
+/**
+ * A `CallParams` variant where tool calling is explicitly enabled.
+ *
+ * Requiring `tools` to be present allows TypeScript to select the
+ * tool-aware `call()` overload and return `CallWithToolsResult<T>` instead
+ * of the normal `T` response type.
+ */
+export type ToolEnabledCallParams<T> = CallParams<T> & {
+  tools: NonNullable<CallParams<T>['tools']>;
+};
+
+type CachedCallInput<T> = Omit<CachedCallParams<T>, 'fn'>;
+
+/**
+ * Parameters for a cached LLM call without tool calling.
+ *
+ * Combines the cache configuration with the `CallParams` passed to
+ * `VernLLM.call()`. The cached value is the normal LLM response type `T`.
+ */
+export type CachedLLMCallParams<T> = CachedCallInput<T> & {
+  call: CallParams<T>;
+};
+
+/**
+ * Parameters for a cached LLM call with tool calling enabled.
+ *
+ * The cached value includes the full `CallWithToolsResult<T>`, meaning
+ * tool requests and normal content responses are cached exactly as returned
+ * by the model.
+ */
+export type CachedLLMToolCallParams<T> = CachedCallInput<CallWithToolsResult<T>> & {
+  call: ToolEnabledCallParams<T>;
+};

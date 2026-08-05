@@ -8,5 +8,8 @@ description: Requirements, edge cases, and dependency behavior
 - An already aborted `signal` rejects immediately with `LLMError('aborted')` before any request is dispatched.
 - Per attempt timeouts throw `LLMError('timeout')` and can be retried like other transient failures.
 - `jsonMode: false` skips JSON parsing entirely and returns the raw string.
+- `jsonMode` defaults to `false`, not `true`, on any call that sets `tools`.
+- `tools` and `jsonSchema`/`schema` are mutually exclusive on the same call and throw `LLMError('validation')` if combined.
+- `fromFetch` has no way to return `tool_calls` from `mapResponse`, so tool calling is not supported through that adapter yet.
 - `reserveUsage` failures stop the call before a provider request is sent and surface as `LLMError('quota_exceeded')`. VernLLM does not decide quota rules; the application controls the reservation logic.
 - Provider SDKs and validation libraries are not runtime dependencies. VernLLM relies on compatible interfaces rather than specific implementations, so users bring their own provider clients and schema validators (such as Zod-compatible validators).

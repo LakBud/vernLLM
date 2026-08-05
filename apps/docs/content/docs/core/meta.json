@@ -5,6 +5,7 @@
     "index",
     "retries",
     "structured-output",
+    "tool-calling",
     "caching",
     "usage-metering",
     "usage-tracking",

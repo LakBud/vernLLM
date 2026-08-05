@@ -1,0 +1,224 @@
+---
+title: Tool Execution Loop
+description: Build a full request, execute, continue loop around a model that calls your functions
+---
+
+# Tool Execution Loop
+
+This guide walks through a complete tool calling flow with VernLLM: defining a tool, letting the
+model request it, executing it yourself, and feeding the result back for a final answer.
+
+VernLLM never runs a tool on your behalf. It only transports the request and parses what comes
+back, so the execution step below is always something your own application code does.
+
+## 1. Define the tool
+
+A `ToolDefinition` is just a name, a description, and a JSON Schema for its arguments:
+
+```ts title="define-weather-tool.ts"
+const weatherTool = {
+  name: 'get_weather',
+  description: 'Gets the current weather for a given city',
+  parameters: {
+    type: 'object',
+    properties: {
+      city: { type: 'string' },
+    },
+    required: ['city'],
+  },
+};
+```
+
+Add `argumentsSchema` if you want VernLLM to validate the parsed arguments client side before
+handing them back to you, using any `safeParse` compatible validator such as Zod:
+
+```ts title="define-weather-tool-with-schema.ts"
+import { z } from 'zod';
+
+const weatherTool = {
+  name: 'get_weather',
+  description: 'Gets the current weather for a given city',
+  parameters: {
+    type: 'object',
+    properties: { city: { type: 'string' } },
+    required: ['city'],
+  },
+  argumentsSchema: z.object({ city: z.string() }),
+};
+```
+
+## 2. Make the first call
+
+Pass `tools` to `call()`. The model decides on its own whether to answer directly or request a
+tool, since `toolChoice` defaults to `'auto'`:
+
+```ts title="tool-calling-first-call.ts"
+const first = await llm.call({
+  systemPrompt: 'You are a helpful weather assistant.',
+  userContent: 'What is the weather in New York right now?',
+  tools: [weatherTool],
+});
+```
+
+`first` is a `CallWithToolsResult<T>`. Check `first.type` to see what happened:
+
+```ts title="tool-calling-check-type.ts"
+if (first.type === 'tool_calls') {
+  console.log('Model wants to call:', first.toolCalls);
+} else {
+  console.log('Model answered directly:', first.content);
+}
+```
+
+## 3. Execute the tool yourself
+
+When `first.type` is `'tool_calls'`, run each requested tool with your own application logic.
+`ToolCall.arguments` is already parsed JSON, and validated if `argumentsSchema` was set:
+
+```ts title="tool-calling-execute.ts"
+async function getWeather(city: string) {
+  const response = await fetch(`https://weather.example.com/api?city=${encodeURIComponent(city)}`);
+  return response.json();
+}
+
+const toolResults = [];
+
+if (first.type === 'tool_calls') {
+  for (const call of first.toolCalls) {
+    const args = call.arguments as { city: string };
+    const weather = await getWeather(args.city);
+
+    toolResults.push({
+      toolCallId: call.id,
+      content: weather,
+    });
+  }
+}
+```
+
+<Callout type="warn">
+  If a tool execution fails, set `isError: true` on the corresponding `ToolResult`. `fromAnthropic`
+  maps it onto `tool_result.is_error`, and `fromBedrock` maps it onto `toolResult.status: 'error'`.
+  Gemini has no equivalent wire concept and ignores it silently.
+</Callout>
+
+## 4. Continue the conversation
+
+Call `call()` again, this time with an `assistant` turn carrying the original `toolCalls` and a
+matching `tool` turn carrying the results, appended to `history`:
+
+```ts title="tool-calling-continue.ts"
+const final = await llm.call({
+  systemPrompt: 'You are a helpful weather assistant.',
+  userContent: 'What is the weather in New York right now?',
+  tools: [weatherTool],
+  history: [
+    {
+      role: 'assistant',
+      toolCalls: first.toolCalls,
+    },
+    {
+      role: 'tool',
+      toolResults,
+    },
+  ],
+});
+
+if (final.type === 'content') {
+  console.log(final.content);
+}
+```
+
+VernLLM validates this shape before sending anything. A `tool` turn must immediately follow an
+`assistant` turn that requested tools, and every requested `toolCallId` needs exactly one matching
+result, no more, no fewer. An invalid history throws `LLMError('validation')` before a request is
+made.
+
+## Parallel tool calls
+
+The model can request more than one tool in a single turn. `first.toolCalls` is always an array,
+so the same loop from step 3 handles one call or several without changes:
+
+```ts title="tool-calling-parallel.ts"
+const first = await llm.call({
+  userContent: 'What is the weather and time in Paris?',
+  tools: [weatherTool, timeTool],
+});
+
+if (first.type === 'tool_calls') {
+  const toolResults = await Promise.all(
+    first.toolCalls.map(async (call) => ({
+      toolCallId: call.id,
+      content: await runTool(call.name, call.arguments),
+    })),
+  );
+
+  const final = await llm.call({
+    userContent: 'What is the weather and time in Paris?',
+    tools: [weatherTool, timeTool],
+    history: [
+      { role: 'assistant', toolCalls: first.toolCalls },
+      { role: 'tool', toolResults },
+    ],
+  });
+}
+```
+
+Each adapter serializes the results into that provider's own native format rather than exposing
+VernLLM's wire shape directly. The OpenAI-compatible adapter sends one message per tool result,
+already the native format there. Anthropic, Bedrock, and Gemini instead expect every result from
+one turn combined into a single content-block-carrying turn, so those adapters merge the results
+back together on your behalf. Either way, you never need to think about the provider-specific
+shape yourself.
+
+## Forcing a specific tool
+
+Set `toolChoice: { name: 'get_weather' }` to force the model to call one particular tool instead
+of leaving the decision to it:
+
+```ts title="tool-calling-force-tool.ts"
+const result = await llm.call({
+  userContent: 'New York',
+  tools: [weatherTool],
+  toolChoice: { name: 'get_weather' },
+});
+```
+
+This is useful when the user message alone should always map to a specific action, and you would
+rather skip the model deciding whether to call it at all.
+
+## Full flow, put together
+
+```ts title="tool-calling-full-flow.ts"
+async function askAboutWeather(city: string) {
+  const first = await llm.call({
+    userContent: `What is the weather in ${city}?`,
+    tools: [weatherTool],
+  });
+
+  if (first.type !== 'tool_calls') {
+    return first.content;
+  }
+
+  const toolResults = await Promise.all(
+    first.toolCalls.map(async (call) => ({
+      toolCallId: call.id,
+      content: await getWeather((call.arguments as { city: string }).city),
+    })),
+  );
+
+  const final = await llm.call({
+    userContent: `What is the weather in ${city}?`,
+    tools: [weatherTool],
+    history: [
+      { role: 'assistant', toolCalls: first.toolCalls },
+      { role: 'tool', toolResults },
+    ],
+  });
+
+  return final.type === 'content' ? final.content : undefined;
+}
+```
+
+See <a href="/docs/core/tool-calling">Tool Calling</a> for the full reference on result shapes,
+`toolChoice`, caching behavior, and per-provider notes.

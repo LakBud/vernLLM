@@ -1,0 +1,274 @@
+---
+title: Tool Calling
+description: Let the model request application defined tools, without VernLLM ever executing them
+---
+
+VernLLM supports first class tool calling on top of its existing reliability layer. Retries,
+validation, usage tracking, and caching all keep working the same way whether or not `tools` is
+set.
+
+<Callout type="info">
+  VernLLM never executes tools itself. `call()` returns the tool calls the model requested as
+  structured data, and it is entirely up to your application to decide how and when to run them.
+</Callout>
+
+<Callout type="info">
+  Tool calling introduces two breaking type changes for custom `LLMClient` implementations and
+  strictly typed `ConversationTurn` construction. Most applications are unaffected, see{' '}
+  <a href="/docs/migration-notes#tool-calling">Migration Notes</a> if you implement `LLMClient`
+  directly or build `history` entries from a loosely typed `role`.
+</Callout>
+
+## Enabling tools
+
+Pass `tools` to `call()` as an array of `ToolDefinition` objects. Each one describes a capability
+the model may request, not the capability itself:
+
+```ts title="tool-calling-basic-usage.ts"
+const weatherTool = {
+  name: 'get_weather',
+  description: 'Gets the current weather for a city',
+  parameters: {
+    type: 'object',
+    properties: {
+      city: { type: 'string' },
+    },
+    required: ['city'],
+  },
+};
+
+const result = await llm.call({
+  userContent: 'What is the weather in New York?',
+  tools: [weatherTool],
+});
+```
+
+<Callout type="warn">
+  Setting `tools` changes what `call()` returns. Instead of `T` directly, you get back a
+  `CallWithToolsResult<T>` discriminated union. This is intentional and does not affect calls that
+  omit `tools`, which keep returning `T` exactly as before.
+</Callout>
+
+## The result shape
+
+`CallWithToolsResult<T>` is either a content result or a tool call result:
+
+```ts
+type CallWithToolsResult<T> = ContentResult<T> | ToolCallResult;
+
+type ContentResult<T> = {
+  type: 'content';
+  content: T;
+};
+
+type ToolCallResult = {
+  type: 'tool_calls';
+  toolCalls: ToolCall[];
+  content?: string; // any text the model produced alongside the request
+};
+```
+
+Check `result.type` to branch:
+
+```ts title="tool-calling-branching.ts"
+const result = await llm.call({
+  userContent: 'What is the weather in New York?',
+  tools: [weatherTool],
+});
+
+if (result.type === 'tool_calls') {
+  for (const call of result.toolCalls) {
+    console.log(call.name, call.arguments);
+  }
+} else {
+  console.log(result.content);
+}
+```
+
+<Callout>
+  Prefer the exported `isToolCallResult()` helper over relying on TypeScript's static narrowing
+  whenever `params` was not a literal with `tools` set inline, for example when it was built up on a
+  variable. See the overload note below.
+</Callout>
+
+## A note on the call() overload
+
+TypeScript only resolves `call()` to the tools aware overload when `tools` is visible as a
+required, present key at the call site, either an inline object literal with `tools: [...]`, or a
+variable typed as `CallParams<T> & { tools: ToolDefinition[] }`.
+
+If you build `params` as a plain `CallParams<T>` and conditionally set `tools` on it, TypeScript
+picks the plain `Promise<T>` overload regardless of what `tools` turns out to be at runtime. The
+return value's actual shape still follows `tools` at runtime, so this mismatch is silent rather
+than a compile error.
+
+```ts title="tool-calling-runtime-check.ts"
+import { isToolCallResult } from 'vern-llm';
+
+const params: CallParams<string> = {
+  userContent: 'What is the weather?',
+  tools: someCondition ? [weatherTool] : undefined,
+};
+
+const result = await llm.call(params);
+
+if (isToolCallResult(result)) {
+  // handled safely regardless of what TypeScript inferred
+}
+```
+
+## Argument parsing and validation
+
+Tool call arguments arrive from the provider as a JSON string on the wire. VernLLM parses them
+into `ToolCall.arguments` before returning them to you.
+
+Add `argumentsSchema` to a `ToolDefinition` for client side validation, using the same
+`safeParse` compatible shape as the top level `schema` option:
+
+```ts title="tool-calling-arguments-schema.ts"
+import { z } from 'zod';
+
+const weatherTool = {
+  name: 'get_weather',
+  description: 'Gets the current weather for a city',
+  parameters: {
+    type: 'object',
+    properties: { city: { type: 'string' } },
+    required: ['city'],
+  },
+  argumentsSchema: z.object({ city: z.string() }),
+};
+```
+
+<Callout type="warn">
+  If validation fails, `call()` throws `LLMError('validation')` before returning a result. If the
+  model requests a tool name that was not in the `tools` array, `call()` throws `LLMError('api')`
+  instead, on the reasoning that a hallucinated tool name may not recur on retry.
+</Callout>
+
+## Continuing after a tool call
+
+VernLLM does not run tools automatically. Once your application has executed the requested tool,
+call `call()` again with the tool call and its result appended to `history`:
+
+```ts title="tool-calling-continuation.ts"
+const first = await llm.call({
+  userContent: 'What is the weather in New York?',
+  tools: [weatherTool],
+});
+
+if (first.type === 'tool_calls') {
+  const call = first.toolCalls[0];
+  const weather = await getWeather(call.arguments.city); // your own execution logic
+
+  const final = await llm.call({
+    userContent: 'What is the weather in New York?',
+    tools: [weatherTool],
+    history: [
+      {
+        role: 'assistant',
+        toolCalls: first.toolCalls,
+      },
+      {
+        role: 'tool',
+        toolResults: [
+          {
+            toolCallId: call.id,
+            content: weather,
+          },
+        ],
+      },
+    ],
+  });
+}
+```
+
+See <a href="/docs/guides/tool-execution-loop">the tool execution loop guide</a> for a complete, runnable
+example, and <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a> for how
+tool turns fit into `history` more generally.
+
+## toolChoice
+
+`toolChoice` controls whether and how the model must call a tool. It defaults to `'auto'` when
+`tools` is set:
+
+<Cards>
+  <Card title="'auto'">
+    The model decides whether to call a tool. This is the default whenever `tools` is set.
+  </Card>
+  <Card title="'required'">
+    The model must call some tool, but VernLLM does not constrain which one.
+  </Card>
+  <Card title="'none'">The model must not call a tool, even though `tools` were offered.</Card>
+  <Card title="{ name: string }">
+    Forces the model to call the named tool. Throws `LLMError('validation')` if the name is not
+    present in `tools`.
+  </Card>
+</Cards>
+
+<Callout type="warn">
+  Bedrock's Converse API has no equivalent to `'none'` while tools are still offered. `fromBedrock`
+  throws `LLMError('validation')` rather than silently falling back to `'auto'`, which would let the
+  model call tools despite the caller explicitly asking it not to. Omit `tools` entirely for that
+  call instead.
+</Callout>
+
+## Mutual exclusivity with jsonSchema
+
+`tools` cannot be combined with `jsonSchema` or `schema`. On Anthropic and Bedrock, `jsonSchema` is
+implemented internally as a forced single tool call, which would collide with real tools. Setting
+both throws `LLMError('validation')` before a request is sent.
+
+`jsonMode` also defaults to `false` when `tools` is set, since forcing a JSON response format
+alongside tool calling is unreliable across providers. Pass `jsonMode: true` explicitly if you
+still want JSON parsing applied to the model's text content.
+
+## Caching tool calls
+
+`cachedLLMCall()` supports tool enabled calls the same way it supports plain ones. The entire
+`CallWithToolsResult<T>` is cached, including `tool_calls` results, not only final answers:
+
+```ts title="tool-calling-caching.ts"
+const result = await llm.cachedLLMCall({
+  cacheKey: `weather:${city}`,
+  ttl: 60,
+  call: {
+    userContent: `What is the weather in ${city}?`,
+    tools: [weatherTool],
+  },
+});
+```
+
+<Callout type="info">
+  Whether caching a `tool_calls` result is appropriate depends on the tool. Caching "the model
+  decided to call get_weather" is usually fine to reuse briefly. Caching a decision made under
+  permissions or account state that can change between calls is not. Use a short `ttl`, or route
+  `tool_calls` results through a separate `cacheKey` from final answers, if that distinction matters
+  for your tools.
+</Callout>
+
+## Breaking changes for a small number of callers
+
+Adding tool calling required two type-level changes: `ConversationTurn` became a discriminated
+union, and `LLMClient.messages` widened to include tool turns. Neither affects a normal `call()`
+user. See <a href="/docs/migration-notes">Migration Notes</a> for exactly what breaks and why,
+verified against the compiler rather than guessed at.
+
+## Provider support
+
+Every adapter translates VernLLM's OpenAI shaped `tools`/`tool_choice`/`tool_calls` into that
+provider's native mechanism:
+
+| Provider          | Native mechanism                                            |
+| ----------------- | ----------------------------------------------------------- |
+| OpenAI-compatible | Passed through as is, VernLLM's wire format already matches |
+| Anthropic         | `tool_use` / `tool_result` content blocks                   |
+| Bedrock           | Converse's `toolUse` / `toolResult` content blocks          |
+| Gemini            | `functionCall` / `functionResponse` parts                   |
+
+<Callout>
+  Gemini has no call id concept. VernLLM's Gemini adapter uses the function name as the wire tool
+  call id, which means two calls to the same tool within a single turn cannot be told apart when
+  results come back. This is a limitation of Gemini's own function calling API, not something
+  VernLLM can work around.
+</Callout>

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromAnthropic } from '../../../src/adapters/index.js';
+import { type AnthropicClient, fromAnthropic } from '../../../src/adapters/index.js';
 import { at, makeFakeAnthropicClient } from '../../helpers.js';
 
 /** A fake client that responds with a forced tool_use block instead of text. */
@@ -9,30 +9,16 @@ function makeFakeAnthropicToolClient(
   input: unknown,
   usage = { input_tokens: 10, output_tokens: 5 },
 ) {
-  const create = vi.fn(
-    async (
-      _params: {
-        model: string;
-        max_tokens: number;
-        temperature?: number;
-        system?: string;
-        messages: Array<{
-          role: 'user' | 'assistant';
-          content: string | Array<unknown>;
-        }>;
-        tools?: Array<{ name: string; description?: string; input_schema: unknown }>;
-        tool_choice?: { type: 'tool'; name: string };
-      },
-      _options: { signal: AbortSignal },
-    ) => ({
-      content: [{ type: 'tool_use', name: toolName, input }],
-      usage,
-    }),
-  );
+  const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+    content: [{ type: 'tool_use', name: toolName, input }],
+    usage,
+  }));
 
-  return { client: { messages: { create } }, create };
+  return {
+    client: { messages: { create } },
+    create,
+  };
 }
-
 describe('fromAnthropic', () => {
   it('maps system + user messages into Anthropic system/messages shape', async () => {
     const { client, create } = makeFakeAnthropicClient('hi there');
@@ -236,6 +222,180 @@ describe('fromAnthropic', () => {
     ]);
   });
 
+  it('handles parallel tool_use responses and continuation requests with merged tool_result blocks', async () => {
+    const create = vi
+      .fn<AnthropicClient['messages']['create']>()
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call_weather',
+            name: 'weather',
+            input: { city: 'Paris' },
+          },
+          {
+            type: 'tool_use',
+            id: 'call_time',
+            name: 'time',
+            input: { city: 'Paris' },
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'Sunny, 15:00.' }],
+        usage: { input_tokens: 20, output_tokens: 5 },
+      });
+
+    const adapted = fromAnthropic({
+      messages: { create },
+    });
+
+    const first = await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        temperature: 0.2,
+        max_tokens: 100,
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'weather',
+              description: 'Gets weather',
+              parameters: { type: 'object' },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'time',
+              description: 'Gets time',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+        messages: [{ role: 'user', content: 'Weather and time in Paris?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(first.choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: 'call_weather',
+        type: 'function',
+        function: {
+          name: 'weather',
+          arguments: JSON.stringify({ city: 'Paris' }),
+        },
+      },
+      {
+        id: 'call_time',
+        type: 'function',
+        function: {
+          name: 'time',
+          arguments: JSON.stringify({ city: 'Paris' }),
+        },
+      },
+    ]);
+
+    expect(at(create.mock.calls, 0)[0]).toMatchObject({
+      tools: [
+        {
+          name: 'weather',
+          description: 'Gets weather',
+          input_schema: { type: 'object' },
+        },
+        {
+          name: 'time',
+          description: 'Gets time',
+          input_schema: { type: 'object' },
+        },
+      ],
+    });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        temperature: 0.2,
+        max_tokens: 100,
+        messages: [
+          { role: 'user', content: 'Weather and time in Paris?' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call_weather',
+                type: 'function',
+                function: {
+                  name: 'weather',
+                  arguments: JSON.stringify({ city: 'Paris' }),
+                },
+              },
+              {
+                id: 'call_time',
+                type: 'function',
+                function: {
+                  name: 'time',
+                  arguments: JSON.stringify({ city: 'Paris' }),
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_weather',
+            content: 'Sunny',
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_time',
+            content: '15:00',
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(at(create.mock.calls, 1)[0].messages).toEqual([
+      {
+        role: 'user',
+        content: 'Weather and time in Paris?',
+      },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call_weather',
+            name: 'weather',
+            input: { city: 'Paris' },
+          },
+          {
+            type: 'tool_use',
+            id: 'call_time',
+            name: 'time',
+            input: { city: 'Paris' },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call_weather',
+            content: 'Sunny',
+          },
+          {
+            type: 'tool_result',
+            tool_use_id: 'call_time',
+            content: '15:00',
+          },
+        ],
+      },
+    ]);
+  });
+
   it('falls back to a prompt instruction for json_object mode (no schema to build a tool from)', async () => {
     const { client, create } = makeFakeAnthropicClient('{}');
     const adapted = fromAnthropic(client);
@@ -294,6 +454,54 @@ describe('fromAnthropic', () => {
       { role: 'user', content: "What's the capital of France?" },
       { role: 'assistant', content: 'Paris.' },
       { role: 'user', content: "What's its population?" },
+    ]);
+  });
+});
+
+describe('fromAnthropic — merges multiple tool results into one user turn', () => {
+  it('combines two consecutive tool-result wire messages into a single user message with two tool_result blocks', async () => {
+    const { client, create } = makeFakeAnthropicClient('ok');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [{ type: 'function', function: { name: 't', description: 'd', parameters: {} } }],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              { id: 'call_1', type: 'function', function: { name: 'a', arguments: '{}' } },
+              { id: 'call_2', type: 'function', function: { name: 'b', arguments: '{}' } },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'call_1', content: 'result a' },
+          { role: 'tool', tool_call_id: 'call_2', content: 'result b' },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentMessages = at(create.mock.calls, 0)[0].messages;
+
+    expect(sentMessages.filter((m) => m.role === 'user')).toHaveLength(1);
+    expect(sentMessages).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_1', name: 'a', input: {} },
+          { type: 'tool_use', id: 'call_2', name: 'b', input: {} },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'call_1', content: 'result a' },
+          { type: 'tool_result', tool_use_id: 'call_2', content: 'result b' },
+        ],
+      },
     ]);
   });
 });

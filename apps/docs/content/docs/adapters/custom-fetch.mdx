@@ -30,6 +30,15 @@ Non-2xx responses throw with `.status` set, so `nonRetryableStatus` still fails 
 
 For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-Type` header, since those methods don't support a request body.
 
+<Callout type="warn">
+  `fromFetch` does not support `tools` yet. `mapRequest` receives the raw `params` object,
+  including `tools`/`tool_choice` if you set them, so you could forward them into your own request
+  shape, but `mapResponse` only produces `{ content, usage? }`, with no way to return `tool_calls`.
+  A model that calls a tool through `fromFetch` today has its tool request silently dropped rather
+  than surfaced through `CallWithToolsResult`. See <a href="/docs/core/tool-calling">Tool
+  Calling</a> for the adapters that do support it.
+</Callout>
+
 ## Bringing your own HTTP client
 
 By default `fromFetch` uses the global `fetch`. Pass `request` to swap in `axios`, `node-fetch`, `undici`, or anything else, as long as it resolves to a `Response`-compatible object (`ok`, `status`, `headers.get(name)`, `text()`, `json()`):

@@ -1,6 +1,7 @@
 export { VernLLM } from './vernLLM.js';
 export { CircuitBreaker, type CircuitBreakerOptions } from './circuitBreaker.js';
 export { ConsoleLogger, type Logger } from './logger.js';
+
 export {
   fromAnthropic,
   type AnthropicClient,
@@ -51,26 +52,41 @@ export {
   fromAtlasCloud,
   from01AI,
 } from './adapters/index.js';
+
 export {
   LLMError,
   isLLMError,
+  isToolCallResult,
   InMemoryCacheAdapter,
   NormalizedCacheAdapter,
   TieredCacheAdapter,
   type LLMErrorType,
   type CacheAdapter,
   type LLMClient,
+  type WireMessage,
+  type WireToolCall,
+  type WireToolChoice,
   type VernLLMOptions,
   type CallParams,
+  type ToolEnabledCallParams,
   type ConversationTurn,
   type ContentBlock,
   type TextBlock,
   type ImageBlock,
   type CachedCallParams,
+  type CachedLLMCallParams,
+  type CachedLLMToolCallParams,
   type ReserveUsage,
   type RefundUsage,
   type OnUsage,
   type TokenUsage,
   type SchemaLike,
   type JsonSchemaSpec,
+  type ToolDefinition,
+  type ToolCall,
+  type ToolResult,
+  type ToolChoice,
+  type ContentResult,
+  type ToolCallResult,
+  type CallWithToolsResult,
 } from './types/index.js';

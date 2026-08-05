@@ -1,5 +1,5 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-import { LLMError, type ContentBlock, type LLMClient } from '../types/index.js';
+import { LLMError, type ContentBlock, type LLMClient, type WireToolCall } from '../types/index.js';
 
 /** Bedrock Converse's supported inline image formats. */
 type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
@@ -7,7 +7,15 @@ type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
 /** Bedrock Converse's native per-block content shape for a message. */
 type BedrockContentBlock =
   | { text: string }
-  | { image: { format: BedrockImageFormat; source: { bytes: Uint8Array } } };
+  | { image: { format: BedrockImageFormat; source: { bytes: Uint8Array } } }
+  | { toolUse: { toolUseId: string; name: string; input: unknown } }
+  | {
+      toolResult: {
+        toolUseId: string;
+        content: Array<{ text: string }>;
+        status?: 'success' | 'error';
+      };
+    };
 
 /**
  * Minimal structural type matching AWS Bedrock's Converse API. This is
@@ -41,14 +49,20 @@ export interface BedrockConverseClient {
             strict?: boolean;
           };
         }>;
-        toolChoice?: { tool: { name: string } };
+        toolChoice?:
+          | { tool: { name: string } }
+          | { auto: Record<string, never> }
+          | { any: Record<string, never> };
       };
     },
     options: { signal: AbortSignal },
   ): Promise<{
     output?: {
       message?: {
-        content?: Array<{ text?: string; toolUse?: { name?: string; input?: unknown } }>;
+        content?: Array<{
+          text?: string;
+          toolUse?: { toolUseId?: string; name?: string; input?: unknown };
+        }>;
       };
     };
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
@@ -137,6 +151,10 @@ export interface BedrockAdapterOptions {
  * `response_format: json_object` (no schema to build a tool from) and
  * `reasoning_effort` (no Converse equivalent) fall back to a system-prompt
  * instruction and are dropped respectively.
+ *
+ * `tools` maps to Converse's native `toolConfig`/`toolUse`/`toolResult`;
+ * `tool_choice` maps to `toolConfig.toolChoice`. Mutually exclusive with
+ * `jsonSchema` by the time a call reaches here (enforced in vernLLM.ts).
  */
 export function fromBedrock(
   bedrockClient: BedrockConverseClient,
@@ -150,11 +168,12 @@ export function fromBedrock(
         async create(params, requestOptions) {
           const systemMessage = params.messages.find((m) => m.role === 'system');
 
-          // Keep both user and assistant turns, in order, so conversation
-          // history survives instead of collapsing to consecutive user turns.
+          // Keep user, assistant, and tool turns, in order. Converse has no
+          // separate 'tool' role: tool results travel as a user-role message
+          // with toolResult content blocks, and an assistant's tool
+          // requests travel as toolUse content blocks on its own turn.
           const conversationMessages = params.messages.filter(
-            (m): m is typeof m & { role: 'user' | 'assistant' } =>
-              m.role === 'user' || m.role === 'assistant',
+            (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
           );
 
           const jsonSchema =
@@ -174,6 +193,8 @@ export function fromBedrock(
             | undefined;
 
           if (jsonSchema) {
+            // jsonSchema and real `tools` are mutually exclusive by the time
+            // a call reaches here (enforced in vernLLM.ts).
             const { schema, description, strict } = jsonSchema;
 
             toolConfig = {
@@ -192,6 +213,17 @@ export function fromBedrock(
           } else if (params.response_format?.type === 'json_object') {
             // No schema to build a tool from, fall back to a prompt instruction
             jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
+          } else if (params.tools?.length) {
+            toolConfig = {
+              tools: params.tools.map((t) => ({
+                toolSpec: {
+                  name: t.function.name,
+                  description: t.function.description,
+                  inputSchema: { json: t.function.parameters },
+                },
+              })),
+              toolChoice: toBedrockToolChoice(params.tool_choice),
+            };
           }
 
           if (jsonSchema && toolUseSupportedModels) {
@@ -214,12 +246,9 @@ export function fromBedrock(
           const response = await bedrockClient.converse(
             {
               modelId: params.model,
-              messages: conversationMessages.map((m) => ({
-                role: m.role,
-                content: Array.isArray(m.content)
-                  ? toBedrockContent(m.content)
-                  : [{ text: m.content }],
-              })),
+              messages: mergeConsecutiveToolResults(
+                conversationMessages.map((m) => toBedrockMessage(m)),
+              ),
               system: systemParts.length ? systemParts.map((text) => ({ text })) : undefined,
               inferenceConfig: {
                 temperature: params.temperature,
@@ -231,6 +260,7 @@ export function fromBedrock(
           );
 
           let text: string;
+          let wireToolCalls: WireToolCall[] | undefined;
 
           if (toolName) {
             // Forced tool-use: the schema-conforming payload arrives as the
@@ -243,11 +273,46 @@ export function fromBedrock(
 
             text = toolUseBlock?.toolUse ? JSON.stringify(toolUseBlock.toolUse.input) : '';
           } else {
-            text = response.output?.message?.content?.map((c) => c.text ?? '').join('') ?? '';
+            const blocks = response.output?.message?.content ?? [];
+
+            text = blocks.map((c) => c.text ?? '').join('');
+
+            const toolUses = blocks.filter(
+              (
+                block,
+              ): block is { toolUse: { toolUseId?: string; name?: string; input?: unknown } } =>
+                Boolean(block.toolUse),
+            );
+
+            if (toolUses.length) {
+              wireToolCalls = toolUses.map((block, i) => {
+                const toolUse = block.toolUse;
+
+                if (!toolUse.name) {
+                  throw new LLMError(
+                    `Bedrock returned a toolUse block without a name at index ${i}.`,
+                    'validation',
+                  );
+                }
+
+                return {
+                  id: toolUse.toolUseId ?? `${toolUse.name}_${i}`,
+                  type: 'function' as const,
+                  function: {
+                    name: toolUse.name,
+                    arguments: JSON.stringify(toolUse.input ?? {}),
+                  },
+                };
+              });
+            }
           }
 
           return {
-            choices: [{ message: { content: text } }],
+            choices: [
+              {
+                message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
+              },
+            ],
             usage: {
               prompt_tokens: response.usage?.inputTokens,
               completion_tokens: response.usage?.outputTokens,
@@ -258,4 +323,120 @@ export function fromBedrock(
       },
     },
   };
+}
+
+/** Maps VernLLM's OpenAI-shaped wire `tool_choice` onto Converse's `toolChoice`. */
+function toBedrockToolChoice(
+  toolChoice: Parameters<LLMClient['chat']['completions']['create']>[0]['tool_choice'],
+): NonNullable<Parameters<BedrockConverseClient['converse']>[0]['toolConfig']>['toolChoice'] {
+  if (!toolChoice || toolChoice === 'auto') return { auto: {} };
+  if (toolChoice === 'required') return { any: {} };
+
+  if (toolChoice === 'none') {
+    // Converse's toolConfig.toolChoice has no 'none' option. The only way
+    // to guarantee no tool use is to omit toolConfig.tools entirely, which
+    // isn't an option here since tools were explicitly requested. Silently
+    // falling back to 'auto' would let the model call tools despite the
+    // caller explicitly asking it not to, so this fails loudly instead.
+    throw new LLMError(
+      "'none' is not supported by fromBedrock: Bedrock Converse has no " +
+        '`tool_choice` equivalent to forbidding tool use while tools are still offered. Omit ' +
+        '`tools` entirely for this call instead.',
+      'validation',
+    );
+  }
+
+  return { tool: { name: toolChoice.function.name } };
+}
+/**
+ * Translates one VernLLM wire message into Converse's
+ * `{ role: 'user' | 'assistant', content }` shape.
+ */
+function toBedrockMessage(
+  m: Extract<
+    Parameters<LLMClient['chat']['completions']['create']>[0]['messages'][number],
+    { role: 'user' | 'assistant' | 'tool' }
+  >,
+): { role: 'user' | 'assistant'; content: BedrockContentBlock[] } {
+  if (m.role === 'tool') {
+    return {
+      role: 'user',
+      content: [
+        {
+          toolResult: {
+            toolUseId: m.tool_call_id,
+            content: [{ text: m.content }],
+            status: m.is_error ? 'error' : 'success',
+          },
+        },
+      ],
+    };
+  }
+
+  if (m.role === 'assistant' && m.tool_calls?.length) {
+    const blocks: BedrockContentBlock[] = [];
+
+    if (m.content) blocks.push({ text: m.content });
+
+    for (const tc of m.tool_calls) {
+      let input: unknown;
+
+      if (!tc.function.arguments.trim()) {
+        input = {};
+      } else {
+        try {
+          input = JSON.parse(tc.function.arguments);
+        } catch (cause) {
+          throw new LLMError(
+            `Assistant tool call "${tc.function.name}" (${tc.id}) has arguments that are not valid JSON.`,
+            'validation',
+            undefined,
+            undefined,
+            cause,
+          );
+        }
+      }
+
+      blocks.push({ toolUse: { toolUseId: tc.id, name: tc.function.name, input } });
+    }
+
+    return { role: 'assistant', content: blocks };
+  }
+
+  return {
+    role: m.role,
+    content: Array.isArray(m.content) ? toBedrockContent(m.content) : [{ text: m.content ?? '' }],
+  };
+}
+
+/**
+ * Converse expects the results of everything the model asked for in one
+ * turn to arrive together as multiple `toolResult` content blocks on a
+ * single `'user'` message — not as separate consecutive `'user'`
+ * messages. The per-wire-message mapping above produces one `'user'`
+ * message per VernLLM wire tool message, so when an assistant turn
+ * requested more than one tool, this merges the resulting run of
+ * toolResult-only `'user'` messages back into one.
+ */
+function mergeConsecutiveToolResults(
+  messages: { role: 'user' | 'assistant'; content: BedrockContentBlock[] }[],
+): { role: 'user' | 'assistant'; content: BedrockContentBlock[] }[] {
+  const isToolResultOnly = (
+    m: (typeof messages)[number],
+  ): m is { role: 'user'; content: BedrockContentBlock[] } =>
+    m.role === 'user' && m.content.length > 0 && m.content.every((b) => 'toolResult' in b);
+
+  const merged: (typeof messages)[number][] = [];
+
+  for (const m of messages) {
+    const prev = merged.at(-1);
+
+    if (isToolResultOnly(m) && prev && isToolResultOnly(prev)) {
+      prev.content.push(...m.content);
+    } else {
+      merged.push(m);
+    }
+  }
+
+  return merged;
 }

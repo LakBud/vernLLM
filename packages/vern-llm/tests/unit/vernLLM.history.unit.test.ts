@@ -115,4 +115,65 @@ describe('VernLLM.call — conversation history validation', () => {
     expect(result).toBe('ok');
     expect(create).toHaveBeenCalledTimes(1);
   });
+
+  it('throws a validation error when a tool turn is missing a requested tool result', async () => {
+    const { client, create } = createMockClient([textResponse('unused')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 3 });
+
+    let err: LLMError | undefined;
+    try {
+      await llm.call({
+        userContent: 'continue',
+        jsonMode: false,
+        history: [
+          {
+            role: 'assistant',
+            toolCalls: [
+              { id: 'call_1', name: 'get_weather', arguments: {} },
+              { id: 'call_2', name: 'get_time', arguments: {} },
+            ],
+          },
+          {
+            role: 'tool',
+            toolResults: [{ toolCallId: 'call_1', content: 'sunny' }],
+          },
+        ],
+      });
+    } catch (e) {
+      err = e as LLMError;
+    }
+
+    expect(err?.type).toBe('validation');
+    expect(err?.message).toMatch(/missing toolResults/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('throws a validation error when an assistant tool call is followed by a non-tool turn', async () => {
+    const { client, create } = createMockClient([textResponse('unused')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 3 });
+
+    let err: LLMError | undefined;
+    try {
+      await llm.call({
+        userContent: 'continue',
+        jsonMode: false,
+        history: [
+          {
+            role: 'assistant',
+            toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: {} }],
+          },
+          {
+            role: 'user',
+            content: 'actually never mind',
+          },
+        ],
+      });
+    } catch (e) {
+      err = e as LLMError;
+    }
+
+    expect(err?.type).toBe('validation');
+    expect(err?.message).toMatch(/tool request without.*tool results|required tool results/i);
+    expect(create).not.toHaveBeenCalled();
+  });
 });

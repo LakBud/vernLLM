@@ -228,6 +228,13 @@ should be cancellable, pass the same signal into that operation explicitly.
 It combines cache lookup, cache writes, concurrent miss coalescing, and the normal
 retry/timeout/circuit-breaker behavior from `call()`:
 
+<Callout>
+  When `call.tools` is set, `cachedLLMCall` caches the whole `CallWithToolsResult`, including
+  `tool_calls` results, not only final answers. See{' '}
+  <a href="/docs/core/tool-calling#caching-tool-calls">Caching tool calls</a> for when that is, and
+  isn't, appropriate.
+</Callout>
+
 ```ts title="cached-llm-call.ts"
 const result = await llm.cachedLLMCall({
   cacheKey: `cv:${cvId}`,
