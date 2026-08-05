@@ -74,6 +74,80 @@ describe('VernLLM.call: happy paths', () => {
   });
 });
 
+describe('VernLLM.call — temperature', () => {
+  it('sends 0.2 when neither a per-call nor instance-level temperature is set', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await llm.call({ userContent: 'u' });
+    expect(at(calls, 0).temperature).toBe(0.2);
+  });
+
+  it('a per-call number overrides the 0.2 default', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await llm.call({ userContent: 'u', temperature: 0.9 });
+    expect(at(calls, 0).temperature).toBe(0.9);
+  });
+
+  it('a per-call null omits temperature from the request entirely', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await llm.call({ userContent: 'u', temperature: null });
+    expect('temperature' in at(calls, 0)).toBe(false);
+  });
+
+  it('falls back to an instance-level defaultTemperature when no per-call value is set', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm', defaultTemperature: 0.5 });
+
+    await llm.call({ userContent: 'u' });
+    expect(at(calls, 0).temperature).toBe(0.5);
+  });
+
+  it('an instance-level defaultTemperature: null omits temperature when no per-call value is set', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm', defaultTemperature: null });
+
+    await llm.call({ userContent: 'u' });
+    expect('temperature' in at(calls, 0)).toBe(false);
+  });
+
+  it('a per-call value always wins over an instance-level defaultTemperature, in both directions', async () => {
+    const { client, calls } = createMockClient([
+      jsonResponse({ ok: true }),
+      jsonResponse({ ok: true }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', defaultTemperature: null });
+
+    // per-call number overrides an instance-level null opt-out
+    await llm.call({ userContent: 'u', temperature: 0.3 });
+    expect(at(calls, 0).temperature).toBe(0.3);
+
+    // per-call null opts out even when the instance default is a number
+    const llm2 = new VernLLM({ client, model: 'm', defaultTemperature: 0.8 });
+    await llm2.call({ userContent: 'u', temperature: null });
+    expect('temperature' in at(calls, 1)).toBe(false);
+  });
+
+  it('treats temperature: 0 as a real value, not as unset', async () => {
+    const { client, calls } = createMockClient([
+      jsonResponse({ ok: true }),
+      jsonResponse({ ok: true }),
+    ]);
+
+    const llm = new VernLLM({ client, model: 'm' });
+    await llm.call({ userContent: 'u', temperature: 0 });
+    expect(at(calls, 0).temperature).toBe(0);
+
+    const llmWithZeroDefault = new VernLLM({ client, model: 'm', defaultTemperature: 0 });
+    await llmWithZeroDefault.call({ userContent: 'u' });
+    expect(at(calls, 1).temperature).toBe(0);
+  });
+});
+
 describe('VernLLM.call — retry & backoff', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

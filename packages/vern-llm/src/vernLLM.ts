@@ -49,6 +49,7 @@ export class VernLLM {
   private readonly timeoutMs: number;
   private readonly baseDelayMs: number;
   private readonly defaultMaxTokens: number;
+  private readonly defaultTemperature: number | null;
 
   private readonly cache: CacheAdapter<unknown>;
   private readonly nonRetryableStatus: number[];
@@ -64,8 +65,9 @@ export class VernLLM {
   /**
    * @param options - Client, model, and tunables. Notable defaults:
    * `maxRetries` 1, `timeoutMs` 25000, `baseDelayMs` 500 (exponential backoff
-   * base), `defaultMaxTokens` 1000, `cache` an in-memory adapter,
-   * `nonRetryableStatus` `[400, 401, 403, 404, 422]`, `debug` false.
+   * base), `defaultMaxTokens` 1000, `defaultTemperature` 0.2, `cache` an
+   * in-memory adapter, `nonRetryableStatus` `[400, 401, 403, 404, 422]`,
+   * `debug` false.
    */
   constructor(options: VernLLMOptions) {
     this.client = options.client;
@@ -75,6 +77,8 @@ export class VernLLM {
     this.timeoutMs = options.timeoutMs ?? 25_000;
     this.baseDelayMs = options.baseDelayMs ?? 500;
     this.defaultMaxTokens = options.defaultMaxTokens ?? 1000;
+    this.defaultTemperature =
+      options.defaultTemperature === undefined ? 0.2 : options.defaultTemperature;
 
     this.cache = options.cache ?? new InMemoryCacheAdapter();
     this.nonRetryableStatus = options.nonRetryableStatus ?? [400, 401, 403, 404, 422];
@@ -96,27 +100,22 @@ export class VernLLM {
   /**
    * Makes a single logical LLM call, retrying on failure per the configured
    * policy. Fails fast if the breaker is open or the signal is already
-   * aborted. On exhausting retries, records a breaker failure and rejects
-   * with a normalized LLMError.
+   * aborted. Rejects with a normalized LLMError on exhausted retries.
    *
-   * When `tools` is set, returns a `CallWithToolsResult<T>` instead of `T`
-   * directly: `{ type: 'content', content }` or
-   * `{ type: 'tool_calls', toolCalls, content? }`. VernLLM never executes
-   * tools itself, run them yourself and continue by appending the results to
-   * `history` (see `ConversationTurn`). Mutually exclusive with
-   * `jsonSchema`/`schema`.
+   * When `tools` is set, returns a `CallWithToolsResult<T>` instead of `T`:
+   * `{ type: 'content', content }` or `{ type: 'tool_calls', toolCalls,
+   * content? }`. VernLLM never executes tools, run them yourself and
+   * continue via `history` (see `ConversationTurn`). Mutually exclusive
+   * with `jsonSchema`/`schema`.
    *
-   * TypeScript only picks the tools-aware overload when `tools` is a
-   * literal or statically present on the params type. If `tools` is set
-   * conditionally on a plain `CallParams<T>`, the return type won't reflect
-   * it, use `isToolCallResult()` to check at runtime instead. See the Tool
-   * Calling docs for details.
+   * TypeScript only picks the tools-aware overload when `tools` is
+   * statically present on `params`. If set conditionally on a plain
+   * `CallParams<T>`, use `isToolCallResult()` to check the shape at
+   * runtime instead. See the Tool Calling docs for details.
    *
-   * @param params - System/user content plus per-call overrides (model,
-   * temperature, jsonMode, schema, tools, signal, etc). See `CallParams`.
-   * @returns Without `tools`: the parsed (and optionally schema-validated)
-   * response, or the raw string content when `jsonMode` is false and no
-   * `jsonSchema` is set. With `tools`: a `CallWithToolsResult<T>`.
+   * @param params - System/user content plus per-call overrides. See `CallParams`.
+   * @returns Without `tools`: the parsed response, or raw string if
+   * `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`.
    */
   async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
 
@@ -392,7 +391,6 @@ export class VernLLM {
       systemPrompt,
       userContent,
       history = [],
-      temperature = 0.2,
       maxTokens = this.defaultMaxTokens,
       model = this.model,
       reasoningEffort,
@@ -400,6 +398,9 @@ export class VernLLM {
       tools,
       toolChoice,
     } = params;
+
+    const temperature =
+      params.temperature === undefined ? this.defaultTemperature : params.temperature;
 
     if (tools && (jsonSchema || params.schema)) {
       throw new LLMError(
@@ -471,7 +472,7 @@ export class VernLLM {
 
     const request = {
       model,
-      temperature,
+      ...(temperature !== null ? { temperature } : {}),
       max_tokens: maxTokens,
       ...(responseFormat ? { response_format: responseFormat } : {}),
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),

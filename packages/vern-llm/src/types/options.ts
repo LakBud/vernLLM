@@ -15,6 +15,12 @@ export interface VernLLMOptions {
   baseDelayMs?: number;
   /** Default max_tokens for calls that don't override it. Default 1000 */
   defaultMaxTokens?: number;
+  /**
+   * Default temperature for calls that don't override it. Default 0.2, not
+   * the provider's own default. Pass `null` to omit `temperature` from the
+   * request entirely, so the provider applies its own default instead.
+   */
+  defaultTemperature?: number | null;
   /** Enables debug logging of raw model output (logs up to 800 chars of each
    * response). Off by default */
   debug?: boolean;

@@ -92,6 +92,36 @@ See <a href="/docs/core/tool-calling">Tool Calling</a> for the full feature, and
 
 <a href="/docs/API-reference/configuration">Configuration</a> for the `LLMClient` field reference.
 
+### `LLMClient.temperature` is now optional
+
+Unrelated to tool calling, but shipping in the same `2.0.0` release since a major bump was already
+required. Added a way to opt out of VernLLM's `temperature: 0.2` default (`temperature: null` per
+call, or `defaultTemperature: null` on the instance) so the provider can apply its own default
+instead. Making that work required widening the wire-level type:
+
+```ts
+// Before
+temperature: number;
+
+// After
+temperature?: number;
+```
+
+<Callout type="warn">
+  Same narrow scope as the `LLMClient.messages` change above: this only affects code that implements
+  `LLMClient` by hand. If your custom implementation reads `params.temperature` assuming it's always
+  a `number`, for example calling a method on it without a null check, it no longer compiles under
+  `strict`. Every built-in adapter and every normal `call()` caller is unaffected, VernLLM still
+  sends `0.2` by default exactly as before unless you opt out.
+</Callout>
+
+To update a custom `LLMClient`, handle `params.temperature` being `undefined` the same way you'd
+already handle any other optional field, omit it from the outgoing request, or substitute your own
+default before forwarding it. See{' '}
+
+<a href="/docs/API-reference/configuration">Configuration</a> for `defaultTemperature`'s full
+behavior.
+
 ## Nothing else changed
 
 Calls that don't set `tools` keep returning `T` from `call()` exactly as before, `jsonMode` keeps

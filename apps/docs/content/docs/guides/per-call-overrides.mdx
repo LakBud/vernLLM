@@ -32,16 +32,16 @@ const analysis = await llm.call({
 | ----------------- | --------------------------------------------------------------------- |
 | `model`           | The instance's `model` option                                         |
 | `maxTokens`       | The instance's `defaultMaxTokens` (`1000`)                            |
-| `temperature`     | `0.2`, VernLLM's own default, not the provider's                      |
+| `temperature`     | The instance's `defaultTemperature`, or `0.2` if that's unset either  |
 | `reasoningEffort` | Omitted from the request entirely; the provider's own default applies |
 
 <Callout type="warn">
   `temperature` isn't left unset when you don't pass it &mdash; VernLLM defaults it to `0.2` itself.
-  If you want the provider's own default temperature instead of `0.2`, you currently have to check
-  what that provider's default is and pass it explicitly.
+  Pass `temperature: null` on a call, or `defaultTemperature: null` on the instance, to omit
+  `temperature` from the request entirely and let the provider apply its own default instead.
 </Callout>
 
-`temperature`, `reasoningEffort`, `jsonMode`, `jsonSchema`, and `schema` aren't instance-level
+`reasoningEffort`, `jsonMode`, `jsonSchema`, and `schema` aren't instance-level
 options at all &mdash; they only ever exist per call, so there's nothing to "override" at the
 instance level, you just set them on the calls that need them.
 

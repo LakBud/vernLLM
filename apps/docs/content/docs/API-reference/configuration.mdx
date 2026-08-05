@@ -57,10 +57,11 @@ const llm = new VernLLM({
 
 ## Request defaults
 
-| Option             | Default            | Notes                                                                                                                                   |
-| ------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `defaultMaxTokens` | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                 |
-| `parseJson`        | `defaultParseJson` | Custom parser for non standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM. |
+| Option               | Default            | Notes                                                                                                                                                            |
+| -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                                          |
+| `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` from every call by default, so the provider applies its own default. |
+| `parseJson`          | `defaultParseJson` | Custom parser for non standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM.                          |
 
 ## Caching
 
@@ -104,12 +105,12 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 A handful of options are set per `call()` rather than on the instance. The following options have their own defaults worth knowing:
 
-| Option         | Default                                  | Notes                                                                                                                                                                                                                                             |
-| -------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `temperature`  | `0.2`                                    | Low by design. This library targets structured and deterministic extraction more than open-ended generation. Override freely per call.                                                                                                            |
-| `jsonMode`     | `true`, except `false` if `tools` is set | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing. Forcing JSON output alongside tool calling is unreliable across providers, so the default flips off automatically once `tools` is set. |
-| `systemPrompt` | none                                     | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                                                                                                                                         |
-| `toolChoice`   | `'auto'` when `tools` is set             | Controls whether and which tool the model must call. See <a href="/docs/core/tool-calling">Tool Calling</a>.                                                                                                                                      |
+| Option         | Default                                       | Notes                                                                                                                                                                                                                                             |
+| -------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `temperature`  | `0.2`, or the instance's `defaultTemperature` | Low by design. This library targets structured and deterministic extraction more than open-ended generation. Override freely per call. Pass `null` to omit `temperature` from this call and use the provider's own default.                       |
+| `jsonMode`     | `true`, except `false` if `tools` is set      | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing. Forcing JSON output alongside tool calling is unreliable across providers, so the default flips off automatically once `tools` is set. |
+| `systemPrompt` | none                                          | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                                                                                                                                         |
+| `toolChoice`   | `'auto'` when `tools` is set                  | Controls whether and which tool the model must call. See <a href="/docs/core/tool-calling">Tool Calling</a>.                                                                                                                                      |
 
 ## Usage metering
 

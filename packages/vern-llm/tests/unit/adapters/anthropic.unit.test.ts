@@ -20,6 +20,22 @@ function makeFakeAnthropicToolClient(
   };
 }
 describe('fromAnthropic', () => {
+  it("passes through an omitted temperature without crashing, so the caller can defer to Anthropic's own default", async () => {
+    const { client, create } = makeFakeAnthropicClient('hi there');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create.mock.calls[0]![0].temperature).toBeUndefined();
+  });
+
   it('maps system + user messages into Anthropic system/messages shape', async () => {
     const { client, create } = makeFakeAnthropicClient('hi there');
     const adapted = fromAnthropic(client);

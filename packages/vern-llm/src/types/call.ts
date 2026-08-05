@@ -11,12 +11,10 @@ import type { UsageHooks } from './usage.js';
 /**
  * A single prior turn in a multi-turn conversation, passed via `history`.
  *
- * Supports normal user/assistant messages and tool continuations:
- * - assistant turns may include `toolCalls` when the model requested tools.
- * - tool turns include the matching `toolResults`.
- *
- * Tool turns must immediately follow an assistant tool call turn, and every
- * requested tool call must have a result.
+ * Supports normal user/assistant messages and tool continuations: an assistant
+ * turn may include `toolCalls`, and a tool turn carries the matching
+ * `toolResults`. A tool turn must immediately follow an assistant tool call
+ * turn, and every requested tool call must have a result.
  */
 export type ConversationTurn =
   | {
@@ -70,7 +68,12 @@ export interface CallParams<T = unknown> extends UsageHooks {
    */
   history?: ConversationTurn[];
 
-  temperature?: number;
+  /**
+   * Generation temperature. Default 0.2, not the provider's own default.
+   * Pass `null` to omit `temperature` from the request entirely, so the
+   * provider applies its own default instead.
+   */
+  temperature?: number | null;
   jsonMode?: boolean;
   maxTokens?: number;
   requestId?: string;
@@ -96,8 +99,8 @@ export interface CallParams<T = unknown> extends UsageHooks {
   /**
    * Tools the model may call. When set, `call()` always returns a
    * `CallWithToolsResult<T>` discriminated union instead of `T` directly
-   * (see `CallWithToolsResult`) — this is a breaking-change point:
-   * omitting `tools` keeps `call()`'s old `Promise<T>` behavior exactly.
+   * (see `CallWithToolsResult`), a breaking-change point: omitting `tools`
+   * keeps `call()`'s old `Promise<T>` behavior exactly.
    *
    * Mutually exclusive with `jsonSchema`/`schema`: on Anthropic and
    * Bedrock, `jsonSchema` is implemented internally as a forced single-tool
