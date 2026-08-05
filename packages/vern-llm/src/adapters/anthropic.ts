@@ -144,7 +144,7 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
             {
               model: params.model,
               max_tokens: params.max_tokens,
-              temperature: params.temperature,
+              ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
               system: system || undefined,
               messages: mergeConsecutiveToolResults(
                 conversationMessages.map((m) => toAnthropicMessage(m)),
@@ -221,10 +221,10 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
  * mapping above (one `{role:'user', content:[tool_result]}` per VernLLM
  * wire tool message) needs merging back together when an assistant turn
  * requested more than one tool: multiple consecutive user turns would
- * violate that alternation (and Anthropic's API rejects it outright).
- * This merges any run of tool-result-only user messages into one, with
- * all their tool_result blocks combined — the shape Anthropic expects for
- * "here are the results of everything you just asked for."
+ * violate that alternation, and Anthropic's API rejects it outright. This
+ * merges any run of tool-result-only user messages into one, with all
+ * their tool_result blocks combined, the shape Anthropic expects for "here
+ * are the results of everything you just asked for."
  */
 function mergeConsecutiveToolResults(
   messages: { role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }[],

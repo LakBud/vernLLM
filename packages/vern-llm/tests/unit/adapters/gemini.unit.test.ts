@@ -16,6 +16,22 @@ function makeFakeGeminiClient(text: string) {
 }
 
 describe('fromGemini', () => {
+  it('passes through an omitted temperature via generationConfig without crashing', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect('temperature' in (generateContent.mock.calls[0]![0].generationConfig ?? {})).toBe(false);
+  });
+
   it('maps messages into contents + systemInstruction', async () => {
     const { client, generateContent } = makeFakeGeminiClient('hi');
     const adapted = fromGemini(client);

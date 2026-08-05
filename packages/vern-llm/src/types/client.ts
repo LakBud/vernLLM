@@ -50,7 +50,7 @@ export interface LLMClient {
       create(
         params: {
           model: string;
-          temperature: number;
+          temperature?: number;
           max_tokens: number;
           response_format?:
             | { type: 'json_object' }

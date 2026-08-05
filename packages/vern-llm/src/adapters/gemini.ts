@@ -178,13 +178,13 @@ function parseToolResult(text: string): unknown {
 }
 
 /**
- * Gemini expects the results of everything the model asked for in one
- * turn to arrive together as multiple `functionResponse` parts on a
- * single `'user'` entry — not as separate consecutive `'user'` entries.
- * The per-wire-message mapping above produces one `'user'` entry per
- * VernLLM wire tool message, so when an assistant turn requested more
- * than one tool, this merges the resulting run of
- * functionResponse-only `'user'` entries back into one.
+ * Gemini expects the results of everything the model asked for in one turn
+ * to arrive together as multiple `functionResponse` parts on a single
+ * `'user'` entry, not as separate consecutive `'user'` entries. The
+ * per-wire-message mapping above produces one `'user'` entry per VernLLM
+ * wire tool message, so when an assistant turn requested more than one
+ * tool, this merges the resulting run of functionResponse-only `'user'`
+ * entries back into one.
  */
 function mergeConsecutiveFunctionResponses(
   contents: { role: 'user' | 'model'; parts: GeminiPart[] }[],
@@ -241,7 +241,7 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
           const generationConfig: NonNullable<
             Parameters<GeminiClient['generateContent']>[0]['generationConfig']
           > = {
-            temperature: params.temperature,
+            ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
             maxOutputTokens: params.max_tokens,
           };
 

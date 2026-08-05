@@ -51,6 +51,22 @@ describe('fromBedrock', () => {
     );
   });
 
+  it('passes through an omitted temperature via inferenceConfig without crashing', async () => {
+    const { client, converse } = makeFakeBedrockClient('hi');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect('temperature' in (converse.mock.calls[0]![0].inferenceConfig ?? {})).toBe(false);
+  });
+
   it('translates ContentBlock[] userContent into Converse image/text blocks, decoding base64 to bytes', async () => {
     const { client, converse } = makeFakeBedrockClient('described');
     const adapted = fromBedrock(client);

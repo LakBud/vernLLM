@@ -251,7 +251,7 @@ export function fromBedrock(
               ),
               system: systemParts.length ? systemParts.map((text) => ({ text })) : undefined,
               inferenceConfig: {
-                temperature: params.temperature,
+                ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
                 maxTokens: params.max_tokens,
               },
               ...(toolConfig ? { toolConfig } : {}),
@@ -412,11 +412,11 @@ function toBedrockMessage(
 /**
  * Converse expects the results of everything the model asked for in one
  * turn to arrive together as multiple `toolResult` content blocks on a
- * single `'user'` message — not as separate consecutive `'user'`
- * messages. The per-wire-message mapping above produces one `'user'`
- * message per VernLLM wire tool message, so when an assistant turn
- * requested more than one tool, this merges the resulting run of
- * toolResult-only `'user'` messages back into one.
+ * single `'user'` message, not as separate consecutive `'user'` messages.
+ * The per-wire-message mapping above produces one `'user'` message per
+ * VernLLM wire tool message, so when an assistant turn requested more than
+ * one tool, this merges the resulting run of toolResult-only `'user'`
+ * messages back into one.
  */
 function mergeConsecutiveToolResults(
   messages: { role: 'user' | 'assistant'; content: BedrockContentBlock[] }[],
