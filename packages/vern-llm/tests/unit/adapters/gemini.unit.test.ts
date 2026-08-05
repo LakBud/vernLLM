@@ -217,3 +217,157 @@ describe('fromGemini', () => {
     ]);
   });
 });
+
+describe('fromGemini — tools', () => {
+  const weatherTool = {
+    type: 'function' as const,
+    function: {
+      name: 'get_weather',
+      description: 'Gets the weather for a city',
+      parameters: { type: 'object', properties: { city: { type: 'string' } } },
+    },
+  };
+
+  it('translates OpenAI-shaped tools into functionDeclarations, and tool_choice into functionCallingConfig', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('ok');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        temperature: 0.2,
+        max_tokens: 100,
+        tools: [weatherTool],
+        tool_choice: 'auto',
+        messages: [{ role: 'user', content: 'weather in Oslo?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: 'get_weather',
+            description: weatherTool.function.description,
+            parameters: weatherTool.function.parameters,
+          },
+        ],
+      },
+    ]);
+    expect(generateContent.mock.calls[0]![0].toolConfig).toEqual({
+      functionCallingConfig: { mode: 'AUTO' },
+    });
+  });
+
+  it('maps a functionCall response part into a wire tool_calls entry', async () => {
+    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({
+      candidates: [
+        { content: { parts: [{ functionCall: { name: 'get_weather', args: { city: 'Oslo' } } }] } },
+      ],
+    }));
+    const adapted = fromGemini({ generateContent });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: 'get_weather',
+        type: 'function',
+        function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+      },
+    ]);
+  });
+
+  it('round-trips an assistant tool_calls turn and a tool-result turn into model/user contents', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('sunny');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'get_weather',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify({ tempC: 21 }) },
+          { role: 'user', content: 'thanks, what about tomorrow?' },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].contents).toEqual([
+      { role: 'model', parts: [{ functionCall: { name: 'get_weather', args: { city: 'Oslo' } } }] },
+      {
+        role: 'user',
+        parts: [{ functionResponse: { name: 'get_weather', response: { tempC: 21 } } }],
+      },
+      { role: 'user', parts: [{ text: 'thanks, what about tomorrow?' }] },
+    ]);
+  });
+
+  it('combines two consecutive functionResponse wire messages into a single user content entry', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('ok');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'a',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+              },
+              {
+                id: 'b',
+                type: 'function',
+                function: { name: 'get_time', arguments: JSON.stringify({ city: 'Oslo' }) },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify({ tempC: 21 }) },
+          { role: 'tool', tool_call_id: 'get_time', content: JSON.stringify({ hour: 14 }) },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentContents = generateContent.mock.calls[0]![0].contents;
+
+    expect(sentContents.filter((c) => c.role === 'user')).toHaveLength(1);
+    expect(sentContents.at(-1)).toEqual({
+      role: 'user',
+      parts: [
+        { functionResponse: { name: 'get_weather', response: { tempC: 21 } } },
+        { functionResponse: { name: 'get_time', response: { hour: 14 } } },
+      ],
+    });
+  });
+});

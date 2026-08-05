@@ -11,6 +11,9 @@ import {
   describeError,
   withReservedUsage,
   normalizeError,
+  toWireTools,
+  toWireToolCalls,
+  parseWireToolCalls,
 } from './internal/vernLLM.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import {
@@ -18,10 +21,16 @@ import {
   LLMError,
   type CacheAdapter,
   type CachedCallParams,
+  type CachedLLMCallParams,
+  type CachedLLMToolCallParams,
   type CallParams,
+  type CallWithToolsResult,
   type ConversationTurn,
   type LLMClient,
+  type ToolEnabledCallParams,
   type VernLLMOptions,
+  type WireMessage,
+  type WireToolChoice,
 } from './types/index.js';
 
 /**
@@ -90,12 +99,38 @@ export class VernLLM {
    * aborted. On exhausting retries, records a breaker failure and rejects
    * with a normalized LLMError.
    *
+   * When `tools` is set, always returns a discriminated result instead of
+   * `T` directly: `{ type: 'content', content }` when the model answered
+   * normally, or `{ type: 'tool_calls', toolCalls, content? }` when it
+   * requested one or more tools. VernLLM never executes tools itself — the
+   * application runs them and, if it wants a final answer, calls again
+   * with the tool results appended to `history` (see `ConversationTurn`).
+   * `tools` is mutually exclusive with `jsonSchema`/`schema` (see
+   * `CallParams.tools`).
+   *
+   * **A note on the overload:** TypeScript only resolves `call()` to the
+   * `tools`-aware overload when `tools` is visible as a required, present
+   * key at the call site — an inline object literal with `tools: [...]`,
+   * or a variable typed as `CallParams<T> & { tools: ToolDefinition[] }`.
+   * If you build `params` as a plain `CallParams<T>` and conditionally set
+   * `tools` on it (e.g. `tools: someCondition ? [...] : undefined`), TS
+   * picks the plain `Promise<T>` overload regardless of what `tools` turns
+   * out to be at runtime — the return value's *actual* shape still follows
+   * `tools` at runtime, so this mismatch is silent, not a compile error.
+   * Use `isToolCallResult()` (exported alongside `VernLLM`) to check the
+   * shape at runtime whenever `params` isn't a literal with `tools` inline.
+   *
    * @param params - System/user content plus per-call overrides (model,
-   * temperature, jsonMode, schema, signal, etc). See `CallParams`.
-   * @returns The parsed (and optionally schema-validated) response, or the
-   * raw string content when `jsonMode` is false and no `jsonSchema` is set.
+   * temperature, jsonMode, schema, tools, signal, etc). See `CallParams`.
+   * @returns Without `tools`: the parsed (and optionally schema-validated)
+   * response, or the raw string content when `jsonMode` is false and no
+   * `jsonSchema` is set. With `tools`: a `CallWithToolsResult<T>`.
    */
-  async call<T = unknown>(params: CallParams<T>): Promise<T> {
+  async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
+
+  async call<T = unknown>(params: CallParams<T>): Promise<T>;
+
+  async call<T = unknown>(params: CallParams<T>): Promise<T | CallWithToolsResult<T>> {
     this.breaker?.assertClosed();
 
     if (params.signal?.aborted) {
@@ -135,6 +170,112 @@ export class VernLLM {
     );
   }
 
+  /**
+   * Performs a single attempt: builds the request (translating `tools` to
+   * wire shape when present), dispatches it with a timeout, and shapes the
+   * response — either `T` directly, or a `CallWithToolsResult<T>` when
+   * `params.tools` was set. Throws on an empty response (no text and no
+   * tool_calls) so the retry loop treats it like any other transient
+   * failure.
+   */
+  private async executeCall<T>(
+    params: CallParams<T>,
+    requestId: string,
+  ): Promise<T | CallWithToolsResult<T>> {
+    const { useJson, model, request } = this.buildRequestPayload(params);
+
+    const response = await withTimeout(
+      (attemptSignal) => this.client.chat.completions.create(request, { signal: attemptSignal }),
+      this.timeoutMs,
+      params.signal,
+    );
+
+    const content = response.choices?.[0]?.message?.content?.trim();
+    const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+
+    if (!content && !wireToolCalls?.length) {
+      throw new LLMError('Empty LLM response', 'api');
+    }
+
+    this.logger.debug(
+      `[vern:${requestId}] output:\n${(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`).slice(0, 800)}`,
+    );
+
+    this.recordUsage(response, requestId, model);
+
+    if (wireToolCalls?.length) {
+      if (!params.tools) {
+        // A provider returning tool_calls when no tools were offered would
+        // be a provider bug, not a normal outcome — surfaced as an API
+        // error rather than silently coerced into a text response.
+        throw new LLMError(
+          'Provider returned tool_calls but no `tools` were sent with this call.',
+          'api',
+        );
+      }
+
+      const toolCalls = parseWireToolCalls(wireToolCalls);
+
+      this.validateToolCallArguments(toolCalls, params.tools);
+      this.breaker?.recordSuccess();
+
+      return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
+    }
+
+    // No tool_calls at this point, so content must be present (the empty
+    // check above already ruled out both being empty).
+    const textContent = content ?? '';
+
+    if (!useJson) {
+      this.breaker?.recordSuccess();
+      return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
+    }
+
+    const result = this.parseAndValidate<T>(textContent, params.schema);
+    this.breaker?.recordSuccess();
+
+    return params.tools ? { type: 'content', content: result } : result;
+  }
+
+  /**
+   * Checks every `ToolCall` against the `tools` that were actually offered
+   * (catching a hallucinated tool name early, with a clear error, instead
+   * of letting it reach the application's dispatch table as a confusing
+   * "undefined is not a function"), then runs each tool's
+   * `argumentsSchema` (if present) and throws `LLMError('validation')` on
+   * failure.
+   */
+  private validateToolCallArguments(
+    toolCalls: { name: string; arguments: unknown }[],
+    tools: NonNullable<CallParams<unknown>['tools']>,
+  ): void {
+    const knownNames = new Set(tools.map((t) => t.name));
+
+    for (const call of toolCalls) {
+      if (!knownNames.has(call.name)) {
+        throw new LLMError(
+          `Model requested tool "${call.name}", which was not in the tools offered ([${[...knownNames].join(', ')}]).`,
+          'api',
+        );
+      }
+
+      const definition = tools.find((t) => t.name === call.name);
+
+      if (!definition?.argumentsSchema) continue;
+
+      const result = definition.argumentsSchema.safeParse(call.arguments);
+
+      if (!result.success) {
+        throw new LLMError(
+          `Arguments for tool call "${call.name}" failed validation`,
+          'validation',
+          undefined,
+          result.error,
+        );
+      }
+    }
+  }
+
   /** Runs `fn`, retrying with backoff according to `shouldRetry`. */
   private async retryWithBackoff<T>(
     fn: () => Promise<T>,
@@ -161,71 +302,65 @@ export class VernLLM {
   }
 
   /**
-   * Performs a single attempt: builds the request, dispatches it with a
-   * timeout, and shapes the response. Throws on an empty response so the
-   * retry loop treats it like any other transient failure.
-   */
-  private async executeCall<T>(params: CallParams<T>, requestId: string): Promise<T> {
-    const { useJson, model, request } = this.buildRequestPayload(params);
-
-    const response = await withTimeout(
-      (attemptSignal) => this.client.chat.completions.create(request, { signal: attemptSignal }),
-      this.timeoutMs,
-      params.signal,
-    );
-
-    const content = response.choices?.[0]?.message?.content?.trim();
-
-    if (!content) {
-      throw new LLMError('Empty LLM response', 'api');
-    }
-
-    this.logger.debug(`[vern:${requestId}] output:\n${content.slice(0, 800)}`);
-
-    this.recordUsage(response, requestId, model);
-
-    if (!useJson) {
-      this.breaker?.recordSuccess();
-      return content as T;
-    }
-
-    const result = this.parseAndValidate(content, params.schema);
-    this.breaker?.recordSuccess();
-
-    return result;
-  }
-
-  /**
    * Validates `history` alternates user/assistant turns, since providers
    * like Anthropic/Gemini reject or mishandle consecutive same-role turns.
    */
   private validateHistory(history: ConversationTurn[]): void {
-    let previousRole: 'user' | 'assistant' | undefined;
+    let previousTurn: ConversationTurn | undefined;
 
     for (const [index, turn] of history.entries()) {
-      if (turn.role !== 'user' && turn.role !== 'assistant') {
+      if (turn.role !== 'user' && turn.role !== 'assistant' && turn.role !== 'tool') {
         throw new LLMError(
-          `Invalid history[${index}].role "${turn.role}": must be "user" or "assistant"`,
+          `Invalid history[${index}].role "${turn.role}": must be "user", "assistant", or "tool"`,
           'validation',
         );
       }
 
-      if (turn.role === previousRole) {
+      if (turn.role === 'tool') {
+        if (previousTurn?.role !== 'assistant' || !previousTurn.toolCalls?.length) {
+          throw new LLMError(
+            `history[${index}] is a "tool" turn, but must immediately follow an "assistant" turn that requested tools (history[${index - 1}] is not one)`,
+            'validation',
+          );
+        }
+
+        if (!turn.toolResults?.length) {
+          throw new LLMError(
+            `history[${index}] is a "tool" turn but has no toolResults`,
+            'validation',
+          );
+        }
+
+        const requestedIds = new Set(previousTurn.toolCalls.map((tc) => tc.id));
+        const resultIds = turn.toolResults.map((tr) => tr.toolCallId);
+        const unknownIds = resultIds.filter((id) => !requestedIds.has(id));
+
+        if (unknownIds.length) {
+          throw new LLMError(
+            `history[${index}].toolResults references toolCallId(s) [${unknownIds.join(', ')}] not requested by the preceding assistant turn at history[${index - 1}] (which requested [${[...requestedIds].join(', ')}])`,
+            'validation',
+          );
+        }
+      } else if (turn.role === previousTurn?.role) {
         throw new LLMError(
           `history must alternate user/assistant turns: consecutive "${turn.role}" turns at history[${index - 1}] and history[${index}]`,
           'validation',
         );
       }
 
-      previousRole = turn.role;
+      previousTurn = turn;
     }
 
-    if (previousRole === 'user') {
+    if (previousTurn?.role === 'user') {
       throw new LLMError(
-        'The last entry in history is a "user" turn, which would collide with the current userContent turn. history must end with an "assistant" turn (or be empty).',
+        'The last entry in history is a "user" turn, which would collide with the current userContent turn. history must end with an "assistant" or "tool" turn (or be empty).',
         'validation',
       );
     }
+
+    // Ending on 'tool' is valid and expected for continuation calls: the
+    // trailing userContent turn still gets appended after it (see
+    // buildRequestPayload), same as any other call.
   }
 
   /** Applies per-call defaults and shapes params into the client's request object. */
@@ -235,13 +370,69 @@ export class VernLLM {
       userContent,
       history = [],
       temperature = 0.2,
-      jsonMode = true,
       maxTokens = this.defaultMaxTokens,
       model = this.model,
       reasoningEffort,
       jsonSchema,
+      tools,
+      toolChoice,
     } = params;
 
+    if (tools && (jsonSchema || params.schema)) {
+      throw new LLMError(
+        '`tools` cannot be combined with `jsonSchema`/`schema`: on Anthropic and Bedrock, ' +
+          'jsonSchema is implemented internally as a forced single-tool call, which would ' +
+          'collide with real tools. Use one or the other.',
+        'validation',
+      );
+    }
+
+    if (tools && tools.length === 0) {
+      throw new LLMError(
+        '`tools` was an empty array. This is almost always a bug (e.g. a filtered tool list ' +
+          'that ended up empty) — an empty `tools` array still switches on tool-call mode ' +
+          '(response shape, jsonMode default, wire format) with nothing for the model to call. ' +
+          'Omit `tools` entirely for a normal call, or make sure the array is non-empty.',
+        'validation',
+      );
+    }
+
+    if (tools) {
+      const seen = new Set<string>();
+      const duplicates = new Set<string>();
+
+      for (const tool of tools) {
+        if (seen.has(tool.name)) duplicates.add(tool.name);
+        seen.add(tool.name);
+      }
+
+      if (duplicates.size) {
+        throw new LLMError(
+          `\`tools\` has duplicate name(s): [${[...duplicates].join(', ')}]. Tool names must be unique.`,
+          'validation',
+        );
+      }
+    }
+
+    if (toolChoice && !tools) {
+      throw new LLMError(
+        '`toolChoice` was set without `tools` — there is nothing for it to choose between. ' +
+          'Set `tools`, or remove `toolChoice`.',
+        'validation',
+      );
+    }
+
+    if (tools && typeof toolChoice === 'object' && !tools.some((t) => t.name === toolChoice.name)) {
+      throw new LLMError(
+        `toolChoice names "${toolChoice.name}", which is not in \`tools\` ([${tools.map((t) => t.name).join(', ')}]).`,
+        'validation',
+      );
+    }
+
+    // Defaults to false when tools are set and the caller didn't say otherwise,
+    // since forcing a JSON response format alongside tool calling is unreliable
+    // across providers.
+    const jsonMode = params.jsonMode ?? (tools ? false : true);
     const useJson = jsonMode || Boolean(jsonSchema);
 
     if (params.schema && !useJson) {
@@ -261,14 +452,54 @@ export class VernLLM {
       max_tokens: maxTokens,
       ...(responseFormat ? { response_format: responseFormat } : {}),
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+      ...(tools ? { tools: toWireTools(tools) } : {}),
+      ...(tools ? { tool_choice: this.buildWireToolChoice(toolChoice) } : {}),
       messages: [
         ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
-        ...history.map((turn) => ({ role: turn.role, content: turn.content })),
+        ...history.flatMap((turn): WireMessage[] => this.turnToWireMessages(turn)),
         { role: 'user' as const, content: userContent },
-      ],
+      ] satisfies WireMessage[],
     };
 
     return { useJson, model, request };
+  }
+
+  /** Maps VernLLM's app-facing `ToolChoice` onto the OpenAI-shaped wire `tool_choice`. */
+  private buildWireToolChoice(toolChoice: CallParams<unknown>['toolChoice']): WireToolChoice {
+    if (!toolChoice || toolChoice === 'auto') return 'auto';
+    if (toolChoice === 'none' || toolChoice === 'required') return toolChoice;
+
+    return { type: 'function', function: { name: toolChoice.name } };
+  }
+
+  /**
+   * Expands one `ConversationTurn` into one or more wire messages. Plain
+   * user/assistant turns map 1:1. An assistant turn with `toolCalls` maps
+   * to an assistant message carrying wire-shaped `tool_calls`. A `'tool'`
+   * turn expands into one wire `tool` message per `toolResult`, since
+   * OpenAI-shaped wire format wants one message per tool_call_id.
+   */
+  private turnToWireMessages(turn: ConversationTurn): WireMessage[] {
+    if (turn.role === 'tool') {
+      return (turn.toolResults ?? []).map((tr) => ({
+        role: 'tool' as const,
+        tool_call_id: tr.toolCallId,
+        content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content ?? null),
+        ...(tr.isError ? { is_error: true } : {}),
+      }));
+    }
+
+    if (turn.role === 'assistant' && turn.toolCalls?.length) {
+      return [
+        {
+          role: 'assistant' as const,
+          ...(turn.content ? { content: turn.content } : {}),
+          tool_calls: toWireToolCalls(turn.toolCalls),
+        },
+      ];
+    }
+
+    return [{ role: turn.role as 'user' | 'assistant', content: turn.content ?? '' }];
   }
 
   /**
@@ -472,27 +703,42 @@ export class VernLLM {
    * automatically get retry/timeout/circuit-breaker behavior. `reserveUsage`/
    * `refundUsage` are read from the top-level params only.
    *
+   * When `call.tools` is set, this caches the *whole*
+   * `CallWithToolsResult`, including `tool_calls` results, not just final
+   * answers. Whether that's appropriate depends on the tool: caching "the
+   * model decided to call get_weather" is usually fine to reuse briefly;
+   * caching a decision made under permissions or account state that can
+   * change between calls is not (see the tool-calling design doc's caching
+   * guidance). If that distinction matters for your tools, use a short
+   * `ttl` or route `tool_calls` results through a separate `cacheKey`/`ttl`
+   * than final answers, rather than relying on this method to guess.
+   *
    * @param params - `cachedCall` params (`cacheKey`, `ttl`, etc, minus `fn`)
-   * plus `call`, the `CallParams` to pass through to `this.call(...)`.
+   * plus `call`, the `CallParams` (optionally with `tools`) to pass through
+   * to `this.call(...)`.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
-  async cachedLLMCall<T>(
-    params: Omit<CachedCallParams<T>, 'fn'> & { call: CallParams<T> },
-  ): Promise<T> {
-    const { call: callParams, ...cacheParams } = params;
-    const {
-      reserveUsage: innerReserveUsage,
-      refundUsage: innerRefundUsage,
-      ...restCallParams
-    } = callParams;
+  async cachedLLMCall<T>(params: CachedLLMToolCallParams<T>): Promise<CallWithToolsResult<T>>;
 
-    if (innerReserveUsage || innerRefundUsage) {
+  async cachedLLMCall<T>(params: CachedLLMCallParams<T>): Promise<T>;
+
+  async cachedLLMCall<T>(
+    params: CachedLLMCallParams<T> | CachedLLMToolCallParams<T>,
+  ): Promise<T | CallWithToolsResult<T>> {
+    const { call: callParams, ...cacheParams } = params;
+
+    const { reserveUsage, refundUsage, ...restCallParams } = callParams;
+
+    if (reserveUsage || refundUsage) {
       this.logger.warn(
         '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedLLMCall; set them at the top level instead.',
       );
     }
 
-    return this.cachedCall({ ...cacheParams, fn: () => this.call(restCallParams) });
+    return this.cachedCall({
+      ...cacheParams,
+      fn: () => this.call(restCallParams),
+    });
   }
 
   /**
