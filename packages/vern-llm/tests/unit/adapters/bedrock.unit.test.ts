@@ -647,4 +647,39 @@ describe('fromBedrock — tools', () => {
       ],
     });
   });
+
+  it('rejects assistant tool_calls with non-empty invalid JSON arguments', async () => {
+    const { client } = makeFakeBedrockClient('unused');
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'm',
+          temperature: 0.2,
+          max_tokens: 10,
+          tools: [weatherTool],
+          messages: [
+            {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  id: 'call_bad_json',
+                  type: 'function',
+                  function: {
+                    name: 'get_weather',
+                    arguments: '{not valid json}',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+    });
+  });
 });

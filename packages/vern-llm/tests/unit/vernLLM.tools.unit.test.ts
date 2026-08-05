@@ -276,15 +276,17 @@ describe('VernLLM.call — validation', () => {
 
     const llm = new VernLLM({ client, model: 'test-model' });
 
+    const safeParse = vi.fn(() => ({
+      success: true as const,
+      data: {
+        city: 'NEW YORK',
+      },
+    }));
+
     const strictWeatherTool = {
       ...weatherTool,
       argumentsSchema: {
-        safeParse: () => ({
-          success: true as const,
-          data: {
-            city: 'NEW YORK',
-          },
-        }),
+        safeParse,
       },
     };
 
@@ -292,6 +294,8 @@ describe('VernLLM.call — validation', () => {
       userContent: 'hi',
       tools: [strictWeatherTool],
     });
+
+    expect(safeParse).toHaveBeenCalledWith({ city: 'New York' });
 
     expect(result).toEqual({
       type: 'tool_calls',
