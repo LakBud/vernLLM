@@ -11,25 +11,27 @@ import type { UsageHooks } from './usage.js';
 /**
  * A single prior turn in a multi-turn conversation, passed via `history`.
  *
- * Plain turns (`{ role: 'user' | 'assistant', content: '...' }`) work as
- * before. Two extra shapes support tool continuation, expressed as history
- * rather than hidden session state — same as the rest of VernLLM, which
- * keeps no server-side state between calls:
+ * Supports normal user/assistant messages and tool continuations:
+ * - assistant turns may include `toolCalls` when the model requested tools.
+ * - tool turns include the matching `toolResults`.
  *
- * - An `'assistant'` turn that requested tools: `content` is optional (the
- *   model may have produced no text) and `toolCalls` carries what it asked for.
- * - A `'tool'` turn immediately follows, carrying the application's
- *   `toolResults` for those calls.
+ * Tool turns must immediately follow an assistant tool call turn, and every
+ * requested tool call must have a result.
  */
-export interface ConversationTurn {
-  role: 'user' | 'assistant' | 'tool';
-  /** Optional: an assistant turn that only requested tools has no text. */
-  content?: string;
-  /** Present on assistant turns that requested one or more tools. */
-  toolCalls?: ToolCall[];
-  /** Present on 'tool' turns — the results of the preceding toolCalls. */
-  toolResults?: ToolResult[];
-}
+export type ConversationTurn =
+  | {
+      role: 'user';
+      content: string;
+    }
+  | {
+      role: 'assistant';
+      content?: string;
+      toolCalls?: ToolCall[];
+    }
+  | {
+      role: 'tool';
+      toolResults: ToolResult[];
+    };
 
 /** A plain text segment of a multimodal `userContent` array. */
 export interface TextBlock {
@@ -63,8 +65,8 @@ export interface CallParams<T = unknown> extends UsageHooks {
   userContent: string | ContentBlock[];
 
   /**
-   * Previous conversation turns. Must alternate user/assistant and end with
-   * an assistant turn; invalid history throws LLMError('validation').
+   * Previous conversation turns. Must alternate roles; tool turns must follow
+   * assistant tool calls. Invalid history throws LLMError('validation').
    */
   history?: ConversationTurn[];
 

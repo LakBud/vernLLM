@@ -497,7 +497,7 @@ describe('fromBedrock — tools', () => {
         max_tokens: 100,
         tools: [weatherTool],
         tool_choice: 'required',
-        messages: [{ role: 'user', content: 'weather in Oslo?' }],
+        messages: [{ role: 'user', content: 'weather in New York?' }],
       },
       { signal: new AbortController().signal },
     );
@@ -517,7 +517,7 @@ describe('fromBedrock — tools', () => {
   });
 
   it('maps a toolUse content block into a wire tool_calls entry', async () => {
-    const { client } = makeFakeBedrockToolClient('get_weather', { city: 'Oslo' });
+    const { client } = makeFakeBedrockToolClient('get_weather', { city: 'New York' });
     const adapted = fromBedrock(client);
 
     const result = await adapted.chat.completions.create(
@@ -535,7 +535,7 @@ describe('fromBedrock — tools', () => {
       {
         id: 'get_weather_0',
         type: 'function',
-        function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+        function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
       },
     ]);
   });
@@ -557,7 +557,7 @@ describe('fromBedrock — tools', () => {
               {
                 id: 'call_1',
                 type: 'function',
-                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
               },
             ],
           },
@@ -572,7 +572,7 @@ describe('fromBedrock — tools', () => {
       {
         role: 'assistant',
         content: [
-          { toolUse: { toolUseId: 'call_1', name: 'get_weather', input: { city: 'Oslo' } } },
+          { toolUse: { toolUseId: 'call_1', name: 'get_weather', input: { city: 'New York' } } },
         ],
       },
       {
@@ -608,12 +608,12 @@ describe('fromBedrock — tools', () => {
               {
                 id: 'call_1',
                 type: 'function',
-                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
               },
               {
                 id: 'call_2',
                 type: 'function',
-                function: { name: 'get_time', arguments: JSON.stringify({ city: 'Oslo' }) },
+                function: { name: 'get_time', arguments: JSON.stringify({ city: 'New York' }) },
               },
             ],
           },

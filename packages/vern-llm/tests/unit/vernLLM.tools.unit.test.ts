@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { type AnthropicClient, isToolCallResult } from '../../src/index.js';
+import { type AnthropicClient, type CallParams, isToolCallResult } from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse, textResponse, toolCallResponse, at } from '../helpers.js';
 
@@ -42,25 +42,25 @@ describe('VernLLM.call — happy paths', () => {
 
   it('returns a tool_calls result, parsing arguments as JSON', async () => {
     const { client } = createMockClient([
-      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }]),
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }]),
     ]);
     const llm = new VernLLM({ client, model: 'test-model' });
 
     const result = await llm.call({
-      userContent: 'what is the weather in Oslo?',
+      userContent: 'what is the weather in New York?',
       tools: [weatherTool],
     });
 
     expect(result).toEqual({
       type: 'tool_calls',
-      toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }],
+      toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }],
     });
   });
 
   it('carries accompanying text alongside a tool_calls result', async () => {
     const { client } = createMockClient([
       toolCallResponse(
-        [{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }],
+        [{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }],
         'Let me check that for you.',
       ),
     ]);
@@ -114,6 +114,27 @@ describe('VernLLM.call — happy paths', () => {
       function: { name: 'get_weather' },
     });
   });
+
+  it('passes through string toolChoice values to the wire format', async () => {
+    const { client, calls } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await llm.call({
+      userContent: 'hi',
+      tools: [weatherTool],
+      toolChoice: 'required',
+    });
+
+    expect(at(calls, 0).tool_choice).toBe('required');
+
+    await llm.call({
+      userContent: 'hi',
+      tools: [weatherTool],
+      toolChoice: 'none',
+    });
+
+    expect(at(calls, 1).tool_choice).toBe('none');
+  });
 });
 
 describe('VernLLM.call — multi-turn continuation via history', () => {
@@ -125,7 +146,7 @@ describe('VernLLM.call — multi-turn continuation via history', () => {
     const { fromAnthropic } = await import('../../src/adapters/index.js');
 
     const llm = new VernLLM({
-      client: fromAnthropic({ messages: { create } } as never),
+      client: fromAnthropic({ messages: { create } } as AnthropicClient),
       model: 'm',
     });
 
@@ -135,7 +156,7 @@ describe('VernLLM.call — multi-turn continuation via history', () => {
       history: [
         {
           role: 'assistant',
-          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }],
+          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }],
         },
         {
           role: 'tool',
@@ -164,12 +185,12 @@ describe('VernLLM.call — multi-turn continuation via history', () => {
     const llm = new VernLLM({ client, model: 'test-model' });
 
     await llm.call({
-      userContent: 'what is the weather in Oslo?',
+      userContent: 'what is the weather in New York?',
       tools: [weatherTool],
       history: [
         {
           role: 'assistant',
-          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }],
+          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }],
         },
         {
           role: 'tool',
@@ -185,12 +206,12 @@ describe('VernLLM.call — multi-turn continuation via history', () => {
           {
             id: 'call_1',
             type: 'function',
-            function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+            function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
           },
         ],
       },
       { role: 'tool', tool_call_id: 'call_1', content: JSON.stringify({ tempC: 21 }) },
-      { role: 'user', content: 'what is the weather in Oslo?' },
+      { role: 'user', content: 'what is the weather in New York?' },
     ]);
   });
 
@@ -247,6 +268,44 @@ describe('VernLLM.call — validation', () => {
       { type: 'validation' },
     );
   });
+
+  it('returns tool call arguments after argumentsSchema validation succeeds', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }]),
+    ]);
+
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const strictWeatherTool = {
+      ...weatherTool,
+      argumentsSchema: {
+        safeParse: () => ({
+          success: true as const,
+          data: {
+            city: 'NEW YORK',
+          },
+        }),
+      },
+    };
+
+    const result = await llm.call({
+      userContent: 'hi',
+      tools: [strictWeatherTool],
+    });
+
+    expect(result).toEqual({
+      type: 'tool_calls',
+      toolCalls: [
+        {
+          id: 'call_1',
+          name: 'get_weather',
+          arguments: {
+            city: 'New York',
+          },
+        },
+      ],
+    });
+  });
 });
 
 describe('VernLLM.cachedLLMCall — tools', () => {
@@ -273,14 +332,14 @@ describe('VernLLM.cachedLLMCall — tools', () => {
 
   it('caches a tool_calls result too (whole CallWithToolsResult is cached)', async () => {
     const { client, create } = createMockClient([
-      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }]),
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }]),
     ]);
     const llm = new VernLLM({ client, model: 'test-model' });
 
     const params = {
       cacheKey: 'weather-2',
       ttl: 60,
-      call: { userContent: 'weather in Oslo?', tools: [weatherTool] },
+      call: { userContent: 'weather in New York?', tools: [weatherTool] },
     };
 
     const first = await llm.cachedLLMCall(params);
@@ -288,7 +347,7 @@ describe('VernLLM.cachedLLMCall — tools', () => {
 
     expect(first).toEqual({
       type: 'tool_calls',
-      toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }],
+      toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }],
     });
     expect(second).toEqual(first);
     expect(create).toHaveBeenCalledTimes(1);
@@ -368,7 +427,7 @@ describe('VernLLM.call — bug fixes / hardening', () => {
     const llm = new VernLLM({ client, model: 'test-model' });
 
     await expect(
-      llm.call({ userContent: 'hi', toolChoice: 'required' } as never),
+      llm.call({ userContent: 'hi', toolChoice: 'required' } as CallParams<unknown>),
     ).rejects.toMatchObject({ type: 'validation' });
   });
 
@@ -405,7 +464,7 @@ describe('VernLLM.call — bug fixes / hardening', () => {
 
   it('isToolCallResult() narrows a tool_calls result and rejects a content result', async () => {
     const { client } = createMockClient([
-      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }]),
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }]),
     ]);
     const llm = new VernLLM({ client, model: 'test-model' });
 

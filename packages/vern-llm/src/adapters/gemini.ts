@@ -1,6 +1,5 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-
-import type { ContentBlock, LLMClient, WireToolCall } from '../types/index.js';
+import { LLMError, type ContentBlock, type LLMClient, type WireToolCall } from '../types/index.js';
 
 /** Gemini's native per-part content shape for a `contents` entry. */
 type GeminiPart =
@@ -109,16 +108,36 @@ function toGeminiContent(
     // already the name Gemini expects.
     return {
       role: 'user',
-      parts: [{ functionResponse: { name: m.tool_call_id, response: safeParseJson(m.content) } }],
+      parts: [
+        {
+          functionResponse: {
+            name: m.tool_call_id,
+            response: parseToolResult(m.content),
+          },
+        },
+      ],
     };
   }
 
   if (m.role === 'assistant' && m.tool_calls?.length) {
+    const parts: GeminiPart[] = [];
+
+    if (typeof m.content === 'string' && m.content) {
+      parts.push({ text: m.content });
+    }
+
+    parts.push(
+      ...m.tool_calls.map((tc) => ({
+        functionCall: {
+          name: tc.function.name,
+          args: parseToolArguments(tc.function.arguments, tc.function.name),
+        },
+      })),
+    );
+
     return {
       role: 'model',
-      parts: m.tool_calls.map((tc) => ({
-        functionCall: { name: tc.function.name, args: safeParseJson(tc.function.arguments) },
-      })),
+      parts,
     };
   }
 
@@ -128,11 +147,33 @@ function toGeminiContent(
   };
 }
 
-function safeParseJson(text: string): unknown {
+function parseToolArguments(text: string, toolName: string): Record<string, unknown> {
+  let parsed: unknown;
+
   try {
-    return text.trim() ? JSON.parse(text) : {};
+    parsed = text.trim() ? JSON.parse(text) : {};
+  } catch (cause) {
+    throw new LLMError(
+      `Tool call "${toolName}" arguments are not valid JSON.`,
+      'validation',
+      undefined,
+      undefined,
+      cause,
+    );
+  }
+
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new LLMError(`Tool call "${toolName}" arguments must be a JSON object.`, 'validation');
+  }
+
+  return parsed as Record<string, unknown>;
+}
+
+function parseToolResult(text: string): unknown {
+  try {
+    return text.trim() ? JSON.parse(text) : '';
   } catch {
-    return {};
+    return text;
   }
 }
 

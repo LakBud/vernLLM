@@ -277,17 +277,33 @@ export function fromBedrock(
 
             text = blocks.map((c) => c.text ?? '').join('');
 
-            const toolUses = blocks.filter((c) => c.toolUse);
+            const toolUses = blocks.filter(
+              (
+                block,
+              ): block is { toolUse: { toolUseId?: string; name?: string; input?: unknown } } =>
+                Boolean(block.toolUse),
+            );
 
             if (toolUses.length) {
-              wireToolCalls = toolUses.map((c, i) => ({
-                id: c.toolUse!.toolUseId ?? `${c.toolUse!.name}_${i}`,
-                type: 'function' as const,
-                function: {
-                  name: c.toolUse!.name!,
-                  arguments: JSON.stringify(c.toolUse!.input ?? {}),
-                },
-              }));
+              wireToolCalls = toolUses.map((block, i) => {
+                const toolUse = block.toolUse;
+
+                if (!toolUse.name) {
+                  throw new LLMError(
+                    `Bedrock returned a toolUse block without a name at index ${i}.`,
+                    'validation',
+                  );
+                }
+
+                return {
+                  id: toolUse.toolUseId ?? `${toolUse.name}_${i}`,
+                  type: 'function' as const,
+                  function: {
+                    name: toolUse.name,
+                    arguments: JSON.stringify(toolUse.input ?? {}),
+                  },
+                };
+              });
             }
           }
 
@@ -317,14 +333,14 @@ function toBedrockToolChoice(
   if (toolChoice === 'required') return { any: {} };
 
   if (toolChoice === 'none') {
-    // Converse's toolConfig.toolChoice has no 'none' option — the only way
+    // Converse's toolConfig.toolChoice has no 'none' option. The only way
     // to guarantee no tool use is to omit toolConfig.tools entirely, which
     // isn't an option here since tools were explicitly requested. Silently
     // falling back to 'auto' would let the model call tools despite the
     // caller explicitly asking it not to, so this fails loudly instead.
     throw new LLMError(
-      "toolChoice: 'none' is not supported by fromBedrock: Converse's Converse API has no " +
-        'tool_choice equivalent to forbidding tool use while tools are still offered. Omit ' +
+      "'none' is not supported by fromBedrock: Bedrock Converse has no " +
+        '`tool_choice` equivalent to forbidding tool use while tools are still offered. Omit ' +
         '`tools` entirely for this call instead.',
       'validation',
     );
@@ -332,7 +348,6 @@ function toBedrockToolChoice(
 
   return { tool: { name: toolChoice.function.name } };
 }
-
 /**
  * Translates one VernLLM wire message into Converse's
  * `{ role: 'user' | 'assistant', content }` shape.
@@ -351,7 +366,7 @@ function toBedrockMessage(
           toolResult: {
             toolUseId: m.tool_call_id,
             content: [{ text: m.content }],
-            status: 'success',
+            status: m.is_error ? 'error' : 'success',
           },
         },
       ],
@@ -366,10 +381,20 @@ function toBedrockMessage(
     for (const tc of m.tool_calls) {
       let input: unknown;
 
-      try {
-        input = tc.function.arguments.trim() ? JSON.parse(tc.function.arguments) : {};
-      } catch {
+      if (!tc.function.arguments.trim()) {
         input = {};
+      } else {
+        try {
+          input = JSON.parse(tc.function.arguments);
+        } catch (cause) {
+          throw new LLMError(
+            `Assistant tool call "${tc.function.name}" (${tc.id}) has arguments that are not valid JSON.`,
+            'validation',
+            undefined,
+            undefined,
+            cause,
+          );
+        }
       }
 
       blocks.push({ toolUse: { toolUseId: tc.id, name: tc.function.name, input } });

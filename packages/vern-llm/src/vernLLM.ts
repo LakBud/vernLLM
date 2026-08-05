@@ -309,17 +309,10 @@ export class VernLLM {
     let previousTurn: ConversationTurn | undefined;
 
     for (const [index, turn] of history.entries()) {
-      if (turn.role !== 'user' && turn.role !== 'assistant' && turn.role !== 'tool') {
-        throw new LLMError(
-          `Invalid history[${index}].role "${turn.role}": must be "user", "assistant", or "tool"`,
-          'validation',
-        );
-      }
-
       if (turn.role === 'tool') {
         if (previousTurn?.role !== 'assistant' || !previousTurn.toolCalls?.length) {
           throw new LLMError(
-            `history[${index}] is a "tool" turn, but must immediately follow an "assistant" turn that requested tools (history[${index - 1}] is not one)`,
+            `history[${index}] is a "tool" turn, but must immediately follow an "assistant" turn that requested tools`,
             'validation',
           );
         }
@@ -333,34 +326,56 @@ export class VernLLM {
 
         const requestedIds = new Set(previousTurn.toolCalls.map((tc) => tc.id));
         const resultIds = turn.toolResults.map((tr) => tr.toolCallId);
+
         const unknownIds = resultIds.filter((id) => !requestedIds.has(id));
 
         if (unknownIds.length) {
           throw new LLMError(
-            `history[${index}].toolResults references toolCallId(s) [${unknownIds.join(', ')}] not requested by the preceding assistant turn at history[${index - 1}] (which requested [${[...requestedIds].join(', ')}])`,
+            `history[${index}].toolResults references unknown toolCallId(s) [${unknownIds.join(', ')}]`,
             'validation',
           );
         }
-      } else if (turn.role === previousTurn?.role) {
-        throw new LLMError(
-          `history must alternate user/assistant turns: consecutive "${turn.role}" turns at history[${index - 1}] and history[${index}]`,
-          'validation',
-        );
+
+        const missingIds = [...requestedIds].filter((id) => !resultIds.includes(id));
+
+        if (missingIds.length) {
+          throw new LLMError(
+            `history[${index}] is missing toolResults for toolCallId(s) [${missingIds.join(', ')}]`,
+            'validation',
+          );
+        }
+      } else {
+        if (turn.role === previousTurn?.role) {
+          throw new LLMError(
+            `history must alternate user/assistant turns: consecutive "${turn.role}" turns at history[${index - 1}] and history[${index}]`,
+            'validation',
+          );
+        }
+
+        if (previousTurn?.role === 'assistant' && previousTurn.toolCalls?.length) {
+          throw new LLMError(
+            `history[${index}] follows an assistant tool request without tool results`,
+            'validation',
+          );
+        }
       }
 
       previousTurn = turn;
     }
 
-    if (previousTurn?.role === 'user') {
+    if (previousTurn?.role === 'assistant' && previousTurn.toolCalls?.length) {
       throw new LLMError(
-        'The last entry in history is a "user" turn, which would collide with the current userContent turn. history must end with an "assistant" or "tool" turn (or be empty).',
+        'The last entry in history is an assistant tool request without tool results',
         'validation',
       );
     }
 
-    // Ending on 'tool' is valid and expected for continuation calls: the
-    // trailing userContent turn still gets appended after it (see
-    // buildRequestPayload), same as any other call.
+    if (previousTurn?.role === 'user') {
+      throw new LLMError(
+        'The last entry in history is a "user" turn, which would collide with the current userContent turn.',
+        'validation',
+      );
+    }
   }
 
   /** Applies per-call defaults and shapes params into the client's request object. */

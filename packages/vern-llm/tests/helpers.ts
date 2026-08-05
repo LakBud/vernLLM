@@ -24,7 +24,7 @@ export function textResponse(text: string): CreateResult {
 
 /** Builds a response where the model requests one or more tool calls. */
 export function toolCallResponse(
-  calls: Array<{ id: string; name: string; arguments: unknown }>,
+  calls: Array<{ id: string; name: string; arguments: unknown; rawArguments?: string }>,
   content?: string,
 ): CreateResult {
   return {
@@ -35,7 +35,10 @@ export function toolCallResponse(
           tool_calls: calls.map((c) => ({
             id: c.id,
             type: 'function' as const,
-            function: { name: c.name, arguments: JSON.stringify(c.arguments) },
+            function: {
+              name: c.name,
+              arguments: c.rawArguments ?? JSON.stringify(c.arguments),
+            },
           })),
         },
       },

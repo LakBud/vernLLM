@@ -75,6 +75,11 @@ export interface LLMClient {
             };
           }>;
           tool_choice?: WireToolChoice;
+          /**
+           * Wire-format messages. Breaking change for custom adapters:
+           * implementations must handle tool messages and assistant tool_calls.
+           * Exhaustive switches over only system/user/assistant roles may no longer compile.
+           */
           messages: WireMessage[];
         },
         options: { signal: AbortSignal },

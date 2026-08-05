@@ -239,7 +239,7 @@ describe('fromGemini — tools', () => {
         max_tokens: 100,
         tools: [weatherTool],
         tool_choice: 'auto',
-        messages: [{ role: 'user', content: 'weather in Oslo?' }],
+        messages: [{ role: 'user', content: 'weather in New York?' }],
       },
       { signal: new AbortController().signal },
     );
@@ -260,10 +260,103 @@ describe('fromGemini — tools', () => {
     });
   });
 
+  it('preserves text content when Gemini also returns a functionCall', async () => {
+    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { text: 'Checking the weather now.' },
+              {
+                functionCall: {
+                  name: 'get_weather',
+                  args: { city: 'New York' },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    }));
+
+    const adapted = fromGemini({ generateContent });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message).toEqual({
+      content: 'Checking the weather now.',
+      tool_calls: [
+        {
+          id: 'get_weather',
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            arguments: JSON.stringify({ city: 'New York' }),
+          },
+        },
+      ],
+    });
+  });
+
+  it('maps tool_choice none into NONE functionCallingConfig mode', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('ok');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        temperature: 0.2,
+        max_tokens: 100,
+        tools: [weatherTool],
+        tool_choice: 'none',
+        messages: [{ role: 'user', content: 'weather in New York?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].toolConfig).toEqual({
+      functionCallingConfig: { mode: 'NONE' },
+    });
+  });
+
+  it('maps tool_choice required into ANY functionCallingConfig mode', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('ok');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        temperature: 0.2,
+        max_tokens: 100,
+        tools: [weatherTool],
+        tool_choice: 'required',
+        messages: [{ role: 'user', content: 'weather in New York?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].toolConfig).toEqual({
+      functionCallingConfig: { mode: 'ANY' },
+    });
+  });
+
   it('maps a functionCall response part into a wire tool_calls entry', async () => {
     const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({
       candidates: [
-        { content: { parts: [{ functionCall: { name: 'get_weather', args: { city: 'Oslo' } } }] } },
+        {
+          content: {
+            parts: [{ functionCall: { name: 'get_weather', args: { city: 'New York' } } }],
+          },
+        },
       ],
     }));
     const adapted = fromGemini({ generateContent });
@@ -283,7 +376,7 @@ describe('fromGemini — tools', () => {
       {
         id: 'get_weather',
         type: 'function',
-        function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+        function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
       },
     ]);
   });
@@ -305,7 +398,7 @@ describe('fromGemini — tools', () => {
               {
                 id: 'get_weather',
                 type: 'function',
-                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
               },
             ],
           },
@@ -317,7 +410,10 @@ describe('fromGemini — tools', () => {
     );
 
     expect(generateContent.mock.calls[0]![0].contents).toEqual([
-      { role: 'model', parts: [{ functionCall: { name: 'get_weather', args: { city: 'Oslo' } } }] },
+      {
+        role: 'model',
+        parts: [{ functionCall: { name: 'get_weather', args: { city: 'New York' } } }],
+      },
       {
         role: 'user',
         parts: [{ functionResponse: { name: 'get_weather', response: { tempC: 21 } } }],
@@ -341,14 +437,14 @@ describe('fromGemini — tools', () => {
             role: 'assistant',
             tool_calls: [
               {
-                id: 'a',
+                id: 'get_weather',
                 type: 'function',
-                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'Oslo' }) },
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
               },
               {
-                id: 'b',
+                id: 'get_time',
                 type: 'function',
-                function: { name: 'get_time', arguments: JSON.stringify({ city: 'Oslo' }) },
+                function: { name: 'get_time', arguments: JSON.stringify({ city: 'New York' }) },
               },
             ],
           },

@@ -1,6 +1,5 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-
-import type { ContentBlock, LLMClient, WireToolCall } from '../types/index.js';
+import { LLMError, type ContentBlock, type LLMClient, type WireToolCall } from '../types/index.js';
 
 /** Anthropic's native per-block content shape for a message. */
 type AnthropicContentBlock =
@@ -102,8 +101,12 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
 
           const toolName =
             params.response_format?.type === 'json_schema'
-              ? params.response_format.json_schema.name
+              ? params.response_format.json_schema.name.trim()
               : undefined;
+
+          if (params.response_format?.type === 'json_schema' && !toolName) {
+            throw new LLMError('json_schema.name must not be empty.', 'validation');
+          }
 
           let jsonInstruction: string | undefined;
           let tools:
@@ -153,13 +156,30 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
 
           let text: string;
           let wireToolCalls: WireToolCall[] | undefined;
-
           if (toolName) {
             const toolUse = response.content.find(
               (block) => block.type === 'tool_use' && block.name === toolName,
             );
 
-            text = toolUse ? JSON.stringify(toolUse.input) : '';
+            if (!toolUse) {
+              throw new LLMError(
+                `Anthropic did not return the required structured output tool "${toolName}".`,
+                'validation',
+              );
+            }
+
+            if (
+              !toolUse.input ||
+              typeof toolUse.input !== 'object' ||
+              Array.isArray(toolUse.input)
+            ) {
+              throw new LLMError(
+                `Anthropic returned invalid structured output for tool "${toolName}". Expected an object.`,
+                'validation',
+              );
+            }
+
+            text = JSON.stringify(toolUse.input);
           } else {
             text = response.content
               .filter((block) => block.type === 'text')
@@ -269,8 +289,21 @@ function toAnthropicMessage(
 
       try {
         input = tc.function.arguments.trim() ? JSON.parse(tc.function.arguments) : {};
-      } catch {
-        input = {};
+      } catch (cause) {
+        throw new LLMError(
+          `Assistant tool call "${tc.function.name}" (${tc.id}) has arguments that are not valid JSON.`,
+          'validation',
+          undefined,
+          undefined,
+          cause,
+        );
+      }
+
+      if (input === null || Array.isArray(input) || typeof input !== 'object') {
+        throw new LLMError(
+          `Assistant tool call "${tc.function.name}" (${tc.id}) arguments must be a JSON object.`,
+          'validation',
+        );
       }
 
       blocks.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input });

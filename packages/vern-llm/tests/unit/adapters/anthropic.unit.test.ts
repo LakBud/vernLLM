@@ -222,6 +222,180 @@ describe('fromAnthropic', () => {
     ]);
   });
 
+  it('handles parallel tool_use responses and continuation requests with merged tool_result blocks', async () => {
+    const create = vi
+      .fn<AnthropicClient['messages']['create']>()
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call_weather',
+            name: 'weather',
+            input: { city: 'Paris' },
+          },
+          {
+            type: 'tool_use',
+            id: 'call_time',
+            name: 'time',
+            input: { city: 'Paris' },
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'Sunny, 15:00.' }],
+        usage: { input_tokens: 20, output_tokens: 5 },
+      });
+
+    const adapted = fromAnthropic({
+      messages: { create },
+    });
+
+    const first = await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        temperature: 0.2,
+        max_tokens: 100,
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'weather',
+              description: 'Gets weather',
+              parameters: { type: 'object' },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'time',
+              description: 'Gets time',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+        messages: [{ role: 'user', content: 'Weather and time in Paris?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(first.choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: 'call_weather',
+        type: 'function',
+        function: {
+          name: 'weather',
+          arguments: JSON.stringify({ city: 'Paris' }),
+        },
+      },
+      {
+        id: 'call_time',
+        type: 'function',
+        function: {
+          name: 'time',
+          arguments: JSON.stringify({ city: 'Paris' }),
+        },
+      },
+    ]);
+
+    expect(at(create.mock.calls, 0)[0]).toMatchObject({
+      tools: [
+        {
+          name: 'weather',
+          description: 'Gets weather',
+          input_schema: { type: 'object' },
+        },
+        {
+          name: 'time',
+          description: 'Gets time',
+          input_schema: { type: 'object' },
+        },
+      ],
+    });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        temperature: 0.2,
+        max_tokens: 100,
+        messages: [
+          { role: 'user', content: 'Weather and time in Paris?' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call_weather',
+                type: 'function',
+                function: {
+                  name: 'weather',
+                  arguments: JSON.stringify({ city: 'Paris' }),
+                },
+              },
+              {
+                id: 'call_time',
+                type: 'function',
+                function: {
+                  name: 'time',
+                  arguments: JSON.stringify({ city: 'Paris' }),
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_weather',
+            content: 'Sunny',
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_time',
+            content: '15:00',
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(at(create.mock.calls, 1)[0].messages).toEqual([
+      {
+        role: 'user',
+        content: 'Weather and time in Paris?',
+      },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call_weather',
+            name: 'weather',
+            input: { city: 'Paris' },
+          },
+          {
+            type: 'tool_use',
+            id: 'call_time',
+            name: 'time',
+            input: { city: 'Paris' },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call_weather',
+            content: 'Sunny',
+          },
+          {
+            type: 'tool_result',
+            tool_use_id: 'call_time',
+            content: '15:00',
+          },
+        ],
+      },
+    ]);
+  });
+
   it('falls back to a prompt instruction for json_object mode (no schema to build a tool from)', async () => {
     const { client, create } = makeFakeAnthropicClient('{}');
     const adapted = fromAnthropic(client);

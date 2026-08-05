@@ -73,7 +73,8 @@ export function isToolCallResult(result: unknown): result is ToolCallResult {
     typeof result === 'object' &&
     result !== null &&
     'type' in result &&
-    (result as { type: unknown }).type === 'tool_calls'
+    (result as { type: unknown }).type === 'tool_calls' &&
+    Array.isArray((result as { toolCalls?: unknown }).toolCalls)
   );
 }
 

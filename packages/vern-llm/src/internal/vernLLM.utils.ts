@@ -1,14 +1,13 @@
 import { LLMError } from '../types/errors.js';
 
-import type { WireToolCall } from '../types/client.js';
+import type { LLMClient, WireToolCall } from '../types/client.js';
 import type { ToolCall, ToolDefinition } from '../types/tools.js';
 import type { UsageHooks } from '../types/usage.js';
 
 /** Translates app-facing `ToolDefinition[]` into the OpenAI-shaped wire tools array. */
-export function toWireTools(tools: ToolDefinition[]): Array<{
-  type: 'function';
-  function: { name: string; description: string; parameters: Record<string, unknown> };
-}> {
+export function toWireTools(
+  tools: ToolDefinition[],
+): NonNullable<Parameters<LLMClient['chat']['completions']['create']>[0]['tools']> {
   return tools.map((tool) => ({
     type: 'function' as const,
     function: {
