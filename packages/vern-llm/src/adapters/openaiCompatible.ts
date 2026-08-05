@@ -55,11 +55,18 @@ export function fromOpenAICompatible(client: unknown): LLMClient {
     chat: {
       completions: {
         async create(params, options) {
-          const messages = params.messages.map((m) =>
-            m.role === 'user' && Array.isArray(m.content)
-              ? { ...m, content: toOpenAIContent(m.content) }
-              : m,
-          );
+          const messages = params.messages.map((m) => {
+            if (m.role === 'user' && Array.isArray(m.content)) {
+              return { ...m, content: toOpenAIContent(m.content) };
+            }
+
+            if (m.role === 'tool') {
+              const { is_error: _isError, ...openAIToolMessage } = m;
+              return openAIToolMessage;
+            }
+
+            return m;
+          });
 
           return raw.chat.completions.create(
             { ...params, messages } as Parameters<LLMClient['chat']['completions']['create']>[0],

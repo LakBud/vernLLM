@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   fromCerebras,
@@ -140,6 +140,50 @@ describe('fromOpenAICompatible and its aliases', () => {
         ],
       },
     ]);
+  });
+
+  it('strips is_error from tool messages for OpenAI-compatible providers', async () => {
+    const create = vi.fn(async () => ({
+      choices: [{ message: { content: 'ok' } }],
+    }));
+
+    const adapted = fromOpenAICompatible({
+      chat: {
+        completions: {
+          create,
+        },
+      },
+    });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        messages: [
+          {
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: 'failed',
+            is_error: true,
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          {
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: 'failed',
+          },
+        ],
+      }),
+      expect.anything(),
+    );
   });
 
   it.each([
