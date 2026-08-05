@@ -41,7 +41,9 @@ try {
   </Card>
   <Card title="api">
     The provider returned an HTTP error with a status code. Retried unless the status is in
-    `nonRetryableStatus` (default `400, 401, 403, 404, 422`).
+    `nonRetryableStatus` (default `400, 401, 403, 404, 422`). Also raised, and retried, when the
+    model requests a tool name that was not in the `tools` array, on the reasoning that a
+    hallucinated tool name may not recur. See <a href="/docs/core/tool-calling">Tool Calling</a>.
   </Card>
   <Card title="parse">
     The response content was not valid JSON. Never retried because a malformed response will not fix

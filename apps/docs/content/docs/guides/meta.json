@@ -7,6 +7,7 @@
     "caching-methods",
     "provider-fallback",
     "multi-turn-conversations",
+    "tool-execution-loop",
     "per-call-overrides"
   ]
 }

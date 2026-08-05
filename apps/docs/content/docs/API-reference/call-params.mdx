@@ -66,9 +66,25 @@ Existing string-based calls remain fully compatible.
   </Card>
   <Card title="history">
     `ConversationTurn[]`, optional. Prior turns, oldest first, not including `userContent`. Must
-    strictly alternate `user`/`assistant` and end on an `assistant` turn, or `call()` throws
-    `LLMError('validation')` before any request is made. See{' '}
-    <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a>.
+    strictly alternate `user`/`assistant` and end on an `assistant` turn without pending tool calls,
+    or a completed `tool` turn, or `call()` throws `LLMError('validation')` before any request is
+    made. See <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a>.
+  </Card>
+</Cards>
+
+## Tool calling
+
+<Cards>
+  <Card title="tools">
+    `ToolDefinition[]`, optional. Tools the model may call. Setting `tools` changes what `call()`
+    returns, from `T` directly to a `CallWithToolsResult<T>` discriminated union. Mutually
+    exclusive with `jsonSchema`/`schema`, and must not be an empty array. See{' '}
+    <a href="/docs/core/tool-calling">Tool Calling</a>.
+  </Card>
+  <Card title="toolChoice">
+    `'auto' | 'none' | 'required' | { name: string }`, optional. Defaults to `'auto'` when `tools`
+    is set. Throws `LLMError('validation')` if set without `tools`, or if `{ name }` names a tool
+    that is not present in `tools`.
   </Card>
 </Cards>
 
@@ -85,9 +101,9 @@ Existing string-based calls remain fully compatible.
 
 <Cards>
   <Card title="jsonMode">
-    `boolean`, default `true`. When `true`, the response is parsed as JSON. Set to `false` to get the
-    raw string content back untouched. Forced back to `true` if `jsonSchema` is set, even if you pass
-    `jsonMode: false` explicitly.
+    `boolean`, default `true`, except default `false` when `tools` is set. When `true`, the
+    response is parsed as JSON. Set to `false` to get the raw string content back untouched.
+    Forced back to `true` if `jsonSchema` is set, even if you pass `jsonMode: false` explicitly.
   </Card>
   <Card title="jsonSchema">
     `JsonSchemaSpec`, optional. Provider-native JSON Schema structured-output mode

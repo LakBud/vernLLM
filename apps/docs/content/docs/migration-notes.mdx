@@ -1,0 +1,98 @@
+---
+title: Migration Notes
+description: Breaking changes between versions, and what to update
+icon: TriangleAlert
+---
+
+This page tracks breaking changes across `vern-llm` releases. Most releases are additive, this
+page only covers the ones that aren't.
+
+## 2.0.0: Tool calling
+
+Tool calling introduced two type-level breaking changes, which is why this release is `2.0.0`
+rather than a minor. Both are narrow: they affect code that reads a `ConversationTurn` with
+certain assumptions, or code that hand-writes an `LLMClient` implementation instead of using a
+built-in adapter. Plain `call()` usage without `tools`, and history built from
+`{ role: 'user' | 'assistant', content }` objects, are unaffected either way.
+
+### `ConversationTurn` is now a discriminated union
+
+Previously every entry in `history` shared one flat shape:
+
+```ts
+interface ConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+```
+
+`ConversationTurn` is now a discriminated union keyed on `role`, adding a `tool` case:
+
+```ts
+type ConversationTurn =
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content?: string; toolCalls?: ToolCall[] }
+  | { role: 'tool'; toolResults: ToolResult[] };
+```
+
+<Callout type="info">
+  Constructing turns is unaffected, even from a loosely typed `role` variable such as
+  `.map((m) => ({ role: m.role, content: m.text }))`. TypeScript's contextual typing still accepts
+  this against the new union.
+</Callout>
+
+<Callout type="warn">
+  What breaks is code that *reads* a turn. `content` is no longer guaranteed to be a `string` on
+  the `assistant` branch, it is now `string | undefined`, since an assistant turn that only
+  requested tools has no text. Something like `turn.content.toUpperCase()` after narrowing to
+  `role === 'assistant'` now needs a null check first.
+
+An `assertNever(turn)` style exhaustiveness check in a `switch` over `role` also breaks, since
+the union now has three members instead of two, and the previously unreachable fallthrough case
+is no longer narrowed to `never`.
+
+</Callout>
+
+See <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a> for the full
+updated history rules.
+
+### `LLMClient.messages` is a wider union
+
+`LLMClient` is the interface every built-in adapter implements (`fromAnthropic`, `fromGemini`,
+`fromBedrock`, `fromFetch`, or an OpenAI SDK instance passed straight through), and the shape you
+can also implement yourself for a fully custom client. Its `messages` field widened:
+
+```ts
+// Before
+messages: Array<
+  | { role: 'system' | 'assistant'; content: string }
+  | { role: 'user'; content: string | ContentBlock[] }
+>;
+
+// After
+messages: WireMessage[]; // adds 'tool' turns and tool_calls on 'assistant' turns
+```
+
+<Callout type="warn">
+  This is unrelated to `CacheAdapter`/`cachedCall`, it only concerns the provider-facing interface.
+  It only affects code that implements `LLMClient` by hand, bypassing every built-in adapter. If you
+  wrote an exhaustive `switch`/`if` chain over `message.role` covering only `'system' | 'user' |
+  'assistant'`, it may no longer compile, since `WireMessage` adds a `'tool'` case and an optional
+  `tool_calls` field on `'assistant'`.
+</Callout>
+
+To update a custom `LLMClient`, handle the new `tool` role (a `tool_call_id` and `content` pair)
+and read `tool_calls` off `assistant` messages when present. If your custom client doesn't need to
+support tool calling yet, the minimum fix is exhaustiveness only, add a case that ignores or
+rejects `role === 'tool'`, since VernLLM only ever sends one when the caller opted in with
+`tools`.
+
+See <a href="/docs/core/tool-calling">Tool Calling</a> for the full feature, and{' '}
+
+<a href="/docs/API-reference/configuration">Configuration</a> for the `LLMClient` field reference.
+
+## Nothing else changed
+
+Calls that don't set `tools` keep returning `T` from `call()` exactly as before, `jsonMode` keeps
+defaulting to `true`, and existing plain user/assistant `history` arrays keep working with no
+changes required.

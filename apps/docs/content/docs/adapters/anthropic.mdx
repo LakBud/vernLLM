@@ -24,6 +24,15 @@ const llm = new VernLLM({
   dropped.
 </Callout>
 
+## Tool calling
+
+`tools` and `tool_calls` map onto Anthropic's native `tool_use` / `tool_result` content blocks.
+Since Anthropic requires strict `user`/`assistant` alternation, `fromAnthropic` merges consecutive
+tool result messages from a multi-tool turn back into a single `user` turn with multiple
+`tool_result` blocks. `ToolResult.isError` is forwarded as `tool_result.is_error`. See{' '}
+
+<a href="/docs/core/tool-calling">Tool Calling</a> for the full reference.
+
 ## Multimodal input
 
 `fromAnthropic` supports VernLLM's provider-independent `ContentBlock[]` format for image input.

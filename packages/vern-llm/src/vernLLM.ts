@@ -102,7 +102,7 @@ export class VernLLM {
    * When `tools` is set, always returns a discriminated result instead of
    * `T` directly: `{ type: 'content', content }` when the model answered
    * normally, or `{ type: 'tool_calls', toolCalls, content? }` when it
-   * requested one or more tools. VernLLM never executes tools itself — the
+   * requested one or more tools. VernLLM never executes tools itself. The
    * application runs them and, if it wants a final answer, calls again
    * with the tool results appended to `history` (see `ConversationTurn`).
    * `tools` is mutually exclusive with `jsonSchema`/`schema` (see
@@ -405,7 +405,7 @@ export class VernLLM {
     if (tools && tools.length === 0) {
       throw new LLMError(
         '`tools` was an empty array. This is almost always a bug (e.g. a filtered tool list ' +
-          'that ended up empty) — an empty `tools` array still switches on tool-call mode ' +
+          'that ended up empty). An empty `tools` array still switches on tool-call mode ' +
           '(response shape, jsonMode default, wire format) with nothing for the model to call. ' +
           'Omit `tools` entirely for a normal call, or make sure the array is non-empty.',
         'validation',

@@ -30,6 +30,16 @@ const llm = new VernLLM({
   dropped (Gemini's thinking models use a token budget instead).
 </Callout>
 
+## Tool calling
+
+`tools` and `tool_calls` map onto Gemini's native `functionCall` / `functionResponse` parts, and
+`toolChoice` maps onto `toolConfig.functionCallingConfig`. Gemini has no call id concept, so
+`fromGemini` uses the function name as the wire tool call id, meaning two calls to the same tool
+within one turn cannot be told apart when results come back. Consecutive function response
+messages from a multi-tool turn are merged back into a single `user` content entry. See{' '}
+
+<a href="/docs/core/tool-calling">Tool Calling</a> for the full reference.
+
 ## Multimodal input
 
 `fromGemini` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
