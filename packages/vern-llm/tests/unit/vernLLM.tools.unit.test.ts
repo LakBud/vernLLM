@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { AnthropicClient, isToolCallResult } from '../../src/index.js';
+import { type AnthropicClient, isToolCallResult } from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse, textResponse, toolCallResponse, at } from '../helpers.js';
 
