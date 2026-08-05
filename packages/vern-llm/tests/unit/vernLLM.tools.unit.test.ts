@@ -414,6 +414,37 @@ describe('VernLLM.call — bug fixes / hardening', () => {
     ).rejects.toMatchObject({ type: 'validation' });
   });
 
+  it('rejects a duplicate toolCallId in toolResults, even when every requested id has a known match', async () => {
+    // Regression: two results for call_1 and zero for call_2 both count as
+    // "known" ids, so without an explicit duplicate check this could slip
+    // past validation while call_2 is silently left unresolved.
+    const { client } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await expect(
+      llm.call({
+        userContent: 'hi',
+        tools: [weatherTool],
+        history: [
+          {
+            role: 'assistant',
+            toolCalls: [
+              { id: 'call_1', name: 'get_weather', arguments: {} },
+              { id: 'call_2', name: 'get_weather', arguments: {} },
+            ],
+          },
+          {
+            role: 'tool',
+            toolResults: [
+              { toolCallId: 'call_1', content: 'x' },
+              { toolCallId: 'call_1', content: 'x again' },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ type: 'validation', message: expect.stringMatching(/duplicate/i) });
+  });
+
   it('throws a clear error when the model requests a tool name that was not offered (and this is retryable, since a hallucination may not recur)', async () => {
     const { client } = createMockClient([
       toolCallResponse([{ id: 'call_1', name: 'not_a_real_tool', arguments: {} }]),

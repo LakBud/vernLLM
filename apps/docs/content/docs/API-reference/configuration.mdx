@@ -102,7 +102,7 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 ## Per call defaults and overrides
 
-A handful of options are set per `call()` rather than on the instance. Three have their own defaults worth knowing:
+A handful of options are set per `call()` rather than on the instance. The following options have their own defaults worth knowing:
 
 | Option         | Default                                  | Notes                                                                                                                                                                                                                                             |
 | -------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -123,9 +123,10 @@ A handful of options are set per `call()` rather than on the instance. Three hav
 These hooks are application controlled. VernLLM only manages the reservation lifecycle; it does
 not decide quota rules or billing policy.
 
-The rest, including `userContent`, `model`, `maxTokens`, `reasoningEffort`, `schema`, `jsonSchema`,
-`tools`, `signal`, and `requestId`, have no call-level default beyond falling back to the
-instance-level option or being undefined when omitted.
+`userContent`, `model`, `maxTokens`, and `reasoningEffort` have no call-level default beyond
+falling back to the corresponding instance-level `VernLLMOptions` field, or being undefined when
+omitted. `schema`, `jsonSchema`, `tools`, `signal`, and `requestId` have no instance-level
+equivalent at all, they're undefined unless set on the call itself.
 
 `requestId` is an optional identifier you can provide per call:
 

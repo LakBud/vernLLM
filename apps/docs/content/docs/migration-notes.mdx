@@ -36,9 +36,10 @@ type ConversationTurn =
 ```
 
 <Callout type="info">
-  Constructing turns is unaffected, even from a loosely typed `role` variable such as
-  `.map((m) => ({ role: m.role, content: m.text }))`. TypeScript's contextual typing still accepts
-  this against the new union.
+  Constructing turns is unaffected as long as `role` is already narrowed to `'user' | 'assistant'`
+  (or a matching literal), for example `.map((m) => ({ role: m.role, content: m.text }))`, where
+  `m.role: 'user' | 'assistant'`. TypeScript's contextual typing still accepts this against the new
+  union. A genuinely untyped `role: string` was already rejected before this change and still is.
 </Callout>
 
 <Callout type="warn">

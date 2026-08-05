@@ -99,26 +99,18 @@ export class VernLLM {
    * aborted. On exhausting retries, records a breaker failure and rejects
    * with a normalized LLMError.
    *
-   * When `tools` is set, always returns a discriminated result instead of
-   * `T` directly: `{ type: 'content', content }` when the model answered
-   * normally, or `{ type: 'tool_calls', toolCalls, content? }` when it
-   * requested one or more tools. VernLLM never executes tools itself. The
-   * application runs them and, if it wants a final answer, calls again
-   * with the tool results appended to `history` (see `ConversationTurn`).
-   * `tools` is mutually exclusive with `jsonSchema`/`schema` (see
-   * `CallParams.tools`).
+   * When `tools` is set, returns a `CallWithToolsResult<T>` instead of `T`
+   * directly: `{ type: 'content', content }` or
+   * `{ type: 'tool_calls', toolCalls, content? }`. VernLLM never executes
+   * tools itself, run them yourself and continue by appending the results to
+   * `history` (see `ConversationTurn`). Mutually exclusive with
+   * `jsonSchema`/`schema`.
    *
-   * **A note on the overload:** TypeScript only resolves `call()` to the
-   * `tools`-aware overload when `tools` is visible as a required, present
-   * key at the call site — an inline object literal with `tools: [...]`,
-   * or a variable typed as `CallParams<T> & { tools: ToolDefinition[] }`.
-   * If you build `params` as a plain `CallParams<T>` and conditionally set
-   * `tools` on it (e.g. `tools: someCondition ? [...] : undefined`), TS
-   * picks the plain `Promise<T>` overload regardless of what `tools` turns
-   * out to be at runtime — the return value's *actual* shape still follows
-   * `tools` at runtime, so this mismatch is silent, not a compile error.
-   * Use `isToolCallResult()` (exported alongside `VernLLM`) to check the
-   * shape at runtime whenever `params` isn't a literal with `tools` inline.
+   * TypeScript only picks the tools-aware overload when `tools` is a
+   * literal or statically present on the params type. If `tools` is set
+   * conditionally on a plain `CallParams<T>`, the return type won't reflect
+   * it, use `isToolCallResult()` to check at runtime instead. See the Tool
+   * Calling docs for details.
    *
    * @param params - System/user content plus per-call overrides (model,
    * temperature, jsonMode, schema, tools, signal, etc). See `CallParams`.
@@ -173,7 +165,7 @@ export class VernLLM {
   /**
    * Performs a single attempt: builds the request (translating `tools` to
    * wire shape when present), dispatches it with a timeout, and shapes the
-   * response — either `T` directly, or a `CallWithToolsResult<T>` when
+   * response, either `T` directly, or a `CallWithToolsResult<T>` when
    * `params.tools` was set. Throws on an empty response (no text and no
    * tool_calls) so the retry loop treats it like any other transient
    * failure.
@@ -336,6 +328,22 @@ export class VernLLM {
           );
         }
 
+        // Catches a duplicated toolCallId that would otherwise mask a different call's missing result.
+        const seenIds = new Set<string>();
+        const duplicateIds = new Set<string>();
+
+        for (const id of resultIds) {
+          if (seenIds.has(id)) duplicateIds.add(id);
+          seenIds.add(id);
+        }
+
+        if (duplicateIds.size) {
+          throw new LLMError(
+            `history[${index}].toolResults has duplicate toolCallId(s) [${[...duplicateIds].join(', ')}]`,
+            'validation',
+          );
+        }
+
         const missingIds = [...requestedIds].filter((id) => !resultIds.includes(id));
 
         if (missingIds.length) {
@@ -405,7 +413,7 @@ export class VernLLM {
     if (tools && tools.length === 0) {
       throw new LLMError(
         '`tools` was an empty array. This is almost always a bug (e.g. a filtered tool list ' +
-          'that ended up empty). An empty `tools` array still switches on tool-call mode ' +
+          'that ended up empty) — an empty `tools` array still switches on tool-call mode ' +
           '(response shape, jsonMode default, wire format) with nothing for the model to call. ' +
           'Omit `tools` entirely for a normal call, or make sure the array is non-empty.',
         'validation',
