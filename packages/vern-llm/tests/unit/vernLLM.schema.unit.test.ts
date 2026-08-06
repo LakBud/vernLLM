@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 
+import { LLMError } from '../../src/types/errors.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { at, createMockClient, jsonResponse } from '../helpers.js';
 
@@ -19,9 +20,9 @@ describe('VernLLM.call — Zod schema validation', () => {
     const { client, create } = createMockClient([jsonResponse({ wrong: 'shape' })]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 3 });
 
-    const err = await llm
+    const err = (await llm
       .call({ systemPrompt: 's', userContent: 'u', schema: Schema })
-      .catch((e) => e);
+      .catch((e) => e)) as LLMError;
 
     expect(err.type).toBe('validation');
     expect(err.issues).toBeDefined();
@@ -32,9 +33,9 @@ describe('VernLLM.call — Zod schema validation', () => {
     const { client, create } = createMockClient([jsonResponse({ name: 'Fammy', skills: [] })]);
     const llm = new VernLLM({ client, model: 'm' });
 
-    const err = await llm
+    const err = (await llm
       .call({ systemPrompt: 's', userContent: 'u', schema: Schema, jsonMode: false })
-      .catch((e) => e);
+      .catch((e) => e)) as LLMError;
 
     expect(err.type).toBe('validation');
     expect(err.message).toMatch(/nothing would validate it/);
@@ -225,5 +226,282 @@ describe('VernLLM.call — usage tracking', () => {
     expect(result).toEqual({ ok: true });
     expect(onUsage).toHaveBeenCalledTimes(1);
     expect(calls).toHaveLength(1); // no retry triggered by the callback's own failure
+  });
+});
+
+describe('VernLLM.call — onUsageFailure', () => {
+  it('fires onUsageFailure with the spent usage and a validation error, without also firing onUsage', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([
+      jsonResponse(
+        { wrong: 'shape' },
+        { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+      ),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', onUsage, onUsageFailure });
+
+    const err = (await llm
+      .call({
+        systemPrompt: 's',
+        userContent: 'u',
+        schema: z.object({ name: z.string() }),
+      })
+      .catch((e) => e)) as LLMError;
+
+    expect(err.type).toBe('validation');
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ promptTokens: 12, completionTokens: 8, totalTokens: 20 }),
+      expect.objectContaining({ type: 'validation' }),
+    );
+  });
+
+  it('fires onUsageFailure with a parse error when usage survived a malformed JSON body', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([
+      {
+        choices: [{ message: { content: '{not valid json' } }],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+      },
+    ]);
+    const llm = new VernLLM({ client, model: 'm', onUsage, onUsageFailure });
+
+    const err = (await llm
+      .call({ systemPrompt: 's', userContent: 'u', jsonMode: true })
+      .catch((e) => e)) as LLMError;
+
+    expect(err.type).toBe('parse');
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ totalTokens: 6 }),
+      expect.objectContaining({ type: 'parse' }),
+    );
+  });
+
+  it('reports usage failure with a normalized error when content is a non-string value', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([
+      {
+        // Malformed/non-conforming provider response: content isn't a
+        // string, so `.trim()` throws a raw TypeError, not an LLMError.
+        choices: [{ message: { content: { unexpected: 'object' } } }],
+        usage: { prompt_tokens: 9, completion_tokens: 1, total_tokens: 10 },
+      } as never,
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, onUsage, onUsageFailure });
+
+    const err = (await llm
+      .call({ systemPrompt: 's', userContent: 'u' })
+      .catch((e) => e)) as LLMError;
+
+    expect(err).toBeInstanceOf(LLMError); // normalized, not a raw TypeError
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ totalTokens: 10 }),
+      expect.any(LLMError),
+    );
+  });
+
+  it('does not fire onUsageFailure when no usage was reported on the failed response', async () => {
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([jsonResponse({ wrong: 'shape' })]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      onUsageFailure,
+    });
+
+    await llm
+      .call({ systemPrompt: 's', userContent: 'u', schema: z.object({ name: z.string() }) })
+      .catch(() => {});
+
+    expect(onUsageFailure).not.toHaveBeenCalled();
+  });
+
+  it('does not fire onUsageFailure for transport failures, since no response ever arrived', async () => {
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([new Error('network down')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, onUsageFailure });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
+
+    expect(onUsageFailure).not.toHaveBeenCalled();
+  });
+
+  it('never retries a validation/parse failure, so onUsageFailure fires exactly once even with retries configured', async () => {
+    const onUsageFailure = vi.fn();
+    const { client, calls } = createMockClient([
+      jsonResponse({ wrong: 'shape' }, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }),
+    ]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 3,
+      onUsageFailure,
+    });
+
+    await llm
+      .call({ systemPrompt: 's', userContent: 'u', schema: z.object({ name: z.string() }) })
+      .catch(() => {});
+
+    expect(calls).toHaveLength(1);
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows a throwing onUsageFailure callback instead of masking the original error', async () => {
+    const onUsageFailure = vi.fn(() => {
+      throw new Error('onUsageFailure boom');
+    });
+    const { client } = createMockClient([
+      jsonResponse({ wrong: 'shape' }, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }),
+    ]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      onUsageFailure,
+    });
+
+    const err = (await llm
+      .call({ systemPrompt: 's', userContent: 'u', schema: z.object({ name: z.string() }) })
+      .catch((e) => e)) as LLMError;
+
+    expect(err.type).toBe('validation'); // original error surfaces, not the hook's own throw
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs requestId, attempt, type, and tokens on a stacked, single-line format', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { client } = createMockClient([
+      jsonResponse({ wrong: 'shape' }, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }),
+    ]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 2,
+      logger,
+    });
+
+    await llm
+      .call({
+        systemPrompt: 's',
+        userContent: 'u',
+        requestId: 'req_test',
+        schema: z.object({ name: z.string() }),
+      })
+      .catch(() => {});
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[VernLLM:req_test\] usage failure, attempt 1\/3: type=validation tokens=2$/,
+      ),
+    );
+  });
+
+  it('reports usage failure for an "api" error thrown post-response too, e.g. unexpected tool_calls', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([]);
+    client.chat.completions.create = vi.fn().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              { id: 't1', type: 'function', function: { name: 'get_weather', arguments: '{}' } },
+            ],
+          },
+        },
+      ],
+      usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+    });
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, onUsage, onUsageFailure });
+
+    // No `tools` passed, so the tool_calls response is unexpected -> LLMError('api').
+    const err = (await llm
+      .call({ systemPrompt: 's', userContent: 'u' })
+      .catch((e) => e)) as LLMError;
+
+    expect(err.type).toBe('api');
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ totalTokens: 4 }),
+      expect.objectContaining({ type: 'api' }),
+    );
+  });
+
+  it('reports usage failure on an empty response that still carried real usage', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([]);
+    client.chat.completions.create = vi.fn().mockResolvedValue({
+      choices: [{ message: { content: '' } }],
+      usage: { prompt_tokens: 7, completion_tokens: 0, total_tokens: 7 },
+    });
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, onUsage, onUsageFailure });
+
+    const err = (await llm
+      .call({ systemPrompt: 's', userContent: 'u' })
+      .catch((e) => e)) as LLMError;
+
+    expect(err.type).toBe('api');
+    expect(err.message).toMatch(/Empty LLM response/);
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ totalTokens: 7 }),
+      expect.objectContaining({ type: 'api' }),
+    );
+  });
+
+  it('falls back to promptTokens + completionTokens in the log line when totalTokens is 0', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { client } = createMockClient([
+      jsonResponse({ wrong: 'shape' }, { prompt_tokens: 5, completion_tokens: 3, total_tokens: 0 }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', logger });
+
+    await llm
+      .call({
+        systemPrompt: 's',
+        userContent: 'u',
+        requestId: 'req_z',
+        schema: z.object({ name: z.string() }),
+      })
+      .catch(() => {});
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('tokens=8'));
+  });
+
+  it('does not fire onUsageFailure when the signal is already aborted at failure time', async () => {
+    const onUsageFailure = vi.fn();
+    const controller = new AbortController();
+    const { client } = createMockClient([]);
+    client.chat.completions.create = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      return jsonResponse(
+        { wrong: 'shape' },
+        { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      );
+    });
+    const llm = new VernLLM({ client, model: 'm', onUsageFailure });
+
+    const err = (await llm
+      .call({
+        systemPrompt: 's',
+        userContent: 'u',
+        signal: controller.signal,
+        schema: z.object({ name: z.string() }),
+      })
+      .catch((e) => e)) as LLMError;
+
+    expect(err.type).toBe('aborted');
+    expect(onUsageFailure).not.toHaveBeenCalled();
   });
 });

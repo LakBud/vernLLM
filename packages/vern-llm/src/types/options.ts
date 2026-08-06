@@ -2,7 +2,7 @@ import type { CircuitBreakerOptions } from '../circuitBreaker.js';
 import type { Logger } from '../logger.js';
 import type { CacheAdapter } from './cache.js';
 import type { LLMClient } from './client.js';
-import type { OnUsage } from './usage.js';
+import type { OnUsage, OnUsageFailure } from './usage.js';
 
 export interface VernLLMOptions {
   client: LLMClient;
@@ -32,6 +32,14 @@ export interface VernLLMOptions {
   parseJson?: (content: string) => unknown;
   /** Called after every successful call with token usage, if the provider reports it */
   onUsage?: OnUsage;
+  /**
+   * Called when a provider response arrives but VernLLM's own post-processing
+   * then fails, after usage data was already present in that response.
+   * Separate from `onUsage`, which only fires on full success. Never fires
+   * for transport failures (timeout, network error, non-retryable status),
+   * since no response means no usage to report.
+   */
+  onUsageFailure?: OnUsageFailure;
   /** Injectable logger. Defaults to a console-based logger gated by `debug` */
   logger?: Logger;
   /**

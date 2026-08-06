@@ -260,7 +260,7 @@ describe('VernLLM.call — retry & backoff', () => {
       status: 500,
     });
 
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('[vern:request-123]'));
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('[VernLLM:request-123]'));
     expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('provider failed'));
   });
 

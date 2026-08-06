@@ -96,7 +96,8 @@ requests should be metered.
 
 Usage metering controls whether a request can start.
 
-Usage tracking reports provider usage after a provider response through `onUsage`.
+Usage tracking reports provider usage after a provider response, through `onUsage` on success or
+`onUsageFailure` if VernLLM's own post-processing then fails.
 
 See <a href="/docs/core/usage-tracking">Usage Tracking</a> for token reporting details.
 

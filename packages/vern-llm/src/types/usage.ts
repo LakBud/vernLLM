@@ -1,3 +1,5 @@
+import type { LLMError } from './errors.js';
+
 export interface UsageInfo {
   coalesced: boolean;
 }
@@ -33,3 +35,14 @@ export interface TokenUsage {
 }
 
 export type OnUsage = (usage: TokenUsage) => void;
+
+/**
+ * Called when a provider response arrives but VernLLM's own post-processing
+ * then fails, after usage data was already present in that response. Covers
+ * any error thrown after usage extraction, not just parse/validation, since
+ * everything in that path only runs once a response, and real spend, has
+ * already arrived. Fires once per failed attempt with extractable usage,
+ * never for transport failures, where no response means no honest number
+ * to report.
+ */
+export type OnUsageFailure = (usage: TokenUsage, error: LLMError) => void;
