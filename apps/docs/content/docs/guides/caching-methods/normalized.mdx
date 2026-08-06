@@ -19,7 +19,7 @@ const llm = new VernLLM({
   cache: new NormalizedCacheAdapter(), // wraps InMemoryCacheAdapter by default
 });
 
-await llm.cachedLLMCall({
+await llm.cachedCall({
   cacheKey: userQuestion, // pass the raw text, same as with semantic caching
   ttl: 3600,
   call: { systemPrompt: 'Answer concisely.', userContent: userQuestion },

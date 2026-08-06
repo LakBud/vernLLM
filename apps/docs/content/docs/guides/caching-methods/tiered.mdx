@@ -52,7 +52,7 @@ rather it churn faster than the shared store:
 const cache = new TieredCacheAdapter(
   new InMemoryCacheAdapter(),
   new UpstashCacheAdapter(),
-  60, // L1 entries expire after 60s regardless of the ttl passed to cachedLLMCall
+  60, // L1 entries expire after 60s regardless of the ttl passed to cachedCall
 );
 ```
 

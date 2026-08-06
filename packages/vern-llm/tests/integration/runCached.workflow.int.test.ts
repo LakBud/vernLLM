@@ -4,7 +4,21 @@ import { type CacheAdapter } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from '../helpers.js';
 
-describe('cachedCall workflow integration', () => {
+import type { InternalCacheParams } from '../../src/internal/cache.utils.js';
+
+/**
+ * `runCached` is a private implementation primitive backing the public
+ * `cachedCall()`. This test exercises it directly rather than through `any`.
+ */
+type TestableVernLLM = Omit<VernLLM, 'runCached'> & {
+  runCached: <T>(params: InternalCacheParams<T>) => Promise<T>;
+};
+
+function asTestable(llm: VernLLM): TestableVernLLM {
+  return llm as unknown as TestableVernLLM;
+}
+
+describe('runCached workflow integration', () => {
   it('does not call underlying function after cache hit', async () => {
     const { client } = createMockClient([jsonResponse({ ok: true })]);
 
@@ -17,13 +31,13 @@ describe('cachedCall workflow integration', () => {
       result: 'value',
     }));
 
-    const first = await llm.cachedCall({
+    const first = await asTestable(llm).runCached({
       cacheKey: 'abc',
       ttl: 100,
       fn,
     });
 
-    const second = await llm.cachedCall({
+    const second = await asTestable(llm).runCached({
       cacheKey: 'abc',
       ttl: 100,
       fn,
@@ -46,7 +60,7 @@ describe('cachedCall workflow integration', () => {
       .mockResolvedValueOnce({ result: 'first' })
       .mockResolvedValueOnce({ result: 'second' });
 
-    const first = await llm.cachedCall({
+    const first = await asTestable(llm).runCached({
       cacheKey: 'abc',
       ttl: 100,
       fn,
@@ -54,7 +68,7 @@ describe('cachedCall workflow integration', () => {
 
     await llm.deleteCache('abc');
 
-    const second = await llm.cachedCall({
+    const second = await asTestable(llm).runCached({
       cacheKey: 'abc',
       ttl: 100,
       fn,

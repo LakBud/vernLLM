@@ -46,7 +46,7 @@ interface TokenUsage {
 
 - **On success**, once per completed call, after retries have finished (not once per retry attempt).
 - **On failure**, `onUsage` never fires, even if some of the exhausted retry attempts consumed provider tokens before ultimately failing. There's no way to recover partial usage after all retries are exhausted; the provider response that would have carried it was never successfully returned.
-- **With caching**, a cache hit in `cachedCall`/`cachedLLMCall` does not run the underlying LLM call, so `onUsage` does not fire for cached results. It only fires when a provider response is actually received.
+- **With caching**, a cache hit in `cachedCall` does not run the underlying LLM call, so `onUsage` does not fire for cached results. It only fires when a provider response is actually received.
 
 ## Example: per-request cost estimation
 

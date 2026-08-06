@@ -1,6 +1,6 @@
 ---
 title: Caching
-description: Wrap calls with cachedCall or cachedLLMCall
+description: Wrap calls with cachedCall
 ---
 
 vern-llm ships three cache adapters out of the box: `InMemoryCacheAdapter` (exact match),
@@ -23,7 +23,7 @@ const llm = new VernLLM({
 const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
-  fn: () => llm.call({ systemPrompt, userContent }),
+  call: { systemPrompt, userContent },
 });
 ```
 
@@ -36,14 +36,15 @@ const result = await llm.cachedCall({
 ## Concurrent misses are coalesced
 
 If several calls with the same `cacheKey` miss the cache at roughly the same time, only the first one
-(the "trigger") actually calls `fn`. Every other concurrent caller waits on that same in-flight call
-instead of starting its own, and all of them resolve (or reject) together once it settles.
+(the "trigger") actually calls the underlying `call()`. Every other concurrent caller waits on that
+same in-flight call instead of starting its own, and all of them resolve (or reject) together once
+it settles.
 
-This prevents a cache stampede where many simultaneous callers trigger their own expensive `fn()`
-operation before the first one has populated the cache.
+This prevents a cache stampede where many simultaneous callers trigger their own expensive request
+before the first one has populated the cache.
 
 Each coalesced caller has its own `signal` and its own usage-hook lifecycle. Aborting one coalesced
-caller does not cancel the shared in-flight `fn` operation for other callers.
+caller does not cancel the shared in-flight operation for other callers.
 
 <Callout>
 Although `fn` executes only once per in-flight window, usage metering still runs per caller. Each
@@ -80,12 +81,12 @@ interface CacheAdapter<T = unknown> {
 }
 ```
 
-When present, `resolveKey` runs once at the start of `cachedCall`/`cachedLLMCall`, before the cache
-lookup and before the in-flight coalescing check. Its return value, not the original `cacheKey`,
-is what gets used for both. This means concurrent calls that `resolveKey` maps to the same string
-share one in-flight `fn()` call, the same way exact-match callers already do; without it, two calls
-that your adapter would consider "the same" for lookup purposes could still each trigger their own
-`fn()` if they happened to race.
+When present, `resolveKey` runs once at the start of `cachedCall`, before the cache lookup and
+before the in-flight coalescing check. Its return value, not the original `cacheKey`, is what gets
+used for both. This means concurrent calls that `resolveKey` maps to the same string share one
+in-flight call, the same way exact-match callers already do; without it, two calls that your
+adapter would consider "the same" for lookup purposes could still each trigger their own call if
+they happened to race.
 
 Adapters that don't implement `resolveKey` are unaffected, the caller-supplied `cacheKey` is used
 as-is, exactly like before.
@@ -111,12 +112,12 @@ const llm = new VernLLM({
 });
 
 // These two calls share one cache entry:
-await llm.cachedLLMCall({
+await llm.cachedCall({
   cacheKey: '  What is the capital of France?  ',
   ttl: 3600,
   call: { userContent: q1 },
 });
-await llm.cachedLLMCall({
+await llm.cachedCall({
   cacheKey: 'what is the capital of france',
   ttl: 3600,
   call: { userContent: q2 },
@@ -176,67 +177,39 @@ you can remove the entry manually:
 await llm.deleteCache(`cv:${cvId}`);
 ```
 
-## `cachedCall`: cache wrapper
+## `cachedCall`: cached + retried in one call
 
-`cachedCall` manages cache lookup, cache writes, concurrent miss coalescing, and optional usage
-metering. It does not apply retry, timeout, or circuit-breaker behavior by itself.
+`cachedCall` combines cache lookup, cache writes, and concurrent miss coalescing with the normal
+retry/timeout/circuit-breaker behavior from `call()`: the `call` option you pass is exactly the
+`CallParams` you'd give `llm.call()` directly, and on a cache miss `cachedCall` runs it through the
+same resilience pipeline before writing the result to cache.
 
-When `reserveUsage` and `refundUsage` are provided, they run once per caller on cache misses,
-including coalesced callers. The `coalesced` value passed to the hooks indicates whether the
-caller joined an existing in-flight operation.
-
-`signal` can be provided to cancel that caller's cached operation. The caller's signal is passed to
-`reserveUsage` and `refundUsage` as part of the hook context. For `cachedCall`, a top-level
-`signal` does not automatically cancel the operation inside `fn`; pass it to the wrapped operation
-as well if it should be cancelled. Aborting one coalesced caller does not cancel the shared
-in-flight operation used by other callers.
-
-Put whatever operation you want cached inside `fn`. If that operation is a VernLLM request, call
-`llm.call()` inside it so the normal retry, timeout, and circuit-breaker pipeline still applies:
-
-```ts title="cached-call-custom.ts"
-const result = await llm.cachedCall({
-  cacheKey: `cv:${cvId}`,
-  ttl: 3600,
-  signal,
-  fn: async () => {
-    return llm.call({
-      systemPrompt,
-      userContent,
-      signal,
-    });
-  },
-});
-```
-
-## `cachedLLMCall`: cached + retried in one call
-
-`cachedLLMCall` is a convenience wrapper for the common case where the cached operation is a
-`llm.call()` invocation.
+There is no separate way to cache an arbitrary non-LLM function through `VernLLM`; `cachedCall`
+always wraps a `call()` invocation. If you need general-purpose caching or coalescing unrelated to
+an LLM call, reach for a dedicated caching library (e.g. `async-cache-dedupe`) at the application
+level instead.
 
 Usage hooks are applied at the cache level. Do not also provide `reserveUsage` or `refundUsage`
-inside the nested `call` options; those are ignored to avoid reserving twice for the same logical
-request.
+inside the nested `call` options; those are ignored (with a warning) to avoid reserving twice for
+the same logical request. When `reserveUsage` and `refundUsage` are provided, they run once per
+caller on cache misses, including coalesced callers. The `coalesced` value passed to the hooks
+indicates whether the caller joined an existing in-flight operation.
 
 `signal` can be provided at the top level to cancel that caller's cached operation lifecycle. Each
 coalesced caller has its own signal and usage-hook lifecycle. Aborting one coalesced caller does not
-cancel the shared in-flight operation for other callers.
-
-The top-level `signal` only controls the cached wrapper lifecycle. If `fn` starts a request that
-should be cancellable, pass the same signal into that operation explicitly.
-
-It combines cache lookup, cache writes, concurrent miss coalescing, and the normal
-retry/timeout/circuit-breaker behavior from `call()`:
+cancel the shared in-flight operation for other callers. The top-level `signal` only controls the
+cached wrapper's lifecycle; pass the same signal into the nested `call` options as well if the
+underlying request itself should also be cancellable.
 
 <Callout>
-  When `call.tools` is set, `cachedLLMCall` caches the whole `CallWithToolsResult`, including
+  When `call.tools` is set, `cachedCall` caches the whole `CallWithToolsResult`, including
   `tool_calls` results, not only final answers. See{' '}
   <a href="/docs/core/tool-calling#caching-tool-calls">Caching tool calls</a> for when that is, and
   isn't, appropriate.
 </Callout>
 
-```ts title="cached-llm-call.ts"
-const result = await llm.cachedLLMCall({
+```ts title="cached-call.ts"
+const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
   signal,

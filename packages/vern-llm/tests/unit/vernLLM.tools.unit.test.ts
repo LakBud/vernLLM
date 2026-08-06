@@ -312,7 +312,7 @@ describe('VernLLM.call — validation', () => {
   });
 });
 
-describe('VernLLM.cachedLLMCall — tools', () => {
+describe('VernLLM.cachedCall — tools', () => {
   it('caches a content result and skips a second call on a hit', async () => {
     const { client, create } = createMockClient([
       jsonResponse({ answer: 'hi' }),
@@ -326,8 +326,8 @@ describe('VernLLM.cachedLLMCall — tools', () => {
       call: { userContent: 'hi', tools: [weatherTool], jsonMode: true },
     };
 
-    const first = await llm.cachedLLMCall(params);
-    const second = await llm.cachedLLMCall(params);
+    const first = await llm.cachedCall(params);
+    const second = await llm.cachedCall(params);
 
     expect(first).toEqual({ type: 'content', content: { answer: 'hi' } });
     expect(second).toEqual(first);
@@ -346,8 +346,8 @@ describe('VernLLM.cachedLLMCall — tools', () => {
       call: { userContent: 'weather in New York?', tools: [weatherTool] },
     };
 
-    const first = await llm.cachedLLMCall(params);
-    const second = await llm.cachedLLMCall(params);
+    const first = await llm.cachedCall(params);
+    const second = await llm.cachedCall(params);
 
     expect(first).toEqual({
       type: 'tool_calls',
@@ -357,14 +357,14 @@ describe('VernLLM.cachedLLMCall — tools', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it('reserves and refunds exactly once using top-level hooks, same as cachedLLMCall', async () => {
+  it('reserves and refunds exactly once using top-level hooks, same as cachedCall', async () => {
     const reserveUsage = vi.fn();
     const refundUsage = vi.fn();
     const { client } = createMockClient([new Error('fail')]);
     const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0 });
 
     await llm
-      .cachedLLMCall({
+      .cachedCall({
         cacheKey: 'k',
         ttl: 60,
         call: { userContent: 'hi', tools: [weatherTool] },

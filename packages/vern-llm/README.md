@@ -57,7 +57,7 @@ const result = await llm.call({
 - **Retries with backoff**: transient failures retry automatically; validation errors and non-retryable status codes fail fast instead
 - **Structured output**: pass a Zod schema, get a typed, validated result back
 - **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
-- **Caching**: wrap any call with `cachedCall`/`cachedLLMCall`, bring your own cache adapter
+- **Caching**: wrap any call with `cachedCall`, bring your own cache adapter
 - **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
 - **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; VernLLM relies on compatible interfaces rather than specific implementations.
