@@ -1,5 +1,54 @@
 # vern-llm
 
+## 2.0.0
+
+### Major Changes
+
+- c9c7414: Collapsed `cachedCall`/`cachedLLMCall` into a single public `cachedCall`.
+
+  Previously `VernLLM` exposed two caching methods: a generic `cachedCall({ cacheKey, ttl, fn })` that cached whatever `fn` returned with no retry/timeout/circuit-breaker guarantees, and `cachedLLMCall({ cacheKey, ttl, call })` that composed `call()` (retry/timeout/circuit-breaker) with caching. This split didn't match vern-llm's "production-ready resilience for LLM calls" scope, and the generic form was really a general-purpose memoizer that happened to live on the LLM client.
+
+  `cachedLLMCall` is renamed to `cachedCall`. The public `cachedCall()` now always composes `call()` internally, so cached results get the same retry/timeout/circuit-breaker behavior as any other LLM call. There is no longer a public way to cache an arbitrary non-LLM function through `VernLLM`. If you were using the old fn-based `cachedCall({ fn })` for general-purpose caching or coalescing unrelated to an LLM call, switch to a dedicated caching library (e.g. `async-cache-dedupe`) at the application level instead.
+
+  Type renames to match:
+
+  - `CachedLLMCallParams<T>` → `CachedCallParams<T>` (now the public type for `cachedCall()` without tools).
+  - `CachedLLMToolCallParams<T>` → `CachedToolCallParams<T>` (public type for `cachedCall()` with tools).
+  - The old generic `CachedCallParams<T>` (the `fn`-based shape) is no longer exported from the package.
+
+  See the Migration Notes for details.
+
+- 7cdfb6b: Added first-class tool calling support.
+
+  `call()` now accepts `tools`, an array of `ToolDefinition`s the model may request, and an optional `toolChoice` to control whether and which tool is used. When `tools` is set, `call()` returns a `CallWithToolsResult<T>` discriminated union (`{ type: 'content', content }` or `{ type: 'tool_calls', toolCalls, content? }`) instead of `T` directly. VernLLM never executes tools itself, applications run them and continue the conversation by appending an assistant `toolCalls` turn and a matching `tool` turn to `history`.
+
+  `fromAnthropic`, `fromBedrock`, `fromGemini`, and the OpenAI-compatible adapters all translate `tools`/`toolChoice`/`tool_calls` into that provider's native tool-calling mechanism. `fromFetch` does not support tool calling yet, its `mapResponse` has no way to return `tool_calls`. `cachedLLMCall()` supports tool-enabled calls the same way it supports plain ones.
+
+  This is a major release because of two breaking type changes:
+
+  - `ConversationTurn` is now a discriminated union instead of one flat `{ role, content }` shape, adding a `tool` case and making `content` optional on `assistant` turns. Constructing turns is unaffected; code that reads `turn.content` on an `assistant` turn assuming it's always a `string`, or that used an exhaustive `switch`/`assertNever` pattern over `role`, will need updating.
+  - `LLMClient.messages` widened to include tool turns and `tool_calls` on assistant messages. This only affects hand-written `LLMClient` implementations that bypass the built-in adapters. Any such adapter that declares or processes the message type, not only ones with an exhaustive role switch, needs to update its types and handle tool messages and assistant `tool_calls` correctly.
+
+  See the Tool Calling docs and Migration Notes for details.
+
+### Minor Changes
+
+- bc1fc46: Added `onUsageFailure`, an opt-in hook that reports token usage for calls that spent real tokens but then failed on VernLLM's own post-response handling, such as parse or schema validation errors, instead of silently dropping that spend.
+
+  `onUsage` only fires on full success, so there was previously no way to know a failed call had still cost tokens. `onUsageFailure` fills that gap: it fires once per failed attempt when the provider response included usage data, receiving the same `TokenUsage` shape as `onUsage` plus the `LLMError` that caused the failure. It covers any error thrown after a response arrives, not just parse/validation, and is skipped for transport failures (timeout, network error, non-retryable status) and for calls that were aborted, since in both cases there is no usage to report or the error type would not match what `call()` ultimately throws.
+
+  This is purely additive. `onUsage`'s existing contract is unchanged, and no action is needed for existing integrations.
+
+  See the [Usage Tracking](https://vernllm.vercel.app/docs/core/usage-tracking) docs for the full shape and firing semantics.
+
+- c536167: Added a way to opt out of VernLLM's `temperature: 0.2` default and let the provider apply its own default instead.
+
+  Pass `temperature: null` on a call, or `defaultTemperature: null` on the `VernLLM` instance, and `temperature` is omitted from the request entirely rather than sent as `0.2`. A per-call `temperature` still wins over the instance-level `defaultTemperature`, which still wins over the `0.2` fallback, same resolution order as `maxTokens`/`defaultMaxTokens`.
+
+  This is purely additive for normal `call()` usage. Omitting `temperature` everywhere keeps sending `0.2` exactly as before, no behavior changes for existing callers.
+
+  One narrow caveat: making this work required widening `LLMClient`'s wire-level `temperature: number` to `temperature?: number`. This only affects hand-written `LLMClient` implementations that assume `params.temperature` is always a `number` without checking whether it's `undefined`, every built-in adapter (`fromAnthropic`, `fromBedrock`, `fromGemini`, `fromFetch`, OpenAI-compatible) is unaffected. See Migration Notes for details.
+
 ## 1.7.1
 
 ### Patch Changes
