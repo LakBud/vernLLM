@@ -19,6 +19,7 @@ import { ConsoleLogger, type Logger } from './logger.js';
 import {
   InMemoryCacheAdapter,
   LLMError,
+  isLLMError,
   type CacheAdapter,
   type CachedCallParams,
   type CachedToolCallParams,
@@ -26,6 +27,7 @@ import {
   type CallWithToolsResult,
   type ConversationTurn,
   type LLMClient,
+  type TokenUsage,
   type ToolEnabledCallParams,
   type VernLLMOptions,
   type WireMessage,
@@ -59,6 +61,7 @@ export class VernLLM {
 
   private readonly parseJson: (content: string) => unknown;
   private readonly onUsage?: VernLLMOptions['onUsage'];
+  private readonly onUsageFailure?: VernLLMOptions['onUsageFailure'];
 
   private readonly logger: Logger;
   private readonly breaker?: CircuitBreaker;
@@ -86,6 +89,7 @@ export class VernLLM {
 
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.onUsage = options.onUsage;
+    this.onUsageFailure = options.onUsageFailure;
 
     this.logger = options.logger ?? new ConsoleLogger(options.debug ?? false);
     this.breaker = options.circuitBreaker
@@ -137,7 +141,7 @@ export class VernLLM {
       async () => {
         try {
           return await this.retryWithBackoff(
-            () => this.executeCall(params, requestId),
+            (attempt) => this.executeCall(params, requestId, attempt),
             requestId,
             params.signal,
           );
@@ -152,7 +156,7 @@ export class VernLLM {
             this.breaker?.recordFailure();
           }
 
-          this.logger.debug(`[vern:${requestId}] error:\n${describeError(error)}`);
+          this.logger.debug(`[VernLLM:${requestId}] error:\n${describeError(error)}`);
 
           throw normalized;
         }
@@ -173,6 +177,7 @@ export class VernLLM {
   private async executeCall<T>(
     params: CallParams<T>,
     requestId: string,
+    attempt: number,
   ): Promise<T | CallWithToolsResult<T>> {
     const { useJson, model, request } = this.buildRequestPayload(params);
 
@@ -185,45 +190,66 @@ export class VernLLM {
     const content = response.choices?.[0]?.message?.content?.trim();
     const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
 
-    if (!content && !wireToolCalls?.length) {
-      throw new LLMError('Empty LLM response', 'api');
-    }
+    // Extracted immediately after the response lands, before anything that
+    // could throw, so every post-response failure below (including the
+    // empty-response check) has a chance to report real spend instead of
+    // dropping it.
+    const usage = this.extractUsage(response, requestId, model);
 
-    this.logger.debug(
-      `[vern:${requestId}] output:\n${(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`).slice(0, 800)}`,
-    );
-
-    this.recordUsage(response, requestId, model);
-
-    if (wireToolCalls?.length) {
-      if (!params.tools) {
-        throw new LLMError(
-          'Provider returned tool_calls but no `tools` were sent with this call.',
-          'api',
-        );
+    try {
+      if (!content && !wireToolCalls?.length) {
+        throw new LLMError('Empty LLM response', 'api');
       }
 
-      const toolCalls = parseWireToolCalls(wireToolCalls);
+      this.logger.debug(
+        `[VernLLM:${requestId}] output:\n${(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`).slice(0, 800)}`,
+      );
 
-      this.validateToolCallArguments(toolCalls, params.tools);
+      if (wireToolCalls?.length) {
+        if (!params.tools) {
+          throw new LLMError(
+            'Provider returned tool_calls but no `tools` were sent with this call.',
+            'api',
+          );
+        }
+
+        const toolCalls = parseWireToolCalls(wireToolCalls);
+
+        this.validateToolCallArguments(toolCalls, params.tools);
+        this.breaker?.recordSuccess();
+        this.reportUsage(usage);
+
+        return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
+      }
+
+      // No tool_calls at this point, so content must be present (the empty
+      // check above already ruled out both being empty).
+      const textContent = content ?? '';
+
+      if (!useJson) {
+        this.breaker?.recordSuccess();
+        this.reportUsage(usage);
+
+        return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
+      }
+
+      const result = this.parseAndValidate<T>(textContent, params.schema);
       this.breaker?.recordSuccess();
+      this.reportUsage(usage);
 
-      return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
+      return params.tools ? { type: 'content', content: result } : result;
+    } catch (error) {
+      // Skip when the signal is already aborted: normalizeError will
+      // recast whatever error this is to type 'aborted' before it reaches
+      // the caller, so reporting a different type here (e.g. 'validation')
+      // would tell onUsageFailure something that no longer matches what
+      // call() actually throws.
+      if (usage && isLLMError(error) && !params.signal?.aborted) {
+        this.reportUsageFailure(usage, error, attempt);
+      }
+
+      throw error;
     }
-
-    // No tool_calls at this point, so content must be present (the empty
-    // check above already ruled out both being empty).
-    const textContent = content ?? '';
-
-    if (!useJson) {
-      this.breaker?.recordSuccess();
-      return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
-    }
-
-    const result = this.parseAndValidate<T>(textContent, params.schema);
-    this.breaker?.recordSuccess();
-
-    return params.tools ? { type: 'content', content: result } : result;
   }
 
   /**
@@ -267,7 +293,7 @@ export class VernLLM {
 
   /** Runs `fn`, retrying with backoff according to `shouldRetry`. */
   private async retryWithBackoff<T>(
-    fn: () => Promise<T>,
+    fn: (attempt: number) => Promise<T>,
     requestId: string,
     signal?: AbortSignal,
   ): Promise<T> {
@@ -279,7 +305,7 @@ export class VernLLM {
           await this.recoverDelay(requestId, attempt, lastError, signal);
         }
 
-        return await fn();
+        return await fn(attempt);
       } catch (error) {
         lastError = error;
 
@@ -546,25 +572,68 @@ export class VernLLM {
     return useJson ? { type: 'json_object' as const } : undefined;
   }
 
-  /** Reports token usage to `onUsage`, swallowing and logging any error it throws. */
-  private recordUsage(
+  /**
+   * Pulls `TokenUsage` out of a raw response, if the provider reported any.
+   * Extraction is independent of whatever happens to the response
+   * afterwards (parsing, validation), so a malformed body can still yield
+   * usage as long as the provider's usage block itself came through intact.
+   */
+  private extractUsage(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
     requestId: string,
     model: string,
-  ): void {
-    if (!response.usage || !this.onUsage) return;
+  ): TokenUsage | undefined {
+    if (!response.usage) return undefined;
+
+    return {
+      promptTokens: response.usage.prompt_tokens ?? 0,
+      completionTokens: response.usage.completion_tokens ?? 0,
+      totalTokens: response.usage.total_tokens ?? 0,
+      requestId,
+      model,
+    };
+  }
+
+  /** Reports token usage for a successful call, swallowing and logging any error `onUsage` throws. */
+  private reportUsage(usage: TokenUsage | undefined): void {
+    if (!usage || !this.onUsage) return;
 
     try {
-      this.onUsage({
-        promptTokens: response.usage.prompt_tokens ?? 0,
-        completionTokens: response.usage.completion_tokens ?? 0,
-        totalTokens: response.usage.total_tokens ?? 0,
-        requestId,
-        model,
-      });
+      this.onUsage(usage);
     } catch (error) {
       this.logger.error('[VernLLM] onUsage failed', {
         message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
+
+  /**
+   * Reports token usage that was genuinely spent on an attempt that then
+   * failed, so it isn't silently dropped alongside the error. Covers any
+   * error thrown after usage was extracted (parse, validation, or an `api`
+   * error like an unexpected tool_calls response), since all of them occur
+   * only after a response, and therefore real spend, already arrived.
+   * Swallows and logs any error `onUsageFailure` itself throws.
+   */
+  private reportUsageFailure(usage: TokenUsage, error: LLMError, attempt: number): void {
+    // totalTokens can be 0 if a non-adapter (hand-rolled) client reports
+    // prompt/completion tokens but omits the total; fall back to their sum
+    // so the log doesn't understate real spend. Doesn't touch the usage
+    // object itself, onUsageFailure still receives exactly what was parsed.
+    const displayTokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
+
+    this.logger.warn(
+      `[VernLLM:${usage.requestId}] usage failure, attempt ${attempt + 1}/${this.maxRetries + 1}: ` +
+        `type=${error.type} tokens=${displayTokens}`,
+    );
+
+    if (!this.onUsageFailure) return;
+
+    try {
+      this.onUsageFailure(usage, error);
+    } catch (hookError) {
+      this.logger.error('[VernLLM] onUsageFailure failed', {
+        message: hookError instanceof Error ? hookError.message : 'unknown',
       });
     }
   }
@@ -610,7 +679,7 @@ export class VernLLM {
     const delay = retryAfterMs ?? getBackoffDelay(this.baseDelayMs, attempt);
 
     this.logger.warn(
-      `[vern:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${delay}ms` +
+      `[VernLLM:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${delay}ms` +
         (retryAfterMs !== undefined ? ' (honoring Retry-After)' : ''),
     );
 
