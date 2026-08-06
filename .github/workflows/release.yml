@@ -75,3 +75,9 @@ jobs:
           git add apps/docs/content/docs/changelog.mdx
           git commit -m "docs: update changelog" || exit 0
           git push
+
+      - if: steps.changesets.outputs.published == 'true'
+        name: Trigger docs deploy
+        run: curl -f -X POST "$VERNLLM_RELEASE"
+        env:
+          VERNLLM_RELEASE: ${{ secrets.VERNLLM_RELEASE }}
