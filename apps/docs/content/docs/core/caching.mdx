@@ -44,7 +44,9 @@ This prevents a cache stampede where many simultaneous callers trigger their own
 before the first one has populated the cache.
 
 Each coalesced caller has its own `signal` and its own usage-hook lifecycle. Aborting one coalesced
-caller does not cancel the shared in-flight operation for other callers.
+caller does not cancel the shared in-flight operation for other callers; that caller's top-level
+`signal` can reject its own call before the shared operation settles. Only callers that remain
+active receive the shared operation's result.
 
 <Callout>
 Although `fn` executes only once per in-flight window, usage metering still runs per caller. Each

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import {
   type CacheAdapter,
@@ -8,24 +8,13 @@ import {
   LLMError,
 } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from './../helpers.js';
-
-import type { InternalCacheParams } from '../../src/internal/cache.utils.js';
-
-/**
- * `runCached` is a private implementation primitive backing the public
- * `cachedCall()`. These tests exercise it directly rather than through
- * `any`.
- */
-type TestableVernLLM = Omit<VernLLM, 'runCached'> & {
-  runCached: <T>(params: InternalCacheParams<T>) => Promise<T>;
-};
-
-function asTestable(llm: VernLLM): TestableVernLLM {
-  return llm as unknown as TestableVernLLM;
-}
+import { asTestable, createMockClient, jsonResponse } from './../helpers.js';
 
 describe('InMemoryCacheAdapter', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('returns a miss for a missing key', async () => {
     const cache = new InMemoryCacheAdapter();
     expect(await cache.get('missing')).toEqual({ hit: false, value: null });
@@ -45,7 +34,6 @@ describe('InMemoryCacheAdapter', () => {
     vi.advanceTimersByTime(1001);
 
     expect(await cache.get('k')).toEqual({ hit: false, value: null });
-    vi.useRealTimers();
   });
 
   it('deletes a cached value', async () => {
@@ -838,14 +826,5 @@ describe('VernLLM.deleteCache', () => {
     expect(first).toEqual({ result: 'first' });
     expect(second).toEqual({ result: 'second' });
     expect(fn).toHaveBeenCalledTimes(2);
-  });
-
-  it('deletes an existing key', async () => {
-    const cache = new InMemoryCacheAdapter();
-
-    await cache.set('k', { a: 1 }, 60);
-    await cache.delete('k');
-
-    expect(await cache.get('k')).toEqual({ hit: false, value: null });
   });
 });

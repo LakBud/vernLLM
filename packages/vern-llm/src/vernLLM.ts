@@ -749,7 +749,10 @@ export class VernLLM {
    *
    * @param params - `cacheKey`, `ttl`, and optional
    * `reserveUsage`/`refundUsage`/`signal`, plus `call`, the `CallParams`
-   * (optionally with `tools`) to pass through to `this.call(...)`.
+   * (optionally with `tools`) to pass through to `this.call(...)`. The
+   * top-level `signal` governs the cached operation and its usage hooks
+   * only; to also abort the underlying provider request, set `signal`
+   * inside `call`.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
   async cachedCall<T>(params: CachedToolCallParams<T>): Promise<CallWithToolsResult<T>>;

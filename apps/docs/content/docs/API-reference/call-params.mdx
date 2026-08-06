@@ -16,8 +16,11 @@ const result = await llm.call({
 ```
 
 <Callout>
-  `cachedCall`'s `call` field accepts this exact same shape. `cachedCall` also accepts a top-level
-  `signal` for the caller's cancellation lifecycle, separate from any `signal` set inside `call`.
+  `cachedCall`'s `call` field accepts this exact same shape, with one exception: `reserveUsage` and
+  `refundUsage` are not supported inside the nested `call` object. If provided there, they are
+  ignored and a warning is logged. Pass `reserveUsage`/`refundUsage` at the `cachedCall` top level
+  instead. `cachedCall` also accepts a top-level `signal` for the caller's cancellation lifecycle,
+  separate from any `signal` set inside `call`.
 </Callout>
 
 ## Content

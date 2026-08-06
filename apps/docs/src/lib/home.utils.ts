@@ -176,7 +176,7 @@ export const faqItems = [
   {
     question: 'Can I bring my own cache backend?',
     answer:
-      'Yes. cachedCall works with any adapter implementing get/set/delete, so you can plug in Redis, a database, or your own store instead of the built-in in-memory cache.',
+      'Yes. cachedCall works with any adapter implementing get/set (delete is optional), so you can plug in Redis, a database, or your own store instead of the built-in in-memory cache.',
   },
   {
     question: 'Is it typed?',

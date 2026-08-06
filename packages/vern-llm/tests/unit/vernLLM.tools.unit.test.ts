@@ -357,7 +357,7 @@ describe('VernLLM.cachedCall — tools', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it('reserves and refunds exactly once using top-level hooks, same as cachedCall', async () => {
+  it('reserves and refunds exactly once using top-level hooks', async () => {
     const reserveUsage = vi.fn();
     const refundUsage = vi.fn();
     const { client } = createMockClient([new Error('fail')]);

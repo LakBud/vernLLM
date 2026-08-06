@@ -30,7 +30,8 @@ describe('VernLLM.cachedCall — reserveUsage/refundUsage dedup', () => {
     const innerReserve = vi.fn();
     const innerRefund = vi.fn();
     const { client } = createMockClient([new Error('fail')]);
-    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, logger });
 
     await llm
       .cachedCall({
@@ -51,5 +52,6 @@ describe('VernLLM.cachedCall — reserveUsage/refundUsage dedup', () => {
     expect(outerRefund).toHaveBeenCalledTimes(1);
     expect(innerReserve).not.toHaveBeenCalled();
     expect(innerRefund).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ignored by cachedCall'));
   });
 });
