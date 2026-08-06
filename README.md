@@ -39,8 +39,8 @@ const llm = new VernLLM({
   debug: false,
 });
 
-const result = await cachedLLMCall({
-  key: 'resume-demo-001',
+const result = await llm.cachedCall({
+  cacheKey: 'resume-demo-001',
   ttl: 60,
   call: {
     requestId: 'resume-demo-001',

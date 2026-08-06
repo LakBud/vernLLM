@@ -1,11 +1,5 @@
 import type { JsonSchemaSpec, SchemaLike } from './schema.js';
-import type {
-  CallWithToolsResult,
-  ToolCall,
-  ToolChoice,
-  ToolDefinition,
-  ToolResult,
-} from './tools.js';
+import type { ToolCall, ToolChoice, ToolDefinition, ToolResult } from './tools.js';
 import type { UsageHooks } from './usage.js';
 
 /**
@@ -114,20 +108,6 @@ export interface CallParams<T = unknown> extends UsageHooks {
 }
 
 /**
- * Parameters for a generic cached operation.
- *
- * `cachedCall()` uses `cacheKey` to look up existing results and runs `fn`
- * only on cache misses. Concurrent misses for the same key are coalesced
- * into a single in-flight operation.
- */
-export interface CachedCallParams<T> extends UsageHooks {
-  cacheKey: string;
-  ttl: number;
-  fn: () => Promise<T>;
-  signal?: AbortSignal;
-}
-
-/**
  * A `CallParams` variant where tool calling is explicitly enabled.
  *
  * Requiring `tools` to be present allows TypeScript to select the
@@ -138,7 +118,12 @@ export type ToolEnabledCallParams<T> = CallParams<T> & {
   tools: NonNullable<CallParams<T>['tools']>;
 };
 
-type CachedCallInput<T> = Omit<CachedCallParams<T>, 'fn'>;
+/** Shared cache-configuration fields, minus the internal `fn` primitive. */
+interface CachedCallInput extends UsageHooks {
+  cacheKey: string;
+  ttl: number;
+  signal?: AbortSignal;
+}
 
 /**
  * Parameters for a cached LLM call without tool calling.
@@ -146,7 +131,7 @@ type CachedCallInput<T> = Omit<CachedCallParams<T>, 'fn'>;
  * Combines the cache configuration with the `CallParams` passed to
  * `VernLLM.call()`. The cached value is the normal LLM response type `T`.
  */
-export type CachedLLMCallParams<T> = CachedCallInput<T> & {
+export type CachedCallParams<T> = CachedCallInput & {
   call: CallParams<T>;
 };
 
@@ -157,6 +142,6 @@ export type CachedLLMCallParams<T> = CachedCallInput<T> & {
  * tool requests and normal content responses are cached exactly as returned
  * by the model.
  */
-export type CachedLLMToolCallParams<T> = CachedCallInput<CallWithToolsResult<T>> & {
+export type CachedToolCallParams<T> = CachedCallInput & {
   call: ToolEnabledCallParams<T>;
 };

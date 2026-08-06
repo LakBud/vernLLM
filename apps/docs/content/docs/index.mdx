@@ -27,7 +27,7 @@ const llm = new VernLLM({
   },
 });
 
-const summary = await llm.cachedLLMCall({
+const summary = await llm.cachedCall({
   cacheKey: `resume:${resumeId}`,
   ttl: 3600,
 
@@ -52,7 +52,7 @@ const summary = await llm.cachedLLMCall({
     Exponential backoff with jitter and Retry-After awareness
   </Card>
   <Card title="Caching" href="/docs/core/caching">
-    Wrap calls with cachedCall or cachedLLMCall, stampede-safe by default
+    Wrap calls with cachedCall, stampede-safe by default
   </Card>
 </Cards>
 
@@ -61,7 +61,7 @@ const summary = await llm.cachedLLMCall({
 - **Retries with backoff**: transient failures get retried automatically. Parse errors, validation errors, and non retryable status codes fail fast instead
 - **Structured output**: pass a Zod schema and get a typed, validated result back
 - **Provider native JSON Schema mode**: constrain generation itself, not just validate after the fact
-- **Caching**: wrap any call with `cachedCall` or `cachedLLMCall`, and bring your own adapter such as Redis or Upstash
+- **Caching**: wrap any LLM call with `cachedCall`, and bring your own adapter such as Redis or Upstash
 - **Circuit breaker**: trips after repeated failures and recovers automatically once the provider is healthy again
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP through `fromFetch`
 - **Zero runtime dependencies**: VernLLM is provider- and validator-agnostic. It works with compatible LLM clients and any schema validator exposing a safeParse interface, such as Zod.

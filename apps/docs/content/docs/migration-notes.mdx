@@ -7,6 +7,53 @@ icon: TriangleAlert
 This page tracks breaking changes across `vern-llm` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 2.0.0: Collapsing `cachedCall`/`cachedLLMCall`
+
+`VernLLM` used to expose two caching methods with overlapping names: a generic `cachedCall({
+cacheKey, ttl, fn })` that cached whatever `fn` returned, with no retry/timeout/circuit-breaker
+guarantees, and `cachedLLMCall({ cacheKey, ttl, call })` that composed `call()`'s resilience
+behavior with caching. This didn't fit vern-llm's scope as a resilience layer for LLM calls
+specifically, and the generic `fn`-based form was really a general-purpose memoizer that happened
+to live on the LLM client.
+
+`cachedLLMCall` is renamed to `cachedCall`. The public `cachedCall()` now always composes `call()`
+internally, exactly like the old `cachedLLMCall` did, so cached results get the same
+retry/timeout/circuit-breaker behavior as any other LLM call.
+
+```ts
+// Before
+const result = await llm.cachedLLMCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  call: { systemPrompt, userContent },
+});
+
+// After
+const result = await llm.cachedCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  call: { systemPrompt, userContent },
+});
+```
+
+<Callout type="warn">
+  There is no longer a public way to cache an arbitrary non-LLM function through `VernLLM`. If you
+  were using the old `fn`-based `cachedCall({fn})` for general-purpose caching or coalescing
+  unrelated to an LLM call, that capability has been removed from the package. Use a dedicated
+  caching library (e.g. `async-cache-dedupe`) at the application level instead, `VernLLM` no longer
+  tries to be a general-purpose cache.
+</Callout>
+
+Type renames follow the same mapping:
+
+- `CachedLLMCallParams<T>` → `CachedCallParams<T>` (public type for `cachedCall()` without tools).
+- `CachedLLMToolCallParams<T>` → `CachedToolCallParams<T>` (public type for `cachedCall()` with
+  tools).
+- The old generic `CachedCallParams<T>` (the `fn`-based shape) is no longer exported from the
+  package; it now backs a private internal primitive.
+
+See <a href="/docs/core/caching">Caching</a> for the current `cachedCall` reference.
+
 ## 2.0.0: Tool calling
 
 Tool calling introduced two type-level breaking changes, which is why this release is `2.0.0`

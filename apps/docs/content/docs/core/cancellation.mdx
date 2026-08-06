@@ -3,7 +3,7 @@ title: Cancellation & Timeouts
 description: How AbortSignal, per-attempt timeouts, and retries interact
 ---
 
-`call()`, `cachedCall()`, and `cachedLLMCall()` accept a standard `AbortSignal`, which composes with vern-llm's own per-attempt timeout rather than replacing it.
+`call()` and `cachedCall()` accept a standard `AbortSignal`, which composes with vern-llm's own per-attempt timeout rather than replacing it.
 
 ```ts title="abort.ts"
 const controller = new AbortController();
@@ -28,7 +28,7 @@ The internal timer is always cleared afterward, whether the call succeeds, fails
 
 ## Fail-fast on an already-aborted signal
 
-If `signal.aborted` is already `true` when you call `call()`, `cachedCall()`, or `cachedLLMCall()`, it rejects immediately with `LLMError('aborted')` before any request is dispatched — no network call, no wasted attempt.
+If `signal.aborted` is already `true` when you call `call()` or `cachedCall()`, it rejects immediately with `LLMError('aborted')` before any request is dispatched — no network call, no wasted attempt.
 
 ## Aborting during a retry wait
 
@@ -41,20 +41,20 @@ If the signal fires while waiting out a backoff delay between retries, the pendi
 
 ## Cached calls and cancellation
 
-`cachedCall()` and `cachedLLMCall()` also accept a caller-provided `signal`.
+`cachedCall()` also accepts a caller-provided `signal`.
 
-Each coalesced caller has its own signal and cancellation lifecycle. Aborting one coalesced caller does not cancel the shared in-flight `fn` operation for other callers.
+Each coalesced caller has its own signal and cancellation lifecycle. Aborting one coalesced caller does not cancel the shared in-flight operation for other callers.
 
 ```ts title="cached-abort.ts"
 const controller = new AbortController();
 
-const result = await llm.cachedLLMCall({
+const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
+  signal: controller.signal,
   call: {
     systemPrompt,
     userContent,
-    signal: controller.signal,
   },
 });
 ```

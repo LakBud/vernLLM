@@ -1,6 +1,6 @@
 ---
 title: Structured Extraction with Caching
-description: Combining schema validation and cachedLLMCall for a realistic extraction pipeline
+description: Combining schema validation and cachedCall for a realistic extraction pipeline
 ---
 
 A common pattern: extract structured data from unstructured text, validate it, and cache the result so
@@ -27,7 +27,7 @@ const CandidateSchema = z.object({
 });
 
 async function parseResume(resumeId: string, resumeText: string, userId: string) {
-  return llm.cachedLLMCall({
+  return llm.cachedCall({
     cacheKey: `resume:${resumeId}`,
     ttl: 86_400, // 1 day
     call: {
@@ -44,7 +44,7 @@ async function parseResume(resumeId: string, resumeText: string, userId: string)
 If the resume was already parsed, this returns the cached validated result without making another API
 call or reserving additional quota.
 
-If schema validation fails, `cachedLLMCall` throws `LLMError('validation')` and does not write the
+If schema validation fails, `cachedCall` throws `LLMError('validation')` and does not write the
 response to the cache. This prevents invalid responses from becoming cached results.
 
 <Callout>

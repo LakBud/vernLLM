@@ -107,7 +107,7 @@ export const llm = new VernLLM({
   onUsage: u => console.log(\`\${u.requestId}: \${u.totalTokens} tokens\`)
 });
 
-export const summary = await llm.cachedLLMCall({
+export const summary = await llm.cachedCall({
   cacheKey: 'resume:candidate-123',
   ttl: 3600,
   call: {
@@ -146,7 +146,7 @@ export const annotations = [
     note: 'Tracks tokens and request metadata',
   },
   {
-    line: 'cachedLLMCall',
+    line: 'cachedCall',
     note: 'Returns cached results without another API call',
   },
   {
@@ -176,7 +176,7 @@ export const faqItems = [
   {
     question: 'Can I bring my own cache backend?',
     answer:
-      'Yes. cachedLLMCall works with any adapter implementing get/set/delete, so you can plug in Redis, a database, or your own store instead of the built-in in-memory cache.',
+      'Yes. cachedCall works with any adapter implementing get/set (delete is optional), so you can plug in Redis, a database, or your own store instead of the built-in in-memory cache.',
   },
   {
     question: 'Is it typed?',

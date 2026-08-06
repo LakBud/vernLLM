@@ -1,6 +1,6 @@
 ---
 title: Call Params
-description: Every field accepted by call(), cachedLLMCall(), and their defaults
+description: Every field accepted by call(), cachedCall(), and their defaults
 ---
 
 `call()` takes a single `CallParams<T>` object. `userContent` is the only required field; everything
@@ -16,9 +16,11 @@ const result = await llm.call({
 ```
 
 <Callout>
-  `cachedLLMCall`'s `call` field accepts this exact same shape. `cachedCall`'s `fn` is a plain
-  function, so it's up to you to pass these through to `llm.call()` yourself. Both `cachedCall` and
-  `cachedLLMCall` also accept a top-level `signal` for the caller's cancellation lifecycle.
+  `cachedCall`'s `call` field accepts this exact same shape, with one exception: `reserveUsage` and
+  `refundUsage` are not supported inside the nested `call` object. If provided there, they are
+  ignored and a warning is logged. Pass `reserveUsage`/`refundUsage` at the `cachedCall` top level
+  instead. `cachedCall` also accepts a top-level `signal` for the caller's cancellation lifecycle,
+  separate from any `signal` set inside `call`.
 </Callout>
 
 ## Content
@@ -139,10 +141,9 @@ Existing string-based calls remain fully compatible.
   <Card title="signal">
     `AbortSignal`, optional. If already aborted when `call()` is invoked, it throws
     `LLMError('aborted')` immediately without making a request. If it aborts mid-flight, the
-    in-flight attempt and any pending retry delay are cancelled. For `cachedCall` and
-    `cachedLLMCall`, each caller has its own signal. Aborting one coalesced caller does not cancel
-    the shared in-flight operation for other callers. See{' '}
-    <a href="/docs/core/cancellation">Cancellation</a>.
+    in-flight attempt and any pending retry delay are cancelled. For `cachedCall`, each caller has
+    its own signal. Aborting one coalesced caller does not cancel the shared in-flight operation for
+    other callers. See <a href="/docs/core/cancellation">Cancellation</a>.
   </Card>
 </Cards>
 

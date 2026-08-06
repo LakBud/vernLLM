@@ -59,7 +59,9 @@ await llm.call({
 
 ## With caching
 
-Usage metering also works with `cachedCall` and `cachedLLMCall`.
+Usage metering also works with `cachedCall`. Provide usage hooks at the cache level; do not also
+set `reserveUsage`/`refundUsage` inside the nested `call` options; those are stripped automatically
+to prevent reserving usage twice for the same logical request.
 
 On a cache miss, the usage flow runs around the underlying call. A cache hit skips the LLM call
 entirely, so no new reservation or usage record is created.
@@ -68,41 +70,27 @@ entirely, so no new reservation or usage record is created.
 const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
+  call: { systemPrompt, userContent },
   reserveUsage: ({ coalesced, signal }) => quota.reserve(userId, { coalesced, signal }),
   refundUsage: ({ coalesced, signal }) => quota.refund(userId, { coalesced, signal }),
-  fn: () => llm.call({ systemPrompt, userContent }),
 });
 ```
 
 ## Concurrent cached calls
 
 When multiple callers request the same cache key at the same time, only the first caller runs the
-underlying `fn`. Other callers share the same in-flight result.
+underlying call. Other callers share the same in-flight result.
 
 Each caller still gets its own `reserveUsage` and `refundUsage` lifecycle, its own `signal`, and
 its own cancellation behavior. The `coalesced` flag lets your application decide how shared
 requests should be metered.
 
 <Callout>
-  Although `fn` executes only once per in-flight window, `reserveUsage` and `refundUsage` are still
-  invoked once per caller. If `fn` fails, every caller is refunded independently. Aborting one
-  coalesced caller does not cancel the shared in-flight `fn` for other callers.
+  Although the underlying call executes only once per in-flight window, `reserveUsage` and
+  `refundUsage` are still invoked once per caller. If the call fails, every caller is refunded
+  independently. Aborting one coalesced caller does not cancel the shared in-flight call for other
+  callers.
 </Callout>
-
-## cachedLLMCall
-
-When using `cachedLLMCall`, provide usage hooks at the cache level. The inner `call()` options are
-stripped automatically to prevent reserving usage twice for the same logical request.
-
-```ts title="cached-llm-metering.ts"
-const result = await llm.cachedLLMCall({
-  cacheKey: `cv:${cvId}`,
-  ttl: 3600,
-  call: { systemPrompt, userContent },
-  reserveUsage: ({ coalesced, signal }) => quota.reserve(userId, { coalesced, signal }),
-  refundUsage: ({ coalesced, signal }) => quota.refund(userId, { coalesced, signal }),
-});
-```
 
 ## Relationship with usage tracking
 

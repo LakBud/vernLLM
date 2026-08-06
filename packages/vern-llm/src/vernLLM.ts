@@ -21,8 +21,7 @@ import {
   LLMError,
   type CacheAdapter,
   type CachedCallParams,
-  type CachedLLMCallParams,
-  type CachedLLMToolCallParams,
+  type CachedToolCallParams,
   type CallParams,
   type CallWithToolsResult,
   type ConversationTurn,
@@ -32,6 +31,8 @@ import {
   type WireMessage,
   type WireToolChoice,
 } from './types/index.js';
+
+import type { InternalCacheParams } from './internal/cache.utils.js';
 
 /**
  * A resilient layer around an LLM chat completions client, this is VernLLM!
@@ -644,15 +645,20 @@ export class VernLLM {
   }
 
   /**
-   * Cache wrapper around caller-supplied logic. Concurrent misses for the
-   * same `cacheKey` share a single in-flight call, avoiding cache stampedes.
+   * Internal cache primitive around caller-supplied logic. Concurrent misses
+   * for the same `cacheKey` share a single in-flight call, avoiding cache
+   * stampedes.
+   *
+   * Not part of the public API — backs the public `cachedCall()`, which
+   * always composes this with `call()` so cached results get the same
+   * retry/timeout/circuit-breaker guarantees as any other LLM call.
    *
    * @param params - `cacheKey`, `ttl`, `fn` (the work to run on a cache
    * miss, typically `() => this.call(...)`), and optional
-   * `reserveUsage`/`refundUsage`/`signal`. See `CachedCallParams`.
+   * `reserveUsage`/`refundUsage`/`signal`. See `InternalCacheParams`.
    * @returns The cached value on a hit, or the result of `fn()` on a miss.
    */
-  async cachedCall<T>(params: CachedCallParams<T>): Promise<T> {
+  private async runCached<T>(params: InternalCacheParams<T>): Promise<T> {
     const resolvedKey = await this.resolveCacheKey(params.cacheKey);
     const resolvedParams =
       resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
@@ -677,7 +683,7 @@ export class VernLLM {
   }
 
   /** Starts the shared fn() call for a cache miss and tracks it in the in-flight map until it settles. */
-  private registerTrigger<T>(params: CachedCallParams<T>, coalesced: boolean): Promise<T> {
+  private registerTrigger<T>(params: InternalCacheParams<T>, coalesced: boolean): Promise<T> {
     const resultPromise = withReservedUsage(
       params,
       coalesced,
@@ -698,7 +704,7 @@ export class VernLLM {
   }
 
   /** Runs `fn` and writes its result to the cache. */
-  private async runAndCache<T>(params: CachedCallParams<T>): Promise<T> {
+  private async runAndCache<T>(params: InternalCacheParams<T>): Promise<T> {
     const result = await params.fn();
 
     try {
@@ -720,9 +726,11 @@ export class VernLLM {
   }
 
   /**
-   * Convenience wrapper composing `call` + `cachedCall`, so cached LLM calls
+   * Cache wrapper composing `call` + caching, so cached LLM calls
    * automatically get retry/timeout/circuit-breaker behavior. `reserveUsage`/
-   * `refundUsage` are read from the top-level params only.
+   * `refundUsage` are read from the top-level params only. Concurrent misses
+   * for the same `cacheKey` share a single in-flight call, avoiding cache
+   * stampedes.
    *
    * When `call.tools` is set, this caches the *whole*
    * `CallWithToolsResult`, including `tool_calls` results, not just final
@@ -734,17 +742,25 @@ export class VernLLM {
    * `ttl` or route `tool_calls` results through a separate `cacheKey`/`ttl`
    * than final answers, rather than relying on this method to guess.
    *
-   * @param params - `cachedCall` params (`cacheKey`, `ttl`, etc, minus `fn`)
-   * plus `call`, the `CallParams` (optionally with `tools`) to pass through
-   * to `this.call(...)`.
+   * There is no public way to cache an arbitrary non-LLM function through
+   * `VernLLM` — this method always composes with `call()`. For
+   * general-purpose caching/coalescing unrelated to an LLM call, use a
+   * dedicated caching library at the application level instead.
+   *
+   * @param params - `cacheKey`, `ttl`, and optional
+   * `reserveUsage`/`refundUsage`/`signal`, plus `call`, the `CallParams`
+   * (optionally with `tools`) to pass through to `this.call(...)`. The
+   * top-level `signal` governs the cached operation and its usage hooks
+   * only; to also abort the underlying provider request, set `signal`
+   * inside `call`.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
-  async cachedLLMCall<T>(params: CachedLLMToolCallParams<T>): Promise<CallWithToolsResult<T>>;
+  async cachedCall<T>(params: CachedToolCallParams<T>): Promise<CallWithToolsResult<T>>;
 
-  async cachedLLMCall<T>(params: CachedLLMCallParams<T>): Promise<T>;
+  async cachedCall<T>(params: CachedCallParams<T>): Promise<T>;
 
-  async cachedLLMCall<T>(
-    params: CachedLLMCallParams<T> | CachedLLMToolCallParams<T>,
+  async cachedCall<T>(
+    params: CachedCallParams<T> | CachedToolCallParams<T>,
   ): Promise<T | CallWithToolsResult<T>> {
     const { call: callParams, ...cacheParams } = params;
 
@@ -752,11 +768,11 @@ export class VernLLM {
 
     if (reserveUsage || refundUsage) {
       this.logger.warn(
-        '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedLLMCall; set them at the top level instead.',
+        '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedCall; set them at the top level instead.',
       );
     }
 
-    return this.cachedCall({
+    return this.runCached({
       ...cacheParams,
       fn: () => this.call(restCallParams),
     });

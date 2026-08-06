@@ -13,7 +13,6 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/vern-llm"><img src="https://img.shields.io/npm/v/vern-llm.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/vern-llm"><img src="https://img.shields.io/npm/dm/vern-llm.svg" alt="npm downloads" /></a>
-  <a href="https://bundlephobia.com/package/vern-llm"><img src="https://img.shields.io/bundlephobia/minzip/vern-llm.svg" alt="bundle size" /></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/test.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/test.yml/badge.svg" alt="test status" /></a>
   <a href="https://github.com/LakBud/vernLLM/blob/main/LICENSE.md"><img src="https://img.shields.io/npm/l/vern-llm.svg" alt="license" /></a>
   <img src="https://img.shields.io/node/v/vern-llm.svg" alt="node version" />
@@ -57,7 +56,7 @@ const result = await llm.call({
 - **Retries with backoff**: transient failures retry automatically; validation errors and non-retryable status codes fail fast instead
 - **Structured output**: pass a Zod schema, get a typed, validated result back
 - **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
-- **Caching**: wrap any call with `cachedCall`/`cachedLLMCall`, bring your own cache adapter
+- **Caching**: wrap any LLM call with `cachedCall`, bring your own cache adapter
 - **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
 - **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; VernLLM relies on compatible interfaces rather than specific implementations.

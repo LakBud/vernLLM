@@ -225,11 +225,11 @@ still want JSON parsing applied to the model's text content.
 
 ## Caching tool calls
 
-`cachedLLMCall()` supports tool enabled calls the same way it supports plain ones. The entire
+`cachedCall()` supports tool enabled calls the same way it supports plain ones. The entire
 `CallWithToolsResult<T>` is cached, including `tool_calls` results, not only final answers:
 
 ```ts title="tool-calling-caching.ts"
-const result = await llm.cachedLLMCall({
+const result = await llm.cachedCall({
   cacheKey: `weather:${city}`,
   ttl: 60,
   call: {

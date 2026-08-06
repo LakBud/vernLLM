@@ -2,6 +2,22 @@ import { vi } from 'vitest';
 
 import { type AnthropicClient } from '../src/adapters/anthropic.js';
 import { type LLMClient } from '../src/types/index.js';
+import { type VernLLM } from '../src/vernLLM.js';
+
+import type { InternalCacheParams } from '../src/internal/cache.utils.js';
+
+/**
+ * `runCached` is a private implementation primitive backing the public
+ * `cachedCall()`. These tests exercise it directly rather than through
+ * `any`.
+ */
+export type TestableVernLLM = Omit<VernLLM, 'runCached'> & {
+  runCached: <T>(params: InternalCacheParams<T>) => Promise<T>;
+};
+
+export function asTestable(llm: VernLLM): TestableVernLLM {
+  return llm as unknown as TestableVernLLM;
+}
 
 type CreateResult = Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
 type CreateParams = Parameters<LLMClient['chat']['completions']['create']>[0];

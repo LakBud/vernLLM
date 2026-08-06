@@ -65,7 +65,7 @@ const llm = new VernLLM({
 
 ## Caching
 
-The `cache` option controls the adapter used by `cachedCall` and `cachedLLMCall`.
+The `cache` option controls the adapter used by `cachedCall`.
 
 By default, VernLLM creates an `InMemoryCacheAdapter`. This stores cached responses in the current
 process memory using a bounded in-memory map. It is useful for local development and single-process
@@ -83,9 +83,9 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 <a href="/docs/core/caching">Caching</a> for usage.
 
-| Option  | Default                      | Notes                                                                                                                                                                                                                                                     |
-| ------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall` and `cachedLLMCall`, not plain `call()`. The default in-memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi-process deployments. See <a href="/docs/core/caching">Caching</a>. |
+| Option  | Default                      | Notes                                                                                                                                                                                                                                 |
+| ------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall`, not plain `call()`. The default in-memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi-process deployments. See <a href="/docs/core/caching">Caching</a>. |
 
 ## Observability
 
