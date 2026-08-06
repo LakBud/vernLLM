@@ -112,7 +112,8 @@ async function callForTenant(tenantId: string, userContent: string) {
 ## Interaction with usage tracking
 
 `onUsage` reports the model that actually served the request, including a per-call override, not
-the instance's default. This matters if you bill different models at different rates:
+the instance's default. This matters if you bill different models at different rates. The same
+applies to `onUsageFailure`, since both share the same `TokenUsage` shape:
 
 ```ts title="usage-tracking-model-override.ts"
 const llm = new VernLLM({

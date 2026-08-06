@@ -119,8 +119,9 @@ Existing string-based calls remain fully compatible.
   <Card title="schema">
     A Zod (or Zod-compatible, anything exposing `safeParse`) schema, optional. Validates the parsed
     JSON client-side. On failure, throws `LLMError('validation')` with `.issues` set to the
-    validator's error object. Usage tracking may already have reported the provider response before
-    this validation step runs.
+    validator's error object. If the provider response included usage data, that failure is
+    reported to `onUsageFailure`, not `onUsage`. See <a href="/docs/core/usage-tracking">Usage
+    Tracking</a>.
   </Card>
 </Cards>
 
@@ -134,8 +135,8 @@ Existing string-based calls remain fully compatible.
 
 <Cards>
   <Card title="requestId">
-    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage` so you can
-    correlate a usage record back to the call that produced it. See{' '}
+    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage` and
+    `onUsageFailure` so you can correlate a usage record back to the call that produced it. See{' '}
     <a href="/docs/core/usage-tracking">Token Usage Tracking</a>.
   </Card>
   <Card title="signal">

@@ -48,6 +48,32 @@ interface TokenUsage {
 - **On failure**, `onUsage` never fires, even if some of the exhausted retry attempts consumed provider tokens before ultimately failing. There's no way to recover partial usage after all retries are exhausted; the provider response that would have carried it was never successfully returned.
 - **With caching**, a cache hit in `cachedCall` does not run the underlying LLM call, so `onUsage` does not fire for cached results. It only fires when a provider response is actually received.
 
+## Reporting usage on failure
+
+```ts title="usage-failure-setup.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  onUsage: (usage) => billing.record(usage),
+  onUsageFailure: (usage, error) => {
+    billing.record(usage);
+    logger.warn(`call failed after spending ${usage.totalTokens} tokens: ${error.type}`);
+  },
+});
+```
+
+`onUsageFailure` fires when a provider response arrives, and usage data was present on it, but VernLLM's own post-processing then fails, parsing, schema validation, or any other error raised after the response landed. It exists because `onUsage` only fires on full success: without it, tokens spent on an attempt that then failed would go unreported, even though the provider already charged for them.
+
+<Callout>
+  `onUsageFailure` fires once per failed attempt with extractable usage, not once per logical
+  `call()`. A call that fails once and then succeeds on retry fires `onUsageFailure` for the failed
+  attempt and `onUsage` for the successful one, both carrying their own real usage. It never fires
+  for transport failures (timeout, network error, non-retryable status) or when the call was
+  aborted, since in both cases there's no honest number, or no matching error type, to report. If
+  the `onUsageFailure` callback itself throws, that failure is logged and swallowed, same as
+  `onUsage`.
+</Callout>
+
 ## Example: per-request cost estimation
 
 ```ts title="usage-cost-estimation.ts"

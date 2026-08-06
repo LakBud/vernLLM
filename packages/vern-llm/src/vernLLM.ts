@@ -19,7 +19,6 @@ import { ConsoleLogger, type Logger } from './logger.js';
 import {
   InMemoryCacheAdapter,
   LLMError,
-  isLLMError,
   type CacheAdapter,
   type CachedCallParams,
   type CachedToolCallParams,
@@ -187,16 +186,14 @@ export class VernLLM {
       params.signal,
     );
 
-    const content = response.choices?.[0]?.message?.content?.trim();
-    const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
-
-    // Extracted immediately after the response lands, before anything that
-    // could throw, so every post-response failure below (including the
-    // empty-response check) has a chance to report real spend instead of
-    // dropping it.
+    // Extracted right after the response arrives, before anything else
+    // touches it, so a post-response failure still gets its usage reported.
     const usage = this.extractUsage(response, requestId, model);
 
     try {
+      const content = response.choices?.[0]?.message?.content?.trim();
+      const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+
       if (!content && !wireToolCalls?.length) {
         throw new LLMError('Empty LLM response', 'api');
       }
@@ -239,16 +236,17 @@ export class VernLLM {
 
       return params.tools ? { type: 'content', content: result } : result;
     } catch (error) {
-      // Skip when the signal is already aborted: normalizeError will
-      // recast whatever error this is to type 'aborted' before it reaches
-      // the caller, so reporting a different type here (e.g. 'validation')
-      // would tell onUsageFailure something that no longer matches what
-      // call() actually throws.
-      if (usage && isLLMError(error) && !params.signal?.aborted) {
-        this.reportUsageFailure(usage, error, attempt);
+      // Normalized first so onUsageFailure always gets a real LLMError, and
+      // so this matches what call()'s outer normalizeError would throw
+      // anyway. That also covers the aborted-signal case: normalizeError
+      // returns type 'aborted' when the signal is aborted.
+      const normalized = normalizeError(error, params.signal);
+
+      if (usage && normalized.type !== 'aborted') {
+        this.reportUsageFailure(usage, normalized, attempt);
       }
 
-      throw error;
+      throw normalized;
     }
   }
 
@@ -573,10 +571,10 @@ export class VernLLM {
   }
 
   /**
-   * Pulls `TokenUsage` out of a raw response, if the provider reported any.
-   * Extraction is independent of whatever happens to the response
-   * afterwards (parsing, validation), so a malformed body can still yield
-   * usage as long as the provider's usage block itself came through intact.
+   * Pulls `TokenUsage` out of a raw response, if the provider reported it.
+   * Extraction doesn't depend on what happens to the response afterward, so
+   * a malformed body can still yield usage if the provider's usage block
+   * itself came through intact.
    */
   private extractUsage(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
@@ -608,18 +606,18 @@ export class VernLLM {
   }
 
   /**
-   * Reports token usage that was genuinely spent on an attempt that then
-   * failed, so it isn't silently dropped alongside the error. Covers any
-   * error thrown after usage was extracted (parse, validation, or an `api`
-   * error like an unexpected tool_calls response), since all of them occur
-   * only after a response, and therefore real spend, already arrived.
-   * Swallows and logs any error `onUsageFailure` itself throws.
+   * Reports token usage genuinely spent on an attempt that then failed, so
+   * it isn't dropped alongside the error. Covers any error thrown after
+   * usage extraction (parse, validation, or an `api` error like an
+   * unexpected tool_calls response), since all of them happen only after a
+   * response, meaning real spend, already arrived. Swallows and logs any
+   * error `onUsageFailure` itself throws.
    */
   private reportUsageFailure(usage: TokenUsage, error: LLMError, attempt: number): void {
-    // totalTokens can be 0 if a non-adapter (hand-rolled) client reports
-    // prompt/completion tokens but omits the total; fall back to their sum
-    // so the log doesn't understate real spend. Doesn't touch the usage
-    // object itself, onUsageFailure still receives exactly what was parsed.
+    // Falls back to promptTokens + completionTokens if totalTokens is 0
+    // (e.g. a hand-rolled client that omits the total), so the log doesn't
+    // understate real spend. Doesn't touch usage itself, onUsageFailure
+    // still gets exactly what was parsed.
     const displayTokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
 
     this.logger.warn(

@@ -1,10 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 
+import { LLMError } from '../../src/types/errors.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { at, createMockClient, jsonResponse } from '../helpers.js';
-
-import type { LLMError } from '../../src/types/errors.js';
 
 describe('VernLLM.call — Zod schema validation', () => {
   const Schema = z.object({ name: z.string(), skills: z.array(z.string()) });
@@ -280,6 +279,32 @@ describe('VernLLM.call — onUsageFailure', () => {
     expect(onUsageFailure).toHaveBeenCalledWith(
       expect.objectContaining({ totalTokens: 6 }),
       expect.objectContaining({ type: 'parse' }),
+    );
+  });
+
+  it('reports usage failure with a normalized error when content is a non-string value', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([
+      {
+        // Malformed/non-conforming provider response: content isn't a
+        // string, so `.trim()` throws a raw TypeError, not an LLMError.
+        choices: [{ message: { content: { unexpected: 'object' } } }],
+        usage: { prompt_tokens: 9, completion_tokens: 1, total_tokens: 10 },
+      } as never,
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, onUsage, onUsageFailure });
+
+    const err = (await llm
+      .call({ systemPrompt: 's', userContent: 'u' })
+      .catch((e) => e)) as LLMError;
+
+    expect(err).toBeInstanceOf(LLMError); // normalized, not a raw TypeError
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ totalTokens: 10 }),
+      expect.any(LLMError),
     );
   });
 
