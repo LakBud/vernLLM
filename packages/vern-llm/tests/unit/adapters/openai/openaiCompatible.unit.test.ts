@@ -41,7 +41,7 @@ import {
   fromInfermatic,
   fromAtlasCloud,
   from01AI,
-} from '../../../src/adapters/index.js';
+} from '../../../../src/adapters/index.js';
 
 describe('fromOpenAICompatible and its aliases', () => {
   it('delegates create() to the underlying client, forwarding params/options untouched for string content', async () => {

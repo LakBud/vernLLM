@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { type BedrockConverseClient, fromBedrock } from '../../../src/adapters/index.js';
-import { at } from '../../helpers.js';
+import { type BedrockConverseClient, fromBedrock } from '../../../../src/adapters/index.js';
+import { at } from '../../../helpers.js';
 
 function makeFakeBedrockClient(text: string) {
   const converse = vi.fn<BedrockConverseClient['converse']>(async (_params, _options) => ({

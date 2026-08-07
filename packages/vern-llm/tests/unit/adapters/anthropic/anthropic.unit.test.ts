@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { type AnthropicClient, fromAnthropic } from '../../../src/adapters/index.js';
-import { at, makeFakeAnthropicClient } from '../../helpers.js';
+import { type AnthropicClient, fromAnthropic } from '../../../../src/adapters/index.js';
+import { at, makeFakeAnthropicClient } from '../../../helpers.js';
 
 /** A fake client that responds with a forced tool_use block instead of text. */
 function makeFakeAnthropicToolClient(

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromBedrock } from '../../../src/adapters/bedrock.js';
+import { fromBedrock } from '../../../../src/adapters/bedrock.js';
 
 describe('Bedrock adapter integration', () => {
   it('maps the Converse API into LLMClient format', async () => {

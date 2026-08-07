@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 
 import { type AnthropicClient } from '../src/adapters/anthropic.js';
-import { type LLMClient } from '../src/types/index.js';
+import { type LLMClient, type WireStreamChunk } from '../src/types/index.js';
 import { type VernLLM } from '../src/vernLLM.js';
 
 import type { InternalCacheParams } from '../src/internal/cache.utils.js';
@@ -115,6 +115,78 @@ export function createMockClient(
 
   const client: LLMClient = { chat: { completions: { create } } };
   return { client, create, calls };
+}
+
+/**
+ * Builds a hand-rolled `LLMClient` whose `createStream` yields a scripted
+ * sequence of `WireStreamChunk`s per call (no real adapter needed — proves
+ * the core streaming plumbing in isolation, per the streaming design's
+ * implementation order).
+ */
+export function createMockStreamingClient(
+  script: Array<WireStreamChunk[] | Error | (() => AsyncIterable<WireStreamChunk>)>,
+) {
+  const calls: CreateParams[] = [];
+  let i = 0;
+
+  const createStream = vi.fn(
+    (params: CreateParams, _options: { signal: AbortSignal }): AsyncIterable<WireStreamChunk> => {
+      calls.push(params);
+      const entry = script[Math.min(i, script.length - 1)];
+      i++;
+
+      if (entry === undefined) {
+        throw new Error('createMockStreamingClient: script is empty');
+      }
+
+      if (entry instanceof Error) {
+        const err = entry;
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next(): Promise<IteratorResult<WireStreamChunk>> {
+                return Promise.reject(err);
+              },
+            };
+          },
+        };
+      }
+
+      if (typeof entry === 'function') {
+        return entry();
+      }
+
+      const chunks = entry;
+
+      return {
+        [Symbol.asyncIterator]() {
+          let index = 0;
+
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (index >= chunks.length) {
+                return { done: true, value: undefined };
+              }
+
+              const value = chunks[index];
+              index++;
+
+              return { done: false, value: value! };
+            },
+          };
+        },
+      };
+    },
+  );
+
+  // No non-streaming `create` implemented — these mocks are for
+  // `stream: true` tests only.
+  const create = vi.fn(async () => {
+    throw new Error('createMockStreamingClient: create() was not scripted');
+  });
+
+  const client: LLMClient = { chat: { completions: { create, createStream } } };
+  return { client, createStream, calls };
 }
 
 /** Non-null indexed access for arrays, for use with noUncheckedIndexedAccess. */

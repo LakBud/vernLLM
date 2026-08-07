@@ -1,5 +1,11 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-import { LLMError, type ContentBlock, type LLMClient, type WireToolCall } from '../types/index.js';
+import {
+  LLMError,
+  type ContentBlock,
+  type LLMClient,
+  type WireStreamChunk,
+  type WireToolCall,
+} from '../types/index.js';
 
 /** Anthropic's native per-block content shape for a message. */
 type AnthropicContentBlock =
@@ -56,20 +62,6 @@ function toAnthropicContent(blocks: ContentBlock[]): AnthropicContentBlock[] {
 }
 
 /**
- * Wraps an Anthropic SDK client so it satisfies the same `LLMClient`
- * interface VernLLM uses for OpenAI/Groq.
- *
- * `response_format: json_schema` is mapped to Anthropic's forced tool-use:
- * a single tool is defined with `input_schema` set to the caller's schema,
- * `description` forwarded when provided, and `strict` forwarded when set.
- * `tool_choice` forces the model to call it. Provider-constrained schema
- * matching applies only when `strict: true` is forwarded and supported.
- *
- * `response_format: json_object` (no schema to build a tool from) falls
- * back to a system-prompt instruction, since there's nothing to constrain
- * generation against.
- */
-/**
  * Translates VernLLM's OpenAI-shaped wire `tool_choice` into Anthropic's
  * `{ type: 'auto' | 'any' | 'none' | 'tool', name? }` shape. `'required'`
  * maps to `'any'` (Anthropic's "must call some tool" equivalent).
@@ -84,75 +76,137 @@ function toAnthropicToolChoice(
   return { type: 'tool', name: toolChoice.function.name };
 }
 
+/** One SSE event of an Anthropic `messages.create({ stream: true })` stream. */
+type AnthropicStreamEvent =
+  | { type: 'message_start'; message: { usage?: { input_tokens?: number } } }
+  | {
+      type: 'content_block_start';
+      index: number;
+      content_block: { type: string; id?: string; name?: string };
+    }
+  | {
+      type: 'content_block_delta';
+      index: number;
+      delta:
+        | { type: 'text_delta'; text: string }
+        | { type: 'input_json_delta'; partial_json: string };
+    }
+  | { type: 'content_block_stop'; index: number }
+  | { type: 'message_delta'; usage?: { output_tokens?: number } }
+  | { type: 'message_stop' };
+
+type AnthropicRequestBody = Parameters<AnthropicClient['messages']['create']>[0];
+
+/**
+ * Builds the Anthropic-shaped request body from VernLLM's wire params,
+ * shared between `create` and `createStream` so both go through identical
+ * translation (system prompt, message shaping, and the jsonSchema →
+ * forced-single-tool mapping all happen exactly once, not once per entry
+ * point).
+ *
+ * Returns `toolName` alongside the body: when set, the model was forced to
+ * call a single synthetic tool standing in for `jsonSchema` output, and
+ * both `create` and `createStream` need to know this so they can unwrap
+ * that tool call back into plain text content instead of treating it like
+ * a real tool call.
+ */
+function buildAnthropicRequestBody(
+  params: Parameters<LLMClient['chat']['completions']['create']>[0],
+): { body: AnthropicRequestBody; toolName: string | undefined } {
+  const systemMessage = params.messages.find((m) => m.role === 'system');
+
+  // Keep user, assistant, and tool turns, in order. Anthropic has no
+  // separate 'tool' role: tool results travel as a user-role message
+  // containing tool_result content blocks, and an assistant's tool
+  // requests travel as tool_use content blocks on its own turn.
+  const conversationMessages = params.messages.filter(
+    (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
+  );
+
+  const toolName =
+    params.response_format?.type === 'json_schema'
+      ? params.response_format.json_schema.name.trim()
+      : undefined;
+
+  if (params.response_format?.type === 'json_schema' && !toolName) {
+    throw new LLMError('json_schema.name must not be empty.', 'validation');
+  }
+
+  let jsonInstruction: string | undefined;
+  let tools: NonNullable<Parameters<AnthropicClient['messages']['create']>[0]['tools']> | undefined;
+  let toolChoice: Parameters<AnthropicClient['messages']['create']>[0]['tool_choice'];
+
+  if (params.response_format?.type === 'json_schema' && toolName) {
+    // jsonSchema and real `tools` are mutually exclusive by the time
+    // a call reaches here (enforced in vernLLM.ts), so this branch
+    // and the `params.tools` branch below never both apply.
+    const { schema, description, strict } = params.response_format.json_schema;
+
+    tools = [{ name: toolName, description, input_schema: schema, strict }];
+    toolChoice = { type: 'tool', name: toolName };
+  } else if (params.response_format?.type === 'json_object') {
+    // No schema to build a tool from, fall back to a prompt instruction
+    jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
+  } else if (params.tools?.length) {
+    tools = params.tools.map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters,
+    }));
+    toolChoice = toAnthropicToolChoice(params.tool_choice);
+  }
+
+  // `reasoning_effort` (OpenAI o-series/gpt-5 style) has no direct Anthropic
+  // equivalent. Claude's extended thinking uses a token budget, not a tier
+  // string, so it's intentionally dropped here rather than guessed at.
+
+  const system = [systemMessage?.content, jsonInstruction].filter(Boolean).join('\n\n');
+
+  const body: AnthropicRequestBody = {
+    model: params.model,
+    max_tokens: params.max_tokens,
+    ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+    system: system || undefined,
+    messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toAnthropicMessage(m))),
+    ...(tools ? { tools, tool_choice: toolChoice } : {}),
+  };
+
+  return { body, toolName };
+}
+
+/**
+ * Wraps an Anthropic SDK client so it satisfies the same `LLMClient`
+ * interface VernLLM uses for OpenAI/Groq.
+ *
+ * `response_format: json_schema` is mapped to Anthropic's forced tool-use:
+ * a single tool is defined with `input_schema` set to the caller's schema,
+ * `description` forwarded when provided, and `strict` forwarded when set.
+ * `tool_choice` forces the model to call it. Provider-constrained schema
+ * matching applies only when `strict: true` is forwarded and supported.
+ *
+ * `response_format: json_object` (no schema to build a tool from) falls
+ * back to a system-prompt instruction, since there's nothing to constrain
+ * generation against.
+ */
 export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
+  // The Anthropic SDK's `messages.create`, called with `stream: true`,
+  // returns an AsyncIterable of `AnthropicStreamEvent` rather than
+  // `AnthropicClient['messages']['create']`'s normal single-message return
+  // type — hence `unknown` here and a cast at the call site, same
+  // rationale as `fromOpenAICompatible`'s `rawCreate`: the wire contract,
+  // not the SDK's own TS types, is what's actually relied on.
+  const rawMessagesCreate = anthropicClient.messages.create as unknown as (
+    params: unknown,
+    options: { signal: AbortSignal },
+  ) => Promise<unknown> | AsyncIterable<AnthropicStreamEvent>;
+
   return {
     chat: {
       completions: {
         async create(params, options) {
-          const systemMessage = params.messages.find((m) => m.role === 'system');
+          const { body, toolName } = buildAnthropicRequestBody(params);
 
-          // Keep user, assistant, and tool turns, in order. Anthropic has no
-          // separate 'tool' role: tool results travel as a user-role message
-          // containing tool_result content blocks, and an assistant's tool
-          // requests travel as tool_use content blocks on its own turn.
-          const conversationMessages = params.messages.filter(
-            (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
-          );
-
-          const toolName =
-            params.response_format?.type === 'json_schema'
-              ? params.response_format.json_schema.name.trim()
-              : undefined;
-
-          if (params.response_format?.type === 'json_schema' && !toolName) {
-            throw new LLMError('json_schema.name must not be empty.', 'validation');
-          }
-
-          let jsonInstruction: string | undefined;
-          let tools:
-            | NonNullable<Parameters<AnthropicClient['messages']['create']>[0]['tools']>
-            | undefined;
-          let toolChoice: Parameters<AnthropicClient['messages']['create']>[0]['tool_choice'];
-
-          if (params.response_format?.type === 'json_schema' && toolName) {
-            // jsonSchema and real `tools` are mutually exclusive by the time
-            // a call reaches here (enforced in vernLLM.ts), so this branch
-            // and the `params.tools` branch below never both apply.
-            const { schema, description, strict } = params.response_format.json_schema;
-
-            tools = [{ name: toolName, description, input_schema: schema, strict }];
-            toolChoice = { type: 'tool', name: toolName };
-          } else if (params.response_format?.type === 'json_object') {
-            // No schema to build a tool from, fall back to a prompt instruction
-            jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
-          } else if (params.tools?.length) {
-            tools = params.tools.map((t) => ({
-              name: t.function.name,
-              description: t.function.description,
-              input_schema: t.function.parameters,
-            }));
-            toolChoice = toAnthropicToolChoice(params.tool_choice);
-          }
-
-          // `reasoning_effort` (OpenAI o-series/gpt-5 style) has no direct Anthropic
-          // equivalent. Claude's extended thinking uses a token budget, not a tier
-          // string, so it's intentionally dropped here rather than guessed at.
-
-          const system = [systemMessage?.content, jsonInstruction].filter(Boolean).join('\n\n');
-
-          const response = await anthropicClient.messages.create(
-            {
-              model: params.model,
-              max_tokens: params.max_tokens,
-              ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-              system: system || undefined,
-              messages: mergeConsecutiveToolResults(
-                conversationMessages.map((m) => toAnthropicMessage(m)),
-              ),
-              ...(tools ? { tools, tool_choice: toolChoice } : {}),
-            },
-            options,
-          );
+          const response = await anthropicClient.messages.create(body, options);
 
           let text: string;
           let wireToolCalls: WireToolCall[] | undefined;
@@ -210,6 +264,91 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
                 (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
             },
           };
+        },
+
+        async *createStream(params, options) {
+          const { body, toolName } = buildAnthropicRequestBody(params);
+
+          const stream = (await rawMessagesCreate(
+            { ...body, stream: true },
+            options,
+          )) as AsyncIterable<AnthropicStreamEvent>;
+
+          // Tracks which content-block index is which kind, since Anthropic
+          // interleaves text and tool_use blocks under a shared `index`
+          // sequence and later delta events only carry that index, not the
+          // kind. `json-tool` is the forced single-tool-call standing in
+          // for `jsonSchema` output (see `toolName` above): its
+          // input_json_delta fragments are re-emitted as `text-delta`, not
+          // `tool_call_delta`, so the accumulated result lands in
+          // finalizeResponse's `content` path exactly like the
+          // non-streaming `create` branch above unwraps it.
+          const blockKinds = new Map<number, 'text' | 'tool_use' | 'json-tool'>();
+          let inputTokens = 0;
+
+          for await (const event of stream) {
+            if (event.type === 'message_start') {
+              inputTokens = event.message.usage?.input_tokens ?? 0;
+            } else if (event.type === 'content_block_start') {
+              if (event.content_block.type === 'tool_use') {
+                const kind = event.content_block.name === toolName ? 'json-tool' : 'tool_use';
+
+                blockKinds.set(event.index, kind);
+
+                if (kind === 'tool_use') {
+                  yield {
+                    type: 'tool_call_delta',
+                    index: event.index,
+                    id: event.content_block.id,
+                    name: event.content_block.name,
+                  };
+                }
+              } else {
+                blockKinds.set(event.index, 'text');
+              }
+            } else if (event.type === 'content_block_delta') {
+              if (event.delta.type === 'text_delta') {
+                // Only surfaced as real content when there's no forced
+                // json-schema tool in play. When `toolName` is set, the
+                // *only* content that should end up in the accumulated
+                // text is the forced tool's own JSON payload (its
+                // input_json_delta fragments, handled below) — exactly
+                // what the non-streaming `create` branch above does by
+                // discarding every content block except the matching
+                // tool_use one. Anthropic can still emit genuine text
+                // blocks alongside a forced tool call (a model narrating
+                // before calling it, say), and without this guard those
+                // would get concatenated into the same buffer as the
+                // tool's JSON, corrupting it.
+                if (!toolName) {
+                  yield { type: 'text-delta', delta: event.delta.text };
+                }
+              } else if (event.delta.type === 'input_json_delta') {
+                const kind = blockKinds.get(event.index);
+
+                if (kind === 'json-tool') {
+                  yield { type: 'text-delta', delta: event.delta.partial_json };
+                } else {
+                  yield {
+                    type: 'tool_call_delta',
+                    index: event.index,
+                    argumentsDelta: event.delta.partial_json,
+                  };
+                }
+              }
+            } else if (event.type === 'message_delta') {
+              const outputTokens = event.usage?.output_tokens ?? 0;
+
+              yield {
+                type: 'usage',
+                usage: {
+                  prompt_tokens: inputTokens,
+                  completion_tokens: outputTokens,
+                  total_tokens: inputTokens + outputTokens,
+                },
+              } satisfies WireStreamChunk;
+            }
+          }
         },
       },
     },
