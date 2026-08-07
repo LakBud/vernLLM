@@ -11,5 +11,8 @@ description: Requirements, edge cases, and dependency behavior
 - `jsonMode` defaults to `false`, not `true`, on any call that sets `tools`.
 - `tools` and `jsonSchema`/`schema` are mutually exclusive on the same call and throw `LLMError('validation')` if combined.
 - `fromFetch` has no way to return `tool_calls` from `mapResponse`, so tool calling is not supported through that adapter yet.
+- `stream: true` requires the underlying client/adapter to implement `createStream`. A client that doesn't throws a clear `LLMError('validation')` rather than a confusing runtime failure.
+- A streaming call that fails after at least one chunk has already arrived is not retried, only a failure before the first chunk is. See <a href="/docs/core/streaming#what-gets-retried">What gets retried</a>.
+- `chunks` on a `StreamCallResult` is single-use. Iterating it more than once, or from more than one place concurrently, splits the sequence between consumers rather than replaying it.
 - `reserveUsage` failures stop the call before a provider request is sent and surface as `LLMError('quota_exceeded')`. VernLLM does not decide quota rules; the application controls the reservation logic.
 - Provider SDKs and validation libraries are not runtime dependencies. VernLLM relies on compatible interfaces rather than specific implementations, so users bring their own provider clients and schema validators (such as Zod-compatible validators).

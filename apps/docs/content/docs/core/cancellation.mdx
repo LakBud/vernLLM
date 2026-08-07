@@ -3,7 +3,7 @@ title: Cancellation & Timeouts
 description: How AbortSignal, per-attempt timeouts, and retries interact
 ---
 
-`call()` and `cachedCall()` accept a standard `AbortSignal`, which composes with vern-llm's own per-attempt timeout rather than replacing it.
+`call()` and `cachedCall()` accept a standard `AbortSignal`, which composes with VernLLM's own per-attempt timeout rather than replacing it.
 
 ```ts title="abort.ts"
 const controller = new AbortController();
@@ -20,9 +20,9 @@ controller.abort();
 
 ## How it composes with timeouts
 
-Each attempt gets its own internal timeout controller. If you also pass a `signal`, vern-llm combines both into a single signal via `AbortSignal.any([yourSignal, internalTimeoutSignal])` — either one firing cancels the in-flight request.
+Each attempt gets its own internal timeout controller. If you also pass a `signal`, VernLLM combines both into a single signal via `AbortSignal.any([yourSignal, internalTimeoutSignal])` — either one firing cancels the in-flight request.
 
-If the internal timeout fires, vern-llm throws `LLMError('timeout')`. If the signal you provide fires, vern-llm throws `LLMError('aborted')`. This lets callers distinguish between requests that exceeded their time limit and requests that were intentionally cancelled.
+If the internal timeout fires, VernLLM throws `LLMError('timeout')`. If the signal you provide fires, VernLLM throws `LLMError('aborted')`. This lets callers distinguish between requests that exceeded their time limit and requests that were intentionally cancelled.
 
 The internal timer is always cleared afterward, whether the call succeeds, fails, or is aborted, so nothing is left running in the background.
 
@@ -38,6 +38,15 @@ If the signal fires while waiting out a backoff delay between retries, the pendi
   An abort is never retried, even if it happens mid-backoff. It's treated as a deliberate
   cancellation, not a transient failure.
 </Callout>
+
+## Cancelling a streaming call
+
+`signal` works the same way for a `stream: true` call. If it fires before the stream opens, `call()`
+throws `LLMError('aborted')` before any request is dispatched, same as a non-streaming call. If it
+fires after the stream has opened, the in-flight request is cancelled and `finalResult` rejects
+with `LLMError('aborted')`; any chunks already delivered through `chunks` are not retracted. See{' '}
+
+<a href="/docs/core/streaming">Streaming</a> for the full contract.
 
 ## Cached calls and cancellation
 

@@ -93,6 +93,19 @@ Existing string-based calls remain fully compatible.
   </Card>
 </Cards>
 
+## Streaming
+
+<Cards>
+  <Card title="stream">
+    `boolean`, optional, default `false`. When `true`, `call()` returns a `StreamCallResult<T>`
+    (`{ chunks, finalResult }`) instead of resolving directly to `T`. Requires TypeScript to see
+    `stream: true` as a literal at the call site to select the streaming overload, see{' '}
+    <a href="/docs/core/streaming#a-note-on-the-call-overload">the streaming overload note</a>.
+    Combines freely with `tools`, `schema`, and `jsonSchema`. See{' '}
+    <a href="/docs/core/streaming">Streaming</a>.
+  </Card>
+</Cards>
+
 ## Model & generation
 
 | Field             | Type                                       | Default                                       | Notes                                                                                                                                                                                                                                  |

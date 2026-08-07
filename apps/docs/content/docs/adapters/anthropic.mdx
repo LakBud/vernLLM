@@ -13,7 +13,7 @@ const llm = new VernLLM({
 });
 ```
 
-`AnthropicClient` is the public client type exported by `vern-llm` and accepted by `fromAnthropic`. It allows TypeScript users to type their Anthropic SDK client without depending on adapter internals.
+`AnthropicClient` is the public client type exported by `VernLLM` and accepted by `fromAnthropic`. It allows TypeScript users to type their Anthropic SDK client without depending on adapter internals.
 
 <Callout type="warn">
   Anthropic does not support OpenAI's `response_format` directly. JSON schema responses are mapped
@@ -32,6 +32,33 @@ tool result messages from a multi-tool turn back into a single `user` turn with 
 `tool_result` blocks. `ToolResult.isError` is forwarded as `tool_result.is_error`. See{' '}
 
 <a href="/docs/core/tool-calling">Tool Calling</a> for the full reference.
+
+## Streaming
+
+`fromAnthropic` implements `createStream` on top of the Messages API's own streaming mode. Anthropic's
+`content_block_delta` events map onto `text-delta` chunks, and `input_json_delta` events on a
+`tool_use` block map onto `tool_call_delta` chunks. No extra setup is needed beyond the client
+already passed to `fromAnthropic`:
+
+```ts title="anthropic-streaming.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Write a short poem about the ocean.',
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+```
+
+<Callout>
+  When `jsonSchema` forces a single tool call, `fromAnthropic` only emits `text-delta` chunks for
+  genuine preamble text, not for the tool's streamed JSON payload, keeping the streamed output
+  consistent with what non-streaming `create()` returns for the same request.
+</Callout>
+
+See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract, none of
+which changes per-provider beyond how each adapter maps its own streaming events.
 
 ## Multimodal input
 

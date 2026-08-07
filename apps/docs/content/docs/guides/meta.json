@@ -8,6 +8,7 @@
     "provider-fallback",
     "multi-turn-conversations",
     "tool-execution-loop",
+    "streaming-responses",
     "per-call-overrides"
   ]
 }

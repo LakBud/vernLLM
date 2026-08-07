@@ -94,8 +94,8 @@ export const providers = [
 ];
 
 export const codeExample = `import OpenAI from 'openai';
-import { z } from 'zod';
 import { InMemoryCacheAdapter, VernLLM } from 'vern-llm';
+import { getWeatherTool } from './tools';
 
 export const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
@@ -107,22 +107,20 @@ export const llm = new VernLLM({
   onUsage: u => console.log(\`\${u.requestId}: \${u.totalTokens} tokens\`)
 });
 
-export const summary = await llm.cachedCall({
-  cacheKey: 'resume:candidate-123',
+export const { chunks, finalResult } = await llm.cachedCall({
+  cacheKey: 'weather:new-york',
   ttl: 3600,
   call: {
-    requestId: 'resume-analysis-123',
-    temperature: 0.2,
-    maxTokens: 1000,
-    systemPrompt: 'Analyze this resume and return structured hiring insights.',
-    userContent: 'Software engineer with 5 years of experience',
-    schema: z.object({
-      strengths: z.array(z.string()),
-      concerns: z.array(z.string()),
-      recommendation: z.string()
-    })
+    requestId: 'weather-demo-123',
+    userContent: "What's the weather in New York?",
+    tools: [getWeatherTool],
+    stream: true
   }
-});`;
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}`;
 
 export const annotations = [
   {
@@ -158,8 +156,12 @@ export const annotations = [
     note: 'Controls cache lifetime',
   },
   {
-    line: 'schema',
-    note: 'Returns validated, typed output with Zod',
+    line: 'tools',
+    note: 'Lets the model request app defined functions',
+  },
+  {
+    line: 'stream: true',
+    note: 'Delivers live chunks with validated result',
   },
 ];
 export const faqItems = [
