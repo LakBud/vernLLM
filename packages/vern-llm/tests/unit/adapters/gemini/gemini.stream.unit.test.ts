@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromGemini, GeminiClient } from '../../../../src';
+import { fromGemini, type GeminiClient } from '../../../../src/index.js';
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromOpenAICompatible, StreamChunk, VernLLM } from '../../../../src';
+import { fromOpenAICompatible, type StreamChunk, VernLLM } from '../../../../src/index.js';
 
 /** A fake OpenAI-shaped SSE stream, as `chat.completions.create({ stream: true })` returns. */
 function fakeOpenAIStream(chunks: unknown[]): AsyncIterable<unknown> {

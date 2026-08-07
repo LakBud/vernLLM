@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromOpenAICompatible } from '../../../../src';
+import { fromOpenAICompatible } from '../../../../src/index.js';
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
