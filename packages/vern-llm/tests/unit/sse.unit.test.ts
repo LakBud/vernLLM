@@ -118,9 +118,9 @@ describe('parseSseStream', () => {
 
   it('flushes a held-back incomplete trailing multi-byte character instead of silently dropping it and returning a wrong-but-valid value', async () => {
     // 'data: 1' followed by ONLY the first byte of '€' (0xE2 0x82 0xAC),
-    // with nothing else — the source ends here, mid-character. Without
+    // with nothing else, the source ends here, mid-character. Without
     // flushing TextDecoder's held-back byte, the trailing content is just
-    // 'data: 1', which is syntactically valid JSON (the number `1`) — a
+    // 'data: 1', which is syntactically valid JSON (the number `1`). A
     // silently WRONG value, not merely a lost character, since the
     // truncation happens to land right after otherwise-complete JSON.
     // Flushing surfaces the held-back byte as a replacement character

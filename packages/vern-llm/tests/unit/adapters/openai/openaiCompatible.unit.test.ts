@@ -8,6 +8,7 @@ import {
   fromGroq,
   fromHyperbolic,
   fromLMStudio,
+  fromMistral,
   fromMoonshot,
   fromNovita,
   fromOllama,
@@ -187,6 +188,7 @@ describe('fromOpenAICompatible and its aliases', () => {
 
   it.each([
     ['fromGroq', fromGroq],
+    ['fromMistral', fromMistral],
     ['fromDeepSeek', fromDeepSeek],
     ['fromCerebras', fromCerebras],
     ['fromTogether', fromTogether],

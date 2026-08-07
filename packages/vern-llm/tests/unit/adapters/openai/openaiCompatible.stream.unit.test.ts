@@ -154,7 +154,7 @@ describe('fromOpenAICompatible().chat.completions.createStream', () => {
     expect(receivedParams).not.toHaveProperty('stream_options');
   });
 
-  it('fromMistral omits stream_options by default, unlike fromOpenAICompatible', async () => {
+  it('fromMistral includes stream_options by default, since Mistral supports usage-in-stream', async () => {
     let receivedParams: Record<string, unknown> | undefined;
     const create = vi.fn(async (params: Record<string, unknown>) => {
       receivedParams = params;
@@ -169,8 +169,7 @@ describe('fromOpenAICompatible().chat.completions.createStream', () => {
       ),
     );
 
-    expect(receivedParams).toMatchObject({ stream: true });
-    expect(receivedParams).not.toHaveProperty('stream_options');
+    expect(receivedParams).toMatchObject({ stream: true, stream_options: { include_usage: true } });
   });
 
   it('applies the same ContentBlock[] -> image_url translation as create() before streaming', async () => {

@@ -165,7 +165,7 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     const { client } = makeFakeStreamingAnthropicClient([
       { type: 'message_start', message: { usage: { input_tokens: 5 } } },
       // A preamble text block, e.g. the model narrating before calling the
-      // forced tool — legal even under `tool_choice: { type: 'tool' }`.
+      // forced tool, legal even under `tool_choice: { type: 'tool' }`.
       { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
       {
         type: 'content_block_delta',

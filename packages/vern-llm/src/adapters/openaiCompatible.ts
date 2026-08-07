@@ -130,9 +130,9 @@ function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStreamChun
 export interface OpenAICompatibleAdapterOptions {
   /**
    * Whether the provider supports `stream_options.include_usage`. Not
-   * every "OpenAI-compatible" provider does — e.g. Mistral rejects or
-   * ignores the field — so this defaults to `true` (matching OpenAI and
-   * Groq) and should be set to `false` for providers known not to support
+   * every "OpenAI-compatible" provider is guaranteed to, so this defaults
+   * to `true` (matching OpenAI, Groq, Mistral, and most others observed)
+   * and should be set to `false` for a provider verified not to support
    * it. When `false`, `stream_options` is omitted entirely and no usage
    * block will arrive on the stream; callers relying on streamed `usage`
    * with such a provider won't get one.
@@ -199,15 +199,12 @@ export const fromGroq = fromOpenAICompatible;
 
 /**
  * Mistrals `chat.completions`-shaped client (or their OpenAI-compat
- * endpoint). Defaults `supportsStreamUsage` to `false`: Mistral does not
- * support `stream_options.include_usage`, so streamed calls through this
- * alias won't receive a usage block. Pass `{ supportsStreamUsage: true }`
- * explicitly if a future Mistral endpoint adds support.
+ * endpoint). Mistral supports `stream_options.include_usage` (added after
+ * an earlier period where it returned a 422 for unrecognized fields, per
+ * Mistral's changelog and streaming docs), so this is a plain alias like
+ * the others — `supportsStreamUsage` defaults to `true`.
  */
-export const fromMistral = (
-  client: unknown,
-  options: OpenAICompatibleAdapterOptions = {},
-): LLMClient => fromOpenAICompatible(client, { supportsStreamUsage: false, ...options });
+export const fromMistral = fromOpenAICompatible;
 
 /** DeepSeeks API is OpenAI-compatible */
 export const fromDeepSeek = fromOpenAICompatible;

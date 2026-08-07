@@ -170,7 +170,7 @@ describe('VernLLM.call — stream: true', () => {
     });
 
     // The original stream error is what's reported, not the cleanup
-    // failure — cleanup failing during error handling shouldn't mask why
+    // failure. Cleanup failing during error handling shouldn't mask why
     // the stream actually failed.
     await expect(drain(chunks)).rejects.toMatchObject({ message: 'LLM request failed' });
     await expect(finalResult).rejects.toMatchObject({ message: 'LLM request failed' });
@@ -283,7 +283,7 @@ describe('VernLLM.call — stream: true', () => {
 
               // A real macrotask delay (not just a microtask hop), so the
               // failure is guaranteed to land strictly after `call()` has
-              // already returned `{ chunks, finalResult }` — proving
+              // already returned `{ chunks, finalResult }`. Proving
               // refund really is deferred onto finalResult settling, not
               // just implicitly fast enough to look that way.
               await new Promise((resolve) => setTimeout(resolve, 15));
@@ -303,8 +303,8 @@ describe('VernLLM.call — stream: true', () => {
       refundUsage,
     });
 
-    // Reserved by the time call() returns, refund not yet issued — that's
-    // deferred onto finalResult settling.
+    // Reserved by the time call() returns, refund not yet issued.
+    // That's deferred onto finalResult settling.
     expect(reserveUsage).toHaveBeenCalledTimes(1);
     expect(refundUsage).not.toHaveBeenCalled();
 
@@ -412,7 +412,7 @@ describe('VernLLM.call — stream: true', () => {
 
   it('bounds time-to-first-chunk with withTimeout, throwing LLMError(timeout) when the stream never opens in time', async () => {
     // Built directly (not via the helper) so the mock can capture the
-    // abort signal `createStream` receives and actually honor it — a real
+    // abort signal `createStream` receives and actually honor it. A real
     // adapter's `createStream` does the same internally (e.g. via
     // `fetch`), which is what lets `withTimeout`'s internal
     // AbortController actually interrupt a hung first-chunk wait.
@@ -462,7 +462,7 @@ describe('VernLLM.call — stream: true', () => {
               }
               if (step === 1) {
                 step++;
-                // Long pause well past timeoutMs — should NOT time out,
+                // Long pause well past timeoutMs. Should NOT time out,
                 // since the timeout only bounds time-to-first-chunk.
                 await new Promise((resolve) => setTimeout(resolve, 30));
                 return { done: false, value: { type: 'text-delta', delta: ' second' } };
@@ -497,7 +497,7 @@ describe('VernLLM.call — stream: true', () => {
   });
 
   it('bounds the unread chunk backlog for a large stream nobody ever reads, without affecting finalResult', async () => {
-    // Well past 2x the eviction threshold — exercises the cap that keeps
+    // Well past 2x the eviction threshold, exercises the cap that keeps
     // an entirely-ignored `chunks` from holding the whole stream's output
     // in memory for its duration.
     const chunkCount = 25_000;
@@ -537,14 +537,14 @@ describe('VernLLM.call — stream: true', () => {
 
     // finalResult already settled from the eagerly-running pump by the
     // time `call()` resolves for this fast mock stream, so `chunks` is
-    // read here strictly *after* the whole backlog was built up unread —
+    // read here strictly *after* the whole backlog was built up unread,
     // exactly the pathological case the cap targets.
     await finalResult;
 
     const collected = await drain(chunks);
 
     // Bounded, and short of the full 25,000 chunks the stream actually
-    // produced — the oldest entries were dropped once the backlog grew
+    // produced, the oldest entries were dropped once the backlog grew
     // past the (batched) eviction threshold.
     expect(collected.length).toBeLessThan(chunkCount);
     expect(collected.length).toBeGreaterThan(0);
@@ -553,7 +553,7 @@ describe('VernLLM.call — stream: true', () => {
     expect(collected.length).toBeLessThanOrEqual(20_000);
 
     // What's left is a contiguous tail: the oldest surviving entry's
-    // index is exactly (chunkCount - collected.length), confirming
+    // index is exactly (chunkCount: collected.length), confirming
     // eviction removed from the front, not scattered or from the back.
     const firstSurvivingDelta = (collected[0] as { type: 'text-delta'; delta: string }).delta;
     const expectedFirstIndex = chunkCount - collected.length;

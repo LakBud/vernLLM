@@ -199,7 +199,7 @@ describe('VernLLM.call(stream: true) through fromAnthropic — end to end', () =
     const collected = await drain(chunks);
 
     // The forced tool_use block is unwrapped into plain text-delta chunks,
-    // not tool_call_delta — matching how create() unwraps it into content.
+    // not tool_call_delta, matching how create() unwraps it into content.
     expect(collected).toEqual([
       { type: 'text-delta', delta: '{"answer":' },
       { type: 'text-delta', delta: '"42"}' },
