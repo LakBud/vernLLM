@@ -52,9 +52,20 @@ describe('parseSseStream', () => {
     expect(events).toEqual([{ a: 1 }]);
   });
 
-  it('normalizes \\r\\n line endings', async () => {
+  it('normalizes \r\n line endings', async () => {
     const events = await collect(parseSseStream(chunksOf('data: {"a":1}\r\n\r\n')));
     expect(events).toEqual([{ a: 1 }]);
+  });
+
+  it('normalizes CRLF delimiters split across chunk boundaries', async () => {
+    // Each frame's trailing \r\n\r\n boundary is split so the \r lands in
+    // one chunk and the \n lands in the next, exercising whole-buffer
+    // normalization (not per-chunk) needed to catch a delimiter that
+    // straddles two transport chunks.
+    const events = await collect(
+      parseSseStream(chunksOf('data: {"a":1}\r', '\n\r', '\ndata: {"a":2}\r', '\n\r', '\n')),
+    );
+    expect(events).toEqual([{ a: 1 }, { a: 2 }]);
   });
 
   it('joins multiple data: lines within one frame with a newline, per the SSE spec', async () => {
@@ -121,6 +132,27 @@ describe('parseSseStream', () => {
       async *[Symbol.asyncIterator]() {
         yield prefix;
         yield incompleteEuroFirstByte;
+      },
+    };
+
+    await expect(collect(parseSseStream(source))).rejects.toMatchObject({ type: 'parse' });
+  });
+
+  it('rejects invalid UTF-8 inside a JSON string with a wrapped parse error', async () => {
+    // 0xff is never valid anywhere in a UTF-8 byte sequence. Embedded
+    // inside what would otherwise be a well-formed JSON string, fatal
+    // decoding must catch it and surface it as LLMError('parse') rather
+    // than silently substituting a replacement character and letting a
+    // corrupted string parse "successfully".
+    const before = new TextEncoder().encode('data: {"a":"');
+    const invalidByte = new Uint8Array([0xff]);
+    const after = new TextEncoder().encode('"}\n\n');
+
+    const source: AsyncIterable<Uint8Array> = {
+      async *[Symbol.asyncIterator]() {
+        yield before;
+        yield invalidByte;
+        yield after;
       },
     };
 

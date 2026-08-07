@@ -3,23 +3,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { fromFetch } from '../../../../src/adapters/index.js';
 import { type StreamChunk, type WireStreamChunk } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-
-/** A fake `ReadableStream<Uint8Array>`, as `response.body` would be. */
-function fakeReadableStream(parts: string[]): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  let index = 0;
-
-  return new ReadableStream({
-    pull(controller) {
-      if (index >= parts.length) {
-        controller.close();
-        return;
-      }
-      controller.enqueue(encoder.encode(parts[index]));
-      index++;
-    },
-  });
-}
+import { fakeReadableStream } from '../../../helpers.js';
 
 async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
   const out: StreamChunk[] = [];
@@ -145,7 +129,24 @@ describe('VernLLM.call(stream: true) through fromFetch — end to end', () => {
       stream: true,
     });
 
-    await drain(chunks);
+    const collected = await drain(chunks);
+
+    expect(collected).toEqual([
+      {
+        type: 'tool_call_delta',
+        index: 0,
+        id: 'call_1',
+        name: 'get_weather',
+        argsDelta: '{"city":',
+      },
+      {
+        type: 'tool_call_delta',
+        index: 0,
+        id: undefined,
+        name: undefined,
+        argsDelta: '"Denver"}',
+      },
+    ]);
 
     await expect(finalResult).resolves.toEqual({
       type: 'tool_calls',

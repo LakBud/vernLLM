@@ -120,15 +120,32 @@ function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStreamChun
  * receives over the wire, not the SDKs TS types.
  *
  * `createStream` is implemented by calling the same underlying
- * `chat.completions.create` with `stream: true` (and `stream_options:
- * { include_usage: true }`, so a final usage block always arrives) — the
- * OpenAI SDK, and every OpenAI-compatible client modeled on it, returns an
- * `AsyncIterable` of SSE chunks instead of a single completion object when
- * `stream: true` is set. Each chunk is translated into `WireStreamChunk`(s)
- * via `toWireStreamChunks`.
+ * `chat.completions.create` with `stream: true` (and, for providers that
+ * support it, `stream_options: { include_usage: true }`, so a final usage
+ * block arrives) — the OpenAI SDK, and every OpenAI-compatible client
+ * modeled on it, returns an `AsyncIterable` of SSE chunks instead of a
+ * single completion object when `stream: true` is set. Each chunk is
+ * translated into `WireStreamChunk`(s) via `toWireStreamChunks`.
  */
-export function fromOpenAICompatible(client: unknown): LLMClient {
+export interface OpenAICompatibleAdapterOptions {
+  /**
+   * Whether the provider supports `stream_options.include_usage`. Not
+   * every "OpenAI-compatible" provider does — e.g. Mistral rejects or
+   * ignores the field — so this defaults to `true` (matching OpenAI and
+   * Groq) and should be set to `false` for providers known not to support
+   * it. When `false`, `stream_options` is omitted entirely and no usage
+   * block will arrive on the stream; callers relying on streamed `usage`
+   * with such a provider won't get one.
+   */
+  supportsStreamUsage?: boolean;
+}
+
+export function fromOpenAICompatible(
+  client: unknown,
+  options: OpenAICompatibleAdapterOptions = {},
+): LLMClient {
   const raw = client as LLMClient;
+  const { supportsStreamUsage = true } = options;
 
   // The underlying client's `create`, called with `stream: true`, returns
   // an AsyncIterable of `OpenAIStreamChunk` rather than
@@ -157,7 +174,12 @@ export function fromOpenAICompatible(client: unknown): LLMClient {
           const messages = toOpenAIMessages(params);
 
           const stream = (await rawCreate(
-            { ...params, messages, stream: true, stream_options: { include_usage: true } },
+            {
+              ...params,
+              messages,
+              stream: true,
+              ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+            },
             options,
           )) as AsyncIterable<OpenAIStreamChunk>;
 
@@ -175,8 +197,17 @@ export function fromOpenAICompatible(client: unknown): LLMClient {
 /** Groqs SDK matches the OpenAI wire format */
 export const fromGroq = fromOpenAICompatible;
 
-/** Mistrals `chat.completions`-shaped client (or their OpenAI-compat endpoint) */
-export const fromMistral = fromOpenAICompatible;
+/**
+ * Mistrals `chat.completions`-shaped client (or their OpenAI-compat
+ * endpoint). Defaults `supportsStreamUsage` to `false`: Mistral does not
+ * support `stream_options.include_usage`, so streamed calls through this
+ * alias won't receive a usage block. Pass `{ supportsStreamUsage: true }`
+ * explicitly if a future Mistral endpoint adds support.
+ */
+export const fromMistral = (
+  client: unknown,
+  options: OpenAICompatibleAdapterOptions = {},
+): LLMClient => fromOpenAICompatible(client, { supportsStreamUsage: false, ...options });
 
 /** DeepSeeks API is OpenAI-compatible */
 export const fromDeepSeek = fromOpenAICompatible;

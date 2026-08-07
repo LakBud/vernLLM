@@ -302,17 +302,20 @@ describe('VernLLM.cachedCall — stream: true', () => {
       ],
     ]);
     const llm = new VernLLM({ client, model: 'test-model' });
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
 
     const [callA, callB] = await Promise.all([
       llm.cachedCall({
         cacheKey: 'concurrent-key',
         ttl: 60,
         call: { userContent: 'hi', jsonMode: false, stream: true },
+        reserveUsage,
       }),
       llm.cachedCall({
         cacheKey: 'concurrent-key',
         ttl: 60,
         call: { userContent: 'hi', jsonMode: false, stream: true },
+        reserveUsage,
       }),
     ]);
 
@@ -336,6 +339,15 @@ describe('VernLLM.cachedCall — stream: true', () => {
     // Only one real stream was opened — the joiner shared it instead of
     // triggering a second one.
     expect(createStream).toHaveBeenCalledTimes(1);
+
+    // Both callers reserve usage — a joiner still spends its own quota,
+    // it just doesn't trigger a second stream — but only the trigger's
+    // reservation is marked coalesced: false; the joiner's is true.
+    expect(reserveUsage).toHaveBeenCalledTimes(2);
+    const coalescedFlags = reserveUsage.mock.calls
+      .map((call: unknown[]) => (call[0] as { coalesced: boolean }).coalesced)
+      .sort();
+    expect(coalescedFlags).toEqual([false, true]);
   });
 
   it('coalesces more than two concurrent callers onto a single trigger', async () => {
@@ -461,6 +473,27 @@ describe('VernLLM.cachedCall — stream: true', () => {
 
     expect(reserveUsage).toHaveBeenCalledTimes(1);
     expect(refundUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserves usage once and never refunds it for a successful streaming cachedCall', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn().mockResolvedValue(undefined);
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hi there' }]]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const { chunks, finalResult } = await llm.cachedCall({
+      cacheKey: 'reserve-success-key',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true },
+      reserveUsage,
+      refundUsage,
+    });
+
+    await drain(chunks);
+    await expect(finalResult).resolves.toBe('hi there');
+
+    expect(reserveUsage).toHaveBeenCalledTimes(1);
+    expect(refundUsage).not.toHaveBeenCalled();
   });
 
   it('a failure before the stream ever opens (reserveUsage throwing) does not permanently wedge the cache key — a later cachedCall for the same key succeeds instead of hanging forever', async () => {

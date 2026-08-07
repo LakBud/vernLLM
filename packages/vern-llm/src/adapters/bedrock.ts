@@ -420,7 +420,7 @@ export function fromBedrock(
 
                 blockKinds.set(contentBlockIndex, kind);
 
-                if (kind === 'tool_use') {
+                if (kind === 'tool_use' && !toolName) {
                   yield {
                     type: 'tool_call_delta',
                     index: contentBlockIndex,
@@ -449,7 +449,7 @@ export function fromBedrock(
 
                 if (kind === 'json-tool') {
                   yield { type: 'text-delta', delta: delta.toolUse.input };
-                } else {
+                } else if (!toolName) {
                   yield {
                     type: 'tool_call_delta',
                     index: contentBlockIndex,

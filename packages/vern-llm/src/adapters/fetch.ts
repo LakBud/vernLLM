@@ -131,6 +131,17 @@ async function* webStreamToAsyncIterable(
       if (value) yield value;
     }
   } finally {
+    // Cancel before releasing the lock so an early-terminated or
+    // downstream-failed consumer still tells the underlying source to
+    // stop, instead of leaving it running with nothing left to read it.
+    // An already-errored stream rejects cancel(); that rejection isn't
+    // useful to the caller here, so it's swallowed.
+    try {
+      await reader.cancel();
+    } catch {
+      // Ignore: the stream may already be errored/closed.
+    }
+
     reader.releaseLock();
   }
 }

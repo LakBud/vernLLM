@@ -285,6 +285,7 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
           // non-streaming `create` branch above unwraps it.
           const blockKinds = new Map<number, 'text' | 'tool_use' | 'json-tool'>();
           let inputTokens = 0;
+          let sawJsonTool = false;
 
           for await (const event of stream) {
             if (event.type === 'message_start') {
@@ -295,7 +296,15 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
 
                 blockKinds.set(event.index, kind);
 
-                if (kind === 'tool_use') {
+                if (kind === 'json-tool') {
+                  sawJsonTool = true;
+                } else if (!toolName) {
+                  // Only surface tool_use blocks as tool_call_delta chunks
+                  // when there's no forced structured-output tool in play.
+                  // When `toolName` is set, any non-matching tool_use block
+                  // is unexpected (Anthropic forces exactly one tool), and
+                  // surfacing it would corrupt the caller's expectation of
+                  // receiving only the forced tool's JSON payload as text.
                   yield {
                     type: 'tool_call_delta',
                     index: event.index,
@@ -328,7 +337,7 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
 
                 if (kind === 'json-tool') {
                   yield { type: 'text-delta', delta: event.delta.partial_json };
-                } else {
+                } else if (!toolName) {
                   yield {
                     type: 'tool_call_delta',
                     index: event.index,
@@ -348,6 +357,13 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
                 },
               } satisfies WireStreamChunk;
             }
+          }
+
+          if (toolName && !sawJsonTool) {
+            throw new LLMError(
+              `Anthropic did not return the required structured output tool "${toolName}".`,
+              'validation',
+            );
           }
         },
       },

@@ -198,6 +198,63 @@ export function at<T>(arr: readonly T[], index: number): T {
   return value;
 }
 
+/** A fake `ReadableStream<Uint8Array>`, as `response.body` would be. */
+export function fakeReadableStream(parts: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+
+  return new ReadableStream({
+    pull(controller) {
+      if (index >= parts.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(parts[index]));
+      index++;
+    },
+  });
+}
+
+/**
+ * Builds a `createMockStreamingClient` factory-style script entry (the
+ * `() => AsyncIterable<WireStreamChunk>` variant) that yields `chunks` and
+ * then throws `failure` from `next()`, with an iterator whose `return()`
+ * implementation calls `onReturn` — so tests can exercise
+ * `buildStreamResult`'s cleanup path (`iterator.return?.()`, called when
+ * the pump loop's try/catch handles a processing-time throw) instead of
+ * skipping it. If `onReturn` throws or its returned promise rejects,
+ * `return()` itself rejects with that error, exercising the
+ * swallow-on-cleanup-failure branch in the same pump loop.
+ */
+export function scriptedIteratorWithReturn(
+  chunks: WireStreamChunk[],
+  failure: unknown,
+  onReturn: () => void | Promise<void> = () => {},
+): () => AsyncIterable<WireStreamChunk> {
+  return () => ({
+    [Symbol.asyncIterator]() {
+      let index = 0;
+
+      return {
+        async next(): Promise<IteratorResult<WireStreamChunk>> {
+          if (index >= chunks.length) {
+            throw failure;
+          }
+
+          const value = chunks[index];
+          index++;
+
+          return { done: false, value: value! };
+        },
+        async return(): Promise<IteratorResult<WireStreamChunk>> {
+          await onReturn();
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  });
+}
+
 export function makeFakeAnthropicClient(
   responseText: string,
   usage = { input_tokens: 10, output_tokens: 5 },

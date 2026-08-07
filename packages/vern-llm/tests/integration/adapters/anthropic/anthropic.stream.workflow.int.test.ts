@@ -125,7 +125,29 @@ describe('VernLLM.call(stream: true) through fromAnthropic — end to end', () =
       stream: true,
     });
 
-    await drain(chunks);
+    const collected = await drain(chunks);
+
+    expect(collected).toEqual([
+      { type: 'tool_call_delta', index: 0, id: 'toolu_1', name: 'get_weather' },
+      { type: 'tool_call_delta', index: 0, id: undefined, name: undefined, argsDelta: '{"city":' },
+      {
+        type: 'tool_call_delta',
+        index: 0,
+        id: undefined,
+        name: undefined,
+        argsDelta: '"Denver"}',
+      },
+      {
+        type: 'usage',
+        usage: {
+          promptTokens: 10,
+          completionTokens: 8,
+          totalTokens: 18,
+          requestId: expect.any(String),
+          model: 'claude-x',
+        },
+      },
+    ]);
 
     await expect(finalResult).resolves.toEqual({
       type: 'tool_calls',

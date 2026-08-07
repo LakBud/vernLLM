@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromOpenAICompatible } from '../../../../src/index.js';
+import { fromOpenAICompatible, fromMistral } from '../../../../src/index.js';
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
@@ -130,6 +130,47 @@ describe('fromOpenAICompatible().chat.completions.createStream', () => {
       usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
     });
     expect(receivedParams).toMatchObject({ stream: true, stream_options: { include_usage: true } });
+  });
+
+  it('omits stream_options for providers configured without stream-usage support', async () => {
+    let receivedParams: Record<string, unknown> | undefined;
+    const create = vi.fn(async (params: Record<string, unknown>) => {
+      receivedParams = params;
+      return fakeOpenAIStream([{ choices: [{ delta: { content: 'hi' } }] }]);
+    });
+    const adapted = fromOpenAICompatible(
+      { chat: { completions: { create } } },
+      { supportsStreamUsage: false },
+    );
+
+    await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'test-model', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(receivedParams).toMatchObject({ stream: true });
+    expect(receivedParams).not.toHaveProperty('stream_options');
+  });
+
+  it('fromMistral omits stream_options by default, unlike fromOpenAICompatible', async () => {
+    let receivedParams: Record<string, unknown> | undefined;
+    const create = vi.fn(async (params: Record<string, unknown>) => {
+      receivedParams = params;
+      return fakeOpenAIStream([{ choices: [{ delta: { content: 'hi' } }] }]);
+    });
+    const adapted = fromMistral({ chat: { completions: { create } } });
+
+    await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'test-model', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(receivedParams).toMatchObject({ stream: true });
+    expect(receivedParams).not.toHaveProperty('stream_options');
   });
 
   it('applies the same ContentBlock[] -> image_url translation as create() before streaming', async () => {

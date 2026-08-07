@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { LLMError, type StreamChunk, type WireStreamChunk } from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
-import { createMockStreamingClient } from '../helpers.js';
+import { createMockStreamingClient, scriptedIteratorWithReturn } from '../helpers.js';
 
 const weatherTool = {
   name: 'get_weather',
@@ -129,6 +129,53 @@ describe('VernLLM.call — stream: true', () => {
     expect(onUsage).not.toHaveBeenCalled();
   });
 
+  it('cleans up the iterator (calls return()) after a mid-stream processing failure', async () => {
+    const onReturn = vi.fn();
+    const { client } = createMockStreamingClient([
+      scriptedIteratorWithReturn(
+        [{ type: 'text-delta', delta: 'partial' }],
+        new Error('connection dropped'),
+        onReturn,
+      ),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await expect(drain(chunks)).rejects.toBeInstanceOf(LLMError);
+    await expect(finalResult).rejects.toBeInstanceOf(LLMError);
+    expect(onReturn).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows a rejecting return() during mid-stream cleanup, reporting the original error', async () => {
+    const { client } = createMockStreamingClient([
+      scriptedIteratorWithReturn(
+        [{ type: 'text-delta', delta: 'partial' }],
+        new Error('connection dropped'),
+        () => {
+          throw new Error('cleanup also failed');
+        },
+      ),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    // The original stream error is what's reported, not the cleanup
+    // failure — cleanup failing during error handling shouldn't mask why
+    // the stream actually failed.
+    await expect(drain(chunks)).rejects.toMatchObject({ message: 'LLM request failed' });
+    await expect(finalResult).rejects.toMatchObject({ message: 'LLM request failed' });
+  });
+
   it('throws LLMError(validation) immediately when the client has no createStream', async () => {
     const llm = new VernLLM({
       client: { chat: { completions: { create: vi.fn() } } },
@@ -140,7 +187,7 @@ describe('VernLLM.call — stream: true', () => {
     });
   });
 
-  it('retries a connection-open failure, then normalizes and records a breaker failure on exhausted retries', async () => {
+  it('retries a connection-open failure and rejects after retries are exhausted', async () => {
     const { client, createStream } = createMockStreamingClient([
       new Error('connect failed'),
       new Error('connect failed again'),
@@ -285,6 +332,84 @@ describe('VernLLM.call — stream: true', () => {
     expect(refundUsage).not.toHaveBeenCalled();
   });
 
+  it('invokes onUsage with the accumulated TokenUsage for a successful stream', async () => {
+    const onUsage = vi.fn();
+    const { client } = createMockStreamingClient([
+      [
+        { type: 'text-delta', delta: 'hi there' },
+        { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } },
+      ],
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', onUsage });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await drain(chunks);
+    await expect(finalResult).resolves.toBe('hi there');
+
+    expect(onUsage).toHaveBeenCalledTimes(1);
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ promptTokens: 5, completionTokens: 3, totalTokens: 8 }),
+    );
+  });
+
+  it('invokes onUsageFailure (not onUsage) when a usage chunk arrives before a mid-stream failure', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockStreamingClient([
+      () => ({
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (step === 0) {
+                step++;
+                return {
+                  done: false,
+                  value: {
+                    type: 'usage',
+                    usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+                  },
+                };
+              }
+              throw new Error('connection dropped');
+            },
+          };
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', onUsage, onUsageFailure });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await expect(drain(chunks)).rejects.toBeInstanceOf(LLMError);
+    await expect(finalResult).rejects.toBeInstanceOf(LLMError);
+
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledTimes(1);
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ promptTokens: 5, completionTokens: 3, totalTokens: 8 }),
+      expect.any(LLMError),
+    );
+  });
+
+  it("rejects finalResult with LLMError('Empty LLM response', 'api') for a stream that yields zero chunks", async () => {
+    const { client } = createMockStreamingClient([[]]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0 });
+
+    await expect(
+      llm.call({ userContent: 'hi', jsonMode: false, stream: true }),
+    ).rejects.toMatchObject({ type: 'api', message: 'Empty LLM response' });
+  });
+
   it('bounds time-to-first-chunk with withTimeout, throwing LLMError(timeout) when the stream never opens in time', async () => {
     // Built directly (not via the helper) so the mock can capture the
     // abort signal `createStream` receives and actually honor it — a real
@@ -369,5 +494,96 @@ describe('VernLLM.call — stream: true', () => {
     const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
 
     await expect(finalResult).resolves.toBe('no reader needed');
+  });
+
+  it('bounds the unread chunk backlog for a large stream nobody ever reads, without affecting finalResult', async () => {
+    // Well past 2x the eviction threshold — exercises the cap that keeps
+    // an entirely-ignored `chunks` from holding the whole stream's output
+    // in memory for its duration.
+    const chunkCount = 25_000;
+    const wireChunks: WireStreamChunk[] = Array.from({ length: chunkCount }, (_, i) => ({
+      type: 'text-delta',
+      delta: `${i} `,
+    }));
+    const { client } = createMockStreamingClient([wireChunks]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+
+    // finalResult accumulates from the wire chunks directly, not from the
+    // (capped) chunks buffer, so it's unaffected by the cap dropping old
+    // backlog entries. finalizeResponse trims the accumulated text, hence
+    // .trim() here too.
+    const expected = Array.from({ length: chunkCount }, (_, i) => `${i} `)
+      .join('')
+      .trim();
+    await expect(finalResult).resolves.toBe(expected);
+  });
+
+  it('drops the oldest backlog entries once the unread chunk cap is exceeded, keeping only the most recent ones', async () => {
+    const chunkCount = 25_000;
+    const wireChunks: WireStreamChunk[] = Array.from({ length: chunkCount }, (_, i) => ({
+      type: 'text-delta',
+      delta: `${i} `,
+    }));
+    const { client } = createMockStreamingClient([wireChunks]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    // finalResult already settled from the eagerly-running pump by the
+    // time `call()` resolves for this fast mock stream, so `chunks` is
+    // read here strictly *after* the whole backlog was built up unread —
+    // exactly the pathological case the cap targets.
+    await finalResult;
+
+    const collected = await drain(chunks);
+
+    // Bounded, and short of the full 25,000 chunks the stream actually
+    // produced — the oldest entries were dropped once the backlog grew
+    // past the (batched) eviction threshold.
+    expect(collected.length).toBeLessThan(chunkCount);
+    expect(collected.length).toBeGreaterThan(0);
+    // Pins the actual guarantee, not just "it shrank": the backlog never
+    // grows past 2x the cap before being trimmed back down.
+    expect(collected.length).toBeLessThanOrEqual(20_000);
+
+    // What's left is a contiguous tail: the oldest surviving entry's
+    // index is exactly (chunkCount - collected.length), confirming
+    // eviction removed from the front, not scattered or from the back.
+    const firstSurvivingDelta = (collected[0] as { type: 'text-delta'; delta: string }).delta;
+    const expectedFirstIndex = chunkCount - collected.length;
+    expect(firstSurvivingDelta).toBe(`${expectedFirstIndex} `);
+  });
+
+  it('evicts the unread backlog in amortized O(1) per chunk, not O(cap) per chunk', async () => {
+    // Regression test for a real perf cliff: naive per-push `shift()`
+    // eviction is O(current length) *every* push once the cap is
+    // reached, so a large ignored stream could take seconds (or worse)
+    // just running the pump, independent of any real work. Batched
+    // eviction (grow to 2x cap, trim in one splice) amortizes that cost.
+    // 200,000 chunks is far more than any test above exercises, and
+    // asserts the pump completes quickly rather than stalling.
+    const chunkCount = 200_000;
+    const wireChunks: WireStreamChunk[] = Array.from({ length: chunkCount }, () => ({
+      type: 'text-delta',
+      delta: 'x',
+    }));
+    const { client } = createMockStreamingClient([wireChunks]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const start = Date.now();
+    const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    await finalResult;
+    const elapsedMs = Date.now() - start;
+
+    // Generous ceiling — the point isn't precise timing, it's ruling out
+    // the multi-second-plus stalls the naive per-push shift() showed at
+    // nearby array sizes in isolated benchmarking.
+    expect(elapsedMs).toBeLessThan(5000);
   });
 });

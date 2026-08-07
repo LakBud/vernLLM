@@ -30,13 +30,27 @@ import { LLMError } from '../types/errors.js';
 export async function* parseSseStream(
   source: AsyncIterable<Uint8Array | string>,
 ): AsyncGenerator<unknown> {
-  const decoder = new TextDecoder();
+  // `fatal: true` makes invalid UTF-8 throw instead of silently decoding
+  // to U+FFFD replacement characters, which could otherwise land inside a
+  // JSON string and either corrupt it unnoticeably or, worse, still parse
+  // as syntactically valid JSON with silently-wrong content.
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let buffer = '';
 
   for await (const chunk of source) {
-    const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+    let text: string;
 
-    buffer += text.replace(/\r\n/g, '\n');
+    try {
+      text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+    } catch (cause) {
+      throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', undefined, undefined, cause);
+    }
+
+    // Normalized against the whole buffer, not just the newly-arrived
+    // chunk: a `\r\n` delimiter can straddle a chunk boundary (one chunk
+    // ending in `\r`, the next starting with `\n`), and normalizing only
+    // the new text would miss that split pair.
+    buffer = (buffer + text).replace(/\r\n/g, '\n');
 
     let boundary = buffer.indexOf('\n\n');
 
@@ -66,7 +80,11 @@ export async function* parseSseStream(
   // that looks legitimate. Flushing guarantees the truncation itself is
   // represented in the text, so it surfaces as a parse error instead of
   // quietly returning incomplete data as if it were the real thing.
-  buffer += decoder.decode();
+  try {
+    buffer += decoder.decode();
+  } catch (cause) {
+    throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', undefined, undefined, cause);
+  }
 
   // Flush a final frame that arrived without a trailing blank line — some
   // servers close the connection right after the last `data:` line instead

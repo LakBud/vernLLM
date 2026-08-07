@@ -46,7 +46,7 @@ import {
 import type { InternalCacheParams, InternalCacheStreamParams } from './internal/cache.utils.js';
 
 /**
- * A resilient wrapper around an LLM chat completions client.
+ * A resilient layer around an LLM chat completions client. This is VernLLM!
  *
  * Adds retry with backoff and jitter, per-attempt timeouts, an optional
  * circuit breaker, JSON parsing with optional schema validation, usage
@@ -126,9 +126,21 @@ export class VernLLM {
    * `CallParams<T>`, use `isToolCallResult()` to check the shape at
    * runtime instead. See the Tool Calling docs for details.
    *
+   * The same static-vs-dynamic caveat applies to `stream`: TypeScript only
+   * selects the streaming overload (returning `StreamCallResult<...>`) when
+   * `stream: true` is statically present on `params`. A `stream` value set
+   * conditionally on a plain `CallParams<T>` still resolves to `Promise<T>`
+   * (or `Promise<CallWithToolsResult<T>>`) at the type level even though
+   * the actual runtime result is the `{ chunks, finalResult }` streaming
+   * shape whenever `stream` evaluates to `true` — callers doing this should
+   * narrow/cast accordingly rather than relying on the static return type.
+   *
    * @param params System/user content plus per-call overrides. See `CallParams`.
-   * @returns Without `tools`: the parsed response, or raw string if
-   * `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`.
+   * @returns Without `tools` or `stream`: the parsed response, or raw
+   * string if `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`.
+   * With `stream: true` (statically): a `{ chunks, finalResult }`
+   * `StreamCallResult`, `finalResult` resolving to whichever of the above
+   * shapes applies once the stream completes. See `StreamCallResult`.
    */
   async call<T = unknown>(
     params: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>,
@@ -388,6 +400,16 @@ export class VernLLM {
       params.signal,
     );
 
+    // An immediately-exhausted stream (no chunks at all) is the streaming
+    // equivalent of `executeCall`'s empty-response check: surface the same
+    // `LLMError('Empty LLM response', 'api')` so retry behaves identically
+    // whether the empty result came from a non-streaming or streaming
+    // attempt, rather than silently recording connection-time success for
+    // an attempt that produced nothing.
+    if (first.done) {
+      throw new LLMError('Empty LLM response', 'api');
+    }
+
     this.breaker?.recordSuccess();
 
     return this.buildStreamResult(iterator, first, params, useJson, requestId, model, attempt);
@@ -426,11 +448,36 @@ export class VernLLM {
       rejectFinal = reject;
     });
 
+    // Marks the promise as observed immediately so a caller that ignores
+    // `finalResult` (only reading `chunks`) doesn't trigger an unhandled
+    // rejection warning when the stream fails. The returned promise from
+    // `.catch()` is intentionally discarded — this only needs the
+    // side-effect of attaching a handler to `finalResult` itself, not a
+    // derived promise the caller would see.
+    finalResult.catch(() => {});
+
     // Push-based buffer, not a plain generator pulled by the caller: a
     // generator's body doesn't run until `.next()` is called, so a caller
     // that only awaits `finalResult` and never reads `chunks` would get a
     // `finalResult` that never settles. The background pump below always
     // runs to completion regardless of whether `chunks` is consumed.
+    //
+    // Buffering only while nobody has *started* iterating `chunks` isn't a
+    // safe optimization here: the pump above fires immediately, before
+    // `{ chunks, finalResult }` is even returned to the caller, and for a
+    // fast-resolving stream (a low-latency provider, or anything mocked)
+    // it can finish emitting every chunk before the caller's code resumes
+    // far enough to begin iterating — "has iteration started yet" is a
+    // race the caller usually loses regardless of how promptly it reads
+    // `chunks`, which would silently drop real chunks for entirely
+    // correct call sites. Capping the buffer's size instead avoids that
+    // race: it's a synchronous, deterministic decision (buffered.length),
+    // not one that depends on scheduling. The cap only ever matters for a
+    // caller that truly never reads `chunks` on an unusually large
+    // stream — normal consumption, even started somewhat late, stays far
+    // under it — and bounds that case's peak memory instead of leaving it
+    // proportional to the whole stream's output.
+    const MAX_BUFFERED_CHUNKS = 10_000;
     const buffered: StreamChunk[] = [];
     const pending: Array<{
       resolve: (result: IteratorResult<StreamChunk>) => void;
@@ -444,8 +491,26 @@ export class VernLLM {
 
       if (waiter) {
         waiter.resolve({ done: false, value: chunk });
-      } else {
-        buffered.push(chunk);
+        return;
+      }
+
+      buffered.push(chunk);
+
+      if (buffered.length > MAX_BUFFERED_CHUNKS * 2) {
+        // Trim back down to the cap in one batch operation instead of
+        // `shift()`ing a single element off on every push once the cap is
+        // reached. A per-push `shift()` here is O(current length) in the
+        // worst case — cheap for a handful of calls, but that cost is
+        // paid on *every* push for the remainder of an ignored stream,
+        // and its real-world cost isn't a stable, engine-independent
+        // property: benchmarking this exact pattern at a similar backing
+        // -array size showed multi-second stalls for what should be
+        // sub-millisecond work. Letting the array grow to 2x the cap
+        // before trimming amortizes the O(n) `splice` across
+        // `MAX_BUFFERED_CHUNKS` pushes, so the average cost per push
+        // stays O(1) regardless of how far past the cap the array is
+        // allowed to grow before trimming.
+        buffered.splice(0, buffered.length - MAX_BUFFERED_CHUNKS);
       }
     };
 

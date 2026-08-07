@@ -413,6 +413,12 @@ export async function withReservedUsageForStream<T>(
     },
   );
 
+  // Same rationale as the no-op catch attached where finalResult is first
+  // constructed: mark this derived promise observed too, so a caller that
+  // only reads `chunks` doesn't get an unhandled-rejection warning from
+  // this wrapper promise either.
+  finalResult.catch(() => {});
+
   return { chunks: opened.chunks, finalResult };
 }
 

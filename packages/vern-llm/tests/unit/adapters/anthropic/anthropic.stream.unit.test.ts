@@ -210,4 +210,64 @@ describe('fromAnthropic().chat.completions.createStream', () => {
       { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
     ]);
   });
+
+  it('rejects with LLMError(validation) when the streamed tool_use name does not match the forced json_schema tool', async () => {
+    const { client } = makeFakeStreamingAnthropicClient([
+      { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'toolu_1', name: 'wrong_tool' },
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"answer":"42"}' },
+      },
+      { type: 'message_delta', usage: { output_tokens: 2 } },
+    ]);
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      collect(
+        adapted.chat.completions.createStream!(
+          {
+            model: 'claude-x',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: 'question' }],
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'extract', schema: { type: 'object' } },
+            },
+          },
+          { signal: new AbortController().signal },
+        ),
+      ),
+    ).rejects.toMatchObject({ type: 'validation' });
+  });
+
+  it('rejects with LLMError(validation) when the stream ends without emitting the forced tool or any text-delta', async () => {
+    const { client } = makeFakeStreamingAnthropicClient([
+      { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+      { type: 'message_delta', usage: { output_tokens: 0 } },
+    ]);
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      collect(
+        adapted.chat.completions.createStream!(
+          {
+            model: 'claude-x',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: 'question' }],
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'extract', schema: { type: 'object' } },
+            },
+          },
+          { signal: new AbortController().signal },
+        ),
+      ),
+    ).rejects.toMatchObject({ type: 'validation' });
+  });
 });

@@ -9,10 +9,31 @@ export type StreamChunk =
 
 /**
  * What `call()` returns when `stream: true`. `chunks` is for live rendering;
- * `finalResult` resolves to *exactly* what `call()` would have returned had
- * `stream` been omitted — same T, same `CallWithToolsResult<T>`, same
- * validation, same errors. This mirrors the non-streaming return type on
- * purpose: streaming changes delivery, not the contract.
+ * `finalResult` resolves to the same validated `T`/`CallWithToolsResult<T>`
+ * shape `call()` would have returned had `stream` been omitted, once the
+ * stream completes successfully.
+ *
+ * `chunks` is single-use and supports only one consumer: iterating it more
+ * than once, or from more than one place concurrently, shares the same
+ * underlying buffered stream rather than replaying or forking it, which can
+ * split chunks unpredictably between consumers. Stopping iteration early
+ * (e.g. `break`ing out of a `for await`) does not cancel or otherwise
+ * signal the underlying stream — the background pump keeps running to
+ * completion regardless, buffering any chunks emitted after that point, so
+ * `finalResult` still settles normally even if `chunks` is abandoned or
+ * never read at all.
+ *
+ * Unread chunks are buffered internally for the duration of one stream —
+ * this is what lets a caller start iterating `chunks` after the stream has
+ * already progressed (or finished) and still see everything. That backlog
+ * is capped: an unusually large stream whose `chunks` is never read at all
+ * has its oldest buffered chunks dropped once the backlog grows past
+ * roughly twice a fixed internal limit, trimmed back down to that limit in
+ * one batch rather than one-at-a-time, bounding both peak memory and the
+ * eviction work itself for that pathological case instead of the array
+ * growing (or being trimmed) proportional to the whole stream's output.
+ * Ordinary consumption, even started somewhat late, stays far under the
+ * limit and is unaffected.
  */
 export interface StreamCallResult<R> {
   chunks: AsyncIterable<StreamChunk>;

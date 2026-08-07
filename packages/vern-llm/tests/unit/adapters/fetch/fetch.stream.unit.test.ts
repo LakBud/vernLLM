@@ -1,29 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { fromFetch } from '../../../../src/adapters/index.js';
-import { at } from '../../../helpers.js';
+import { at, fakeReadableStream } from '../../../helpers.js';
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
   for await (const item of iterable) out.push(item);
   return out;
-}
-
-/** A fake `ReadableStream<Uint8Array>`, as `response.body` would be. */
-function fakeReadableStream(parts: string[]): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  let index = 0;
-
-  return new ReadableStream({
-    pull(controller) {
-      if (index >= parts.length) {
-        controller.close();
-        return;
-      }
-      controller.enqueue(encoder.encode(parts[index]));
-      index++;
-    },
-  });
 }
 
 interface DeltaEvent {
@@ -224,10 +207,12 @@ describe('fromFetch().chat.completions.createStream', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('throws an error with .status set when the default requestStream gets a non-2xx response', async () => {
+  it('throws an error with .status and .headers set when the default requestStream gets a non-2xx response', async () => {
+    const responseHeaders = new Headers({ 'Retry-After': '30' });
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
       ok: false,
       status: 429,
+      headers: responseHeaders,
       text: async () => 'rate limited',
     }));
     vi.stubGlobal('fetch', fetchMock);
@@ -248,6 +233,7 @@ describe('fromFetch().chat.completions.createStream', () => {
 
     expect(err.status).toBe(429);
     expect(err.message).toContain('rate limited');
+    expect(err.headers.get('Retry-After')).toBe('30');
   });
 
   it('omits body and Content-Type for GET requests, matching create()', async () => {
