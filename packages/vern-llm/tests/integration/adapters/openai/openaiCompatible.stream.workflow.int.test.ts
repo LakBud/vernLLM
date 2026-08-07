@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromOpenAICompatible, type StreamChunk, VernLLM } from '../../../../src/index.js';
+import {
+  fromMistral,
+  fromOpenAICompatible,
+  type StreamChunk,
+  VernLLM,
+} from '../../../../src/index.js';
 
 /** A fake OpenAI-shaped SSE stream, as `chat.completions.create({ stream: true })` returns. */
 function fakeOpenAIStream(chunks: unknown[]): AsyncIterable<unknown> {
@@ -119,5 +124,78 @@ describe('VernLLM.call(stream: true) through fromOpenAICompatible — end to end
       type: 'tool_calls',
       toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'Denver' } }],
     });
+  });
+
+  it('sends stream_options.include_usage by default end to end', async () => {
+    let receivedParams: Record<string, unknown> | undefined;
+    const create = vi.fn(async (params: Record<string, unknown>) => {
+      receivedParams = params;
+      return fakeOpenAIStream([{ choices: [{ delta: { content: 'hi' } }] }]);
+    });
+
+    const llm = new VernLLM({
+      client: fromOpenAICompatible({ chat: { completions: { create } } }),
+      model: 'test-model',
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await drain(chunks);
+    await expect(finalResult).resolves.toBe('hi');
+    expect(receivedParams).toMatchObject({ stream: true, stream_options: { include_usage: true } });
+  });
+
+  it('omits stream_options end to end when supportsStreamUsage is disabled', async () => {
+    let receivedParams: Record<string, unknown> | undefined;
+    const create = vi.fn(async (params: Record<string, unknown>) => {
+      receivedParams = params;
+      return fakeOpenAIStream([{ choices: [{ delta: { content: 'hi' } }] }]);
+    });
+
+    const llm = new VernLLM({
+      client: fromOpenAICompatible(
+        { chat: { completions: { create } } },
+        { supportsStreamUsage: false },
+      ),
+      model: 'test-model',
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await drain(chunks);
+    await expect(finalResult).resolves.toBe('hi');
+    expect(receivedParams).toMatchObject({ stream: true });
+    expect(receivedParams).not.toHaveProperty('stream_options');
+  });
+
+  it('sends stream_options.include_usage through fromMistral end to end, since Mistral supports it', async () => {
+    let receivedParams: Record<string, unknown> | undefined;
+    const create = vi.fn(async (params: Record<string, unknown>) => {
+      receivedParams = params;
+      return fakeOpenAIStream([{ choices: [{ delta: { content: 'hi' } }] }]);
+    });
+
+    const llm = new VernLLM({
+      client: fromMistral({ chat: { completions: { create } } }),
+      model: 'test-model',
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await drain(chunks);
+    await expect(finalResult).resolves.toBe('hi');
+    expect(receivedParams).toMatchObject({ stream: true, stream_options: { include_usage: true } });
   });
 });
