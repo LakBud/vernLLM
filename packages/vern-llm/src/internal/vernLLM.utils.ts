@@ -162,6 +162,43 @@ export async function withTimeout<T>(
 }
 
 /**
+ * Races one `iterator.next()` call against a per-call idle timer, to
+ * bound the gap *between* chunks (unlike `withTimeout`, which only bounds
+ * opening the stream and its first chunk). Without this, a connection
+ * that streams one chunk then hangs would never fail.
+ *
+ * `timeoutMs` of 0/undefined disables the check. Otherwise rejects with
+ * `LLMError('timeout')` if `next()` doesn't settle in time. The clock
+ * resets on every call, so the window is measured from the most recent
+ * chunk, not from stream start.
+ */
+export function withChunkIdleTimeout<T>(
+  next: () => Promise<IteratorResult<T>>,
+  timeoutMs: number | undefined,
+): Promise<IteratorResult<T>> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return next();
+  }
+
+  return new Promise<IteratorResult<T>>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new LLMError(`No stream chunk received for ${timeoutMs}ms (idle timeout)`, 'timeout'));
+    }, timeoutMs);
+
+    next().then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
  * Default cap (ms) for both exponential backoff and honored Retry-After
  * values, so a misbehaving/adversarial Retry-After can't stall a caller
  * indefinitely
@@ -469,6 +506,9 @@ export function buildReplayChunks<T>(
           id: toolCall.id,
           name: toolCall.name,
           argsDelta: JSON.stringify(toolCall.arguments ?? {}),
+          // A replay is always the whole value in one shot, never a
+          // fragment, same as Gemini's one-shot tool_call_delta chunks.
+          complete: true,
         });
       });
 

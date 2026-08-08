@@ -4,9 +4,9 @@ import { LLMError } from '../types/errors.js';
  * Parses a Server-Sent-Events byte/text stream into the JSON payload of
  * each `data:` frame, in arrival order. Generic over transport: works with
  * anything that hands back progressively-arriving `Uint8Array` or `string`
- * chunks via async iteration — native `fetch`'s `response.body` (wrapped
+ * chunks via async iteration: native `fetch`'s `response.body` (wrapped
  * to be iterable, see `webStreamToAsyncIterable` in `fetch.ts`), axios's
- * Node `Readable` (already async-iterable, no wrapping needed), etc — so
+ * Node `Readable` (already async-iterable, no wrapping needed), etc, so
  * this framing layer doesn't care which transport produced the bytes.
  *
  * Follows the SSE spec's frame-delimiting rules closely enough for LLM
@@ -19,10 +19,10 @@ import { LLMError } from '../types/errors.js';
  * ends iteration without yielding it.
  *
  * Simplification: `\r\n` line endings are normalized to `\n` before frame
- * splitting, so a bare `\r` (with no following `\n`) as a line terminator
- * — technically legal per the SSE spec, but not something any HTTP server
- * actually does in practice — is not handled. `\n` and `\r\n` (the two
- * line endings real servers use) both work.
+ * splitting, so a bare `\r` with no following `\n` (technically legal per
+ * the SSE spec, but not something any HTTP server does in practice) is
+ * not handled. `\n` and `\r\n` (the two line endings real servers use)
+ * both work.
  *
  * Malformed JSON in a frame throws `LLMError('parse')`, consistent with
  * how malformed JSON is handled elsewhere in VernLLM.
@@ -68,25 +68,16 @@ export async function* parseSseStream(
     }
   }
 
-  // Flushes any bytes `TextDecoder` held back mid-decode (its `{ stream:
-  // true }` mode withholds a trailing, not-yet-complete multi-byte UTF-8
-  // sequence in case another chunk arrives to complete it). Without this,
-  // if the very last chunk of the whole source happened to end mid
-  // multi-byte character, those held-back bytes are silently discarded
-  // rather than surfacing as a replacement character — and if whatever
-  // precedes them already happens to form syntactically valid JSON (e.g.
-  // truncation lands right after a complete-looking number or string),
-  // the result isn't a parse failure at all: it's a silently WRONG value
-  // that looks legitimate. Flushing guarantees the truncation itself is
-  // represented in the text, so it surfaces as a parse error instead of
-  // quietly returning incomplete data as if it were the real thing.
+  // Flush any bytes TextDecoder held back mid-decode, so a truncated
+  // multi-byte char surfaces as a parse error instead of silently
+  // vanishing (and possibly leaving behind valid-looking, wrong JSON).
   try {
     buffer += decoder.decode();
   } catch (cause) {
     throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', undefined, undefined, cause);
   }
 
-  // Flush a final frame that arrived without a trailing blank line — some
+  // Flush a final frame that arrived without a trailing blank line: some
   // servers close the connection right after the last `data:` line instead
   // of sending one more `\n\n` first.
   const trailing = buffer.trim();
@@ -101,12 +92,24 @@ export async function* parseSseStream(
 const DONE = Symbol('sse-stream-done');
 const NO_DATA = Symbol('sse-frame-no-data');
 
+/**
+ * Sentinel yielded by `parseSseStream` for a comment-only frame (no
+ * `data:` payload), the mechanism providers use for SSE keep-alive
+ * pings. Exported so a consumer (e.g. `fromFetch`) can react to "still
+ * alive" separately from a genuinely empty frame (`NO_DATA`, kept internal).
+ */
+export const SSE_PING = Symbol('sse-frame-ping');
+
 /** Extracts and JSON-parses the `data:` payload of one SSE frame (the text between two blank lines). */
 function parseSseFrame(frame: string): unknown {
   const dataLines: string[] = [];
+  let sawComment = false;
 
   for (const line of frame.split('\n')) {
-    if (line.startsWith(':')) continue; // comment line, per the SSE spec
+    if (line.startsWith(':')) {
+      sawComment = true; // comment line, also used as a keep-alive ping
+      continue;
+    }
     if (!line.startsWith('data:')) continue; // ignore event:/id:/retry:/blank lines
 
     // A single space after the colon is stripped per the SSE spec; further
@@ -114,7 +117,7 @@ function parseSseFrame(frame: string): unknown {
     dataLines.push(line.startsWith('data: ') ? line.slice(6) : line.slice(5));
   }
 
-  if (!dataLines.length) return NO_DATA;
+  if (!dataLines.length) return sawComment ? SSE_PING : NO_DATA;
 
   const data = dataLines.join('\n');
 

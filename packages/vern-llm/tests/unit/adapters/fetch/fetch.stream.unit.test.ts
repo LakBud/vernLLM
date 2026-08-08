@@ -72,6 +72,44 @@ describe('fromFetch().chat.completions.createStream', () => {
     );
   });
 
+  it('translates an SSE comment-line keep-alive ping into a WireStreamChunk ping, bypassing mapStreamEvent', async () => {
+    const mapStreamEvent = vi.fn((event: unknown) => {
+      if (!isDeltaEvent(event) || !event.delta) return undefined;
+      return { type: 'text-delta' as const, delta: event.delta };
+    });
+    const requestStream = vi.fn(async () =>
+      fakeReadableStream([
+        'data: {"delta":"Hello"}\n\n',
+        ': keep-alive\n\n',
+        'data: {"delta":", world!"}\n\n',
+      ]),
+    );
+
+    const client = fromFetch({
+      url: 'https://api.example.com/stream',
+      requestStream,
+      mapRequest: (params) => ({ model: params.model }),
+      mapResponse: (json: unknown) => ({ content: String(json) }),
+      mapStreamEvent,
+    });
+
+    const chunks = await collect(
+      client.chat.completions.createStream!(
+        { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([
+      { type: 'text-delta', delta: 'Hello' },
+      { type: 'ping' },
+      { type: 'text-delta', delta: ', world!' },
+    ]);
+    // The ping never reached mapStreamEvent: it's recognized generically,
+    // before any provider-specific event mapping runs.
+    expect(mapStreamEvent).toHaveBeenCalledTimes(2);
+  });
+
   it('supports mapStreamEvent returning an array of WireStreamChunks for a single event', async () => {
     const requestStream = vi.fn(async () =>
       fakeReadableStream(['data: {"text":"hi","toolName":"get_weather"}\n\n']),

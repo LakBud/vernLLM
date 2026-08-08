@@ -93,7 +93,10 @@ type AnthropicStreamEvent =
     }
   | { type: 'content_block_stop'; index: number }
   | { type: 'message_delta'; usage?: { output_tokens?: number } }
-  | { type: 'message_stop' };
+  | { type: 'message_stop' }
+  // Keep-alive event during long streams (e.g. extended thinking). Modeled
+  // so the event switch has somewhere to route it. See createStream.
+  | { type: 'ping' };
 
 type AnthropicRequestBody = Parameters<AnthropicClient['messages']['create']>[0];
 
@@ -356,6 +359,10 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
                   total_tokens: inputTokens + outputTokens,
                 },
               } satisfies WireStreamChunk;
+            } else if (event.type === 'ping') {
+              // Keep-alive with no content. Yielding it resets the
+              // idle-timeout clock in VernLLM's stream loop.
+              yield { type: 'ping' };
             }
           }
 

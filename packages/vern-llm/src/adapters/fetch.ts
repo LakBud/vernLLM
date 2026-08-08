@@ -1,4 +1,4 @@
-import { parseSseStream } from '../internal/sse.js';
+import { parseSseStream, SSE_PING } from '../internal/sse.js';
 import { LLMError, type LLMClient, type WireStreamChunk } from '../types/index.js';
 
 /** The chat-completion-shaped request VernLLM builds internally */
@@ -272,13 +272,13 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
 
           // A custom `request` transport (proxying, special auth, test
           // mocking, etc.) is silently irrelevant to streaming unless the
-          // caller *also* configures `requestStream` — `requestStream`
+          // caller *also* configures `requestStream`. `requestStream`
           // defaults to plain native `fetch`, not to `config.request`,
           // since `RequestLike`'s buffered `ResponseLike` has no way to
           // expose a byte stream generically. Falling back to native
           // `fetch` anyway would be a surprising, easy-to-miss divergence
-          // (bypassing whatever `request` was there for — a proxy, custom
-          // auth, or a test's mocked transport — and potentially hitting
+          // (bypassing whatever `request` was there for. For example a proxy,
+          // custom auth, or a test's mocked transport and potentially hitting
           // the real network). Failing loudly here instead of guessing.
           if (config.request && !config.requestStream) {
             throw new LLMError(
@@ -309,6 +309,15 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
           });
 
           for await (const event of parseFrames(byteStream)) {
+            // Only the default parseSseStream produces this sentinel (an
+            // SSE comment line used as a keep-alive ping). Handled here,
+            // before mapStreamEvent, since provider-specific mapping
+            // shouldn't need to know about SSE framing internals.
+            if (event === SSE_PING) {
+              yield { type: 'ping' };
+              continue;
+            }
+
             const wireChunks = config.mapStreamEvent(event);
 
             if (!wireChunks) continue;

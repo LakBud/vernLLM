@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { parseSseStream } from '../../src/internal/sse.js';
+import { parseSseStream, SSE_PING } from '../../src/internal/sse.js';
 
 /** A source of string chunks, arriving one at a time, as an async iterable. */
 function chunksOf(...parts: string[]): AsyncIterable<string> {
@@ -157,5 +157,17 @@ describe('parseSseStream', () => {
     };
 
     await expect(collect(parseSseStream(source))).rejects.toMatchObject({ type: 'parse' });
+  });
+
+  it('yields the SSE_PING sentinel for a comment-only frame (keep-alive ping), not a plain skip', async () => {
+    const source = chunksOf('data: {"a":1}\n\n', ': keep-alive\n\n', 'data: {"a":2}\n\n');
+
+    expect(await collect(parseSseStream(source))).toEqual([{ a: 1 }, SSE_PING, { a: 2 }]);
+  });
+
+  it('does not yield SSE_PING for a genuinely empty frame with no comment and no data', async () => {
+    const source = chunksOf('data: {"a":1}\n\n', '\n\n', 'data: {"a":2}\n\n');
+
+    expect(await collect(parseSseStream(source))).toEqual([{ a: 1 }, { a: 2 }]);
   });
 });

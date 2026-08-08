@@ -6,6 +6,7 @@ import {
   extractStatus,
   extractRetryAfterMs,
   withTimeout,
+  withChunkIdleTimeout,
   getBackoffDelay,
   waitForRetry,
   describeError,
@@ -59,6 +60,7 @@ export class VernLLM {
 
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
+  private readonly chunkIdleTimeoutMs: number;
   private readonly baseDelayMs: number;
   private readonly defaultMaxTokens: number;
   private readonly defaultTemperature: number | null;
@@ -87,6 +89,7 @@ export class VernLLM {
 
     this.maxRetries = options.maxRetries ?? 1;
     this.timeoutMs = options.timeoutMs ?? 25_000;
+    this.chunkIdleTimeoutMs = options.chunkIdleTimeoutMs ?? 30_000;
     this.baseDelayMs = options.baseDelayMs ?? 500;
     this.defaultMaxTokens = options.defaultMaxTokens ?? 1000;
     this.defaultTemperature =
@@ -164,15 +167,11 @@ export class VernLLM {
     const requestId = params.requestId ?? randomUUID();
 
     if (params.stream) {
-      // Streaming reuses the same normalize/breaker/logging treatment as
-      // the non-streaming path below, applied around opening the stream.
-      // Mid-stream failures are handled separately in executeStreamCall
-      // and buildStreamResult without touching the breaker. Usage
-      // reservation differs here: withReservedUsageForStream returns as
-      // soon as the stream opens, deferring refund/report onto
-      // finalResult instead of awaiting the whole operation inline, since
-      // call() must hand back { chunks, finalResult } before the real
-      // outcome is known.
+      // Same normalize/breaker/logging treatment as non-streaming, applied
+      // around opening the stream; mid-stream failures are handled
+      // separately in buildStreamResult. Usage refund/report is deferred
+      // onto finalResult, since call() must return { chunks, finalResult }
+      // before the real outcome is known.
       return withReservedUsageForStream(
         params,
         async () => {
@@ -448,35 +447,13 @@ export class VernLLM {
       rejectFinal = reject;
     });
 
-    // Marks the promise as observed immediately so a caller that ignores
-    // `finalResult` (only reading `chunks`) doesn't trigger an unhandled
-    // rejection warning when the stream fails. The returned promise from
-    // `.catch()` is intentionally discarded — this only needs the
-    // side-effect of attaching a handler to `finalResult` itself, not a
-    // derived promise the caller would see.
+    // Avoid an unhandled-rejection warning for callers that only read `chunks`.
     finalResult.catch(() => {});
 
-    // Push-based buffer, not a plain generator pulled by the caller: a
-    // generator's body doesn't run until `.next()` is called, so a caller
-    // that only awaits `finalResult` and never reads `chunks` would get a
-    // `finalResult` that never settles. The background pump below always
-    // runs to completion regardless of whether `chunks` is consumed.
-    //
-    // Buffering only while nobody has *started* iterating `chunks` isn't a
-    // safe optimization here: the pump above fires immediately, before
-    // `{ chunks, finalResult }` is even returned to the caller, and for a
-    // fast-resolving stream (a low-latency provider, or anything mocked)
-    // it can finish emitting every chunk before the caller's code resumes
-    // far enough to begin iterating — "has iteration started yet" is a
-    // race the caller usually loses regardless of how promptly it reads
-    // `chunks`, which would silently drop real chunks for entirely
-    // correct call sites. Capping the buffer's size instead avoids that
-    // race: it's a synchronous, deterministic decision (buffered.length),
-    // not one that depends on scheduling. The cap only ever matters for a
-    // caller that truly never reads `chunks` on an unusually large
-    // stream — normal consumption, even started somewhat late, stays far
-    // under it — and bounds that case's peak memory instead of leaving it
-    // proportional to the whole stream's output.
+    // Push-based, not a pulled generator, so the pump always drives
+    // `finalResult` to completion even if `chunks` is never read. Buffer
+    // size (not "has anyone started iterating yet") is what caps memory,
+    // since the pump can outrace the caller starting iteration.
     const MAX_BUFFERED_CHUNKS = 10_000;
     const buffered: StreamChunk[] = [];
     const pending: Array<{
@@ -497,6 +474,15 @@ export class VernLLM {
       buffered.push(chunk);
 
       if (buffered.length > MAX_BUFFERED_CHUNKS * 2) {
+        // Nothing else surfaces this: without a log, a caller that never
+        // read (or fell behind on) `chunks` has no way to tell eviction,
+        // not a provider or transport bug, is why chunks are missing.
+        this.logger.debug(
+          `[VernLLM] stream chunk buffer exceeded cap (${MAX_BUFFERED_CHUNKS}), evicting ` +
+            `${buffered.length - MAX_BUFFERED_CHUNKS} oldest chunk(s); buffered=${buffered.length}. ` +
+            'The chunks iterable was never read (or fell far behind) for this stream.',
+        );
+
         // Trim back down to the cap in one batch operation instead of
         // `shift()`ing a single element off on every push once the cap is
         // reached. A per-push `shift()` here is O(current length) in the
@@ -567,7 +553,10 @@ export class VernLLM {
         while (!result.done) {
           const wireChunk = result.value;
 
-          if (wireChunk.type === 'text-delta') {
+          if (wireChunk.type === 'ping') {
+            // No content to accumulate or push. Just resolving here
+            // resets the idle-timeout clock on the next .next() call.
+          } else if (wireChunk.type === 'text-delta') {
             textAcc += wireChunk.delta;
             push({ type: 'text-delta', delta: wireChunk.delta });
           } else if (wireChunk.type === 'tool_call_delta') {
@@ -584,6 +573,7 @@ export class VernLLM {
               id: wireChunk.id,
               name: wireChunk.name,
               argsDelta: wireChunk.argumentsDelta,
+              complete: wireChunk.complete,
             });
           } else if (wireChunk.type === 'usage') {
             usage = {
@@ -596,7 +586,7 @@ export class VernLLM {
             push({ type: 'usage', usage });
           }
 
-          result = await iterator.next();
+          result = await withChunkIdleTimeout(() => iterator.next(), this.chunkIdleTimeoutMs);
         }
       } catch (error) {
         // Best-effort cleanup for a processing-time throw (as opposed to
@@ -610,6 +600,13 @@ export class VernLLM {
         }
 
         const normalized = normalizeError(error, params.signal);
+
+        // Idle timeout is the one mid-stream failure that trips the
+        // breaker: otherwise a provider that hangs after one chunk would
+        // always record a success and never open it.
+        if (normalized.type === 'timeout') {
+          this.breaker?.recordFailure();
+        }
 
         if (usage && normalized.type !== 'aborted') {
           this.reportUsageFailure(usage, normalized, attempt);

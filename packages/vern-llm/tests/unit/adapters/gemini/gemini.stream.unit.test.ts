@@ -94,6 +94,7 @@ describe('fromGemini().chat.completions.createStream', () => {
         id: 'get_weather',
         name: 'get_weather',
         argumentsDelta: '{"city":"NYC"}',
+        complete: true,
       },
     ]);
   });

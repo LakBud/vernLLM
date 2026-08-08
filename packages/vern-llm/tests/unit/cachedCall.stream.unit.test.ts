@@ -163,6 +163,7 @@ describe('VernLLM.cachedCall — stream: true', () => {
         id: 'call_1',
         name: 'get_weather',
         argsDelta: '{"city":"Denver"}',
+        complete: true,
       },
     ]);
     await expect(second.finalResult).resolves.toEqual({
@@ -228,6 +229,7 @@ describe('VernLLM.cachedCall — stream: true', () => {
         id: 'call_1',
         name: 'get_weather',
         argsDelta: '{"city":"NYC"}',
+        complete: true,
       },
       {
         type: 'tool_call_delta',
@@ -235,6 +237,7 @@ describe('VernLLM.cachedCall — stream: true', () => {
         id: 'call_2',
         name: 'get_time',
         argsDelta: '{"tz":"EST"}',
+        complete: true,
       },
     ]);
   });

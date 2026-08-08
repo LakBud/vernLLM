@@ -60,6 +60,37 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     ]);
   });
 
+  it('translates a ping event into a WireStreamChunk ping, keeping the idle-timeout clock alive', async () => {
+    const { client } = makeFakeStreamingAnthropicClient([
+      { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+      { type: 'ping' },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ', world!' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', usage: { output_tokens: 3 } },
+      { type: 'message_stop' },
+    ]);
+    const adapted = fromAnthropic(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([
+      { type: 'text-delta', delta: 'Hello' },
+      { type: 'ping' },
+      { type: 'text-delta', delta: ', world!' },
+      {
+        type: 'usage',
+        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+      },
+    ]);
+  });
+
   it('translates a tool_use block + input_json_delta events into tool_call_delta WireStreamChunks', async () => {
     const { client } = makeFakeStreamingAnthropicClient([
       { type: 'message_start', message: { usage: { input_tokens: 5 } } },

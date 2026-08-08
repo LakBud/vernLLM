@@ -404,6 +404,9 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
                   id: part.functionCall.name,
                   name: part.functionCall.name,
                   argumentsDelta: JSON.stringify(part.functionCall.args ?? {}),
+                  // Gemini can't stream function-call args incrementally:
+                  // this is always the whole thing, not a fragment.
+                  complete: true,
                 } satisfies WireStreamChunk;
                 toolCallIndex++;
               }
