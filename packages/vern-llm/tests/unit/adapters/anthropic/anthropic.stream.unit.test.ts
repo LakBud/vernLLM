@@ -233,7 +233,7 @@ describe('fromAnthropic().chat.completions.createStream', () => {
       ),
     );
 
-    // The preamble text is NOT surfaced — only the forced tool's own JSON
+    // The preamble text is NOT surfaced, only the forced tool's own JSON
     // payload is. If it leaked in, the accumulated text would be
     // "Sure, I'll extract that.{"answer":"42"}", which isn't valid JSON.
     expect(chunks).toEqual([

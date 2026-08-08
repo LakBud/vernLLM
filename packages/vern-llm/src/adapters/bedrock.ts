@@ -76,7 +76,7 @@ export interface BedrockConverseClient {
 
   /**
    * Optional. Required only for `stream: true` calls. Takes the same
-   * request shape `converse` does, returning `{ stream }` — matching
+   * request shape `converse` does, returning `{ stream }`, matching
    * `ConverseStreamCommand`'s real AWS SDK v3 output shape, an
    * `AsyncIterable` of incremental events under a `stream` property,
    * rather than the whole response being the iterable directly.
@@ -91,7 +91,7 @@ export interface BedrockConverseClient {
  * One event of a Bedrock `ConverseStreamCommand` response's `stream`.
  * Content blocks (text or toolUse) are identified by `contentBlockIndex`,
  * Converse's own convention for correlating start/delta/stop events across
- * possibly-interleaved blocks — mirrored directly by VernLLM's
+ * possibly-interleaved blocks, mirrored directly by VernLLM's
  * `tool_call_delta.index`.
  */
 type BedrockConverseStreamEvent =
@@ -310,12 +310,12 @@ function buildBedrockRequest(
  * `jsonSchema` by the time a call reaches here (enforced in vernLLM.ts).
  *
  * `createStream` calls `converseStream` (optional on `BedrockConverseClient`
- * — required only if the caller sets `stream: true`) and translates its
+ *, required only if the caller sets `stream: true`) and translates its
  * `contentBlockStart`/`contentBlockDelta`/`metadata` events into
  * `WireStreamChunk`s. Content blocks are tracked by `contentBlockIndex`,
  * same as `fromAnthropic`'s block-index tracking (Converse's streaming
  * shape is structurally close to Anthropic's own, both being tool-use-aware
- * content-block streams) — including the same `json-tool` unwrapping: a
+ * content-block streams), including the same `json-tool` unwrapping: a
  * `jsonSchema`-forced tool's `toolUse.input` deltas are re-emitted as
  * `text-delta`, not `tool_call_delta`, so the accumulated result lands in
  * `finalizeResponse`'s `content` path exactly like the non-streaming
@@ -435,7 +435,7 @@ export function fromBedrock(
               const { contentBlockIndex, delta } = event.contentBlockDelta;
 
               // Only surfaced as real content when there's no forced
-              // json-schema tool in play — see the identical guard (and
+              // json-schema tool in play, see the identical guard (and
               // its full rationale) in `fromAnthropic`'s `createStream`.
               // Converse's streaming shape is structurally close enough to
               // Anthropic's own that the same corruption risk applies: a

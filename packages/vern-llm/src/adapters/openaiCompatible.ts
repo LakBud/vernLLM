@@ -70,7 +70,7 @@ function toOpenAIMessages(
  * Translates one OpenAI-shaped SSE chunk into zero or more `WireStreamChunk`s.
  * A single chunk can carry a text delta, one or more tool-call argument
  * deltas (each keyed by `index`, OpenAI's own convention for streaming
- * parallel tool calls — mirrored directly by VernLLM's `tool_call_delta`
+ * parallel tool calls, mirrored directly by VernLLM's `tool_call_delta`
  * shape so accumulation composes without translation), and/or a final
  * usage block (present only when `stream_options.include_usage` is set,
  * which this adapter always sets).
@@ -122,7 +122,7 @@ function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStreamChun
  * `createStream` is implemented by calling the same underlying
  * `chat.completions.create` with `stream: true` (and, for providers that
  * support it, `stream_options: { include_usage: true }`, so a final usage
- * block arrives) — the OpenAI SDK, and every OpenAI-compatible client
+ * block arrives), the OpenAI SDK, and every OpenAI-compatible client
  * modeled on it, returns an `AsyncIterable` of SSE chunks instead of a
  * single completion object when `stream: true` is set. Each chunk is
  * translated into `WireStreamChunk`(s) via `toWireStreamChunks`.
@@ -149,7 +149,7 @@ export function fromOpenAICompatible(
 
   // The underlying client's `create`, called with `stream: true`, returns
   // an AsyncIterable of `OpenAIStreamChunk` rather than
-  // `LLMClient['create']`'s normal single-completion return type — hence
+  // `LLMClient['create']`'s normal single-completion return type, hence
   // `unknown` here and a cast at the call site, same rationale as casting
   // the whole client above: the wire contract, not the SDK's own TS types,
   // is what's actually being relied on.
@@ -202,7 +202,7 @@ export const fromGroq = fromOpenAICompatible;
  * endpoint). Mistral supports `stream_options.include_usage` (added after
  * an earlier period where it returned a 422 for unrecognized fields, per
  * Mistral's changelog and streaming docs), so this is a plain alias like
- * the others — `supportsStreamUsage` defaults to `true`.
+ * the others, `supportsStreamUsage` defaults to `true`.
  */
 export const fromMistral = fromOpenAICompatible;
 

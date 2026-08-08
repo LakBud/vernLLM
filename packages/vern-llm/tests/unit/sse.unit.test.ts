@@ -68,6 +68,26 @@ describe('parseSseStream', () => {
     expect(events).toEqual([{ a: 1 }, { a: 2 }]);
   });
 
+  it('treats a bare \r (no following \n) as a line ending, per the SSE spec', async () => {
+    const events = await collect(parseSseStream(chunksOf('data: {"a":1}\r\r')));
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
+  it('does not misread a bare \r at the end of one chunk followed by \n starting the next chunk', async () => {
+    // The trailing \r must stay pending until the next chunk arrives, in
+    // case together they form a split \r\n pair, not two separate bare-CR
+    // line endings that would otherwise look like an early blank line.
+    const events = await collect(parseSseStream(chunksOf('data: {"a":1}\r', '\r')));
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
+  it('resolves a bare \r at the very end of the stream (no following chunk) as a line ending', async () => {
+    // No trailing \n\n ever arrives; this exercises the flush path
+    // resolving a still-pending trailing \r once the stream ends.
+    const events = await collect(parseSseStream(chunksOf('data: {"a":1}\r')));
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
   it('joins multiple data: lines within one frame with a newline, per the SSE spec', async () => {
     const events = await collect(parseSseStream(chunksOf('data: {"a":\ndata: 1}\n\n')));
     expect(events).toEqual([{ a: 1 }]);

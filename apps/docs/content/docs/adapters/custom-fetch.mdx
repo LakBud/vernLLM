@@ -190,9 +190,11 @@ once chunks reach VernLLM, independent of how `fromFetch` itself is configured.
 
 <Callout>
   `mapStreamEvent` can return `tool_call_delta` chunks too (`{ type: 'tool_call_delta', index,
-  id?, name?, argumentsDelta? }`), the same `WireStreamChunk` shape every other adapter emits for
-  tool calls. There's nothing fromFetch-specific to configure beyond mapping your provider's own
-  tool-call events into that shape.
+  id?, name?, argumentsDelta?, complete? }`), the same `WireStreamChunk` shape every other
+  adapter emits for tool calls. `complete: true` marks `argumentsDelta` as the whole set of
+  arguments in one shot rather than a fragment, useful if your provider (like Gemini) can't
+  stream tool-call arguments incrementally. There's nothing fromFetch-specific to configure
+  beyond mapping your provider's own tool-call events into that shape.
 </Callout>
 
 ## Bringing your own HTTP client

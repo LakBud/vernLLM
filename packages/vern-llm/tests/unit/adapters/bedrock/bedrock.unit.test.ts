@@ -473,7 +473,7 @@ describe('fromBedrock', () => {
   });
 });
 
-describe('fromBedrock — tools', () => {
+describe('fromBedrock, tools', () => {
   const weatherTool = {
     type: 'function' as const,
     function: {

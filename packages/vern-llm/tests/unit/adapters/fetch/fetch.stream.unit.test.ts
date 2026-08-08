@@ -354,7 +354,7 @@ describe('fromFetch().chat.completions.createStream', () => {
       ),
     ).rejects.toMatchObject({ type: 'validation' });
 
-    // Neither transport was actually invoked — the check fails fast,
+    // Neither transport was actually invoked, the check fails fast,
     // before opening any connection.
     expect(customRequest).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -370,7 +370,7 @@ describe('fromFetch().chat.completions.createStream', () => {
 
     const client = fromFetch({
       url: 'https://api.example.com',
-      // No `request`, no `requestStream` — both default to native fetch,
+      // No `request`, no `requestStream`, both default to native fetch,
       // which is a consistent, non-surprising pairing.
       mapRequest: () => ({}),
       mapResponse: (json: unknown) => ({ content: String(json) }),

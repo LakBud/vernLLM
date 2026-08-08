@@ -27,7 +27,7 @@ async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
   return out;
 }
 
-describe('VernLLM.call(stream: true) through fromGemini — end to end', () => {
+describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
   it('streams live text-delta chunks and resolves finalResult to the same parsed/validated shape a non-streaming call would return', async () => {
     const generateContent = vi.fn<GeminiClient['generateContent']>(async () => {
       throw new Error('non-streaming generateContent() should not be called for stream: true');

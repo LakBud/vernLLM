@@ -195,7 +195,7 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
   // The Anthropic SDK's `messages.create`, called with `stream: true`,
   // returns an AsyncIterable of `AnthropicStreamEvent` rather than
   // `AnthropicClient['messages']['create']`'s normal single-message return
-  // type — hence `unknown` here and a cast at the call site, same
+  // type, hence `unknown` here and a cast at the call site, same
   // rationale as `fromOpenAICompatible`'s `rawCreate`: the wire contract,
   // not the SDK's own TS types, is what's actually relied on.
   const rawMessagesCreate = anthropicClient.messages.create as unknown as (
@@ -324,7 +324,7 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
                 // json-schema tool in play. When `toolName` is set, the
                 // *only* content that should end up in the accumulated
                 // text is the forced tool's own JSON payload (its
-                // input_json_delta fragments, handled below) — exactly
+                // input_json_delta fragments, handled below), exactly
                 // what the non-streaming `create` branch above does by
                 // discarding every content block except the matching
                 // tool_use one. Anthropic can still emit genuine text

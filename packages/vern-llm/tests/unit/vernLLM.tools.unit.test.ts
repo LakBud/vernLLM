@@ -14,7 +14,7 @@ const weatherTool = {
   },
 };
 
-describe('VernLLM.call — happy paths', () => {
+describe('VernLLM.call, happy paths', () => {
   it('returns a plain-text content result by default (jsonMode defaults to false when tools are set)', async () => {
     const { client } = createMockClient([textResponse('hi there')]);
     const llm = new VernLLM({ client, model: 'test-model' });
@@ -137,7 +137,7 @@ describe('VernLLM.call — happy paths', () => {
   });
 });
 
-describe('VernLLM.call — multi-turn continuation via history', () => {
+describe('VernLLM.call, multi-turn continuation via history', () => {
   it('forwards ToolResult.isError to Anthropic as tool_result.is_error', async () => {
     const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
       content: [{ type: 'text', text: 'ok' }],
@@ -232,7 +232,7 @@ describe('VernLLM.call — multi-turn continuation via history', () => {
   });
 });
 
-describe('VernLLM.call — validation', () => {
+describe('VernLLM.call, validation', () => {
   it('throws when combined with jsonSchema', async () => {
     const { client } = createMockClient([textResponse('ok')]);
     const llm = new VernLLM({ client, model: 'test-model' });
@@ -312,7 +312,7 @@ describe('VernLLM.call — validation', () => {
   });
 });
 
-describe('VernLLM.cachedCall — tools', () => {
+describe('VernLLM.cachedCall, tools', () => {
   it('caches a content result and skips a second call on a hit', async () => {
     const { client, create } = createMockClient([
       jsonResponse({ answer: 'hi' }),
@@ -378,7 +378,7 @@ describe('VernLLM.cachedCall — tools', () => {
   });
 });
 
-describe('VernLLM.call — bug fixes / hardening', () => {
+describe('VernLLM.call, bug fixes / hardening', () => {
   it('rejects a "tool" history turn that follows a plain assistant turn without toolCalls', async () => {
     const { client } = createMockClient([textResponse('ok')]);
     const llm = new VernLLM({ client, model: 'test-model' });

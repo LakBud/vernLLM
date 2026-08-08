@@ -21,7 +21,7 @@ const llm = new VernLLM({
   debug: false,
   cache: new InMemoryCacheAdapter(), // optional; in-memory, not shared across processes
   parseJson: (content) => {
-    // must return undefined on failure, not throw — this is what
+    // must return undefined on failure, not throw, this is what
     // the built-in defaultParseJson does internally
     try {
       return JSON.parse(content);
@@ -39,7 +39,7 @@ const llm = new VernLLM({
 
 <Cards>
   <Card title="client">
-    An `LLMClient` — an OpenAI SDK instance, or the result of wrapping another provider with an
+    An `LLMClient`, an OpenAI SDK instance, or the result of wrapping another provider with an
     adapter (`fromAnthropic`, `fromGemini`, `fromBedrock`, `fromFetch`, etc). See{' '}
     <a href="/docs/adapters">Adapters</a>.
   </Card>
@@ -64,7 +64,7 @@ const llm = new VernLLM({
 | -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                                          |
 | `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` from every call by default, so the provider applies its own default. |
-| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM.                          |
+| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure, not throw, which signals a parse error to VernLLM.                            |
 
 ## Caching
 
@@ -81,7 +81,7 @@ Upstash.
 in memory. When the limit is reached, the oldest entries are removed first.
 
 Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
-(normalizes keys before matching — case, whitespace, punctuation) and `TieredCacheAdapter`
+(normalizes keys before matching, case, whitespace, punctuation) and `TieredCacheAdapter`
 (checks a fast local adapter first, falling back to a shared one). See
 
 <a href="/docs/core/caching">Caching</a> for usage.

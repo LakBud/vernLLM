@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient } from './../helpers.js';
 
-describe('VernLLM.cachedCall — reserveUsage/refundUsage dedup', () => {
+describe('VernLLM.cachedCall, reserveUsage/refundUsage dedup', () => {
   it('reserves and refunds exactly once when only the top-level hooks are provided', async () => {
     const reserveUsage = vi.fn();
     const refundUsage = vi.fn();
@@ -24,7 +24,7 @@ describe('VernLLM.cachedCall — reserveUsage/refundUsage dedup', () => {
     expect(refundUsage).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores reserveUsage/refundUsage set on the inner call object — top-level hooks win, no double reservation', async () => {
+  it('ignores reserveUsage/refundUsage set on the inner call object, top-level hooks win, no double reservation', async () => {
     const outerReserve = vi.fn();
     const outerRefund = vi.fn();
     const innerReserve = vi.fn();

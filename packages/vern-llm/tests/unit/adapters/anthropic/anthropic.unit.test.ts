@@ -474,7 +474,7 @@ describe('fromAnthropic', () => {
   });
 });
 
-describe('fromAnthropic — merges multiple tool results into one user turn', () => {
+describe('fromAnthropic, merges multiple tool results into one user turn', () => {
   it('combines two consecutive tool-result wire messages into a single user message with two tool_result blocks', async () => {
     const { client, create } = makeFakeAnthropicClient('ok');
     const adapted = fromAnthropic(client);

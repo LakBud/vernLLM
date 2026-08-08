@@ -232,14 +232,13 @@ catch. See{' '}
 
 ## Per-chunk idle timeout
 
-`timeoutMs` only bounds opening the stream and its first chunk. Once that first chunk arrives,
-nothing else bounds how long VernLLM waits for the next one. A connection that opens fine,
-delivers one chunk, then hangs would otherwise never fail on its own.
+`timeoutMs` only bounds opening the stream and its first chunk. Every gap after that is bounded
+separately, by `chunkIdleTimeoutMs` (default `30000`, pass `0` to disable). Without it, a
+connection that opens fine, delivers one chunk, then hangs would never fail on its own.
 
-`chunkIdleTimeoutMs` (default `30000`, pass `0` to disable) bounds every gap between chunks after
-the first. The clock resets on every chunk, including provider keep-alive pings (see below), so it
-measures the gap since the most recent chunk, not the stream's total duration. If it elapses,
-`finalResult` rejects with `LLMError('timeout')`, same as the stream-open timeout.
+The clock resets on every chunk, including provider keep-alive pings (see below), so it measures
+the gap since the most recent chunk, not the stream's total duration. If it elapses, `finalResult`
+rejects with `LLMError('timeout')`, same as the stream-open timeout.
 
 ```ts
 const llm = new VernLLM({
@@ -299,11 +298,13 @@ const result = await finalResult;
 ```
 
 <Callout type="info">
-  A replayed `chunks` (from a hit or a coalesced joiner) delivers a single flat chunk containing the
-  full final content, not a re-simulated token-by-token playback of the original stream. This is
-  deliberate: VernLLM does not fake "live" delivery to preserve a UX feel, the same reasoning
-  already applies to non-streaming cache hits resolving instantly. A coalesced caller therefore does
-  not see the trigger's live tokens, only the completed result once it's ready.
+  A replayed `chunks` (from a hit or a coalesced joiner) is not a re-simulated token-by-token
+  playback of the original stream. This is deliberate: VernLLM does not fake "live" delivery to
+  preserve a UX feel, the same reasoning already applies to non-streaming cache hits resolving
+  instantly. A coalesced caller therefore does not see the trigger's live tokens, only the completed
+  result once it's ready. For a plain text response this means one flat chunk with the full content;
+  for a tool-call response it means one `tool_call_delta` per cached tool call (each with its full
+  arguments in one shot), followed by an optional trailing text chunk.
 </Callout>
 
 See <a href="/docs/core/caching">Caching</a> for everything else about `cachedCall`, coalescing,

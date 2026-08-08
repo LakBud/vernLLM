@@ -74,7 +74,7 @@ describe('VernLLM.call: happy paths', () => {
   });
 });
 
-describe('VernLLM.call — temperature', () => {
+describe('VernLLM.call, temperature', () => {
   it('sends 0.2 when neither a per-call nor instance-level temperature is set', async () => {
     const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm' });
@@ -148,7 +148,7 @@ describe('VernLLM.call — temperature', () => {
   });
 });
 
-describe('VernLLM.call — retry & backoff', () => {
+describe('VernLLM.call, retry & backoff', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
@@ -288,7 +288,7 @@ describe('VernLLM.call — retry & backoff', () => {
   });
 });
 
-describe('VernLLM.call — abort during backoff wait', () => {
+describe('VernLLM.call, abort during backoff wait', () => {
   it('resolves the backoff wait immediately when aborted mid-delay, then reports aborted', async () => {
     const controller = new AbortController();
     const { client, create } = createMockClient([new Error('fail 1'), new Error('fail 2')]);
@@ -303,13 +303,13 @@ describe('VernLLM.call — abort during backoff wait', () => {
     controller.abort();
 
     await assertion;
-    // Only the first attempt should have reached the client — the wait was
+    // Only the first attempt should have reached the client, the wait was
     // cut short by the abort before a second attempt could fire.
     expect(create).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('VernLLM.call — non-retryable status codes', () => {
+describe('VernLLM.call, non-retryable status codes', () => {
   it('fails fast on a 401 without consuming a retry', async () => {
     const { client, create } = createMockClient([new FakeApiError('unauthorized', 401)]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 3, baseDelayMs: 10 });
@@ -400,7 +400,7 @@ describe('VernLLM.call — non-retryable status codes', () => {
   });
 });
 
-describe('VernLLM.call — parse failures', () => {
+describe('VernLLM.call, parse failures', () => {
   it('throws LLMError(parse) on invalid JSON and does not retry', async () => {
     const { client, create } = createMockClient([textResponse('{not valid json')]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 3 });
@@ -421,7 +421,7 @@ describe('VernLLM.call — parse failures', () => {
   });
 });
 
-describe('VernLLM.call — abort handling', () => {
+describe('VernLLM.call, abort handling', () => {
   it('throws LLMError(aborted) if the signal is already aborted', async () => {
     const { client, create } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm' });
@@ -460,7 +460,7 @@ describe('LLMError', () => {
   });
 });
 
-describe('VernLLM.call — timeout handling', () => {
+describe('VernLLM.call, timeout handling', () => {
   it('throws LLMError(timeout) when an internal timeout aborts the request', async () => {
     const { client, create } = createMockClient([
       (_params, signal) =>
@@ -486,7 +486,7 @@ describe('VernLLM.call — timeout handling', () => {
   });
 });
 
-describe('VernLLM.call — reserveUsage/refundUsage', () => {
+describe('VernLLM.call, reserveUsage/refundUsage', () => {
   it('calls reserveUsage once before dispatching the request', async () => {
     const reserveUsage = vi.fn();
     const { client, create } = createMockClient([jsonResponse({ ok: true })]);
@@ -538,7 +538,7 @@ describe('VernLLM.call — reserveUsage/refundUsage', () => {
     expect(refundUsage).not.toHaveBeenCalled();
   });
 
-  it('does not trip the circuit breaker when reserveUsage rejects — a reservation failure is not a provider failure', async () => {
+  it('does not trip the circuit breaker when reserveUsage rejects, a reservation failure is not a provider failure', async () => {
     const reserveUsage = vi.fn(async () => {
       throw new Error('quota exceeded');
     });

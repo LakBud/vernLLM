@@ -381,12 +381,12 @@ export async function withReservedUsage<T>(
  * opens, well before the real outcome (validation, schema/tool-call checks)
  * is known.
  *
- * Reserves usage before `openStream` runs — same failure mode as the
+ * Reserves usage before `openStream` runs, same failure mode as the
  * non-streaming path if `reserveUsage` itself throws (mapped to
  * `quota_exceeded`, nothing opened). If `openStream` itself throws (stream
  * never opened), refunds synchronously and rethrows, exactly like
  * `withReservedUsage` does today. If it succeeds, returns `{ chunks,
- * finalResult }` immediately — refund/report is deferred onto
+ * finalResult }` immediately, refund/report is deferred onto
  * `finalResult`'s continuation, since that's the only point the real
  * outcome is known. This means `onUsageFailure` (and any refund) can fire
  * well after this function itself has returned.
@@ -440,7 +440,7 @@ export async function withReservedUsageForStream<T>(
   }
 
   // Stream opened. The real outcome is only known once finalResult settles,
-  // so refund is attached there instead of awaited inline — this is the
+  // so refund is attached there instead of awaited inline, this is the
   // structural difference from withReservedUsage, not an optional variant.
   const finalResult = opened.finalResult.then(
     (value) => value,
@@ -465,7 +465,7 @@ export async function withReservedUsageForStream<T>(
  * string (the `jsonMode: false` case), otherwise `JSON.stringify`'d (the
  * `jsonMode: true` case, where the cached value is the *parsed* result, not
  * the original raw text). This is a reasonable reconstruction, not a
- * byte-identical replay of whatever text the model originally streamed —
+ * byte-identical replay of whatever text the model originally streamed,
  * good enough for `for await (const c of chunks)` call sites that don't
  * branch on hit vs. miss, which is the only thing a cache-hit replay needs
  * to support.
@@ -476,14 +476,14 @@ function toReplayText(value: unknown): string {
 
 /**
  * Builds a trivially-exhausted one-shot `chunks` iterable from an
- * already-known value — used for a `cachedCall` cache hit, where there's no
+ * already-known value, used for a `cachedCall` cache hit, where there's no
  * live generation to relay (see `VernLLM.cachedCall`'s docs). No `usage`
  * chunk is emitted: a cache hit spent no real tokens, so there's nothing to
  * report, matching how non-streaming `cachedCall` never calls `onUsage` on
  * a hit either.
  *
  * `hasTools` must reflect whether the *original* call that produced this
- * cached value had `tools` set — that's what determines whether `value` is
+ * cached value had `tools` set, that's what determines whether `value` is
  * `T` directly or a `CallWithToolsResult<T>` wrapper, and it isn't
  * something that can be reliably guessed from the value's shape alone
  * (a `schema`-validated `T` could coincidentally look like a
@@ -532,10 +532,10 @@ export function buildReplayChunks<T>(
  * *joined* an already-in-flight call for the same key rather than
  * triggering one itself (see `runCachedStream`'s in-flight-coalescing
  * path): there's no live stream to relay (it isn't this call's stream to
- * relay — see the joiner-path comment in `runCachedStream`), but there's
+ * relay, see the joiner-path comment in `runCachedStream`), but there's
  * also no value yet, only a pending promise for one. Waits for `promise`,
  * then delegates to `buildReplayChunks`. If `promise` rejects, iterating
- * `chunks` throws that same error — consistent with how a live stream's
+ * `chunks` throws that same error, consistent with how a live stream's
  * `chunks` throws on a mid-stream failure.
  */
 export function buildReplayChunksFromPromise<T>(

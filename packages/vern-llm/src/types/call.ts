@@ -112,7 +112,7 @@ export interface CallParams<T = unknown> extends UsageHooks {
    * Retry/timeout/circuit-breaker guarantees apply only to opening the
    * stream (through the first chunk); a failure after that point rejects
    * `finalResult` directly and is not retried, since a mid-stream failure
-   * isn't connection-time evidence for the circuit breaker — the attempt
+   * isn't connection-time evidence for the circuit breaker, the attempt
    * already counted as a success once the first chunk arrived. Once the
    * stream opens successfully, `finalResult` still resolves to the same
    * validated `T`/`CallWithToolsResult<T>` shape `call()` would have

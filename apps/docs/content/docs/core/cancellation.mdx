@@ -20,7 +20,7 @@ controller.abort();
 
 ## How it composes with timeouts
 
-Each attempt gets its own internal timeout controller. If you also pass a `signal`, VernLLM combines both into a single signal via `AbortSignal.any([yourSignal, internalTimeoutSignal])` — either one firing cancels the in-flight request.
+Each attempt gets its own internal timeout controller. If you also pass a `signal`, VernLLM combines both into a single signal via `AbortSignal.any([yourSignal, internalTimeoutSignal])`, either one firing cancels the in-flight request.
 
 If the internal timeout fires, VernLLM throws `LLMError('timeout')`. If the signal you provide fires, VernLLM throws `LLMError('aborted')`. This lets callers distinguish between requests that exceeded their time limit and requests that were intentionally cancelled.
 
@@ -28,11 +28,11 @@ The internal timer is always cleared afterward, whether the call succeeds, fails
 
 ## Fail-fast on an already-aborted signal
 
-If `signal.aborted` is already `true` when you call `call()` or `cachedCall()`, it rejects immediately with `LLMError('aborted')` before any request is dispatched — no network call, no wasted attempt.
+If `signal.aborted` is already `true` when you call `call()` or `cachedCall()`, it rejects immediately with `LLMError('aborted')` before any request is dispatched, no network call, no wasted attempt.
 
 ## Aborting during a retry wait
 
-If the signal fires while waiting out a backoff delay between retries, the pending timer is cancelled immediately and the wait rejects right away — it won't sit idle until the delay would have finished on its own.
+If the signal fires while waiting out a backoff delay between retries, the pending timer is cancelled immediately and the wait rejects right away, it won't sit idle until the delay would have finished on its own.
 
 <Callout>
   An abort is never retried, even if it happens mid-backoff. It's treated as a deliberate

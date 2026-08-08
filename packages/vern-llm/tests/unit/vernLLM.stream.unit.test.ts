@@ -20,7 +20,7 @@ async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
   return out;
 }
 
-describe('VernLLM.call — stream: true', () => {
+describe('VernLLM.call, stream: true', () => {
   it('yields live text-delta chunks and resolves finalResult to the same shape a non-streaming call would return', async () => {
     const { client } = createMockStreamingClient([
       [
@@ -581,7 +581,7 @@ describe('VernLLM.call — stream: true', () => {
     await finalResult;
     const elapsedMs = Date.now() - start;
 
-    // Generous ceiling — the point isn't precise timing, it's ruling out
+    // Generous ceiling, the point isn't precise timing, it's ruling out
     // the multi-second-plus stalls the naive per-push shift() showed at
     // nearby array sizes in isolated benchmarking.
     expect(elapsedMs).toBeLessThan(5000);
@@ -608,7 +608,7 @@ describe('VernLLM.call — stream: true', () => {
   });
 });
 
-describe('VernLLM.call — stream: true — per-chunk idle timeout', () => {
+describe('VernLLM.call, stream: true, per-chunk idle timeout', () => {
   it('fails finalResult with LLMError("timeout") when the gap between chunks exceeds chunkIdleTimeoutMs', async () => {
     const { client } = createMockStreamingClient([
       () => ({
@@ -621,7 +621,7 @@ describe('VernLLM.call — stream: true — per-chunk idle timeout', () => {
                 return { done: false, value: { type: 'text-delta', delta: 'first' } };
               }
 
-              // Never resolves within the configured idle window — the
+              // Never resolves within the configured idle window, the
               // idle timeout races this and wins.
               await new Promise((resolve) => setTimeout(resolve, 50));
               return { done: false, value: { type: 'text-delta', delta: 'never seen' } };
@@ -659,7 +659,7 @@ describe('VernLLM.call — stream: true — per-chunk idle timeout', () => {
 
               // Each individual gap is well within the idle window, even
               // though the *total* stream duration exceeds it many times
-              // over — proving the clock resets per-chunk instead of
+              // over, proving the clock resets per-chunk instead of
               // measuring from stream start.
               await new Promise((resolve) => setTimeout(resolve, 8));
               step++;
@@ -752,7 +752,7 @@ describe('VernLLM.call — stream: true — per-chunk idle timeout', () => {
     // A provider that reliably opens a connection, streams exactly one
     // chunk, then hangs would otherwise record a breaker success on every
     // call (the first chunk always arrives) while failing every call via
-    // timeout — the breaker must still open.
+    // timeout, the breaker must still open.
     expect(llm.getCircuitState()).toBe('open');
   });
 
@@ -793,7 +793,7 @@ describe('VernLLM.call — stream: true — per-chunk idle timeout', () => {
   });
 });
 
-describe('VernLLM.call — stream: true — provider keep-alive pings', () => {
+describe('VernLLM.call, stream: true, provider keep-alive pings', () => {
   it('a ping wire chunk is not surfaced to the caller and does not appear in the accumulated text', async () => {
     const { client } = createMockStreamingClient([
       [

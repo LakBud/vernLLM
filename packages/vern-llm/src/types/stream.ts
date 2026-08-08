@@ -33,13 +33,13 @@ export type StreamChunk =
  * underlying buffered stream rather than replaying or forking it, which can
  * split chunks unpredictably between consumers. Stopping iteration early
  * (e.g. `break`ing out of a `for await`) does not cancel or otherwise
- * signal the underlying stream. The background pump keeps running to
+ * signal the underlying stream, the background pump keeps running to
  * completion regardless, buffering any chunks emitted after that point, so
  * `finalResult` still settles normally even if `chunks` is abandoned or
  * never read at all.
  *
- * Unread chunks are buffered internally for the duration of one stream.
- * This is what lets a caller start iterating `chunks` after the stream has
+ * Unread chunks are buffered internally for the duration of one stream,
+ * this is what lets a caller start iterating `chunks` after the stream has
  * already progressed (or finished) and still see everything. That backlog
  * is capped: an unusually large stream whose `chunks` is never read at all
  * has its oldest buffered chunks dropped once the backlog grows past
@@ -66,7 +66,7 @@ export type StreamEnabledCallParams<T> = CallParams<T> & { stream: true };
 
 /**
  * The adapter-facing, pre-normalization shape a `createStream` client
- * implementation emits — analogous to how `WireMessage`/`WireToolCall`
+ * implementation emits, analogous to how `WireMessage`/`WireToolCall`
  * already sit between `CallParams` and each provider's own wire format.
  */
 export type WireStreamChunk =
@@ -97,8 +97,8 @@ export type WireStreamChunk =
 /**
  * Parameters for a cached, streaming LLM call without tool calling.
  *
- * The cached value is `T`. This is the same as `CachedCallParams<T>`, but a
- * miss relays live `chunks` to the caller while the result is being generated,
+ * The cached value is `T`, same as `CachedCallParams<T>`, but a miss
+ * relays live `chunks` to the caller while the result is being generated,
  * and a hit synthesizes a one-shot `chunks` replay from the cached value
  * (see `VernLLM.cachedCall`'s docs for exactly what that replay looks
  * like).
@@ -110,8 +110,8 @@ export type CachedStreamCallParams<T> = CachedCallInput & {
 /**
  * Parameters for a cached, streaming LLM call with tool calling enabled.
  *
- * The cached value is the full `CallWithToolsResult<T>`. This is the same as
- * `CachedToolCallParams<T>` with the same live-chunks-on-miss,
+ * The cached value is the full `CallWithToolsResult<T>`, same as
+ * `CachedToolCallParams<T>`, with the same live-chunks-on-miss,
  * replayed-chunks-on-hit behavior as `CachedStreamCallParams<T>`.
  */
 export type CachedStreamToolCallParams<T> = CachedCallInput & {

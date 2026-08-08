@@ -135,7 +135,7 @@ export class VernLLM {
    * conditionally on a plain `CallParams<T>` still resolves to `Promise<T>`
    * (or `Promise<CallWithToolsResult<T>>`) at the type level even though
    * the actual runtime result is the `{ chunks, finalResult }` streaming
-   * shape whenever `stream` evaluates to `true` — callers doing this should
+   * shape whenever `stream` evaluates to `true`, callers doing this should
    * narrow/cast accordingly rather than relying on the static return type.
    *
    * @param params System/user content plus per-call overrides. See `CallParams`.
@@ -486,7 +486,7 @@ export class VernLLM {
         // Trim back down to the cap in one batch operation instead of
         // `shift()`ing a single element off on every push once the cap is
         // reached. A per-push `shift()` here is O(current length) in the
-        // worst case — cheap for a handful of calls, but that cost is
+        // worst case, cheap for a handful of calls, but that cost is
         // paid on *every* push for the remainder of an ignored stream,
         // and its real-world cost isn't a stable, engine-independent
         // property: benchmarking this exact pattern at a similar backing

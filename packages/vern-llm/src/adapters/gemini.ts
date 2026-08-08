@@ -64,7 +64,7 @@ export interface GeminiClient {
   /**
    * Optional. Required only for `stream: true` calls. Takes the same
    * request shape as `generateContent`, yielding an `AsyncIterable` of
-   * partial responses instead of one final one — Gemini's own streaming
+   * partial responses instead of one final one, Gemini's own streaming
    * shape, each chunk holding the same `candidates[].content.parts[]`
    * structure as `generateContent`'s response, just incremental.
    */
@@ -318,13 +318,13 @@ function buildGeminiRequest(
  * both apply.
  *
  * `createStream` calls `generateContentStream` (optional on `GeminiClient`
- * — required only if the caller sets `stream: true`) and translates each
+ *, required only if the caller sets `stream: true`) and translates each
  * partial response into `WireStreamChunk`s. Unlike OpenAI/Anthropic,
  * Gemini's own function-calling API doesn't stream tool-call arguments
  * incrementally: a `functionCall` part always arrives whole in one chunk,
  * so each one is emitted as a single, complete `tool_call_delta` (a
  * one-shot "delta" containing the full arguments) rather than accumulated
- * fragments — that's a real difference in the underlying API, not
+ * fragments, that's a real difference in the underlying API, not
  * something this adapter can smooth over. `usageMetadata` is (per Gemini's
  * own behavior) only reliably present on the last chunk, so the `usage`
  * `WireStreamChunk` is emitted once, after the stream completes, from
@@ -349,7 +349,7 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
               // a call id (Gemini has no call-id concept at all), so the id
               // here is just the name. This means two calls to the *same*
               // tool within one turn can't be told apart when results come
-              // back — a real limitation of Gemini's own function-calling
+              // back, a real limitation of Gemini's own function-calling
               // API, not something VernLLM can paper over.
               id: p.functionCall!.name,
               type: 'function' as const,

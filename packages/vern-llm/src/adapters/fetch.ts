@@ -34,7 +34,7 @@ export type RequestLike = (
 /**
  * A streaming-capable request function. Unlike `RequestLike`, which returns
  * a fully-buffered `ResponseLike`, this resolves to an `AsyncIterable` of
- * progressively-arriving chunks — the common ground across transports:
+ * progressively-arriving chunks, the common ground across transports:
  * native `fetch`'s `response.body` (wrapped to be iterable; see
  * `webStreamToAsyncIterable` below), axios's Node `Readable` in
  * `responseType: 'stream'` mode (already async-iterable, no wrapping
@@ -89,7 +89,7 @@ export interface FetchAdapterConfig {
   /**
    * Optional. How the raw stream bytes are split into individual event
    * payloads. Defaults to Server-Sent Events framing (`data: ...` blocks
-   * separated by a blank line, `[DONE]` sentinel honored — see
+   * separated by a blank line, `[DONE]` sentinel honored, see
    * `parseSseStream`), which covers the large majority of LLM providers'
    * streaming HTTP endpoints. Override this for a provider that frames its
    * stream differently, e.g. newline-delimited JSON (NDJSON) with no SSE
@@ -100,7 +100,7 @@ export interface FetchAdapterConfig {
   /**
    * Optional. Required only for `stream: true` calls. Maps one parsed
    * stream event (already extracted from its frame by `parseStreamFrames`)
-   * into zero, one, or more `WireStreamChunk`s — mirrors `mapResponse`'s
+   * into zero, one, or more `WireStreamChunk`s, mirrors `mapResponse`'s
    * role for the non-streaming path, just per-event instead of once for
    * the whole body. Return `undefined` to skip an event that carries
    * nothing VernLLM needs (e.g. a provider's keep-alive ping). Configs
@@ -114,7 +114,7 @@ export interface FetchAdapterConfig {
 /**
  * Wraps a WHATWG `ReadableStream` (what `response.body` is) so it can be
  * consumed with `for await`. Implemented via `getReader()` rather than
- * relying on `ReadableStream` having a native `Symbol.asyncIterator` —
+ * relying on `ReadableStream` having a native `Symbol.asyncIterator`,
  * that support varies across runtimes/versions, and this works everywhere
  * a `ReadableStream` does.
  */
@@ -210,11 +210,11 @@ async function buildRequestInit(
  * response to fall back on, unlike the other three optional streaming
  * seams). It opens the request via `requestStream` (defaults to native
  * `fetch`), splits the raw bytes into individual events via
- * `parseStreamFrames` (defaults to SSE framing — see `parseSseStream`),
+ * `parseStreamFrames` (defaults to SSE framing, see `parseSseStream`),
  * and translates each event into `WireStreamChunk`(s) via
  * `mapStreamEvent`. Both seams are overridable per-config for providers
  * that don't fit the SSE-over-fetch default. If a custom `request`
- * transport is configured, `requestStream` must be configured too —
+ * transport is configured, `requestStream` must be configured too,
  * `requestStream` never silently falls back to `request` (see
  * `createStream`'s own comment for why), so a `stream: true` call with
  * `request` set but no `requestStream` throws a clear
@@ -272,20 +272,20 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
 
           // A custom `request` transport (proxying, special auth, test
           // mocking, etc.) is silently irrelevant to streaming unless the
-          // caller *also* configures `requestStream`. `requestStream`
+          // caller *also* configures `requestStream`, `requestStream`
           // defaults to plain native `fetch`, not to `config.request`,
           // since `RequestLike`'s buffered `ResponseLike` has no way to
           // expose a byte stream generically. Falling back to native
           // `fetch` anyway would be a surprising, easy-to-miss divergence
-          // (bypassing whatever `request` was there for. For example a proxy,
-          // custom auth, or a test's mocked transport and potentially hitting
+          // (bypassing whatever `request` was there for, a proxy, custom
+          // auth, or a test's mocked transport, and potentially hitting
           // the real network). Failing loudly here instead of guessing.
           if (config.request && !config.requestStream) {
             throw new LLMError(
               '`stream: true` requires `requestStream` to be configured on fromFetch when a ' +
                 'custom `request` transport is set. `requestStream` does not fall back to ' +
                 "`request` (it needs an async-iterable byte stream, which `RequestLike`'s " +
-                'buffered `ResponseLike` has no way to provide) — without it, `stream: true` ' +
+                'buffered `ResponseLike` has no way to provide), without it, `stream: true` ' +
                 'would silently use plain native `fetch` instead of your configured transport. ' +
                 'Add a `requestStream` that opens the same connection your `request` does, or ' +
                 'omit `request` if native `fetch` is fine for both.',

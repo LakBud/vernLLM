@@ -18,11 +18,11 @@ import { LLMError } from '../types/errors.js';
  * sentinel several providers, notably OpenAI, send to mark stream end)
  * ends iteration without yielding it.
  *
- * Simplification: `\r\n` line endings are normalized to `\n` before frame
- * splitting, so a bare `\r` with no following `\n` (technically legal per
- * the SSE spec, but not something any HTTP server does in practice) is
- * not handled. `\n` and `\r\n` (the two line endings real servers use)
- * both work.
+ * Line endings: `\r\n` and bare `\r` (both legal per the SSE spec, alongside `\n`) are normalized
+ * to `\n` before frame splitting. A `\r` at the very end of the currently-buffered text is left
+ * alone until either more text arrives (in case it's the first half of a split `\r\n` pair) or the
+ * stream ends, so a `\r\n` pair split across two transport chunks is never misread as two blank
+ * lines.
  *
  * Malformed JSON in a frame throws `LLMError('parse')`, consistent with
  * how malformed JSON is handled elsewhere in VernLLM.
@@ -49,8 +49,11 @@ export async function* parseSseStream(
     // Normalized against the whole buffer, not just the newly-arrived
     // chunk: a `\r\n` delimiter can straddle a chunk boundary (one chunk
     // ending in `\r`, the next starting with `\n`), and normalizing only
-    // the new text would miss that split pair.
-    buffer = (buffer + text).replace(/\r\n/g, '\n');
+    // the new text would miss that split pair. A bare trailing `\r` (not
+    // followed by anything yet) is left as-is for the same reason; it's
+    // converted once either more text or end-of-stream resolves whether
+    // it was standalone or the start of a split `\r\n`.
+    buffer = (buffer + text).replace(/\r\n/g, '\n').replace(/\r(?!$)/g, '\n');
 
     let boundary = buffer.indexOf('\n\n');
 
@@ -75,6 +78,27 @@ export async function* parseSseStream(
     buffer += decoder.decode();
   } catch (cause) {
     throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', undefined, undefined, cause);
+  }
+
+  // The stream has ended, so a trailing `\r` still held back above (it
+  // could have been the start of a split `\r\n` pair) can only be a bare
+  // CR line ending now. Normalize it and re-check for any frame boundary
+  // it just completed.
+  buffer = buffer.replace(/\r$/, '\n');
+
+  let boundary = buffer.indexOf('\n\n');
+
+  while (boundary !== -1) {
+    const frame = buffer.slice(0, boundary);
+
+    buffer = buffer.slice(boundary + 2);
+
+    const event = parseSseFrame(frame);
+
+    if (event === DONE) return;
+    if (event !== NO_DATA) yield event;
+
+    boundary = buffer.indexOf('\n\n');
   }
 
   // Flush a final frame that arrived without a trailing blank line: some

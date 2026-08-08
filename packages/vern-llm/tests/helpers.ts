@@ -81,7 +81,7 @@ export class FakeApiError extends Error {
 
 /**
  * A scriptable mock LLMClient. Each entry in `script` is either a response
- * (or a function producing one, sync or async — useful for reading params or
+ * (or a function producing one, sync or async, useful for reading params or
  * respecting the abort signal) or an Error to throw for that call.
  * Calls beyond the script length reuse the last entry.
  */
@@ -119,7 +119,7 @@ export function createMockClient(
 
 /**
  * Builds a hand-rolled `LLMClient` whose `createStream` yields a scripted
- * sequence of `WireStreamChunk`s per call (no real adapter needed — proves
+ * sequence of `WireStreamChunk`s per call (no real adapter needed, proves
  * the core streaming plumbing in isolation, per the streaming design's
  * implementation order).
  */
@@ -179,7 +179,7 @@ export function createMockStreamingClient(
     },
   );
 
-  // No non-streaming `create` implemented — these mocks are for
+  // No non-streaming `create` implemented, these mocks are for
   // `stream: true` tests only.
   const create = vi.fn(async () => {
     throw new Error('createMockStreamingClient: create() was not scripted');
@@ -219,7 +219,7 @@ export function fakeReadableStream(parts: string[]): ReadableStream<Uint8Array> 
  * Builds a `createMockStreamingClient` factory-style script entry (the
  * `() => AsyncIterable<WireStreamChunk>` variant) that yields `chunks` and
  * then throws `failure` from `next()`, with an iterator whose `return()`
- * implementation calls `onReturn` — so tests can exercise
+ * implementation calls `onReturn`, so tests can exercise
  * `buildStreamResult`'s cleanup path (`iterator.return?.()`, called when
  * the pump loop's try/catch handles a processing-time throw) instead of
  * skipping it. If `onReturn` throws or its returned promise rejects,

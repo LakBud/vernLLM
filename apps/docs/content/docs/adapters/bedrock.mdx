@@ -14,7 +14,7 @@ JSON handling depends on the requested format:
 
 `BedrockConverseClient` is the public client type exported by `VernLLM` and accepted by `fromBedrock`. It allows TypeScript users to type their Bedrock Converse client without depending on adapter internals.
 
-Note: Tool-based structured output requires a Bedrock model that supports tool use. `fromBedrock` doesn't try to detect this from a failed call — AWS's error text for an unsupported model isn't a documented, stable contract, so guessing at it would be unreliable. By default, a `jsonSchema` call to a model without tool support surfaces Bedrock's raw error unchanged. If you want a clearer, earlier failure, pass `toolUseSupportedModels` (see below).
+Note: Tool-based structured output requires a Bedrock model that supports tool use. `fromBedrock` doesn't try to detect this from a failed call, AWS's error text for an unsupported model isn't a documented, stable contract, so guessing at it would be unreliable. By default, a `jsonSchema` call to a model without tool support surfaces Bedrock's raw error unchanged. If you want a clearer, earlier failure, pass `toolUseSupportedModels` (see below).
 
 ## Setup
 

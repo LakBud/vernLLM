@@ -43,7 +43,7 @@ function mapEvent(event: unknown): WireStreamChunk | undefined {
   return undefined;
 }
 
-describe('VernLLM.call(stream: true) through fromFetch — end to end', () => {
+describe('VernLLM.call(stream: true) through fromFetch, end to end', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });

@@ -234,7 +234,7 @@ describe('fromGemini', () => {
   });
 });
 
-describe('fromGemini — tools', () => {
+describe('fromGemini, tools', () => {
   const weatherTool = {
     type: 'function' as const,
     function: {

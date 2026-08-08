@@ -30,7 +30,7 @@ async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
   return out;
 }
 
-describe('VernLLM.call(stream: true) through fromAnthropic — end to end', () => {
+describe('VernLLM.call(stream: true) through fromAnthropic, end to end', () => {
   it('streams live text-delta chunks and resolves finalResult to the same parsed/validated shape a non-streaming call would return', async () => {
     const create = vi.fn(async (params: Record<string, unknown>) => {
       if (params.stream) {

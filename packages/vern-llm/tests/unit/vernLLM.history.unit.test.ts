@@ -4,7 +4,7 @@ import { LLMError } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { at, createMockClient, textResponse } from '../helpers.js';
 
-describe('VernLLM.call — conversation history', () => {
+describe('VernLLM.call, conversation history', () => {
   it('sends only system + current user turn when no history is given', async () => {
     const { client, calls } = createMockClient([textResponse('hi')]);
     const llm = new VernLLM({ client, model: 'm' });
@@ -52,7 +52,7 @@ describe('VernLLM.call — conversation history', () => {
   });
 });
 
-describe('VernLLM.call — conversation history validation', () => {
+describe('VernLLM.call, conversation history validation', () => {
   it('throws a non-retryable validation error when history ends with a user turn', async () => {
     const { client, create } = createMockClient([textResponse('unused')]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 3 });

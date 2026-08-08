@@ -1,7 +1,7 @@
 import type { SchemaLike } from './schema.js';
 
 /**
- * Describes a capability the model may request — not the capability
+ * Describes a capability the model may request, not the capability
  * itself. VernLLM transports this to the provider and parses what comes
  * back; it never executes anything.
  */
@@ -37,7 +37,7 @@ export interface ToolResult {
   /**
    * Signals a failed tool execution back to the model (matches Anthropic's
    * native `is_error` on tool_result blocks). Only `fromAnthropic` honors
-   * this today — Gemini and Bedrock have no equivalent wire concept, so
+   * this today, Gemini and Bedrock have no equivalent wire concept, so
    * other adapters ignore it silently.
    */
   isError?: boolean;
@@ -63,7 +63,7 @@ export type CallWithToolsResult<T> = ContentResult<T> | ToolCallResult;
  * Runtime-safe check for whether a `call()` result is a `tool_calls`
  * result. Prefer this over relying on TypeScript's static narrowing
  * whenever `params` passed to `call()` wasn't a literal with `tools`
- * inlined (see the "note on the overload" in `VernLLM.call`'s docs) — in
+ * inlined (see the "note on the overload" in `VernLLM.call`'s docs), in
  * that case TS may have typed the result as plain `T` even though it's
  * actually a `CallWithToolsResult<T>` at runtime, and this check works
  * either way.

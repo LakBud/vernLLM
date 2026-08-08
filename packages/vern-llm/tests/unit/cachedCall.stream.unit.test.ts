@@ -20,7 +20,7 @@ async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
   return out;
 }
 
-describe('VernLLM.cachedCall — stream: true', () => {
+describe('VernLLM.cachedCall, stream: true', () => {
   it('miss: relays live chunks and caches the settled finalResult value', async () => {
     const { client, createStream } = createMockStreamingClient([
       [
@@ -242,7 +242,7 @@ describe('VernLLM.cachedCall — stream: true', () => {
     ]);
   });
 
-  it('a mid-stream failure is not cached — a later cachedCall for the same key opens a fresh stream', async () => {
+  it('a mid-stream failure is not cached, a later cachedCall for the same key opens a fresh stream', async () => {
     let attempt = 0;
     const createStream = () => {
       attempt++;
@@ -328,7 +328,7 @@ describe('VernLLM.cachedCall — stream: true', () => {
     const [chunksA, chunksB] = await Promise.all([drain(callA.chunks), drain(callB.chunks)]);
 
     // callA triggered the real stream, so it gets the live deltas as they
-    // arrived. callB joined an already-in-flight call for the same key —
+    // arrived. callB joined an already-in-flight call for the same key,
     // it has no live generation of its own to relay, so it gets a
     // one-shot replay built from the shared finalResult once that
     // settles (a single combined chunk, not the original two deltas).
@@ -339,12 +339,12 @@ describe('VernLLM.cachedCall — stream: true', () => {
     expect(chunksB).toEqual([{ type: 'text-delta', delta: 'concurrent result' }]);
     await expect(callA.finalResult).resolves.toBe('concurrent result');
     await expect(callB.finalResult).resolves.toBe('concurrent result');
-    // Only one real stream was opened — the joiner shared it instead of
+    // Only one real stream was opened, the joiner shared it instead of
     // triggering a second one.
     expect(createStream).toHaveBeenCalledTimes(1);
 
-    // Both callers reserve usage — a joiner still spends its own quota,
-    // it just doesn't trigger a second stream — but only the trigger's
+    // Both callers reserve usage, a joiner still spends its own quota,
+    // it just doesn't trigger a second stream, but only the trigger's
     // reservation is marked coalesced: false; the joiner's is true.
     expect(reserveUsage).toHaveBeenCalledTimes(2);
     const coalescedFlags = reserveUsage.mock.calls
@@ -499,7 +499,7 @@ describe('VernLLM.cachedCall — stream: true', () => {
     expect(refundUsage).not.toHaveBeenCalled();
   });
 
-  it('a failure before the stream ever opens (reserveUsage throwing) does not permanently wedge the cache key — a later cachedCall for the same key succeeds instead of hanging forever', async () => {
+  it('a failure before the stream ever opens (reserveUsage throwing) does not permanently wedge the cache key, a later cachedCall for the same key succeeds instead of hanging forever', async () => {
     const { client, createStream } = createMockStreamingClient([
       [{ type: 'text-delta', delta: 'hello' }],
     ]);
