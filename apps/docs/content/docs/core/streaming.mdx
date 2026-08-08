@@ -1,10 +1,10 @@
 ---
 title: Streaming
-description: Get incremental chunks as the model generates, with the same retry, timeout, and caching guarantees as a normal call
+description: Get incremental chunks as the model generates, with the same retry and caching guarantees as a normal call, plus a per-chunk idle timeout
 ---
 
 VernLLM supports streaming responses through the same `call()` and `cachedCall()` you already use.
-Set `stream: true`, and everything else, retries, timeouts, the circuit breaker, schema validation,
+Set `stream: true`, and everything else, retries, the circuit breaker, schema validation,
 tool calling, and caching keeps working exactly as it does today, just delivered incrementally
 instead of as a single resolved value.
 
@@ -12,7 +12,10 @@ instead of as a single resolved value.
   VernLLM's streaming preserves the same guarantees as non-streaming `call()`. Retries cover
   connection failures before the first chunk arrives; a stream that fails partway through does not
   retry, since replaying it would duplicate output the caller may have already rendered. See{' '}
-  <a href="#what-gets-retried">What gets retried</a> below.
+  <a href="#what-gets-retried">What gets retried</a> below. Unlike non-streaming `call()`, where
+  `timeoutMs` bounds the whole response, streaming only uses it to bound opening the stream and its
+  first chunk; every gap after that is bounded separately by `chunkIdleTimeoutMs`, see{' '}
+  <a href="#per-chunk-idle-timeout">Per-chunk idle timeout</a> below.
 </Callout>
 
 ## Enabling streaming
@@ -25,6 +28,7 @@ and `finalResult`, a promise that resolves to the same value `call()` would have
 ```ts title="streaming-basic-usage.ts"
 const { chunks, finalResult } = await llm.call({
   userContent: 'Write a short poem about the ocean.',
+  jsonMode: false,
   stream: true,
 });
 
@@ -51,9 +55,23 @@ of event:
 ```ts
 type StreamChunk =
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool_call_delta'; index: number; id?: string; name?: string; argsDelta?: string }
+  | {
+      type: 'tool_call_delta';
+      index: number;
+      id?: string;
+      name?: string;
+      argsDelta?: string;
+      complete?: boolean;
+    }
   | { type: 'usage'; usage: TokenUsage };
 ```
+
+<Callout>
+  `complete: true` on a `tool_call_delta` means `argsDelta` is the whole set of arguments for that
+  call, not a fragment. This happens for Gemini (its API can't stream function-call arguments
+  incrementally) and for replayed chunks from a `cachedCall` hit. Omitted or `false` for a genuine
+  fragment from providers that do stream incrementally (OpenAI-compatible, Anthropic, Bedrock).
+</Callout>
 
 Check `chunk.type` to branch:
 
@@ -203,11 +221,41 @@ stream rather than the whole response:
   `.catch()` to it, or Node will report an unhandled rejection once the stream fails.
 </Callout>
 
-The circuit breaker, when configured, only records a failure for the stream-opening step, matching
-this same before-first-chunk/after-first-chunk split. See{' '}
+The circuit breaker, when configured, records a failure for the stream-opening step, matching
+this same before-first-chunk/after-first-chunk split, with one exception: an idle-timeout failure
+(see below) still counts, even though it happens after the first chunk. A provider that reliably
+streams one chunk and then hangs is exactly the kind of unhealthy behavior the breaker exists to
+catch. See{' '}
 
 <a href="/docs/core/circuit-breaker">Circuit Breaker</a> and
 <a href="/docs/core/retries">Retries</a> for the underlying policy this reuses.
+
+## Per-chunk idle timeout
+
+`timeoutMs` only bounds opening the stream and its first chunk. Once that first chunk arrives,
+nothing else bounds how long VernLLM waits for the next one. A connection that opens fine,
+delivers one chunk, then hangs would otherwise never fail on its own.
+
+`chunkIdleTimeoutMs` (default `30000`, pass `0` to disable) bounds every gap between chunks after
+the first. The clock resets on every chunk, including provider keep-alive pings (see below), so it
+measures the gap since the most recent chunk, not the stream's total duration. If it elapses,
+`finalResult` rejects with `LLMError('timeout')`, same as the stream-open timeout.
+
+```ts
+const llm = new VernLLM({
+  client,
+  model: 'gpt-4o-mini',
+  chunkIdleTimeoutMs: 15_000, // fail if no chunk arrives for 15s
+});
+```
+
+### Provider keep-alive pings
+
+Some providers send periodic keep-alive signals during long pauses in generation: Anthropic's
+documented `ping` events during extended thinking, or an SSE comment line used as a heartbeat.
+`fromAnthropic` and `fromFetch` (for the default SSE framing) both recognize these and reset the
+idle-timeout clock on them. They carry no content, so nothing is surfaced to `chunks` or
+`finalResult`.
 
 ## Caching a streaming call
 
@@ -238,6 +286,7 @@ const { chunks, finalResult } = await llm.cachedCall({
   ttl: 3600,
   call: {
     userContent: `Write a short poem about ${topic}.`,
+    jsonMode: false,
     stream: true,
   },
 });
@@ -274,6 +323,7 @@ a compile error:
 ```ts title="streaming-runtime-check.ts"
 const params: CallParams<string> = {
   userContent: 'Write a short poem about the ocean.',
+  jsonMode: false,
   stream: someCondition,
 };
 

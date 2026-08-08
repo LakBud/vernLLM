@@ -52,9 +52,16 @@ for await (const chunk of chunks) {
 ```
 
 <Callout>
-  When `jsonSchema` forces a single tool call, `fromAnthropic` only emits `text-delta` chunks for
-  genuine preamble text, not for the tool's streamed JSON payload, keeping the streamed output
-  consistent with what non-streaming `create()` returns for the same request.
+  When `jsonSchema` forces a single tool call, `fromAnthropic` streams the tool's JSON payload as
+  `text-delta` chunks and suppresses genuine preamble text, keeping the streamed output consistent
+  with what non-streaming `create()` returns for the same request.
+</Callout>
+
+<Callout>
+  Anthropic's documented `ping` events, sent periodically to keep long-running streams alive (e.g.
+  extended thinking), are recognized and reset VernLLM's `chunkIdleTimeoutMs` clock. They carry no
+  content and are never surfaced through `chunks`. See{' '}
+  <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
 </Callout>
 
 See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract, none of

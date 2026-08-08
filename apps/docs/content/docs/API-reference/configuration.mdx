@@ -13,6 +13,7 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   maxRetries: 1,
   timeoutMs: 25_000,
+  chunkIdleTimeoutMs: 30_000, // stream: true calls only
   baseDelayMs: 500,
   defaultMaxTokens: 1000,
   nonRetryableStatus: [400, 401, 403, 404, 422],
@@ -49,12 +50,13 @@ const llm = new VernLLM({
 
 ## Retry & timeout
 
-| Option               | Default                     | Notes                                                                                                                                                                                                     |
-| -------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                  |
-| `timeoutMs`          | `25000`                     | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window.                                                                                                          |
-| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay). |
-| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                |
+| Option               | Default                     | Notes                                                                                                                                                                                                                                                      |
+| -------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                                                   |
+| `timeoutMs`          | `25000`                     | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, only bounds opening the stream and its first chunk, see `chunkIdleTimeoutMs`.                                                         |
+| `chunkIdleTimeoutMs` | `30000`                     | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. Pass `0` or negative to disable. See <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>. |
+| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay).                                                  |
+| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                                                                 |
 
 ## Request defaults
 
@@ -99,9 +101,9 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                               |
-| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. |
+| Option           | Default  | Notes                                                                                                                                                                                                                                                                                                                       |
+| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. For `stream: true`, a `chunkIdleTimeoutMs` timeout counts as a failure even though it happens mid-stream, unlike other stream failures. |
 
 ## Per call defaults and overrides
 

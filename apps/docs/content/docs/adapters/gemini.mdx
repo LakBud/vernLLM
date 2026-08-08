@@ -57,6 +57,13 @@ for await (const chunk of chunks) {
 }
 ```
 
+<Callout>
+  Gemini's API can't stream function-call arguments incrementally, each `functionCall` part arrives
+  whole in a single chunk. `fromGemini` marks these `tool_call_delta` chunks with `complete: true`,
+  so `argsDelta` is the entire set of arguments, not a fragment. See{' '}
+  <a href="/docs/core/streaming#the-chunk-shape">The chunk shape</a>.
+</Callout>
+
 See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract.
 
 ## Multimodal input

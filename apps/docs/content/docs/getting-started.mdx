@@ -112,6 +112,7 @@ Pass `stream: true` to get incremental chunks back alongside the same validated 
 ```ts title="getting-started-streaming.ts"
 const { chunks, finalResult } = await llm.call({
   userContent: 'Write a short poem about the ocean.',
+  jsonMode: false,
   stream: true,
 });
 

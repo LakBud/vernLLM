@@ -118,10 +118,12 @@ instead, exactly as you would for a non-streaming tool call. See{' '}
 ## Streaming a cached call
 
 If the same route also uses `cachedCall`, be aware that a cache hit or a coalesced joiner does not
-deliver a token-by-token replay, it delivers one flat chunk containing the entire cached response.
-The relay loop above needs no changes to handle this correctly since it already just forwards
-whatever chunks arrive, but a UI that assumes every response trickles in one word at a time should
-expect an occasional response that just appears all at once:
+deliver a token-by-token replay. For a plain text response it delivers one flat chunk containing
+the entire cached content; for a cached tool-call response it delivers one `tool_call_delta` per
+cached tool call (each with its full arguments in one shot), followed by an optional trailing text
+chunk. The relay loop above needs no changes to handle either case correctly since it already just
+forwards whatever chunks arrive, but a UI that assumes every response trickles in one word (or one
+argument fragment) at a time should expect an occasional response that just appears all at once:
 
 ```ts title="streaming-cached-route.ts"
 const { chunks, finalResult } = await llm.cachedCall({
@@ -159,15 +161,14 @@ export async function POST(req: Request) {
       try {
         for await (const chunk of chunks) {
           if (chunk.type === 'text-delta') {
-            controller.enqueue(encoder.encode(chunk.delta));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk.delta)}\n\n`));
           }
         }
 
         await finalResult;
+        controller.close();
       } catch (err) {
         controller.error(err);
-      } finally {
-        controller.close();
       }
     },
   });

@@ -33,6 +33,8 @@ const getWeather = {
   parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
 };
 
+const city = 'Denver';
+
 const { chunks, finalResult } = await llm.cachedCall({
   cacheKey: `weather:${city}`,
   ttl: 60,
