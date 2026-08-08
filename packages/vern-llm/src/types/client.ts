@@ -1,4 +1,5 @@
 import type { ContentBlock } from './call.js';
+import type { WireStreamChunk } from './stream.js';
 
 /** A tool call as it appears on the wire, OpenAI's `function`-wrapped shape. */
 export interface WireToolCall {
@@ -93,6 +94,17 @@ export interface LLMClient {
           total_tokens?: number;
         };
       }>;
+
+      /**
+       * Optional. Required only for `stream: true` calls. Adapters/clients
+       * that don't implement this make `stream: true` throw a clear
+       * `LLMError('validation')` rather than a confusing runtime failure.
+       * Takes the same request shape as `create`, minus the response type.
+       */
+      createStream?(
+        params: Parameters<LLMClient['chat']['completions']['create']>[0],
+        options: { signal: AbortSignal },
+      ): AsyncIterable<WireStreamChunk>;
     };
   };
 }

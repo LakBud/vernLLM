@@ -6,14 +6,18 @@ import {
   extractStatus,
   extractRetryAfterMs,
   withTimeout,
+  withChunkIdleTimeout,
   getBackoffDelay,
   waitForRetry,
   describeError,
   withReservedUsage,
+  withReservedUsageForStream,
   normalizeError,
   toWireTools,
   toWireToolCalls,
   parseWireToolCalls,
+  buildReplayChunks,
+  buildReplayChunksFromPromise,
 } from './internal/vernLLM.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import {
@@ -21,27 +25,34 @@ import {
   LLMError,
   type CacheAdapter,
   type CachedCallParams,
+  type CachedStreamCallParams,
+  type CachedStreamToolCallParams,
   type CachedToolCallParams,
   type CallParams,
   type CallWithToolsResult,
   type ConversationTurn,
   type LLMClient,
+  type StreamCallResult,
+  type StreamChunk,
+  type StreamEnabledCallParams,
   type TokenUsage,
   type ToolEnabledCallParams,
   type VernLLMOptions,
   type WireMessage,
+  type WireStreamChunk,
+  type WireToolCall,
   type WireToolChoice,
 } from './types/index.js';
 
-import type { InternalCacheParams } from './internal/cache.utils.js';
+import type { InternalCacheParams, InternalCacheStreamParams } from './internal/cache.utils.js';
 
 /**
- * A resilient layer around an LLM chat completions client, this is VernLLM!
+ * A resilient layer around an LLM chat completions client. This is VernLLM!
  *
- * Adds retry with backoff/jitter, per-attempt timeouts, an optional circuit breaker,
- * JSON parsing with optional schema validation, usage tracking, and an
- * optional response cache, all configurable, all opt-in beyond sensible
- * defaults.
+ * Adds retry with backoff and jitter, per-attempt timeouts, an optional
+ * circuit breaker, JSON parsing with optional schema validation, usage
+ * tracking, and an optional response cache. All configurable, all opt-in
+ * beyond sensible defaults.
  */
 export class VernLLM {
   private readonly client: LLMClient;
@@ -49,6 +60,7 @@ export class VernLLM {
 
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
+  private readonly chunkIdleTimeoutMs: number;
   private readonly baseDelayMs: number;
   private readonly defaultMaxTokens: number;
   private readonly defaultTemperature: number | null;
@@ -66,11 +78,10 @@ export class VernLLM {
   private readonly breaker?: CircuitBreaker;
 
   /**
-   * @param options - Client, model, and tunables. Notable defaults:
-   * `maxRetries` 1, `timeoutMs` 25000, `baseDelayMs` 500 (exponential backoff
-   * base), `defaultMaxTokens` 1000, `defaultTemperature` 0.2, `cache` an
-   * in-memory adapter, `nonRetryableStatus` `[400, 401, 403, 404, 422]`,
-   * `debug` false.
+   * @param options Client, model, and tunables. Defaults: `maxRetries` 1,
+   * `timeoutMs` 25000, `baseDelayMs` 500, `defaultMaxTokens` 1000,
+   * `defaultTemperature` 0.2, `cache` an in-memory adapter,
+   * `nonRetryableStatus` `[400, 401, 403, 404, 422]`, `debug` false.
    */
   constructor(options: VernLLMOptions) {
     this.client = options.client;
@@ -78,6 +89,7 @@ export class VernLLM {
 
     this.maxRetries = options.maxRetries ?? 1;
     this.timeoutMs = options.timeoutMs ?? 25_000;
+    this.chunkIdleTimeoutMs = options.chunkIdleTimeoutMs ?? 30_000;
     this.baseDelayMs = options.baseDelayMs ?? 500;
     this.defaultMaxTokens = options.defaultMaxTokens ?? 1000;
     this.defaultTemperature =
@@ -108,7 +120,7 @@ export class VernLLM {
    *
    * When `tools` is set, returns a `CallWithToolsResult<T>` instead of `T`:
    * `{ type: 'content', content }` or `{ type: 'tool_calls', toolCalls,
-   * content? }`. VernLLM never executes tools, run them yourself and
+   * content? }`. VernLLM never executes tools; run them yourself and
    * continue via `history` (see `ConversationTurn`). Mutually exclusive
    * with `jsonSchema`/`schema`.
    *
@@ -117,15 +129,35 @@ export class VernLLM {
    * `CallParams<T>`, use `isToolCallResult()` to check the shape at
    * runtime instead. See the Tool Calling docs for details.
    *
-   * @param params - System/user content plus per-call overrides. See `CallParams`.
-   * @returns Without `tools`: the parsed response, or raw string if
-   * `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`.
+   * The same static-vs-dynamic caveat applies to `stream`: TypeScript only
+   * selects the streaming overload (returning `StreamCallResult<...>`) when
+   * `stream: true` is statically present on `params`. A `stream` value set
+   * conditionally on a plain `CallParams<T>` still resolves to `Promise<T>`
+   * (or `Promise<CallWithToolsResult<T>>`) at the type level even though
+   * the actual runtime result is the `{ chunks, finalResult }` streaming
+   * shape whenever `stream` evaluates to `true`, callers doing this should
+   * narrow/cast accordingly rather than relying on the static return type.
+   *
+   * @param params System/user content plus per-call overrides. See `CallParams`.
+   * @returns Without `tools` or `stream`: the parsed response, or raw
+   * string if `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`.
+   * With `stream: true` (statically): a `{ chunks, finalResult }`
+   * `StreamCallResult`, `finalResult` resolving to whichever of the above
+   * shapes applies once the stream completes. See `StreamCallResult`.
    */
+  async call<T = unknown>(
+    params: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>,
+  ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
+
+  async call<T = unknown>(params: StreamEnabledCallParams<T>): Promise<StreamCallResult<T>>;
+
   async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
 
   async call<T = unknown>(params: CallParams<T>): Promise<T>;
 
-  async call<T = unknown>(params: CallParams<T>): Promise<T | CallWithToolsResult<T>> {
+  async call<T = unknown>(
+    params: CallParams<T>,
+  ): Promise<T | CallWithToolsResult<T> | StreamCallResult<T | CallWithToolsResult<T>>> {
     this.breaker?.assertClosed();
 
     if (params.signal?.aborted) {
@@ -133,6 +165,42 @@ export class VernLLM {
     }
 
     const requestId = params.requestId ?? randomUUID();
+
+    if (params.stream) {
+      // Same normalize/breaker/logging treatment as non-streaming, applied
+      // around opening the stream; mid-stream failures are handled
+      // separately in buildStreamResult. Usage refund/report is deferred
+      // onto finalResult, since call() must return { chunks, finalResult }
+      // before the real outcome is known.
+      return withReservedUsageForStream(
+        params,
+        async () => {
+          try {
+            return await this.retryWithBackoff(
+              (attempt) => this.executeStreamCall(params, requestId, attempt),
+              requestId,
+              params.signal,
+            );
+          } catch (error) {
+            const normalized = normalizeError(error, params.signal);
+
+            if (
+              normalized.type !== 'validation' &&
+              normalized.type !== 'parse' &&
+              normalized.type !== 'aborted'
+            ) {
+              this.breaker?.recordFailure();
+            }
+
+            this.logger.debug(`[VernLLM:${requestId}] stream-open error:\n${describeError(error)}`);
+
+            throw normalized;
+          }
+        },
+        params.signal,
+        (logMessage, error) => this.logRefundError(logMessage, error),
+      );
+    }
 
     return withReservedUsage(
       params,
@@ -168,10 +236,9 @@ export class VernLLM {
   /**
    * Performs a single attempt: builds the request (translating `tools` to
    * wire shape when present), dispatches it with a timeout, and shapes the
-   * response, either `T` directly, or a `CallWithToolsResult<T>` when
-   * `params.tools` was set. Throws on an empty response (no text and no
-   * tool_calls) so the retry loop treats it like any other transient
-   * failure.
+   * response into `T` or a `CallWithToolsResult<T>` when `params.tools` was
+   * set. Throws on an empty response (no text and no tool_calls) so the
+   * retry loop treats it like any other transient failure.
    */
   private async executeCall<T>(
     params: CallParams<T>,
@@ -190,9 +257,48 @@ export class VernLLM {
     // touches it, so a post-response failure still gets its usage reported.
     const usage = this.extractUsage(response, requestId, model);
 
+    // Raw and unvalidated on purpose. Extraction (including `.trim()`,
+    // which throws on a non-string `content`) happens inside
+    // `finalizeResponse`'s try/catch, so a malformed response still gets
+    // normalized and its usage failure reported.
+    const rawContent = response.choices?.[0]?.message?.content;
+    const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+
+    return this.finalizeResponse(
+      rawContent,
+      wireToolCalls,
+      params,
+      useJson,
+      usage,
+      requestId,
+      attempt,
+    );
+  }
+
+  /**
+   * Shapes a fully-arrived response (content and/or tool_calls, already
+   * extracted from the provider's payload) into `T` or a
+   * `CallWithToolsResult<T>`. Reused by the streaming path once it has
+   * buffered the full text/tool-call deltas, so there's no separate
+   * parsing/validation logic for streaming.
+   *
+   * Normalizes and reports usage failure on error itself, so every caller
+   * gets identical error handling without duplicating it.
+   */
+  private finalizeResponse<T>(
+    rawContent: string | null | undefined,
+    wireToolCalls: WireToolCall[] | undefined,
+    params: CallParams<T>,
+    useJson: boolean,
+    usage: TokenUsage | undefined,
+    requestId: string,
+    attempt: number,
+  ): T | CallWithToolsResult<T> {
     try {
-      const content = response.choices?.[0]?.message?.content?.trim();
-      const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+      // `.trim()` runs inside this try: a malformed response shape
+      // (e.g. a non-string `content`) throws here and is normalized and
+      // reported like any other post-response failure.
+      const content = rawContent?.trim();
 
       if (!content && !wireToolCalls?.length) {
         throw new LLMError('Empty LLM response', 'api');
@@ -219,8 +325,7 @@ export class VernLLM {
         return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
       }
 
-      // No tool_calls at this point, so content must be present (the empty
-      // check above already ruled out both being empty).
+      // No tool_calls here, so content must be present.
       const textContent = content ?? '';
 
       if (!useJson) {
@@ -236,10 +341,9 @@ export class VernLLM {
 
       return params.tools ? { type: 'content', content: result } : result;
     } catch (error) {
-      // Normalized first so onUsageFailure always gets a real LLMError, and
-      // so this matches what call()'s outer normalizeError would throw
-      // anyway. That also covers the aborted-signal case: normalizeError
-      // returns type 'aborted' when the signal is aborted.
+      // Normalized first so onUsageFailure always gets a real LLMError.
+      // Also covers aborted signals: normalizeError returns type
+      // 'aborted' in that case.
       const normalized = normalizeError(error, params.signal);
 
       if (usage && normalized.type !== 'aborted') {
@@ -251,12 +355,308 @@ export class VernLLM {
   }
 
   /**
-   * Checks every `ToolCall` against the `tools` that were actually offered
-   * (catching a hallucinated tool name early, with a clear error, instead
-   * of letting it reach the application's dispatch table as a confusing
-   * "undefined is not a function"), then runs each tool's
-   * `argumentsSchema` (if present) and throws `LLMError('validation')` on
-   * failure.
+   * Opens a stream for a single attempt: builds the request exactly like
+   * `executeCall`, then requires `createStream` on the client (a clear
+   * `validation` error if the adapter doesn't support it). The timeout
+   * wraps stream construction and the first `.next()` together, not just
+   * construction: calling an `async function*` returns an iterator
+   * synchronously without running its body until `.next()` is first
+   * invoked, so timing only construction would time an operation that's
+   * always instant, not the actual connection. Both are folded into a
+   * single `withTimeout` so the same abort signal reaches whatever the
+   * adapter's `createStream` uses internally for its first network
+   * round-trip.
+   *
+   * Circuit-breaker success is recorded on the first chunk actually
+   * arriving, the same reliability boundary `executeCall` uses.
+   */
+  private async executeStreamCall<T>(
+    params: CallParams<T>,
+    requestId: string,
+    attempt: number,
+  ): Promise<{
+    chunks: AsyncIterable<StreamChunk>;
+    finalResult: Promise<T | CallWithToolsResult<T>>;
+  }> {
+    const { useJson, model, request } = this.buildRequestPayload(params);
+
+    const createStream = this.client.chat.completions.createStream;
+
+    if (!createStream) {
+      throw new LLMError('stream: true requires a client/adapter with createStream', 'validation');
+    }
+
+    const { iterator, first } = await withTimeout(
+      async (attemptSignal) => {
+        const streamIterator = createStream(request, { signal: attemptSignal })[
+          Symbol.asyncIterator
+        ]();
+        const firstResult = await streamIterator.next();
+
+        return { iterator: streamIterator, first: firstResult };
+      },
+      this.timeoutMs,
+      params.signal,
+    );
+
+    // An immediately-exhausted stream (no chunks at all) is the streaming
+    // equivalent of `executeCall`'s empty-response check: surface the same
+    // `LLMError('Empty LLM response', 'api')` so retry behaves identically
+    // whether the empty result came from a non-streaming or streaming
+    // attempt, rather than silently recording connection-time success for
+    // an attempt that produced nothing.
+    if (first.done) {
+      throw new LLMError('Empty LLM response', 'api');
+    }
+
+    this.breaker?.recordSuccess();
+
+    return this.buildStreamResult(iterator, first, params, useJson, requestId, model, attempt);
+  }
+
+  /**
+   * The streaming accumulator: wraps the raw `WireStreamChunk` iterator in
+   * an async generator that yields translated `StreamChunk`s to the caller
+   * live, as they arrive, with no per-chunk timeout and no bound on total
+   * duration, and accumulates text/tool-call deltas internally so that
+   * `finalizeResponse` can produce `finalResult` once the stream completes.
+   *
+   * Two separate try/catches: the iteration loop's catch handles errors
+   * the transport itself throws, which aren't normalized yet, so that
+   * happens here along with the one `reportUsageFailure` call for them.
+   * The second catch, around `finalizeResponse`, does not re-normalize or
+   * re-report since `finalizeResponse` already does both internally.
+   * Neither catch touches the circuit breaker: a mid-stream failure isn't
+   * connection-time evidence, since that was already recorded as a
+   * success once the first chunk arrived.
+   */
+  private buildStreamResult<T>(
+    iterator: AsyncIterator<WireStreamChunk>,
+    first: IteratorResult<WireStreamChunk>,
+    params: CallParams<T>,
+    useJson: boolean,
+    requestId: string,
+    model: string,
+    attempt: number,
+  ): { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T | CallWithToolsResult<T>> } {
+    let resolveFinal!: (value: T | CallWithToolsResult<T>) => void;
+    let rejectFinal!: (error: unknown) => void;
+
+    const finalResult = new Promise<T | CallWithToolsResult<T>>((resolve, reject) => {
+      resolveFinal = resolve;
+      rejectFinal = reject;
+    });
+
+    // Avoid an unhandled-rejection warning for callers that only read `chunks`.
+    finalResult.catch(() => {});
+
+    // Push-based, not a pulled generator, so the pump always drives
+    // `finalResult` to completion even if `chunks` is never read. Buffer
+    // size (not "has anyone started iterating yet") is what caps memory,
+    // since the pump can outrace the caller starting iteration.
+    const MAX_BUFFERED_CHUNKS = 10_000;
+    const buffered: StreamChunk[] = [];
+    const pending: Array<{
+      resolve: (result: IteratorResult<StreamChunk>) => void;
+      reject: (error: unknown) => void;
+    }> = [];
+    let streamDone = false;
+    let streamError: unknown;
+
+    const push = (chunk: StreamChunk) => {
+      const waiter = pending.shift();
+
+      if (waiter) {
+        waiter.resolve({ done: false, value: chunk });
+        return;
+      }
+
+      buffered.push(chunk);
+
+      if (buffered.length > MAX_BUFFERED_CHUNKS * 2) {
+        // Nothing else surfaces this: without a log, a caller that never
+        // read (or fell behind on) `chunks` has no way to tell eviction,
+        // not a provider or transport bug, is why chunks are missing.
+        this.logger.debug(
+          `[VernLLM] stream chunk buffer exceeded cap (${MAX_BUFFERED_CHUNKS}), evicting ` +
+            `${buffered.length - MAX_BUFFERED_CHUNKS} oldest chunk(s); buffered=${buffered.length}. ` +
+            'The chunks iterable was never read (or fell far behind) for this stream.',
+        );
+
+        // Trim back down to the cap in one batch operation instead of
+        // `shift()`ing a single element off on every push once the cap is
+        // reached. A per-push `shift()` here is O(current length) in the
+        // worst case, cheap for a handful of calls, but that cost is
+        // paid on *every* push for the remainder of an ignored stream,
+        // and its real-world cost isn't a stable, engine-independent
+        // property: benchmarking this exact pattern at a similar backing
+        // -array size showed multi-second stalls for what should be
+        // sub-millisecond work. Letting the array grow to 2x the cap
+        // before trimming amortizes the O(n) `splice` across
+        // `MAX_BUFFERED_CHUNKS` pushes, so the average cost per push
+        // stays O(1) regardless of how far past the cap the array is
+        // allowed to grow before trimming.
+        buffered.splice(0, buffered.length - MAX_BUFFERED_CHUNKS);
+      }
+    };
+
+    const finish = () => {
+      streamDone = true;
+
+      for (const waiter of pending.splice(0)) {
+        waiter.resolve({ done: true, value: undefined });
+      }
+    };
+
+    const fail = (error: unknown) => {
+      streamDone = true;
+      streamError = error;
+
+      for (const waiter of pending.splice(0)) {
+        waiter.reject(error);
+      }
+    };
+
+    const chunks: AsyncIterable<StreamChunk> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next(): Promise<IteratorResult<StreamChunk>> {
+            if (buffered.length) {
+              return Promise.resolve({ done: false, value: buffered.shift() as StreamChunk });
+            }
+
+            if (streamDone) {
+              return streamError
+                ? Promise.reject(streamError)
+                : Promise.resolve({ done: true, value: undefined });
+            }
+
+            return new Promise((resolve, reject) => {
+              pending.push({ resolve, reject });
+            });
+          },
+        };
+      },
+    };
+
+    const toolCallAcc = new Map<number, { id?: string; name?: string; args: string }>();
+
+    let textAcc = '';
+    let usage: TokenUsage | undefined;
+
+    // Fires immediately, not lazily, so it always drives finalResult to
+    // completion regardless of whether the caller reads chunks.
+    void (async () => {
+      try {
+        let result: IteratorResult<WireStreamChunk> = first;
+
+        while (!result.done) {
+          const wireChunk = result.value;
+
+          if (wireChunk.type === 'ping') {
+            // No content to accumulate or push. Just resolving here
+            // resets the idle-timeout clock on the next .next() call.
+          } else if (wireChunk.type === 'text-delta') {
+            textAcc += wireChunk.delta;
+            push({ type: 'text-delta', delta: wireChunk.delta });
+          } else if (wireChunk.type === 'tool_call_delta') {
+            const entry = toolCallAcc.get(wireChunk.index) ?? { args: '' };
+
+            entry.id ??= wireChunk.id;
+            entry.name ??= wireChunk.name;
+            entry.args += wireChunk.argumentsDelta ?? '';
+            toolCallAcc.set(wireChunk.index, entry);
+
+            push({
+              type: 'tool_call_delta',
+              index: wireChunk.index,
+              id: wireChunk.id,
+              name: wireChunk.name,
+              argsDelta: wireChunk.argumentsDelta,
+              complete: wireChunk.complete,
+            });
+          } else if (wireChunk.type === 'usage') {
+            usage = {
+              promptTokens: wireChunk.usage.prompt_tokens ?? 0,
+              completionTokens: wireChunk.usage.completion_tokens ?? 0,
+              totalTokens: wireChunk.usage.total_tokens ?? 0,
+              requestId,
+              model,
+            };
+            push({ type: 'usage', usage });
+          }
+
+          result = await withChunkIdleTimeout(() => iterator.next(), this.chunkIdleTimeoutMs);
+        }
+      } catch (error) {
+        // Best-effort cleanup for a processing-time throw (as opposed to
+        // `iterator.next()` rejecting, which usually means the adapter's
+        // own generator already cleaned up). Closes the underlying
+        // connection or reader lock if it's still open.
+        try {
+          await iterator.return?.();
+        } catch {
+          // Cleanup failing isn't the error being reported; swallow it.
+        }
+
+        const normalized = normalizeError(error, params.signal);
+
+        // Idle timeout is the one mid-stream failure that trips the
+        // breaker: otherwise a provider that hangs after one chunk would
+        // always record a success and never open it.
+        if (normalized.type === 'timeout') {
+          this.breaker?.recordFailure();
+        }
+
+        if (usage && normalized.type !== 'aborted') {
+          this.reportUsageFailure(usage, normalized, attempt);
+        }
+
+        fail(normalized);
+        rejectFinal(normalized);
+
+        return;
+      }
+
+      finish();
+
+      try {
+        const wireToolCalls: WireToolCall[] | undefined = toolCallAcc.size
+          ? [...toolCallAcc.entries()]
+              .sort(([indexA], [indexB]) => indexA - indexB)
+              .map(([, entry]) => ({
+                id: entry.id ?? '',
+                type: 'function' as const,
+                function: { name: entry.name ?? '', arguments: entry.args },
+              }))
+          : undefined;
+
+        const finalized = this.finalizeResponse(
+          textAcc,
+          wireToolCalls,
+          params,
+          useJson,
+          usage,
+          requestId,
+          attempt,
+        );
+
+        resolveFinal(finalized);
+      } catch (error) {
+        // finalizeResponse has already normalized this error and reported
+        // the usage failure internally. Just propagate it.
+        rejectFinal(error);
+      }
+    })();
+
+    return { chunks, finalResult };
+  }
+
+  /**
+   * Checks every `ToolCall` against the `tools` that were offered, catching
+   * a hallucinated tool name early instead of letting it reach the
+   * application's dispatch table. Then runs each tool's `argumentsSchema`,
+   * if present, throwing `LLMError('validation')` on failure.
    */
   private validateToolCallArguments(
     toolCalls: { name: string; arguments: unknown }[],
@@ -462,7 +862,7 @@ export class VernLLM {
 
     if (toolChoice && !tools) {
       throw new LLMError(
-        '`toolChoice` was set without `tools` — there is nothing for it to choose between. ' +
+        '`toolChoice` was set without `tools`. There is nothing for it to choose between. ' +
           'Set `tools`, or remove `toolChoice`.',
         'validation',
       );
@@ -606,18 +1006,16 @@ export class VernLLM {
   }
 
   /**
-   * Reports token usage genuinely spent on an attempt that then failed, so
-   * it isn't dropped alongside the error. Covers any error thrown after
-   * usage extraction (parse, validation, or an `api` error like an
-   * unexpected tool_calls response), since all of them happen only after a
-   * response, meaning real spend, already arrived. Swallows and logs any
-   * error `onUsageFailure` itself throws.
+   * Reports token usage spent on an attempt that then failed, so it isn't
+   * dropped alongside the error. Covers any error thrown after usage
+   * extraction, since all of them happen only after a response (real
+   * spend) already arrived. Swallows and logs any error `onUsageFailure`
+   * itself throws.
    */
   private reportUsageFailure(usage: TokenUsage, error: LLMError, attempt: number): void {
     // Falls back to promptTokens + completionTokens if totalTokens is 0
-    // (e.g. a hand-rolled client that omits the total), so the log doesn't
-    // understate real spend. Doesn't touch usage itself, onUsageFailure
-    // still gets exactly what was parsed.
+    // (e.g. a hand-rolled client that omits the total), so the log
+    // doesn't understate real spend.
     const displayTokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
 
     this.logger.warn(
@@ -702,7 +1100,7 @@ export class VernLLM {
    * supports deletion. Cache invalidation is the caller's responsibility;
    * only the application knows when cached data is stale.
    *
-   * @param key - The raw cache key (resolved through the adapter's
+   * @param key The raw cache key (resolved through the adapter's
    * `resolveKey`, if any, before deletion).
    */
   async deleteCache(key: string): Promise<void> {
@@ -716,11 +1114,11 @@ export class VernLLM {
    * for the same `cacheKey` share a single in-flight call, avoiding cache
    * stampedes.
    *
-   * Not part of the public API — backs the public `cachedCall()`, which
+   * Not part of the public API. Backs the public `cachedCall()`, which
    * always composes this with `call()` so cached results get the same
    * retry/timeout/circuit-breaker guarantees as any other LLM call.
    *
-   * @param params - `cacheKey`, `ttl`, `fn` (the work to run on a cache
+   * @param params `cacheKey`, `ttl`, `fn` (the work to run on a cache
    * miss, typically `() => this.call(...)`), and optional
    * `reserveUsage`/`refundUsage`/`signal`. See `InternalCacheParams`.
    * @returns The cached value on a hit, or the result of `fn()` on a miss.
@@ -785,6 +1183,137 @@ export class VernLLM {
     return result;
   }
 
+  /**
+   * Streaming counterpart to `runCached`. Three cases:
+   *
+   * - Hit: no live generation to relay. Returns immediately with
+   *   `finalResult` resolved to the cached value and a one-shot `chunks`
+   *   replay built from it, so `for await (const c of chunks)` call sites
+   *   work identically on a hit or a miss. No usage hooks fire, since
+   *   nothing was actually spent.
+   * - Miss, nothing else in flight for this key: delegates to
+   *   `registerStreamTrigger`, which opens the stream and relays its
+   *   `chunks` live.
+   * - Miss, but another call for the same key is already in flight: this
+   *   call has no live chunks of its own to relay, so it's treated like a
+   *   delayed hit. `finalResult` shares the trigger's in-flight promise
+   *   (the same `this.inFlight` map non-streaming `runCached` uses, so
+   *   streaming and non-streaming `cachedCall`s for the same key coalesce
+   *   against each other too), and `chunks` is a one-shot replay built
+   *   once that promise resolves.
+   */
+  private async runCachedStream<T>(
+    params: InternalCacheStreamParams<T>,
+    hasTools: boolean,
+  ): Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }> {
+    const resolvedKey = await this.resolveCacheKey(params.cacheKey);
+    const resolvedParams =
+      resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
+
+    const cached = await this.cache.get(resolvedKey);
+
+    if (cached.hit) {
+      const value = cached.value as T;
+
+      return { chunks: buildReplayChunks(value, hasTools), finalResult: Promise.resolve(value) };
+    }
+
+    const existing = this.inFlight.get(resolvedKey) as Promise<T> | undefined;
+
+    if (existing) {
+      const finalResult = withReservedUsage(
+        resolvedParams,
+        true,
+        () => existing,
+        params.signal,
+        (logMessage, error) => this.logRefundError(logMessage, error),
+      );
+
+      return { chunks: buildReplayChunksFromPromise(finalResult, hasTools), finalResult };
+    }
+
+    return this.registerStreamTrigger(resolvedParams);
+  }
+
+  /**
+   * Opens the shared stream for a cache miss and tracks its settled value
+   * in `this.inFlight` until it resolves or rejects. Writes to the cache
+   * on success only, matching `runAndCache`.
+   *
+   * Registers the in-flight promise synchronously, before anything async
+   * runs, so a concurrent `cachedCall` for the same key always sees it in
+   * time to join instead of triggering its own stream. Settlement is
+   * wired onto the whole `withReservedUsageForStream` call rather than a
+   * line inside its callback, so any failure point (reserving usage,
+   * opening the stream, or the stream itself) reliably settles the
+   * in-flight entry instead of leaving it stuck.
+   */
+  private registerStreamTrigger<T>(
+    params: InternalCacheStreamParams<T>,
+  ): Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }> {
+    let resolveInFlight!: (value: T) => void;
+    let rejectInFlight!: (error: unknown) => void;
+
+    const inFlightResult = new Promise<T>((resolve, reject) => {
+      resolveInFlight = resolve;
+      rejectInFlight = reject;
+    });
+
+    this.inFlight.set(params.cacheKey, inFlightResult);
+
+    void inFlightResult
+      .catch(() => {})
+      .finally(() => {
+        this.inFlight.delete(params.cacheKey);
+      });
+
+    const streamPromise = withReservedUsageForStream(
+      params,
+      async () => {
+        const opened = await params.openStream();
+
+        const trackedResult: Promise<T> = opened.finalResult.then(
+          async (value) => {
+            try {
+              await this.cache.set(params.cacheKey, value, params.ttl);
+            } catch (error) {
+              this.logger.error('[VernLLM] cache write failed', {
+                message: error instanceof Error ? error.message : 'unknown',
+              });
+            }
+
+            return value;
+          },
+          (error: unknown) => {
+            // Failed calls aren't cached, matching `runAndCache`, which
+            // only calls `cache.set` after `fn()` succeeds. Rethrown
+            // unchanged so both the refund logic attached downstream and
+            // `inFlightResult` see the real failure.
+            throw error;
+          },
+        );
+
+        return { chunks: opened.chunks, finalResult: trackedResult };
+      },
+      params.signal,
+      (logMessage, error) => this.logRefundError(logMessage, error),
+    );
+
+    // Settles `inFlightResult` (registered above) based on `streamPromise`'s
+    // own outcome, not a line inside its callback. See this function's
+    // docs for why.
+    streamPromise.then(
+      (opened) => {
+        opened.finalResult.then(resolveInFlight, rejectInFlight);
+      },
+      (error: unknown) => {
+        rejectInFlight(error);
+      },
+    );
+
+    return streamPromise;
+  }
+
   /** Logs a failed refundUsage attempt via the configured logger. */
   private logRefundError(logMessage: string, error: unknown): void {
     this.logger.error(logMessage, {
@@ -797,38 +1326,46 @@ export class VernLLM {
    * automatically get retry/timeout/circuit-breaker behavior. `reserveUsage`/
    * `refundUsage` are read from the top-level params only. Concurrent misses
    * for the same `cacheKey` share a single in-flight call, avoiding cache
-   * stampedes.
+   * stampedes. Supports `stream: true` and `tools` in any combination.
    *
-   * When `call.tools` is set, this caches the *whole*
-   * `CallWithToolsResult`, including `tool_calls` results, not just final
-   * answers. Whether that's appropriate depends on the tool: caching "the
-   * model decided to call get_weather" is usually fine to reuse briefly;
-   * caching a decision made under permissions or account state that can
-   * change between calls is not (see the tool-calling design doc's caching
-   * guidance). If that distinction matters for your tools, use a short
-   * `ttl` or route `tool_calls` results through a separate `cacheKey`/`ttl`
-   * than final answers, rather than relying on this method to guess.
+   * When `call.tools` is set, this caches the whole `CallWithToolsResult`,
+   * including `tool_calls` results, not just final answers. Whether
+   * that's appropriate depends on the tool: caching "the model decided to
+   * call get_weather" is usually fine to reuse briefly, but caching a
+   * decision made under permissions or account state that can change
+   * between calls is not. Use a short `ttl` or a separate `cacheKey` for
+   * such tools if this distinction matters.
    *
    * There is no public way to cache an arbitrary non-LLM function through
-   * `VernLLM` — this method always composes with `call()`. For
-   * general-purpose caching/coalescing unrelated to an LLM call, use a
-   * dedicated caching library at the application level instead.
+   * `VernLLM`. This method always composes with `call()`. For
+   * general-purpose caching unrelated to an LLM call, use a dedicated
+   * caching library at the application level instead.
    *
-   * @param params - `cacheKey`, `ttl`, and optional
+   * @param params `cacheKey`, `ttl`, and optional
    * `reserveUsage`/`refundUsage`/`signal`, plus `call`, the `CallParams`
-   * (optionally with `tools`) to pass through to `this.call(...)`. The
-   * top-level `signal` governs the cached operation and its usage hooks
-   * only; to also abort the underlying provider request, set `signal`
-   * inside `call`.
+   * (optionally with `tools` and/or `stream`) to pass through to
+   * `this.call(...)`. The top-level `signal` governs the cached operation
+   * and its usage hooks only; to also abort the underlying provider
+   * request, set `signal` inside `call`.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
+  async cachedCall<T>(
+    params: CachedStreamToolCallParams<T>,
+  ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
+
+  async cachedCall<T>(params: CachedStreamCallParams<T>): Promise<StreamCallResult<T>>;
+
   async cachedCall<T>(params: CachedToolCallParams<T>): Promise<CallWithToolsResult<T>>;
 
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T>;
 
   async cachedCall<T>(
-    params: CachedCallParams<T> | CachedToolCallParams<T>,
-  ): Promise<T | CallWithToolsResult<T>> {
+    params:
+      | CachedCallParams<T>
+      | CachedToolCallParams<T>
+      | CachedStreamCallParams<T>
+      | CachedStreamToolCallParams<T>,
+  ): Promise<T | CallWithToolsResult<T> | StreamCallResult<T | CallWithToolsResult<T>>> {
     const { call: callParams, ...cacheParams } = params;
 
     const { reserveUsage, refundUsage, ...restCallParams } = callParams;
@@ -836,6 +1373,18 @@ export class VernLLM {
     if (reserveUsage || refundUsage) {
       this.logger.warn(
         '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedCall; set them at the top level instead.',
+      );
+    }
+
+    if (restCallParams.stream) {
+      const streamParams = restCallParams as StreamEnabledCallParams<T>;
+
+      return this.runCachedStream(
+        {
+          ...cacheParams,
+          openStream: () => this.call(streamParams),
+        },
+        Boolean(restCallParams.tools),
       );
     }
 

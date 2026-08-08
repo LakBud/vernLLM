@@ -39,19 +39,28 @@ const llm = new VernLLM({
   debug: false,
 });
 
-const result = await llm.cachedCall({
-  cacheKey: 'resume-demo-001',
+const getWeather = {
+  name: 'get_weather',
+  description: 'Gets the current weather for a city',
+  parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+};
+
+const { chunks, finalResult } = await llm.cachedCall({
+  cacheKey: 'weather-demo-001',
   ttl: 60,
   call: {
-    requestId: 'resume-demo-001',
-    systemPrompt: 'Extract resume data.',
-    userContent: `
-      Senior TypeScript engineer,
-      6 years, React + Node + AWS.
-    `,
-    schema: ResumeSchema,
+    requestId: 'weather-demo-001',
+    userContent: "What's the weather in New York?",
+    tools: [getWeather],
+    stream: true,
   },
 });
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+
+const result = await finalResult; // cached, retried, and streamed, tool calls included
 ```
 
 Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, Ollama, Anthropic, Gemini, AWS Bedrock, or any provider reachable over HTTP via a `fromFetch` adapter.

@@ -1,0 +1,180 @@
+---
+title: Streaming Responses
+description: Relay a streaming call() to an HTTP client, with cancellation and cached replays handled correctly
+---
+
+<a href="/docs/core/streaming">Streaming</a> covers the `stream: true` contract itself. This guide
+walks through the part that comes right after, getting those chunks in front of a user, using a
+plain HTTP route as the example, and calling out the couple of spots where a naive relay gets
+streaming semantics wrong.
+
+## A basic Server-Sent Events route
+
+The shortest path from `llm.call({ stream: true })` to a browser is Server-Sent Events. Forward
+each `text-delta` as it arrives, and close the connection once `finalResult` settles:
+
+```ts title="streaming-sse-route.ts"
+import type { Request, Response } from 'express';
+
+export async function streamChat(req: Request, res: Response) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const { chunks, finalResult } = await llm.call({
+    userContent: req.body.message,
+    history: req.body.history,
+    stream: true,
+  });
+
+  try {
+    for await (const chunk of chunks) {
+      if (chunk.type === 'text-delta') {
+        res.write(`data: ${JSON.stringify({ delta: chunk.delta })}\n\n`);
+      }
+    }
+
+    const result = await finalResult; // surfaces a mid-stream failure, see below
+
+    res.write(`data: ${JSON.stringify({ done: true, result })}\n\n`);
+  } catch (err) {
+    res.write(`data: ${JSON.stringify({ error: describeToClient(err) })}\n\n`);
+  } finally {
+    res.end();
+  }
+}
+```
+
+<Callout type="warn">
+  A failure after the first chunk arrives rejects `finalResult`, not `chunks` itself. The `for
+  await` loop over `chunks` finishes normally even on a mid-stream failure, so the error only
+  surfaces when you `await finalResult` afterward, as in the example above. Skipping that `await`
+  silently drops the failure from view. See{' '}
+  <a href="/docs/core/streaming#what-gets-retried">What gets retried</a> for why a mid-stream
+  failure isn't retried automatically.
+</Callout>
+
+## Forwarding client cancellation
+
+If the browser disconnects (the user navigates away, closes the tab), propagate that as an
+`AbortSignal` into the call so the underlying provider request stops too, rather than continuing to
+generate and bill for a response nobody will see:
+
+```ts title="streaming-sse-cancellation.ts"
+export async function streamChat(req: Request, res: Response) {
+  const controller = new AbortController();
+
+  req.on('close', () => controller.abort());
+
+  const { chunks, finalResult } = await llm.call({
+    userContent: req.body.message,
+    stream: true,
+    signal: controller.signal,
+  });
+
+  // ...same relay loop as above
+}
+```
+
+See <a href="/docs/core/cancellation">Cancellation & Timeouts</a> for exactly what firing `signal`
+does to an in-flight request and how it interacts with retries.
+
+## Rendering tool call chunks
+
+If the call also sets `tools`, chunks of type `tool_call_delta` arrive interleaved with
+`text-delta` chunks. A client rendering both usually wants to know when a tool call starts and
+when the assistant is done building its arguments, which the `index` field on each chunk gives you
+for free:
+
+```ts title="streaming-tool-call-relay.ts"
+const pendingCalls = new Map<number, { name?: string; args: string }>();
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') {
+    res.write(`data: ${JSON.stringify({ type: 'text', delta: chunk.delta })}\n\n`);
+  }
+
+  if (chunk.type === 'tool_call_delta') {
+    const existing = pendingCalls.get(chunk.index) ?? { args: '' };
+
+    existing.name ??= chunk.name;
+    existing.args += chunk.argsDelta ?? '';
+
+    pendingCalls.set(chunk.index, existing);
+
+    res.write(
+      `data: ${JSON.stringify({ type: 'tool_call', index: chunk.index, name: existing.name })}\n\n`,
+    );
+  }
+}
+```
+
+Don't parse `existing.args` as JSON yourself while it's still arriving, it's a partial string and
+will not be valid JSON until the call finishes. Read the fully parsed arguments off `finalResult`
+instead, exactly as you would for a non-streaming tool call. See{' '}
+
+<a href="/docs/core/streaming#tool-calling-while-streaming">Tool calling while streaming</a>.
+
+## Streaming a cached call
+
+If the same route also uses `cachedCall`, be aware that a cache hit or a coalesced joiner does not
+deliver a token-by-token replay. For a plain text response it delivers one flat chunk containing
+the entire cached content; for a cached tool-call response it delivers one `tool_call_delta` per
+cached tool call (each with its full arguments in one shot), followed by an optional trailing text
+chunk. The relay loop above needs no changes to handle either case correctly since it already just
+forwards whatever chunks arrive, but a UI that assumes every response trickles in one word (or one
+argument fragment) at a time should expect an occasional response that just appears all at once:
+
+```ts title="streaming-cached-route.ts"
+const { chunks, finalResult } = await llm.cachedCall({
+  cacheKey: `chat:${conversationId}:${messageHash}`,
+  ttl: 300,
+  call: {
+    userContent: req.body.message,
+    stream: true,
+  },
+});
+```
+
+See <a href="/docs/core/streaming#caching-a-streaming-call">Caching a streaming call</a> for exactly
+which of the three cases (miss, hit, coalesced) a given request falls into.
+
+## A note on framework-native streaming helpers
+
+Frameworks like Next.js expose their own `ReadableStream`-based streaming response helpers instead
+of raw `res.write()`. The relay logic is the same either way, only the part that writes a chunk out
+to the transport changes:
+
+```ts title="streaming-next-route.ts"
+export async function POST(req: Request) {
+  const body = await req.json();
+
+  const { chunks, finalResult } = await llm.call({
+    userContent: body.message,
+    stream: true,
+  });
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+
+      try {
+        for await (const chunk of chunks) {
+          if (chunk.type === 'text-delta') {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk.delta)}\n\n`));
+          }
+        }
+
+        await finalResult;
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+}
+```

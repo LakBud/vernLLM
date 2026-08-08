@@ -1,5 +1,11 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-import { LLMError, type ContentBlock, type LLMClient, type WireToolCall } from '../types/index.js';
+import {
+  LLMError,
+  type ContentBlock,
+  type LLMClient,
+  type WireStreamChunk,
+  type WireToolCall,
+} from '../types/index.js';
 
 /** Bedrock Converse's supported inline image formats. */
 type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
@@ -67,7 +73,48 @@ export interface BedrockConverseClient {
     };
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
   }>;
+
+  /**
+   * Optional. Required only for `stream: true` calls. Takes the same
+   * request shape `converse` does, returning `{ stream }`, matching
+   * `ConverseStreamCommand`'s real AWS SDK v3 output shape, an
+   * `AsyncIterable` of incremental events under a `stream` property,
+   * rather than the whole response being the iterable directly.
+   */
+  converseStream?(
+    params: Parameters<BedrockConverseClient['converse']>[0],
+    options: { signal: AbortSignal },
+  ): Promise<{ stream: AsyncIterable<BedrockConverseStreamEvent> }>;
 }
+
+/**
+ * One event of a Bedrock `ConverseStreamCommand` response's `stream`.
+ * Content blocks (text or toolUse) are identified by `contentBlockIndex`,
+ * Converse's own convention for correlating start/delta/stop events across
+ * possibly-interleaved blocks, mirrored directly by VernLLM's
+ * `tool_call_delta.index`.
+ */
+type BedrockConverseStreamEvent =
+  | { messageStart: { role: 'assistant' } }
+  | {
+      contentBlockStart: {
+        contentBlockIndex: number;
+        start?: { toolUse?: { toolUseId?: string; name?: string } };
+      };
+    }
+  | {
+      contentBlockDelta: {
+        contentBlockIndex: number;
+        delta?: { text?: string } | { toolUse?: { input?: string } };
+      };
+    }
+  | { contentBlockStop: { contentBlockIndex: number } }
+  | { messageStop: { stopReason?: string } }
+  | {
+      metadata: {
+        usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+      };
+    };
 
 /** Maps a `ContentBlock` image MIME type, already validated, to Converse's `format` enum. */
 function toBedrockImageFormat(mimeType: string): BedrockImageFormat {
@@ -131,6 +178,112 @@ export interface BedrockAdapterOptions {
   toolUseSupportedModels?: string[] | ((modelId: string) => boolean);
 }
 
+type BedrockRequest = Parameters<BedrockConverseClient['converse']>[0];
+
+/**
+ * Builds the Converse-shaped request from VernLLM's wire params, shared
+ * between `create` and `createStream` so both go through identical
+ * translation (system prompt, message shaping, the jsonSchema →
+ * forced-single-tool mapping, and the `toolUseSupportedModels` preflight
+ * check all happen exactly once).
+ *
+ * Returns `toolName` alongside the request: when set, the model was forced
+ * to call a single synthetic tool standing in for `jsonSchema` output, and
+ * both `create` and `createStream` need to know this so they can unwrap
+ * that tool call back into plain text content instead of treating it like
+ * a real tool call.
+ */
+function buildBedrockRequest(
+  params: Parameters<LLMClient['chat']['completions']['create']>[0],
+  toolUseSupportedModels: BedrockAdapterOptions['toolUseSupportedModels'],
+): { request: BedrockRequest; toolName: string | undefined } {
+  const systemMessage = params.messages.find((m) => m.role === 'system');
+
+  // Keep user, assistant, and tool turns, in order. Converse has no
+  // separate 'tool' role: tool results travel as a user-role message
+  // with toolResult content blocks, and an assistant's tool
+  // requests travel as toolUse content blocks on its own turn.
+  const conversationMessages = params.messages.filter(
+    (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
+  );
+
+  const jsonSchema =
+    params.response_format?.type === 'json_schema' ? params.response_format.json_schema : undefined;
+
+  const toolName = jsonSchema?.name.trim();
+
+  if (jsonSchema && !toolName) {
+    throw new LLMError('json_schema.name must not be empty.', 'validation');
+  }
+
+  let jsonInstruction: string | undefined;
+  let toolConfig: NonNullable<BedrockRequest['toolConfig']> | undefined;
+
+  if (jsonSchema) {
+    // jsonSchema and real `tools` are mutually exclusive by the time
+    // a call reaches here (enforced in vernLLM.ts).
+    const { schema, description, strict } = jsonSchema;
+
+    toolConfig = {
+      tools: [
+        {
+          toolSpec: {
+            name: toolName!,
+            description,
+            inputSchema: { json: schema },
+            strict,
+          },
+        },
+      ],
+      toolChoice: { tool: { name: toolName! } },
+    };
+  } else if (params.response_format?.type === 'json_object') {
+    // No schema to build a tool from, fall back to a prompt instruction
+    jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
+  } else if (params.tools?.length) {
+    toolConfig = {
+      tools: params.tools.map((t) => ({
+        toolSpec: {
+          name: t.function.name,
+          description: t.function.description,
+          inputSchema: { json: t.function.parameters },
+        },
+      })),
+      toolChoice: toBedrockToolChoice(params.tool_choice),
+    };
+  }
+
+  if (jsonSchema && toolUseSupportedModels) {
+    const isSupported = Array.isArray(toolUseSupportedModels)
+      ? toolUseSupportedModels.includes(params.model)
+      : toolUseSupportedModels(params.model);
+
+    if (!isSupported) {
+      throw new LLMError(
+        `Bedrock model "${params.model}" is not listed in toolUseSupportedModels, but jsonSchema structured output requires Converse tool use.`,
+        'validation',
+      );
+    }
+  }
+
+  const systemParts = [systemMessage?.content, jsonInstruction].filter((s): s is string =>
+    Boolean(s),
+  );
+
+  const request: BedrockRequest = {
+    modelId: params.model,
+    messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toBedrockMessage(m))),
+    system: systemParts.length ? systemParts.map((text) => ({ text })) : undefined,
+    inferenceConfig: {
+      ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+      maxTokens: params.max_tokens,
+    },
+    ...(toolConfig ? { toolConfig } : {}),
+  };
+
+  return { request, toolName };
+}
+
 /**
  * Wraps a Bedrock Converse-API client so it satisfies the `LLMClient`
  * interface VernLLM uses for OpenAI/Groq. The Converse API is unified
@@ -155,6 +308,18 @@ export interface BedrockAdapterOptions {
  * `tools` maps to Converse's native `toolConfig`/`toolUse`/`toolResult`;
  * `tool_choice` maps to `toolConfig.toolChoice`. Mutually exclusive with
  * `jsonSchema` by the time a call reaches here (enforced in vernLLM.ts).
+ *
+ * `createStream` calls `converseStream` (optional on `BedrockConverseClient`
+ *, required only if the caller sets `stream: true`) and translates its
+ * `contentBlockStart`/`contentBlockDelta`/`metadata` events into
+ * `WireStreamChunk`s. Content blocks are tracked by `contentBlockIndex`,
+ * same as `fromAnthropic`'s block-index tracking (Converse's streaming
+ * shape is structurally close to Anthropic's own, both being tool-use-aware
+ * content-block streams), including the same `json-tool` unwrapping: a
+ * `jsonSchema`-forced tool's `toolUse.input` deltas are re-emitted as
+ * `text-delta`, not `tool_call_delta`, so the accumulated result lands in
+ * `finalizeResponse`'s `content` path exactly like the non-streaming
+ * `create` branch above unwraps it.
  */
 export function fromBedrock(
   bedrockClient: BedrockConverseClient,
@@ -166,98 +331,9 @@ export function fromBedrock(
     chat: {
       completions: {
         async create(params, requestOptions) {
-          const systemMessage = params.messages.find((m) => m.role === 'system');
+          const { request, toolName } = buildBedrockRequest(params, toolUseSupportedModels);
 
-          // Keep user, assistant, and tool turns, in order. Converse has no
-          // separate 'tool' role: tool results travel as a user-role message
-          // with toolResult content blocks, and an assistant's tool
-          // requests travel as toolUse content blocks on its own turn.
-          const conversationMessages = params.messages.filter(
-            (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
-          );
-
-          const jsonSchema =
-            params.response_format?.type === 'json_schema'
-              ? params.response_format.json_schema
-              : undefined;
-
-          const toolName = jsonSchema?.name.trim();
-
-          if (jsonSchema && !toolName) {
-            throw new LLMError('json_schema.name must not be empty.', 'validation');
-          }
-
-          let jsonInstruction: string | undefined;
-          let toolConfig:
-            | NonNullable<Parameters<BedrockConverseClient['converse']>[0]['toolConfig']>
-            | undefined;
-
-          if (jsonSchema) {
-            // jsonSchema and real `tools` are mutually exclusive by the time
-            // a call reaches here (enforced in vernLLM.ts).
-            const { schema, description, strict } = jsonSchema;
-
-            toolConfig = {
-              tools: [
-                {
-                  toolSpec: {
-                    name: toolName!,
-                    description,
-                    inputSchema: { json: schema },
-                    strict,
-                  },
-                },
-              ],
-              toolChoice: { tool: { name: toolName! } },
-            };
-          } else if (params.response_format?.type === 'json_object') {
-            // No schema to build a tool from, fall back to a prompt instruction
-            jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
-          } else if (params.tools?.length) {
-            toolConfig = {
-              tools: params.tools.map((t) => ({
-                toolSpec: {
-                  name: t.function.name,
-                  description: t.function.description,
-                  inputSchema: { json: t.function.parameters },
-                },
-              })),
-              toolChoice: toBedrockToolChoice(params.tool_choice),
-            };
-          }
-
-          if (jsonSchema && toolUseSupportedModels) {
-            const isSupported = Array.isArray(toolUseSupportedModels)
-              ? toolUseSupportedModels.includes(params.model)
-              : toolUseSupportedModels(params.model);
-
-            if (!isSupported) {
-              throw new LLMError(
-                `Bedrock model "${params.model}" is not listed in toolUseSupportedModels, but jsonSchema structured output requires Converse tool use.`,
-                'validation',
-              );
-            }
-          }
-
-          const systemParts = [systemMessage?.content, jsonInstruction].filter((s): s is string =>
-            Boolean(s),
-          );
-
-          const response = await bedrockClient.converse(
-            {
-              modelId: params.model,
-              messages: mergeConsecutiveToolResults(
-                conversationMessages.map((m) => toBedrockMessage(m)),
-              ),
-              system: systemParts.length ? systemParts.map((text) => ({ text })) : undefined,
-              inferenceConfig: {
-                ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-                maxTokens: params.max_tokens,
-              },
-              ...(toolConfig ? { toolConfig } : {}),
-            },
-            requestOptions,
-          );
+          const response = await bedrockClient.converse(request, requestOptions);
 
           let text: string;
           let wireToolCalls: WireToolCall[] | undefined;
@@ -319,6 +395,79 @@ export function fromBedrock(
               total_tokens: response.usage?.totalTokens,
             },
           };
+        },
+
+        async *createStream(params, requestOptions) {
+          if (!bedrockClient.converseStream) {
+            throw new LLMError(
+              'stream: true requires a Bedrock client with converseStream',
+              'validation',
+            );
+          }
+
+          const { request, toolName } = buildBedrockRequest(params, toolUseSupportedModels);
+
+          const { stream } = await bedrockClient.converseStream(request, requestOptions);
+
+          const blockKinds = new Map<number, 'text' | 'tool_use' | 'json-tool'>();
+
+          for await (const event of stream) {
+            if ('contentBlockStart' in event) {
+              const { contentBlockIndex, start } = event.contentBlockStart;
+
+              if (start?.toolUse) {
+                const kind = start.toolUse.name === toolName ? 'json-tool' : 'tool_use';
+
+                blockKinds.set(contentBlockIndex, kind);
+
+                if (kind === 'tool_use' && !toolName) {
+                  yield {
+                    type: 'tool_call_delta',
+                    index: contentBlockIndex,
+                    id: start.toolUse.toolUseId,
+                    name: start.toolUse.name,
+                  };
+                }
+              } else {
+                blockKinds.set(contentBlockIndex, 'text');
+              }
+            } else if ('contentBlockDelta' in event) {
+              const { contentBlockIndex, delta } = event.contentBlockDelta;
+
+              // Only surfaced as real content when there's no forced
+              // json-schema tool in play, see the identical guard (and
+              // its full rationale) in `fromAnthropic`'s `createStream`.
+              // Converse's streaming shape is structurally close enough to
+              // Anthropic's own that the same corruption risk applies: a
+              // genuine text block alongside a forced tool call would
+              // otherwise get concatenated into the same buffer as the
+              // tool's JSON payload.
+              if (delta && 'text' in delta && delta.text !== undefined && !toolName) {
+                yield { type: 'text-delta', delta: delta.text };
+              } else if (delta && 'toolUse' in delta && delta.toolUse?.input !== undefined) {
+                const kind = blockKinds.get(contentBlockIndex);
+
+                if (kind === 'json-tool') {
+                  yield { type: 'text-delta', delta: delta.toolUse.input };
+                } else if (!toolName) {
+                  yield {
+                    type: 'tool_call_delta',
+                    index: contentBlockIndex,
+                    argumentsDelta: delta.toolUse.input,
+                  } satisfies WireStreamChunk;
+                }
+              }
+            } else if ('metadata' in event && event.metadata.usage) {
+              yield {
+                type: 'usage',
+                usage: {
+                  prompt_tokens: event.metadata.usage.inputTokens,
+                  completion_tokens: event.metadata.usage.outputTokens,
+                  total_tokens: event.metadata.usage.totalTokens,
+                },
+              };
+            }
+          }
         },
       },
     },

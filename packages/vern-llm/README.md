@@ -45,23 +45,41 @@ const llm = new VernLLM({
   circuitBreaker: true,
 });
 
-const result = await llm.call({
-  systemPrompt: 'Return JSON: { "skills": string[] }',
-  userContent: 'Extract skills from: ...',
+const getWeather = {
+  name: 'get_weather',
+  description: 'Gets the current weather for a city',
+  parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+};
+
+const { chunks, finalResult } = await llm.cachedCall({
+  cacheKey: 'weather-demo-001',
+  ttl: 60,
+  call: {
+    userContent: "What's the weather in New York?",
+    tools: [getWeather],
+    stream: true,
+  },
 });
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+
+const result = await finalResult; // cached, retried, and streamed, tool calls included
 ```
 
 ## Why vern-llm?
 
 - **Retries with backoff**: transient failures retry automatically; validation errors and non-retryable status codes fail fast instead
 - **Structured output**: pass a Zod schema, get a typed, validated result back
-- **Tool calling**: pass `tools`, VernLLM handles retries and validation around them the same as any other call; you run the tools and continue the conversation
+- **Tool calling**: pass `tools`, vern-llm handles retries and validation around them the same as any other call; you run the tools and continue the conversation
+- **Streaming**: set `stream: true` on any call and get live chunks alongside the same validated result the call would otherwise resolve to
 - **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
 - **Caching**: wrap any LLM call with `cachedCall`, bring your own cache adapter
 - **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back
 - **Usage tracking**: `onUsage` and `onUsageFailure` report token spend on success and on failure, so nothing goes unaccounted for when a call fails after the provider already responded
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
-- **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; VernLLM relies on compatible interfaces rather than specific implementations.
+- **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; vern-llm relies on compatible interfaces rather than specific implementations.
 
 See the [docs](https://vernllm.vercel.app) for adapter setup, caching, the circuit breaker, and structured output in depth.
 

@@ -112,14 +112,14 @@ describe('CircuitBreaker (unit)', () => {
   });
 });
 
-describe('VernLLM — circuit breaker integration', () => {
+describe('VernLLM, circuit breaker integration', () => {
   it('is undefined by default (opt-in)', () => {
     const { client } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm' });
     expect(llm.getCircuitState()).toBeUndefined();
   });
 
-  it('records exactly one failure per failed call() — not one per attempt', async () => {
+  it('records exactly one failure per failed call(), not one per attempt', async () => {
     const { client } = createMockClient([new Error('a'), new Error('b')]);
     const llm = new VernLLM({
       client,
@@ -130,7 +130,7 @@ describe('VernLLM — circuit breaker integration', () => {
     });
 
     await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
-    // Both attempts failed within a single call() — breaker should register
+    // Both attempts failed within a single call(), breaker should register
     // this as ONE consecutive failure, not two (regression test for a bug
     // where recordFailure() was invoked both in the catch block and again
     // after the loop).

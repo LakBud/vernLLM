@@ -105,6 +105,21 @@ export interface CallParams<T = unknown> extends UsageHooks {
 
   /** Defaults to `'auto'` when `tools` is set. */
   toolChoice?: ToolChoice;
+
+  /**
+   * Streams the response incrementally instead of resolving once. Default:
+   * false. Requires a client/adapter that implements `createStream`.
+   * Retry/timeout/circuit-breaker guarantees apply only to opening the
+   * stream (through the first chunk); a failure after that point rejects
+   * `finalResult` directly and is not retried, since a mid-stream failure
+   * isn't connection-time evidence for the circuit breaker, the attempt
+   * already counted as a success once the first chunk arrived. Once the
+   * stream opens successfully, `finalResult` still resolves to the same
+   * validated `T`/`CallWithToolsResult<T>` shape `call()` would have
+   * returned for the same params with `stream` omitted. See
+   * `StreamCallResult`.
+   */
+  stream?: boolean;
 }
 
 /**
@@ -119,7 +134,7 @@ export type ToolEnabledCallParams<T> = CallParams<T> & {
 };
 
 /** Shared cache-configuration fields, minus the internal `fn` primitive. */
-interface CachedCallInput extends UsageHooks {
+export interface CachedCallInput extends UsageHooks {
   cacheKey: string;
   ttl: number;
   signal?: AbortSignal;

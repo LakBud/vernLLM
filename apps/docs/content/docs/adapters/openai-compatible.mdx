@@ -3,7 +3,7 @@ title: OpenAI-Compatible
 description: Zero-transform passthrough for OpenAI-compatible providers
 ---
 
-Many hosted inference providers expose the same wire format as OpenAI's Chat Completions API. `vern-llm` includes a named adapter for each supported provider, but they're all thin aliases around the same OpenAI-compatible adapter: `fromOpenAICompatible()`.
+Many hosted inference providers expose the same wire format as OpenAI's Chat Completions API. `VernLLM` includes a named adapter for each supported provider, but they're all thin aliases around the same OpenAI-compatible adapter: `fromOpenAICompatible()`.
 
 The adapter preserves the OpenAI-compatible request shape and only normalizes fields VernLLM adds on top of the standard Chat Completions format. In particular, multimodal `ContentBlock[]` input is translated into OpenAI's native content array format, while plain string messages pass through unchanged.
 
@@ -80,6 +80,38 @@ adapter passes them through unchanged. The one normalization it applies is strip
 `is_error` from outgoing `tool` messages, since that field is an Anthropic-only concept with no
 OpenAI-compatible equivalent. See <a href="/docs/core/tool-calling">Tool Calling</a> for the full
 reference.
+
+## Streaming
+
+`fromOpenAICompatible` implements `createStream` by calling the same endpoint as `create` with
+`stream: true`. No extra setup is needed beyond the client already passed to the adapter:
+
+```ts title="openai-compatible-streaming.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Write a short poem about the ocean.',
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+```
+
+<Callout>
+  A final `usage` chunk requires the provider to support `stream_options: { include_usage: true }`.
+  `fromOpenAICompatible` and its named aliases send this by default, `supportsStreamUsage` defaults
+  to `true`. If your provider rejects unrecognized fields on a streaming request, pass{' '}
+  `{ supportsStreamUsage: false }` as the second argument to omit `stream_options` entirely:
+</Callout>
+
+```ts title="openai-compatible-streaming-no-usage.ts"
+const llm = new VernLLM({
+  client: fromOpenAICompatible(client, { supportsStreamUsage: false }),
+  model: 'some-model',
+});
+```
+
+See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract.
 
 ## Multimodal input
 

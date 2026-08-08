@@ -6,6 +6,7 @@
     "retries",
     "structured-output",
     "tool-calling",
+    "streaming",
     "caching",
     "usage-metering",
     "usage-tracking",

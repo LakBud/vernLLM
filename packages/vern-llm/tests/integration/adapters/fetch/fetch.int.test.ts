@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromFetch } from '../../../src/adapters/fetch.js';
+import { fromFetch } from '../../../../src/adapters/fetch.js';
 
 describe('Fetch adapter integration', () => {
   it('maps HTTP provider responses into LLMClient format', async () => {

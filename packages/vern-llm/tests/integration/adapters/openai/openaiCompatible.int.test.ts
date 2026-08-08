@@ -4,7 +4,7 @@ import {
   fromOpenAICompatible,
   fromGroq,
   fromMistral,
-} from '../../../src/adapters/openaiCompatible.js';
+} from '../../../../src/adapters/openaiCompatible.js';
 
 describe('OpenAI compatible adapters', () => {
   it('passes through compatible clients', async () => {

@@ -1,3 +1,4 @@
+import type { StreamChunk } from '../types/stream.js';
 import type { UsageHooks } from '../types/usage.js';
 
 /**
@@ -15,5 +16,18 @@ export interface InternalCacheParams<T> extends UsageHooks {
   cacheKey: string;
   ttl: number;
   fn: () => Promise<T>;
+  signal?: AbortSignal;
+}
+
+/**
+ * Streaming counterpart to `InternalCacheParams`. `openStream` replaces
+ * `fn`: instead of a single awaited value, it opens a live stream (same
+ * shape `VernLLM.call({ stream: true })` returns). Only `vernLLM.ts` (via
+ * `runCachedStream`) uses this.
+ */
+export interface InternalCacheStreamParams<T> extends UsageHooks {
+  cacheKey: string;
+  ttl: number;
+  openStream: () => Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }>;
   signal?: AbortSignal;
 }

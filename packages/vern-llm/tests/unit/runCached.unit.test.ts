@@ -297,7 +297,7 @@ describe('VernLLM.runCached (internal)', () => {
     expect(refundUsage).toHaveBeenCalledTimes(1);
   });
 
-  it('does not call refundUsage when fn throws and no reserveUsage was provided — nothing was reserved', async () => {
+  it('does not call refundUsage when fn throws and no reserveUsage was provided, nothing was reserved', async () => {
     const refundUsage = vi.fn();
     const fn = vi.fn(async () => {
       throw new Error('fn failed');
@@ -310,7 +310,7 @@ describe('VernLLM.runCached (internal)', () => {
     expect(refundUsage).not.toHaveBeenCalled();
   });
 
-  it('does not throw if refundUsage itself throws — original error still propagates', async () => {
+  it('does not throw if refundUsage itself throws, original error still propagates', async () => {
     const fn = vi.fn(async () => {
       throw new Error('original failure');
     });
@@ -330,7 +330,7 @@ describe('VernLLM.runCached (internal)', () => {
     const refundUsage = vi.fn();
     const controller = new AbortController();
 
-    // Deliberately ignores the signal, unlike a well-behaved fn — resolves
+    // Deliberately ignores the signal, unlike a well-behaved fn, resolves
     // successfully regardless of whether the caller aborted mid-flight.
     const fn = vi.fn(async () => {
       controller.abort();
@@ -365,7 +365,7 @@ describe('VernLLM.runCached (internal)', () => {
       asTestable(llm).runCached({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }),
     ).rejects.toThrow('quota exceeded');
 
-    expect(fn).not.toHaveBeenCalled(); // never should have run — reservation failed first
+    expect(fn).not.toHaveBeenCalled(); // never should have run, reservation failed first
     expect(refundUsage).not.toHaveBeenCalled(); // nothing was reserved, so nothing to refund
   });
 
@@ -735,7 +735,7 @@ describe('VernLLM.runCached (internal)', () => {
     });
 
     // The signal is already aborted by the time this coalesced caller's
-    // withReservedUsage runs, so it short-circuits before ever reserving —
+    // withReservedUsage runs, so it short-circuits before ever reserving,
     // meaning there's nothing to refund either.
     expect(reserveUsage).not.toHaveBeenCalledWith({
       coalesced: true,
