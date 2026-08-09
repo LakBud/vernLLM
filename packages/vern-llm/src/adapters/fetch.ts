@@ -1,5 +1,10 @@
 import { parseSseStream, SSE_PING } from '../internal/sse.js';
-import { LLMError, type LLMClient, type WireStreamChunk } from '../types/index.js';
+import {
+  LLMError,
+  type LLMClient,
+  type WireStreamChunk,
+  type WireToolCall,
+} from '../types/index.js';
 
 /** The chat-completion-shaped request VernLLM builds internally */
 type ChatRequest = Parameters<LLMClient['chat']['completions']['create']>[0];
@@ -69,12 +74,26 @@ export interface FetchAdapterConfig {
   /** Maps VernLLMs internal chat-completion request into the providers raw request body */
   mapRequest: (params: ChatRequest) => unknown;
   /**
-   * Maps the providers raw JSON response into `{ content, usage? }`
-   * `content` is the assistants text (JSON string when JSON mode was requested)
+   * Maps the providers raw JSON response into `{ content, usage?, toolCalls? }`
+   * `content` is the assistants text (JSON string when JSON mode was requested).
+   * `content` may be empty/omitted when the model responded with only tool
+   * calls and no text.
+   *
+   * `toolCalls`, when the model requested one or more tools, is the list of
+   * calls as flat `{ id, name, arguments }` entries (matching this config's
+   * own `toolCalls?: Array<{ id: string; name: string; arguments: string }>`
+   * return type below), each entry's `arguments` already JSON-*encoded* as a
+   * string (not the parsed object), mirroring the wire format every
+   * OpenAI-compatible provider uses. `fromFetch` itself converts these into
+   * `WireToolCall`'s `type`/`function`-wrapped shape before returning them
+   * from `create`. VernLLM parses (and validates, if `argumentsSchema` was
+   * set) the arguments string internally, mapResponse doesn't need to do
+   * that itself.
    */
   mapResponse: (json: unknown) => {
-    content: string;
+    content?: string;
     usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   };
 
   /**
@@ -206,6 +225,19 @@ async function buildRequestInit(
  * code, so VernLLMs `nonRetryableStatus` handling (e.g. failing fast on
  * 401/403) applies here too
  *
+ * Tool calling works the same way as every other adapter: `mapRequest`
+ * receives the full `ChatRequest`, including `tools`/`toolChoice`, so it can
+ * translate them into whatever shape the provider's wire format expects
+ * (typically an OpenAI-`function`-wrapped `tools` array plus a `tool_choice`
+ * field). On the way back, `mapResponse` may return a `toolCalls` array
+ * (id/name/JSON-encoded-arguments-string per call) alongside or instead of
+ * `content`; VernLLM parses and (if `argumentsSchema` was set) validates
+ * those arguments the same way it does for every other adapter. For
+ * `stream: true`, tool-call deltas go through the existing
+ * `mapStreamEvent` seam via `WireStreamChunk`'s `tool_call_delta` variant,
+ * no separate config is needed for streaming vs non-streaming tool calls.
+ *
+
  * `createStream` requires `mapStreamEvent` (there's no non-streaming
  * response to fall back on, unlike the other three optional streaming
  * seams). It opens the request via `requestStream` (defaults to native
@@ -248,10 +280,31 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
           }
 
           const json = await res.json();
-          const { content, usage } = config.mapResponse(json);
+          const { content, usage, toolCalls } = config.mapResponse(json);
+
+          // `.length` guard, not just truthiness: an empty array is
+          // semantically "no tool calls", same as `undefined`. Kept
+          // explicit here rather than relying on downstream consumers
+          // (e.g. `finalizeResponse`'s `wireToolCalls?.length` check) to
+          // treat `[]` as absent, so this stays correct even if that
+          // convention ever changes.
+          const wireToolCalls: WireToolCall[] | undefined = toolCalls?.length
+            ? toolCalls.map((tc) => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.name, arguments: tc.arguments },
+              }))
+            : undefined;
 
           return {
-            choices: [{ message: { content } }],
+            choices: [
+              {
+                message: {
+                  content,
+                  ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
+                },
+              },
+            ],
             usage: usage
               ? {
                   prompt_tokens: usage.promptTokens,

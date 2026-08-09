@@ -10,7 +10,7 @@ description: Requirements, edge cases, and dependency behavior
 - `jsonMode: false` skips JSON parsing entirely and returns the raw string.
 - `jsonMode` defaults to `false`, not `true`, on any call that sets `tools`.
 - `tools` and `jsonSchema`/`schema` are mutually exclusive on the same call and throw `LLMError('validation')` if combined.
-- `fromFetch` has no way to return `tool_calls` from `mapResponse`, so tool calling is not supported through that adapter yet.
+- `fromFetch` supports tool calling: `mapResponse` can return a `toolCalls` array (id/name/JSON-encoded-arguments-string) alongside `content`, translated into the same `WireToolCall` shape every other adapter produces.
 - `stream: true` requires the underlying client/adapter to implement `createStream`. A client that doesn't throws a clear `LLMError('validation')` rather than a confusing runtime failure.
 - A streaming call that fails after at least one chunk has already arrived is not retried, only a failure before the first chunk is. See <a href="/docs/core/streaming#what-gets-retried">What gets retried</a>.
 - `chunks` on a `StreamCallResult` is single-use. Iterating it more than once, or from more than one place concurrently, splits the sequence between consumers rather than replaying it.
