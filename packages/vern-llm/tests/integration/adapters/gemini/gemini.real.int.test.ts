@@ -223,7 +223,10 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
   it('honors an aborted signal against a real Google GenAI SDK client mid-request', async () => {
     server = await startRealSdkServer([{ hang: true }]);
 
-    const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
+    const ai = new GoogleGenAI({
+      apiKey: 'test-key',
+      httpOptions: { baseUrl: server.url },
+    });
 
     const llm = new VernLLM({
       client: fromGemini(asGeminiClient(ai.models)),
@@ -232,10 +235,32 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     });
 
     const controller = new AbortController();
-    const callPromise = llm.call({ userContent: 'hi', jsonMode: false, signal: controller.signal });
 
-    queueMicrotask(() => controller.abort());
+    const callPromise = llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      signal: controller.signal,
+    });
 
-    await expect(callPromise).rejects.toMatchObject({ name: 'LLMError', type: 'aborted' });
+    // Wait until the real SDK has actually reached the mock server before
+    // aborting, so this exercises cancellation of an in-flight request.
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (server!.requests.length > 0) {
+          resolve();
+        } else {
+          setTimeout(check, 0);
+        }
+      };
+
+      check();
+    });
+
+    controller.abort();
+
+    await expect(callPromise).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'aborted',
+    });
   });
 });
