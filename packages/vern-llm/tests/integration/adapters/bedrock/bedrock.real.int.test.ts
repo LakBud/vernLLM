@@ -4,23 +4,16 @@ import {
   ConverseStreamCommand,
 } from '@aws-sdk/client-bedrock-runtime';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fromBedrock, type BedrockConverseClient } from '../../../../src/adapters/bedrock.js';
-import { type StreamChunk } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-import { at } from '../../../helpers.js';
+import { at, drain } from '../../../helpers.js';
 import {
   bedrockEventStreamRaw,
   startRealSdkServer,
   type RealSdkServer,
 } from '../../../realSdkServer.js';
-
-async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
-  const out: StreamChunk[] = [];
-  for await (const chunk of chunks) out.push(chunk);
-  return out;
-}
 
 /**
  * Wraps a real `BedrockRuntimeClient` the way `bedrock.ts`'s own doc comment
@@ -158,7 +151,10 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
             name: 'Summary',
             schema: {
               type: 'object',
-              properties: { headline: { type: 'string' }, score: { type: 'number' } },
+              properties: {
+                headline: { type: 'string' },
+                score: { type: 'number' },
+              },
               required: ['headline', 'score'],
             },
           },
@@ -172,13 +168,19 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
       headline: 'Real SDK works',
       score: 9,
     });
-    expect(result.usage).toEqual({ prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 });
+    expect(result.usage).toEqual({
+      prompt_tokens: 30,
+      completion_tokens: 12,
+      total_tokens: 42,
+    });
 
     const sent = at(server.requests, 0);
     expect(sent.body).toMatchObject({
       toolConfig: {
         tools: [
-          expect.objectContaining({ toolSpec: expect.objectContaining({ name: 'Summary' }) }),
+          expect.objectContaining({
+            toolSpec: expect.objectContaining({ name: 'Summary' }),
+          }),
         ],
         toolChoice: { tool: { name: 'Summary' } },
       },
@@ -189,6 +191,9 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
     server = await startRealSdkServer([
       {
         status: 429,
+        headers: {
+          'x-amzn-errortype': 'ThrottlingException',
+        },
         body: { message: 'Rate limited by mock server' },
       },
     ]);
@@ -217,7 +222,10 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
       {
         body: {
           output: {
-            message: { role: 'assistant', content: [{ text: 'I see a small red square.' }] },
+            message: {
+              role: 'assistant',
+              content: [{ text: 'I see a small red square.' }],
+            },
           },
           usage: { inputTokens: 40, outputTokens: 8, totalTokens: 48 },
         },
@@ -241,10 +249,36 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
 
     const sent = at(server.requests, 0);
     const sentBody = sent.body as {
-      messages: Array<{ content: Array<{ text?: string; image?: { format: string } }> }>;
+      messages: Array<{
+        content: Array<{
+          text?: string;
+          image?: {
+            format: string;
+            source?: {
+              bytes?: string | number[] | Record<string, number>;
+            };
+          };
+        }>;
+      }>;
     };
+
     const imageBlock = sentBody.messages[0]?.content[1];
+
     expect(imageBlock?.image?.format).toBe('png');
+
+    const imageBytes = imageBlock?.image?.source?.bytes;
+    expect(imageBytes).toBeDefined();
+
+    const originalBytes = Uint8Array.from(Buffer.from('ZmFrZWJhc2U2NA==', 'base64'));
+
+    const receivedBytes =
+      typeof imageBytes === 'string'
+        ? Uint8Array.from(Buffer.from(imageBytes, 'base64'))
+        : Array.isArray(imageBytes)
+          ? Uint8Array.from(imageBytes)
+          : Uint8Array.from(Object.values(imageBytes ?? {}));
+
+    expect(receivedBytes).toEqual(originalBytes);
   });
 
   it('streams live text-delta chunks from a real Bedrock binary event-stream response and resolves finalResult', async () => {
@@ -288,7 +322,11 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
       { type: 'text-delta', delta: 'world!' },
       {
         type: 'usage',
-        usage: expect.objectContaining({ promptTokens: 10, completionTokens: 5, totalTokens: 15 }),
+        usage: expect.objectContaining({
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+        }),
       },
     ]);
 
@@ -305,10 +343,18 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
     });
 
     const controller = new AbortController();
-    const callPromise = llm.call({ userContent: 'hi', jsonMode: false, signal: controller.signal });
+    const callPromise = llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      signal: controller.signal,
+    });
 
-    queueMicrotask(() => controller.abort());
+    await vi.waitUntil(() => (server?.requests.length ?? 0) > 0);
+    controller.abort();
 
-    await expect(callPromise).rejects.toMatchObject({ name: 'LLMError', type: 'aborted' });
+    await expect(callPromise).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'aborted',
+    });
   });
 });

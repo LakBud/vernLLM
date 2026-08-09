@@ -24,17 +24,25 @@ export interface RealSdkServer {
 
 /**
  * One scripted response:
- * - `{ status?, body }`: a single JSON response (the common, non-streaming case).
+ *
+ * - `{ status?, headers?, body }`: a single JSON response (the common,
+ *   non-streaming case).
+ *
  * - `{ status?, raw }`: full control over the response, for streaming wire
  *   formats (SSE, AWS's binary event-stream) that aren't a single JSON
  *   body. `raw` writes headers and body itself via the given
  *   `http.ServerResponse`.
+ *
  * - `{ hang: true }`: accepts the request, records it, but never writes a
  *   response, leaving the connection open. For abort/cancellation tests:
  *   there's something for the client's `AbortSignal` to actually cancel.
  */
 export type ScriptedResponse =
-  | { status?: number; body: unknown }
+  | {
+      status?: number;
+      headers?: http.OutgoingHttpHeaders;
+      body: unknown;
+    }
   | { status?: number; raw: (res: http.ServerResponse) => void | Promise<void> }
   | { hang: true };
 
@@ -79,10 +87,15 @@ export async function bedrockEventStreamRaw(
   const { EventStreamMarshaller } = await import('@smithy/eventstream-serde-node');
   const { fromUtf8, toUtf8 } = await import('@smithy/util-utf8');
 
-  const marshaller = new EventStreamMarshaller({ utf8Encoder: toUtf8, utf8Decoder: fromUtf8 });
+  const marshaller = new EventStreamMarshaller({
+    utf8Encoder: toUtf8,
+    utf8Decoder: fromUtf8,
+  });
 
   return async (res) => {
-    res.writeHead(200, { 'content-type': 'application/vnd.amazon.eventstream' });
+    res.writeHead(200, {
+      'content-type': 'application/vnd.amazon.eventstream',
+    });
 
     const encoded = marshaller.serialize(
       (async function* () {
@@ -90,9 +103,18 @@ export async function bedrockEventStreamRaw(
       })(),
       (event: { eventType: string; payload: unknown }) => ({
         headers: {
-          ':event-type': { type: 'string' as const, value: event.eventType },
-          ':message-type': { type: 'string' as const, value: 'event' },
-          ':content-type': { type: 'string' as const, value: 'application/json' },
+          ':event-type': {
+            type: 'string' as const,
+            value: event.eventType,
+          },
+          ':message-type': {
+            type: 'string' as const,
+            value: 'event',
+          },
+          ':content-type': {
+            type: 'string' as const,
+            value: 'application/json',
+          },
         },
         body: new TextEncoder().encode(JSON.stringify(event.payload)),
       }),
@@ -119,6 +141,10 @@ export async function startRealSdkServer(responses: ScriptedResponse[]): Promise
 
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
 
+    req.on('error', () => {
+      // Client aborts/socket resets are expected during cancellation tests.
+    });
+
     req.on('end', () => {
       const rawBody = Buffer.concat(chunks).toString('utf8');
       let parsedBody: unknown = rawBody;
@@ -129,7 +155,12 @@ export async function startRealSdkServer(responses: ScriptedResponse[]): Promise
         // Non-JSON body (shouldn't happen for these SDKs); keep the raw string.
       }
 
-      requests.push({ method: req.method, url: req.url, headers: req.headers, body: parsedBody });
+      requests.push({
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: parsedBody,
+      });
 
       const entry = responses[Math.min(callIndex, responses.length - 1)];
       callIndex++;
@@ -147,16 +178,39 @@ export async function startRealSdkServer(responses: ScriptedResponse[]): Promise
       }
 
       if ('raw' in entry) {
-        void entry.raw(res);
+        void Promise.resolve(entry.raw(res)).catch((error: unknown) => {
+          // The raw writer can fail because the client has already aborted.
+          // In that case there is no response left to complete.
+          if (res.destroyed) {
+            return;
+          }
+
+          if (!res.headersSent) {
+            res.writeHead(500, { 'content-type': 'application/json' });
+          }
+
+          res.end(
+            JSON.stringify({
+              error: 'realSdkServer: raw response failed',
+              message: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        });
         return;
       }
 
-      res.writeHead(entry.status ?? 200, { 'content-type': 'application/json' });
+      res.writeHead(entry.status ?? 200, {
+        'content-type': 'application/json',
+        ...entry.headers,
+      });
       res.end(JSON.stringify(entry.body));
     });
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
 
   const address = server.address();
   if (address === null || typeof address === 'string') {
@@ -166,7 +220,12 @@ export async function startRealSdkServer(responses: ScriptedResponse[]): Promise
   return {
     url: `http://127.0.0.1:${address.port}`,
     requests,
-    close: () =>
-      new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+    close: async () => {
+      server.closeAllConnections();
+
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
   };
 }

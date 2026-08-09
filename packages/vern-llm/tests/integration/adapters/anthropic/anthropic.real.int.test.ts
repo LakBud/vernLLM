@@ -1,17 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fromAnthropic } from '../../../../src/adapters/anthropic.js';
-import { type StreamChunk } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-import { at } from '../../../helpers.js';
+import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
-
-async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
-  const out: StreamChunk[] = [];
-  for await (const chunk of chunks) out.push(chunk);
-  return out;
-}
 
 // `fromAnthropic` accepts a real `Anthropic` client instance directly, no
 // wrapper or cast needed: `AnthropicClient`'s TS types now match the real
@@ -289,7 +282,11 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
   it('honors an aborted signal against a real Anthropic SDK client mid-request', async () => {
     server = await startRealSdkServer([{ hang: true }]);
 
-    const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url, maxRetries: 0 });
+    const anthropic = new Anthropic({
+      apiKey: 'test-key',
+      baseURL: server.url,
+      maxRetries: 0,
+    });
 
     const llm = new VernLLM({
       client: fromAnthropic(anthropic),
@@ -298,12 +295,20 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
     });
 
     const controller = new AbortController();
-    const callPromise = llm.call({ userContent: 'hi', jsonMode: false, signal: controller.signal });
+    const callPromise = llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      signal: controller.signal,
+    });
 
-    // The mock server never responds ({ hang: true }), so the request is
-    // genuinely in flight against the real SDK's transport when aborted.
-    queueMicrotask(() => controller.abort());
+    // Wait until the mock server has recorded the request so the abort
+    // happens while the real SDK request is genuinely in flight.
+    await vi.waitUntil(() => (server?.requests.length ?? 0) > 0);
+    controller.abort();
 
-    await expect(callPromise).rejects.toMatchObject({ name: 'LLMError', type: 'aborted' });
+    await expect(callPromise).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'aborted',
+    });
   });
 });

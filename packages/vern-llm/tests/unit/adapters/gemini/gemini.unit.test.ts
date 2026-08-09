@@ -35,6 +35,7 @@ describe('fromGemini', () => {
   it('maps messages into contents + config.systemInstruction, and folds abortSignal into config', async () => {
     const { client, generateContent } = makeFakeGeminiClient('hi');
     const adapted = fromGemini(client);
+    const signal = new AbortController().signal;
 
     await adapted.chat.completions.create(
       {
@@ -46,7 +47,7 @@ describe('fromGemini', () => {
           { role: 'user', content: 'hello' },
         ],
       },
-      { signal: new AbortController().signal },
+      { signal },
     );
 
     expect(generateContent).toHaveBeenCalledWith(
@@ -57,7 +58,7 @@ describe('fromGemini', () => {
           systemInstruction: { parts: [{ text: 'be terse' }] },
           temperature: 0.3,
           maxOutputTokens: 200,
-          abortSignal: expect.anything(),
+          abortSignal: signal,
         }),
       }),
     );
