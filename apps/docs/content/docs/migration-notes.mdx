@@ -7,6 +7,15 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+<Callout type="info">
+  `2.0.0` bundles three unrelated breaking changes. Skip to what applies to you: renamed the caching
+  method ([`cachedCall`/`cachedLLMCall`](#200-collapsing-cachedcallcachedllmcall)), use tool calling
+  or read `ConversationTurn` directly ([tool calling](#200-tool-calling)), or hand-roll a custom
+  `LLMClient` (covered inside the tool calling section, plus a small
+  [`temperature`](#200-llmclienttemperature-is-now-optional) change). Plain `call()` usage with the
+  built-in adapters and no `tools` is unaffected by all three.
+</Callout>
+
 ## 2.0.0: Collapsing `cachedCall`/`cachedLLMCall`
 
 `VernLLM` used to expose two caching methods with overlapping names: a generic `cachedCall({
@@ -135,7 +144,7 @@ support tool calling yet, the minimum fix is exhaustiveness only, add a case tha
 rejects `role === 'tool'`, since VernLLM only ever sends one when the caller opted in with
 `tools`.
 
-See <a href="/docs/core/tool-calling">Tool Calling</a> for the full feature, and{' '}
+See <a href="/docs/core/tool-calling">Tool Calling</a> for the full feature, and
 
 <a href="/docs/API-reference/configuration">Configuration</a> for the `LLMClient` field reference.
 
@@ -164,7 +173,7 @@ temperature?: number;
 
 To update a custom `LLMClient`, handle `params.temperature` being `undefined` the same way you'd
 already handle any other optional field, omit it from the outgoing request, or substitute your own
-default before forwarding it. See{' '}
+default before forwarding it. See
 
 <a href="/docs/API-reference/configuration">Configuration</a> for `defaultTemperature`'s full
 behavior.
