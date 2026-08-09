@@ -40,6 +40,37 @@ causes `fromAnthropic` to throw an `LLMError` with category `validation` before 
 sent to Anthropic. When migrating to the Anthropic adapter, ensure all tool and JSON Schema
 parameter schemas use an object root.
 
+## Combining tools with jsonSchema
+
+By default, `jsonSchema` and `tools` cannot be used in the same call: `jsonSchema` is emulated as
+a forced single tool call, which occupies the same `tools`/`tool_choice` field real tools need.
+
+Anthropic also supports native, schema-constrained output, `output_config.format`, a request field
+independent of `tools`/`tool_choice`, so it composes with real `tools` on models that support it.
+This is opt-in, pass `nativeStructuredOutputModels` as the second argument to `fromAnthropic`:
+
+```ts title="anthropic-native-structured-output.ts"
+const llm = new VernLLM({
+  client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }), {
+    nativeStructuredOutputModels: ['claude-native-model-id'],
+    // ...or a predicate, e.g. by model family:
+    // nativeStructuredOutputModels: (model) => model.startsWith('claude-4'),
+  }),
+  model: 'claude-native-model-id',
+});
+```
+
+There is no built-in default list, see{' '}
+
+<a href="/docs/core/structured-output#combining-with-tools">
+  Structured Output → Combining with tools
+</a>
+for why. On a covered model, `jsonSchema` is sent as `output_config.format` instead of a forced tool
+call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed, while
+any real `tools` you pass are built and sent exactly as they would be without `jsonSchema` present.
+On a model not covered by `nativeStructuredOutputModels`, combining `tools` with `jsonSchema` still
+throws `LLMError('validation')`, naming the model and pointing at this option.
+
 ## Streaming
 
 `fromAnthropic` implements `createStream` on top of the Messages API's own streaming mode. Anthropic's

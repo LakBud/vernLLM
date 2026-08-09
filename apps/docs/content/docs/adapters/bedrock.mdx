@@ -118,6 +118,40 @@ const llm = new VernLLM({
 
 This is opt-in and only affects calls that set `jsonSchema`; plain text and `json_object` calls are never preflight-checked, and by default (no `toolUseSupportedModels` configured) no preflight check runs at all.
 
+The same preflight also runs when a `jsonSchema` call ends up sending `toolConfig` for any reason, including the native-structured-output path below when real `tools` are sent alongside `outputConfig`, since that still requires Converse tool-use support even though `outputConfig` itself doesn't.
+
+## Combining tools with jsonSchema
+
+By default, `jsonSchema` and `tools` cannot be used in the same call: `jsonSchema` is emulated as
+a forced single tool call via `toolConfig`, which occupies the same field real tools need.
+
+Bedrock Converse also supports native, schema-constrained output, `outputConfig.textFormat`, a
+request field independent of `toolConfig`, so it composes with real `tools` on models that support
+it. This is opt-in, pass `nativeStructuredOutputModels` as part of the second argument to
+`fromBedrock`:
+
+```ts title="bedrock-native-structured-output.ts"
+const llm = new VernLLM({
+  client: fromBedrock(converseClient, {
+    nativeStructuredOutputModels: ['anthropic.claude-native-model-id'],
+    // ...or a predicate:
+    // nativeStructuredOutputModels: (modelId) => modelId.startsWith('anthropic.claude-4'),
+  }),
+  model: 'anthropic.claude-native-model-id',
+});
+```
+
+There is no built-in default list, see{' '}
+
+<a href="/docs/core/structured-output#combining-with-tools">
+  Structured Output → Combining with tools
+</a>
+for why. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
+tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
+while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
+present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
+`jsonSchema` still throws `LLMError('validation')`, naming the model and pointing at this option.
+
 ## Streaming
 
 `fromBedrock` implements `createStream` on top of `ConverseStreamCommand`. `contentBlockDelta`

@@ -322,10 +322,10 @@ function buildGeminiRequest(
  * Anthropic.
  *
  * `tools` maps to Gemini's native `functionDeclarations`/`functionCall`;
- * `tool_choice` maps to `toolConfig.functionCallingConfig`. `jsonSchema`
- * and `tools` are mutually exclusive by the time a call reaches here
- * (enforced in vernLLM.ts), so `responseSchema` and `tools` never
- * both apply.
+ * `tool_choice` maps to `toolConfig.functionCallingConfig`. Gemini accepts
+ * `responseSchema` and `tools` in the same request natively, so both are
+ * set independently here and no special-casing is needed for the
+ * combination, unlike `fromAnthropic`/`fromBedrock`.
  *
  * `createStream` calls `generateContentStream` (optional on `GeminiClient`
  *, required only if the caller sets `stream: true`) and translates each

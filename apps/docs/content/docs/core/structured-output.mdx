@@ -75,3 +75,55 @@ const result = await llm.call({
   `input_schema` and `tool_choice` forces the model to call it. A client-side `schema` is still
   recommended when you need validation guarantees across providers.
 </Callout>
+
+## Combining with tools
+
+By default, `jsonSchema` and `tools` cannot be used together. On Anthropic and Bedrock,
+`jsonSchema` is emulated as a forced single tool call, which occupies the same request field real,
+caller-supplied `tools` need. Setting both throws `LLMError('validation')` before a request is
+sent.
+
+Both providers also support a schema-constrained output mechanism, `output_config.format` on
+Anthropic and `outputConfig.textFormat` on Bedrock, that lives in its own request field,
+independent of tool calling. On a model that supports it, `jsonSchema` no longer needs to be
+emulated as a tool call, so it composes with real `tools` in the same request.
+
+This is opt-in and per-adapter, not automatic. Pass `nativeStructuredOutputModels` as part of the
+second argument to `fromAnthropic`/`fromBedrock`, either a static list of model IDs you've
+verified support the mechanism, or a predicate function:
+
+```ts title="native-structured-output.ts"
+import Anthropic from '@anthropic-ai/sdk';
+import { VernLLM, fromAnthropic } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }), {
+    nativeStructuredOutputModels: ['claude-native-model-id'],
+    // ...or a predicate:
+    // nativeStructuredOutputModels: (model) => model.startsWith('claude-4'),
+  }),
+  model: 'claude-native-model-id',
+});
+
+const result = await llm.call({
+  userContent: 'What is the weather, and extract it as structured data?',
+  tools: [weatherTool],
+  jsonSchema: {
+    name: 'WeatherReport',
+    schema: { type: 'object', properties: { summary: { type: 'string' } } },
+  },
+});
+```
+
+<Callout type="warn">
+  There is no built-in default list of native-capable models. Anthropic's and Bedrock's supported
+  model set changes over time and isn't this package's call to make, hardcoding a guess would risk
+  silently routing a request onto a field a given model doesn't actually support, trading a clear
+  `LLMError('validation')` for a confusing error from the provider instead. Left unset, every model
+  keeps using the forced-single-tool-call emulation, and `tools` + `jsonSchema` together is
+  rejected, exactly the behavior before this option existed.
+</Callout>
+
+On a model not covered by `nativeStructuredOutputModels`, `jsonSchema` alone (no `tools`) is
+unaffected and keeps working exactly as before, forced tool-use, described above. The restriction
+only applies when both `tools` and `jsonSchema` are set on the same call.

@@ -175,6 +175,54 @@ describe('fromBedrock', () => {
     expect(at(system, 1).text).toMatch(/valid JSON only/i);
   });
 
+  it(
+    'sends real `tools` alongside the json_object prompt instruction, unmodified (regression: ' +
+      'these used to be built in a single if/else-if chain, so json_object silently dropped ' +
+      'tools instead of sending both)',
+    async () => {
+      const { client, converse } = makeFakeBedrockClient('{}');
+      const adapted = fromBedrock(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'm',
+          max_tokens: 10,
+          response_format: { type: 'json_object' },
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: 'weather',
+                parameters: { type: 'object' },
+              },
+            },
+          ],
+          tool_choice: 'auto',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sentParams = at(converse.mock.calls, 0)[0];
+      const system = sentParams.system as Array<{ text: string }>;
+
+      expect(at(system, 0).text).toMatch(/valid JSON only/i);
+      expect(sentParams.toolConfig).toEqual({
+        tools: [
+          {
+            toolSpec: {
+              name: 'get_weather',
+              description: 'weather',
+              inputSchema: { json: { type: 'object' } },
+            },
+          },
+        ],
+        toolChoice: { auto: {} },
+      });
+    },
+  );
+
   it('forces tool-use via toolConfig for json_schema mode instead of a prompt instruction', async () => {
     const { client, converse } = makeFakeBedrockToolClient('Candidate', { name: 'Ada' });
     const adapted = fromBedrock(client);
@@ -697,5 +745,368 @@ describe('fromBedrock, tools', () => {
       name: 'LLMError',
       type: 'validation',
     });
+  });
+});
+
+describe('fromBedrock, native structured output', () => {
+  const nativeModel = 'anthropic.claude-native-model';
+
+  it('never uses the native path by default, so `tools` + `jsonSchema` is still rejected with no nativeStructuredOutputModels configured', async () => {
+    const { client, converse } = makeFakeBedrockClient('unused');
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: nativeModel,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Out', schema: { type: 'object' } },
+          },
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: 'weather',
+                parameters: { type: 'object' },
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining(nativeModel),
+    });
+
+    expect(converse).not.toHaveBeenCalled();
+  });
+
+  it('throws a validation LLMError naming the model when combining `tools` with `jsonSchema` on a model not covered by nativeStructuredOutputModels', async () => {
+    const { client, converse } = makeFakeBedrockClient('unused');
+    const adapted = fromBedrock(client, { nativeStructuredOutputModels: ['some-other-model'] });
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'amazon.titan-text',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Out', schema: { type: 'object' } },
+          },
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: 'weather',
+                parameters: { type: 'object' },
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('amazon.titan-text'),
+    });
+
+    expect(converse).not.toHaveBeenCalled();
+  });
+
+  it('sends jsonSchema as outputConfig.textFormat alongside real tools, unmodified, on a model covered by nativeStructuredOutputModels', async () => {
+    const { client, converse } = makeFakeBedrockClient('{"ok":true}');
+    const adapted = fromBedrock(client, { nativeStructuredOutputModels: [nativeModel] });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: nativeModel,
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'Out',
+            schema: { type: 'object' },
+            description: 'desc',
+            strict: true,
+          },
+        },
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              description: 'weather',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+        tool_choice: 'auto',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+
+    expect(sentParams.toolConfig).toEqual({
+      tools: [
+        {
+          toolSpec: {
+            name: 'get_weather',
+            description: 'weather',
+            inputSchema: { json: { type: 'object' } },
+          },
+        },
+      ],
+      toolChoice: { auto: {} },
+    });
+
+    expect(sentParams.outputConfig).toEqual({
+      textFormat: {
+        type: 'json_schema',
+        schema: { type: 'object' },
+        name: 'Out',
+        description: 'desc',
+        strict: true,
+      },
+    });
+
+    expect(result.choices?.[0]?.message?.content).toBe('{"ok":true}');
+  });
+
+  it('sends jsonSchema alone as outputConfig.textFormat (not a forced tool call) on a covered model, even with no real tools present', async () => {
+    const { client, converse } = makeFakeBedrockClient('{"name":"Ada"}');
+    const adapted = fromBedrock(client, { nativeStructuredOutputModels: [nativeModel] });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: nativeModel,
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'Candidate', schema: { type: 'object' } },
+        },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+
+    expect(sentParams.toolConfig).toBeUndefined();
+    expect(sentParams.outputConfig).toEqual({
+      textFormat: {
+        type: 'json_schema',
+        schema: { type: 'object' },
+        name: 'Candidate',
+        strict: undefined,
+      },
+    });
+    expect(result.choices?.[0]?.message?.content).toBe('{"name":"Ada"}');
+  });
+
+  it('still uses the legacy forced-tool-call path for jsonSchema alone on a non-covered model (regression)', async () => {
+    const { client, converse } = makeFakeBedrockToolClient('Candidate', { name: 'Ada' });
+    const adapted = fromBedrock(client);
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'amazon.titan-text',
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'Candidate', schema: { type: 'object' } },
+        },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+
+    expect(sentParams.toolConfig).toEqual({
+      tools: [
+        {
+          toolSpec: {
+            name: 'Candidate',
+            description: undefined,
+            inputSchema: { json: { type: 'object' } },
+            strict: undefined,
+          },
+        },
+      ],
+      toolChoice: { tool: { name: 'Candidate' } },
+    });
+    expect(sentParams.outputConfig).toBeUndefined();
+    expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
+  });
+
+  it('supports a predicate function instead of a static list for nativeStructuredOutputModels', async () => {
+    const { client, converse } = makeFakeBedrockClient('{"ok":true}');
+    const adapted = fromBedrock(client, {
+      nativeStructuredOutputModels: (model) => model.startsWith('anthropic.claude-native-'),
+    });
+
+    await adapted.chat.completions.create(
+      {
+        model: nativeModel,
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'Out', schema: { type: 'object' } },
+        },
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              description: 'weather',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+
+    expect(sentParams.outputConfig).toBeDefined();
+    expect(sentParams.toolConfig?.tools).toEqual([
+      {
+        toolSpec: {
+          name: 'get_weather',
+          description: 'weather',
+          inputSchema: { json: { type: 'object' } },
+        },
+      },
+    ]);
+  });
+
+  it('tools alone still work unmodified on a nativeStructuredOutputModels-covered model (regression)', async () => {
+    const { client, converse } = makeFakeBedrockToolClient('get_weather', { city: 'NYC' });
+    const adapted = fromBedrock(client, { nativeStructuredOutputModels: [nativeModel] });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: nativeModel,
+        max_tokens: 10,
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              description: 'weather',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+        tool_choice: 'auto',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+
+    expect(sentParams.outputConfig).toBeUndefined();
+    expect(result.choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: expect.any(String),
+        type: 'function',
+        function: { name: 'get_weather', arguments: '{"city":"NYC"}' },
+      },
+    ]);
+  });
+
+  it("this adapter's toolUseSupportedModels preflight still runs independently for legacy jsonSchema calls, unaffected by nativeStructuredOutputModels", async () => {
+    const { client, converse } = makeFakeBedrockClient('unused');
+    const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'unsupported-model',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'extract data' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+
+    expect(converse).not.toHaveBeenCalled();
+  });
+
+  it('toolUseSupportedModels preflight also runs on the native path when real tools are sent alongside outputConfig (closes the gap where native structured output skipped it)', async () => {
+    const { client, converse } = makeFakeBedrockClient('unused');
+    const adapted = fromBedrock(client, {
+      nativeStructuredOutputModels: [nativeModel],
+      toolUseSupportedModels: ['some-other-model'],
+    });
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: nativeModel,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Out', schema: { type: 'object' } },
+          },
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: 'weather',
+                parameters: { type: 'object' },
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+
+    expect(converse).not.toHaveBeenCalled();
+  });
+
+  it('toolUseSupportedModels preflight does not run on the native path when no real tools are sent (native structured output alone needs no tool-use support)', async () => {
+    const { client, converse } = makeFakeBedrockClient('{"ok":true}');
+    const adapted = fromBedrock(client, {
+      nativeStructuredOutputModels: [nativeModel],
+      toolUseSupportedModels: ['some-other-model'],
+    });
+
+    await adapted.chat.completions.create(
+      {
+        model: nativeModel,
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'Out', schema: { type: 'object' } },
+        },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(converse).toHaveBeenCalledOnce();
   });
 });

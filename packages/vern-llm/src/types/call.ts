@@ -105,10 +105,13 @@ export interface CallParams<T = unknown> extends UsageHooks {
    * (see `CallWithToolsResult`), a breaking-change point: omitting `tools`
    * keeps `call()`'s old `Promise<T>` behavior exactly.
    *
-   * Mutually exclusive with `jsonSchema`/`schema`: on Anthropic and
-   * Bedrock, `jsonSchema` is implemented internally as a forced single-tool
-   * call, which would collide with real tools. Setting both throws
-   * `LLMError('validation')`.
+   * Can be combined with `jsonSchema`/`schema` on models that support
+   * native, schema-constrained output alongside tool calling. On Anthropic
+   * and Bedrock this is opt-in per call site, via each adapter's
+   * `nativeStructuredOutputModels` option: models not covered by it still
+   * throw `LLMError('validation')`, since `jsonSchema` falls back to a
+   * forced single-tool call there, which would collide with real tools.
+   * See `fromAnthropic`/`fromBedrock`.
    */
   tools?: ToolDefinition[];
 

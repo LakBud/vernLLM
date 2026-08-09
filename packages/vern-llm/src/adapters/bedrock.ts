@@ -1,5 +1,9 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
 import {
+  supportsNativeStructuredOutput,
+  type ModelCapabilityOverride,
+} from '../internal/nativeStructuredOutput.js';
+import {
   LLMError,
   type ContentBlock,
   type LLMClient,
@@ -59,6 +63,24 @@ export interface BedrockConverseClient {
           | { tool: { name: string } }
           | { auto: Record<string, never> }
           | { any: Record<string, never> };
+      };
+      /**
+       * Native, schema-constrained output: a separate request field from
+       * `toolConfig`, so it can be sent alongside real tool calls. Only
+       * built by this adapter for models covered by
+       * `nativeStructuredOutputModels` (opt-in, see
+       * `BedrockAdapterOptions`); other models keep getting `jsonSchema`
+       * emulated as a forced single tool call via `toolConfig`, the
+       * pre-existing behavior.
+       */
+      outputConfig?: {
+        textFormat: {
+          type: 'json_schema';
+          schema: Record<string, unknown>;
+          name?: string;
+          description?: string;
+          strict?: boolean;
+        };
       };
     },
     options: { signal: AbortSignal },
@@ -175,21 +197,61 @@ function toBedrockContent(blocks: ContentBlock[]): BedrockContentBlock[] {
  */
 export interface BedrockAdapterOptions {
   /**
-   * Optional preflight check for tool-use support, needed for `jsonSchema`
-   * structured output. VernLLM never guesses capability from a failed
-   * call's error message (AWS's error text isn't a documented, stable
-   * contract), so this is opt-in: pass either a static list of tool-use
-   * -capable model IDs, or a predicate function, and VernLLM will reject
-   * unsupported models with a clear `LLMError('validation')` *before*
-   * dispatching the request, instead of on the wire.
+   * Optional preflight check for tool-use support, needed whenever a
+   * `jsonSchema` call ends up sending Converse `toolConfig` — either the
+   * legacy forced-single-tool-call emulation, or real `tools` sent
+   * alongside native structured output (`outputConfig`). VernLLM never
+   * guesses capability from a failed call's error message (AWS's error
+   * text isn't a documented, stable contract), so this is opt-in: pass
+   * either a static list of tool-use-capable model IDs, or a predicate
+   * function, and VernLLM will reject unsupported models with a clear
+   * `LLMError('validation')` *before* dispatching the request, instead of
+   * on the wire.
    *
    * Left unset (default), no preflight check runs, and a `jsonSchema` call
    * to an unsupported model surfaces Bedrock's raw `converse` error as-is.
    */
   toolUseSupportedModels?: string[] | ((modelId: string) => boolean);
+
+  /**
+   * Which models support native, schema-constrained output
+   * (`outputConfig.textFormat`), independent of `toolConfig`, so it can be
+   * combined with real `tools` in one request. Pass a static list of
+   * model IDs (verified against Bedrock's own docs) or a predicate.
+   *
+   * There is no built-in default here (see `supportsNativeStructuredOutput`
+   * for why). Left unset, every model uses the older forced-single-tool-
+   * call emulation via `toolConfig`, and `tools` + `jsonSchema` together is
+   * rejected, exactly this adapter's behavior before native support was
+   * added.
+   */
+  nativeStructuredOutputModels?: ModelCapabilityOverride;
 }
 
 type BedrockRequest = Parameters<BedrockConverseClient['converse']>[0];
+
+/**
+ * Maps VernLLM's OpenAI-shaped wire `tools`/`tool_choice` into Converse's
+ * `toolConfig` shape. Shared by the two call sites that build real
+ * (non-schema-forced) tool definitions: the plain tools-only branch, and
+ * the native-structured-output branch, which sends real tools alongside
+ * `outputConfig` rather than instead of it.
+ */
+function buildBedrockToolConfig(
+  tools: NonNullable<Parameters<LLMClient['chat']['completions']['create']>[0]['tools']>,
+  toolChoiceParam: Parameters<LLMClient['chat']['completions']['create']>[0]['tool_choice'],
+): NonNullable<BedrockRequest['toolConfig']> {
+  return {
+    tools: tools.map((t) => ({
+      toolSpec: {
+        name: t.function.name,
+        description: t.function.description,
+        inputSchema: { json: t.function.parameters },
+      },
+    })),
+    toolChoice: toBedrockToolChoice(toolChoiceParam),
+  };
+}
 
 /**
  * Builds the Converse-shaped request from VernLLM's wire params, shared
@@ -199,14 +261,21 @@ type BedrockRequest = Parameters<BedrockConverseClient['converse']>[0];
  * check all happen exactly once).
  *
  * Returns `toolName` alongside the request: when set, the model was forced
- * to call a single synthetic tool standing in for `jsonSchema` output, and
- * both `create` and `createStream` need to know this so they can unwrap
- * that tool call back into plain text content instead of treating it like
- * a real tool call.
+ * to call a single synthetic tool standing in for `jsonSchema` output (the
+ * legacy path, for models not covered by `nativeStructuredOutputModels`),
+ * and both `create` and `createStream` need to know this so they can
+ * unwrap that tool call back into plain text content instead of treating
+ * it like a real tool call. On the native path (model covered by
+ * `nativeStructuredOutputModels`), `toolName` is `undefined`: the
+ * schema-conforming JSON already arrives as ordinary text content, nothing
+ * to unwrap, and any real tool calls in `params.tools` are left for the
+ * normal, non-forced tool-call handling both `create` and `createStream`
+ * already do when `toolName` is unset.
  */
 function buildBedrockRequest(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
   toolUseSupportedModels: BedrockAdapterOptions['toolUseSupportedModels'],
+  nativeStructuredOutputModels: BedrockAdapterOptions['nativeStructuredOutputModels'],
 ): { request: BedrockRequest; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -221,57 +290,86 @@ function buildBedrockRequest(
   const jsonSchema =
     params.response_format?.type === 'json_schema' ? params.response_format.json_schema : undefined;
 
-  const toolName = jsonSchema?.name.trim();
+  const schemaName = jsonSchema?.name.trim();
 
-  if (jsonSchema && !toolName) {
+  if (jsonSchema && !schemaName) {
     throw new LLMError('json_schema.name must not be empty.', 'validation');
   }
 
-  let jsonInstruction: string | undefined;
-  let toolConfig: NonNullable<BedrockRequest['toolConfig']> | undefined;
+  const isNative =
+    Boolean(jsonSchema) &&
+    supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels);
 
-  if (jsonSchema) {
-    // jsonSchema and real `tools` are mutually exclusive by the time
-    // a call reaches here (enforced in vernLLM.ts).
-    const { schema, description, strict } = jsonSchema;
-
-    toolConfig = {
-      tools: [
-        {
-          toolSpec: {
-            name: toolName!,
-            description,
-            inputSchema: { json: schema },
-            strict,
-          },
-        },
-      ],
-      toolChoice: { tool: { name: toolName! } },
-    };
-  } else if (params.response_format?.type === 'json_object') {
-    // No schema to build a tool from, fall back to a prompt instruction
-    jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
-  } else if (params.tools?.length) {
-    toolConfig = {
-      tools: params.tools.map((t) => ({
-        toolSpec: {
-          name: t.function.name,
-          description: t.function.description,
-          inputSchema: { json: t.function.parameters },
-        },
-      })),
-      toolChoice: toBedrockToolChoice(params.tool_choice),
-    };
+  if (jsonSchema && params.tools?.length && !isNative) {
+    throw new LLMError(
+      `Bedrock model "${params.model}" is not covered by nativeStructuredOutputModels, so ` +
+        '`jsonSchema` is emulated as a forced single tool call there (via `toolConfig`), which ' +
+        'collides with the `tools` you also provided. Either drop `tools` or `jsonSchema` for this ' +
+        "call, or pass this model in fromBedrock's `nativeStructuredOutputModels` option once " +
+        "you've confirmed it supports Converse's `outputConfig.textFormat`.",
+      'validation',
+    );
   }
 
-  if (jsonSchema && toolUseSupportedModels) {
+  let toolName: string | undefined;
+  let jsonInstruction: string | undefined;
+  let toolConfig: NonNullable<BedrockRequest['toolConfig']> | undefined;
+  let outputConfig: NonNullable<BedrockRequest['outputConfig']> | undefined;
+
+  if (jsonSchema && isNative) {
+    // Native path: the schema goes in its own request field, independent
+    // of toolConfig, so real tools (if any) are built exactly like the
+    // tools-only branch below and sent alongside it.
+    const { schema, description, strict } = jsonSchema;
+
+    outputConfig = {
+      // Not defaulted here: vernLLM.ts's buildResponseFormat already
+      // resolves `strict` to `true` when the caller didn't set it, so by
+      // the time it reaches this adapter it's never `undefined`.
+      textFormat: { type: 'json_schema', schema, name: schemaName, description, strict },
+    };
+
+    if (params.tools?.length) {
+      toolConfig = buildBedrockToolConfig(params.tools, params.tool_choice);
+    }
+  } else if (jsonSchema && schemaName) {
+    // Legacy path: jsonSchema alone (or with tools, on a native model —
+    // see above), on a model without native support, becomes a forced
+    // single tool call via toolConfig, unchanged from before this adapter
+    // had a native path.
+    const { schema, description, strict } = jsonSchema;
+
+    toolName = schemaName;
+    toolConfig = {
+      tools: [{ toolSpec: { name: toolName, description, inputSchema: { json: schema }, strict } }],
+      toolChoice: { tool: { name: toolName } },
+    };
+  } else if (params.response_format?.type === 'json_object') {
+    // No schema to build a tool from, fall back to a prompt instruction.
+    // This does not exclude real `tools`: `json_object` mode is just a
+    // system-prompt nudge, not a request field that could collide with
+    // `toolConfig`, so both are set independently below.
+    jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
+  }
+
+  if (!jsonSchema && params.tools?.length) {
+    toolConfig = buildBedrockToolConfig(params.tools, params.tool_choice);
+  }
+
+  // Runs whenever a jsonSchema call actually ends up sending toolConfig,
+  // whether that's the legacy forced-single-tool-call path, or the native
+  // path with real `tools` also present (native structured output doesn't
+  // need Converse tool-use support, but real tools alongside it still do).
+  if (jsonSchema && toolConfig && toolUseSupportedModels) {
     const isSupported = Array.isArray(toolUseSupportedModels)
       ? toolUseSupportedModels.includes(params.model)
       : toolUseSupportedModels(params.model);
 
     if (!isSupported) {
       throw new LLMError(
-        `Bedrock model "${params.model}" is not listed in toolUseSupportedModels, but jsonSchema structured output requires Converse tool use.`,
+        `Bedrock model "${params.model}" is not listed in toolUseSupportedModels, but this call ` +
+          'requires Converse tool use (either jsonSchema emulated as a forced tool call, or real ' +
+          '`tools` sent alongside native structured output).',
         'validation',
       );
     }
@@ -290,6 +388,7 @@ function buildBedrockRequest(
       maxTokens: params.max_tokens,
     },
     ...(toolConfig ? { toolConfig } : {}),
+    ...(outputConfig ? { outputConfig } : {}),
   };
 
   return { request, toolName };
@@ -303,22 +402,33 @@ function buildBedrockRequest(
  * regardless of which underlying model `modelId` points at, as long as
  * that model supports Converse (most current-generation ones do)
  *
- * `response_format: json_schema` is mapped to Converse's `toolConfig`: a
- * single tool is defined from the schema, description, and strictness settings,
- * and `toolChoice` forces the model to call it. Provider-constrained schema
- * matching applies only when `strict: true` is forwarded and supported.
- * Native tool support varies by model family; pass
- * `toolUseSupportedModels` to preflight-check it (see
+ * `response_format: json_schema`, on a model covered by
+ * `options.nativeStructuredOutputModels` (opt-in, unset by default), is
+ * sent as `outputConfig.textFormat`, its own request field, independent of
+ * `toolConfig`, so it can be combined with real, caller-supplied `tools`
+ * in the same request.
+ *
+ * On any other model (the default), `response_format: json_schema` is
+ * mapped to Converse's `toolConfig` instead: a single tool is defined from
+ * the schema, description, and strictness settings, and `toolChoice`
+ * forces the model to call it. This legacy path cannot be combined with
+ * real `tools` (both would need the same `toolConfig`), and a call that
+ * tries throws `LLMError('validation')` before reaching the API.
+ * Provider-constrained schema matching applies only when `strict: true` is
+ * forwarded and supported. Native tool support varies by model family;
+ * pass `toolUseSupportedModels` to preflight-check it (see
  * `BedrockAdapterOptions`), otherwise a `jsonSchema` call to an
  * unsupported model surfaces Bedrock's raw error unchanged.
  *
  * `response_format: json_object` (no schema to build a tool from) and
  * `reasoning_effort` (no Converse equivalent) fall back to a system-prompt
- * instruction and are dropped respectively.
+ * instruction and are dropped respectively. Unlike `jsonSchema`,
+ * `json_object` combines with real `tools` freely on every model: it's a
+ * prompt nudge, not a request field, so there's nothing for it to collide
+ * with.
  *
- * `tools` maps to Converse's native `toolConfig`/`toolUse`/`toolResult`;
- * `tool_choice` maps to `toolConfig.toolChoice`. Mutually exclusive with
- * `jsonSchema` by the time a call reaches here (enforced in vernLLM.ts).
+ * `tools` alone maps to Converse's native `toolConfig`/`toolUse`/
+ * `toolResult`; `tool_choice` maps to `toolConfig.toolChoice`.
  *
  * `createStream` calls `converseStream` (optional on `BedrockConverseClient`
  *, required only if the caller sets `stream: true`) and translates its
@@ -337,12 +447,17 @@ export function fromBedrock(
   options?: BedrockAdapterOptions,
 ): LLMClient {
   const toolUseSupportedModels = options?.toolUseSupportedModels;
+  const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
 
   return {
     chat: {
       completions: {
         async create(params, requestOptions) {
-          const { request, toolName } = buildBedrockRequest(params, toolUseSupportedModels);
+          const { request, toolName } = buildBedrockRequest(
+            params,
+            toolUseSupportedModels,
+            nativeStructuredOutputModels,
+          );
 
           const response = await bedrockClient.converse(request, requestOptions);
 
@@ -416,7 +531,11 @@ export function fromBedrock(
             );
           }
 
-          const { request, toolName } = buildBedrockRequest(params, toolUseSupportedModels);
+          const { request, toolName } = buildBedrockRequest(
+            params,
+            toolUseSupportedModels,
+            nativeStructuredOutputModels,
+          );
 
           const { stream } = await bedrockClient.converseStream(request, requestOptions);
 
