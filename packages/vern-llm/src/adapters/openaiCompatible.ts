@@ -162,7 +162,7 @@ export function fromOpenAICompatible(
   // `unknown` here and a cast at the call site, same rationale as casting
   // the whole client above: the wire contract, not the SDK's own TS types,
   // is what's actually being relied on.
-  const rawCreate = raw.chat.completions.create as unknown as (
+  const rawCreate = raw.chat.completions.create.bind(raw.chat.completions) as unknown as (
     params: unknown,
     options: { signal: AbortSignal },
   ) => Promise<unknown> | AsyncIterable<OpenAIStreamChunk>;

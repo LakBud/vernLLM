@@ -101,6 +101,16 @@ describe('normalizeError', () => {
     expect(result.status).toBe(500);
   });
 
+  it("falls back to AWS SDK v3's $metadata.httpStatusCode when status/statusCode are absent", () => {
+    const result = normalizeError({
+      name: 'ThrottlingException',
+      $metadata: { httpStatusCode: 429 },
+    });
+
+    expect(result.type).toBe('api');
+    expect(result.status).toBe(429);
+  });
+
   it('carries a Retry-After value through onto the normalized error', () => {
     const err = {
       status: 429,

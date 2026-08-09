@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fromGemini, type GeminiClient } from '../../../../src/adapters/index.js';
 
 function makeFakeGeminiClient(text: string) {
-  const generateContent = vi.fn<GeminiClient['generateContent']>(async (_params, _options) => ({
+  const generateContent = vi.fn<GeminiClient['generateContent']>(async (_params) => ({
     candidates: [{ content: { parts: [{ text }] } }],
     usageMetadata: {
       promptTokenCount: 4,
@@ -16,7 +16,7 @@ function makeFakeGeminiClient(text: string) {
 }
 
 describe('fromGemini', () => {
-  it('passes through an omitted temperature via generationConfig without crashing', async () => {
+  it('passes through an omitted temperature via config without crashing', async () => {
     const { client, generateContent } = makeFakeGeminiClient('hi');
     const adapted = fromGemini(client);
 
@@ -29,12 +29,13 @@ describe('fromGemini', () => {
       { signal: new AbortController().signal },
     );
 
-    expect('temperature' in (generateContent.mock.calls[0]![0].generationConfig ?? {})).toBe(false);
+    expect('temperature' in (generateContent.mock.calls[0]![0].config ?? {})).toBe(false);
   });
 
-  it('maps messages into contents + systemInstruction', async () => {
+  it('maps messages into contents + config.systemInstruction, and folds abortSignal into config', async () => {
     const { client, generateContent } = makeFakeGeminiClient('hi');
     const adapted = fromGemini(client);
+    const signal = new AbortController().signal;
 
     await adapted.chat.completions.create(
       {
@@ -46,17 +47,20 @@ describe('fromGemini', () => {
           { role: 'user', content: 'hello' },
         ],
       },
-      { signal: new AbortController().signal },
+      { signal },
     );
 
     expect(generateContent).toHaveBeenCalledWith(
       expect.objectContaining({
         model: 'gemini-2.5-flash',
         contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
-        systemInstruction: { parts: [{ text: 'be terse' }] },
-        generationConfig: expect.objectContaining({ temperature: 0.3, maxOutputTokens: 200 }),
+        config: expect.objectContaining({
+          systemInstruction: { parts: [{ text: 'be terse' }] },
+          temperature: 0.3,
+          maxOutputTokens: 200,
+          abortSignal: signal,
+        }),
       }),
-      { signal: expect.anything() },
     );
   });
 
@@ -103,9 +107,7 @@ describe('fromGemini', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(generateContent.mock.calls[0]![0].generationConfig?.responseMimeType).toBe(
-      'application/json',
-    );
+    expect(generateContent.mock.calls[0]![0].config?.responseMimeType).toBe('application/json');
   });
 
   it('maps json_schema natively into responseSchema with description (provider-enforced)', async () => {
@@ -131,7 +133,7 @@ describe('fromGemini', () => {
       { signal: new AbortController().signal },
     );
 
-    const config = generateContent.mock.calls[0]![0].generationConfig;
+    const config = generateContent.mock.calls[0]![0].config;
 
     expect(config?.responseSchema).toEqual({
       ...schema,
@@ -195,7 +197,7 @@ describe('fromGemini', () => {
     ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
   });
 
-  it('omits systemInstruction when there is no system message', async () => {
+  it('omits config.systemInstruction when there is no system message', async () => {
     const { client, generateContent } = makeFakeGeminiClient('ok');
     const adapted = fromGemini(client);
 
@@ -204,7 +206,7 @@ describe('fromGemini', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(generateContent.mock.calls[0]![0].systemInstruction).toBeUndefined();
+    expect(generateContent.mock.calls[0]![0].config?.systemInstruction).toBeUndefined();
   });
 
   it('preserves assistant turns, mapped to Geminis "model" role, in order', async () => {
@@ -260,7 +262,7 @@ describe('fromGemini, tools', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(generateContent.mock.calls[0]![0].tools).toEqual([
+    expect(generateContent.mock.calls[0]![0].config?.tools).toEqual([
       {
         functionDeclarations: [
           {
@@ -271,7 +273,7 @@ describe('fromGemini, tools', () => {
         ],
       },
     ]);
-    expect(generateContent.mock.calls[0]![0].toolConfig).toEqual({
+    expect(generateContent.mock.calls[0]![0].config?.toolConfig).toEqual({
       functionCallingConfig: { mode: 'AUTO' },
     });
   });
@@ -339,7 +341,7 @@ describe('fromGemini, tools', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(generateContent.mock.calls[0]![0].toolConfig).toEqual({
+    expect(generateContent.mock.calls[0]![0].config?.toolConfig).toEqual({
       functionCallingConfig: { mode: 'NONE' },
     });
   });
@@ -360,7 +362,7 @@ describe('fromGemini, tools', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(generateContent.mock.calls[0]![0].toolConfig).toEqual({
+    expect(generateContent.mock.calls[0]![0].config?.toolConfig).toEqual({
       functionCallingConfig: { mode: 'ANY' },
     });
   });

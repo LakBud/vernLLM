@@ -1,4 +1,7 @@
-import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
+import {
+  assertSupportedImageMimeType,
+  type SupportedImageMimeType,
+} from '../internal/imageFormat.js';
 import {
   LLMError,
   type ContentBlock,
@@ -10,7 +13,10 @@ import {
 /** Anthropic's native per-block content shape for a message. */
 type AnthropicContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  | {
+      type: 'image';
+      source: { type: 'base64'; media_type: SupportedImageMimeType; data: string };
+    }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 
@@ -27,10 +33,19 @@ export interface AnthropicClient {
         tools?: Array<{
           name: string;
           description?: string;
-          input_schema: Record<string, unknown>;
+          // The real Anthropic SDK's `Tool.input_schema` requires the
+          // literal `type: 'object'` (VernLLM's own public `tools` API
+          // accepts freeform JSON Schema, so this is narrower than that);
+          // see the two call sites below for how a caller's schema is
+          // asserted into this shape.
+          input_schema: { type: 'object'; [key: string]: unknown };
           strict?: boolean;
         }>;
-        tool_choice?: { type: 'tool' | 'auto' | 'any' | 'none'; name?: string };
+        tool_choice?:
+          | { type: 'auto' }
+          | { type: 'any' }
+          | { type: 'none' }
+          | { type: 'tool'; name: string };
       },
       options: { signal: AbortSignal },
     ): Promise<{
@@ -62,13 +77,42 @@ function toAnthropicContent(blocks: ContentBlock[]): AnthropicContentBlock[] {
 }
 
 /**
+ * Asserts a caller-supplied JSON Schema is an object schema before it's
+ * used as Anthropic's `Tool.input_schema`, which (like every other
+ * provider's function-calling API) requires `type: 'object'`. VernLLM's own
+ * public `tools`/`jsonSchema` APIs accept freeform `Record<string,
+ * unknown>` JSON Schema, so nothing upstream guarantees this at compile
+ * time; this is the runtime check that stands in for that, so a schema
+ * missing (or mistyping) `type: 'object'` fails loudly and immediately
+ * instead of being silently forwarded to Anthropic malformed.
+ */
+function assertObjectSchema(
+  schema: Record<string, unknown>,
+  toolName: string,
+): { type: 'object'; [key: string]: unknown } {
+  if (schema.type !== 'object') {
+    throw new LLMError(
+      `Tool "${toolName}"'s schema must have "type": "object" (Anthropic requires object-shaped tool parameters).`,
+      'validation',
+    );
+  }
+
+  return schema as { type: 'object'; [key: string]: unknown };
+}
+
+/**
  * Translates VernLLM's OpenAI-shaped wire `tool_choice` into Anthropic's
  * `{ type: 'auto' | 'any' | 'none' | 'tool', name? }` shape. `'required'`
  * maps to `'any'` (Anthropic's "must call some tool" equivalent).
  */
 function toAnthropicToolChoice(
   toolChoice: Parameters<LLMClient['chat']['completions']['create']>[0]['tool_choice'],
-): { type: 'tool' | 'auto' | 'any' | 'none'; name?: string } | undefined {
+):
+  | { type: 'auto' }
+  | { type: 'any' }
+  | { type: 'none' }
+  | { type: 'tool'; name: string }
+  | undefined {
   if (!toolChoice || toolChoice === 'auto') return { type: 'auto' };
   if (toolChoice === 'none') return { type: 'none' };
   if (toolChoice === 'required') return { type: 'any' };
@@ -145,7 +189,15 @@ function buildAnthropicRequestBody(
     // and the `params.tools` branch below never both apply.
     const { schema, description, strict } = params.response_format.json_schema;
 
-    tools = [{ name: toolName, description, input_schema: schema, strict }];
+    // VernLLM's public `jsonSchema` API accepts a freeform JSON Schema
+    // object (`Record<string, unknown>`), not necessarily typed with a
+    // literal `type: 'object'`, but tool/function parameters are always
+    // object schemas in practice (every provider's function-calling API
+    // requires it), so this assertion reflects that existing convention
+    // rather than changing behavior.
+    tools = [
+      { name: toolName, description, input_schema: assertObjectSchema(schema, toolName), strict },
+    ];
     toolChoice = { type: 'tool', name: toolName };
   } else if (params.response_format?.type === 'json_object') {
     // No schema to build a tool from, fall back to a prompt instruction
@@ -154,7 +206,9 @@ function buildAnthropicRequestBody(
     tools = params.tools.map((t) => ({
       name: t.function.name,
       description: t.function.description,
-      input_schema: t.function.parameters,
+      // Same convention as above: tool parameters are always object
+      // schemas in practice.
+      input_schema: assertObjectSchema(t.function.parameters, t.function.name),
     }));
     toolChoice = toAnthropicToolChoice(params.tool_choice);
   }
@@ -198,7 +252,9 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
   // type, hence `unknown` here and a cast at the call site, same
   // rationale as `fromOpenAICompatible`'s `rawCreate`: the wire contract,
   // not the SDK's own TS types, is what's actually relied on.
-  const rawMessagesCreate = anthropicClient.messages.create as unknown as (
+  const rawMessagesCreate = anthropicClient.messages.create.bind(
+    anthropicClient.messages,
+  ) as unknown as (
     params: unknown,
     options: { signal: AbortSignal },
   ) => Promise<unknown> | AsyncIterable<AnthropicStreamEvent>;

@@ -62,7 +62,9 @@ export function defaultParseJson(content: string): unknown {
 /**
  * Looks inside an unknown error value and pulls out an http status code
  * if one is present. Checks the status field first then the status code
- * field since different client libraries use different names for this.
+ * field since different client libraries use different names for this,
+ * falling back to AWS SDK v3's `$metadata.httpStatusCode` (e.g. Bedrock's
+ * `ThrottlingException`), which doesn't set either of the other two.
  * Returns undefined when the error is not an object or carries no status
  */
 export function extractStatus(err: unknown): number | undefined {
@@ -71,10 +73,12 @@ export function extractStatus(err: unknown): number | undefined {
   const error = err as {
     status?: unknown;
     statusCode?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
   };
 
   if (typeof error.status === 'number') return error.status;
   if (typeof error.statusCode === 'number') return error.statusCode;
+  if (typeof error.$metadata?.httpStatusCode === 'number') return error.$metadata.httpStatusCode;
 
   return undefined;
 }

@@ -34,9 +34,8 @@ function fakeGeminiStream(
 
 function makeFakeStreamingGeminiClient(chunks: unknown[], onReturn?: () => void | Promise<void>) {
   const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
-  const generateContentStream = vi.fn(
-    (_params: unknown, _options: unknown) =>
-      fakeGeminiStream(chunks, onReturn) as AsyncIterable<never>,
+  const generateContentStream = vi.fn((_params: unknown) =>
+    Promise.resolve(fakeGeminiStream(chunks, onReturn) as AsyncIterable<never>),
   );
 
   return {

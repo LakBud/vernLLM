@@ -33,6 +33,13 @@ tool result messages from a multi-tool turn back into a single `user` turn with 
 
 <a href="/docs/core/tool-calling">Tool Calling</a> for the full reference.
 
+For the Anthropic adapter, tool parameter schemas and `response_format: { type: 'json_schema' }`
+schemas must have a root `type: 'object'`. The public VernLLM request types remain broadly typed
+for JSON Schema, so this restriction is validated at runtime. A schema with a non-object root
+causes `fromAnthropic` to throw an `LLMError` with category `validation` before the request is
+sent to Anthropic. When migrating to the Anthropic adapter, ensure all tool and JSON Schema
+parameter schemas use an object root.
+
 ## Streaming
 
 `fromAnthropic` implements `createStream` on top of the Messages API's own streaming mode. Anthropic's

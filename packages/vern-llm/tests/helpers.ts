@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 
 import { type AnthropicClient } from '../src/adapters/anthropic.js';
-import { type LLMClient, type WireStreamChunk } from '../src/types/index.js';
+import { type StreamChunk, type LLMClient, type WireStreamChunk } from '../src/types/index.js';
 import { type VernLLM } from '../src/vernLLM.js';
 
 import type { InternalCacheParams } from '../src/internal/cache.utils.js';
@@ -265,4 +265,11 @@ export function makeFakeAnthropicClient(
   }));
 
   return { client: { messages: { create } }, create };
+}
+
+/** Collects all chunks from an async stream for assertions. */
+export async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
+  const out: StreamChunk[] = [];
+  for await (const chunk of chunks) out.push(chunk);
+  return out;
 }
