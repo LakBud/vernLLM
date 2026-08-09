@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { fromFetch } from '../../../src/adapters/index.js';
-import { at } from '../../helpers.js';
+import { fromFetch } from '../../../../src/adapters/index.js';
+import { at } from '../../../helpers.js';
 
 type FetchResponse = {
   text: string;

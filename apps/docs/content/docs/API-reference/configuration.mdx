@@ -13,6 +13,7 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   maxRetries: 1,
   timeoutMs: 25_000,
+  chunkIdleTimeoutMs: 30_000, // stream: true calls only
   baseDelayMs: 500,
   defaultMaxTokens: 1000,
   nonRetryableStatus: [400, 401, 403, 404, 422],
@@ -20,7 +21,7 @@ const llm = new VernLLM({
   debug: false,
   cache: new InMemoryCacheAdapter(), // optional; in-memory, not shared across processes
   parseJson: (content) => {
-    // must return undefined on failure, not throw — this is what
+    // must return undefined on failure, not throw, this is what
     // the built-in defaultParseJson does internally
     try {
       return JSON.parse(content);
@@ -38,7 +39,7 @@ const llm = new VernLLM({
 
 <Cards>
   <Card title="client">
-    An `LLMClient` — an OpenAI SDK instance, or the result of wrapping another provider with an
+    An `LLMClient`, an OpenAI SDK instance, or the result of wrapping another provider with an
     adapter (`fromAnthropic`, `fromGemini`, `fromBedrock`, `fromFetch`, etc). See{' '}
     <a href="/docs/adapters">Adapters</a>.
   </Card>
@@ -49,12 +50,13 @@ const llm = new VernLLM({
 
 ## Retry & timeout
 
-| Option               | Default                     | Notes                                                                                                                                                                                                     |
-| -------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                  |
-| `timeoutMs`          | `25000`                     | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window.                                                                                                          |
-| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay). |
-| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                |
+| Option               | Default                     | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                                                                                                                                                                                                                                                                                |
+| `timeoutMs`          | `25000`                     | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, only bounds opening the stream and its first chunk, see `chunkIdleTimeoutMs`.                                                                                                                                                                                                                                                                                      |
+| `chunkIdleTimeoutMs` | `30000`                     | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. Pass `0` or `Infinity` to disable; a value larger than `setTimeout` can represent (~24.8 days) is capped at that ceiling instead of firing almost immediately. Overridable per call, see <a href="/docs/API-reference/call-params#streaming">Call Params</a>. See <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>. |
+| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay).                                                                                                                                                                                                                                                                               |
+| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                                                                                                                                                                                                                                                                                              |
 
 ## Request defaults
 
@@ -62,7 +64,7 @@ const llm = new VernLLM({
 | -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                                          |
 | `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` from every call by default, so the provider applies its own default. |
-| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure — not throw — which signals a parse error to VernLLM.                          |
+| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure, not throw, which signals a parse error to VernLLM.                            |
 
 ## Caching
 
@@ -79,7 +81,7 @@ Upstash.
 in memory. When the limit is reached, the oldest entries are removed first.
 
 Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
-(normalizes keys before matching — case, whitespace, punctuation) and `TieredCacheAdapter`
+(normalizes keys before matching, case, whitespace, punctuation) and `TieredCacheAdapter`
 (checks a fast local adapter first, falling back to a shared one). See
 
 <a href="/docs/core/caching">Caching</a> for usage.
@@ -90,18 +92,18 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 ## Observability
 
-| Option           | Default                       | Notes                                                                                                                                                                                                                                                                                                                                               |
-| ---------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onUsage`        | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response.                                                                                                                                                                                                                        |
-| `onUsageFailure` | none                          | Called when a provider response arrived, with usage data available, but VernLLM's own post-processing then failed (parsing, validation, or any other post-response error). Fires once per failed attempt with extractable usage. Never fires for transport failures or an aborted call. See <a href="/docs/core/usage-tracking">Usage Tracking</a>. |
-| `logger`         | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                                                                                         |
-| `debug`          | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`.                                                            |
+| Option           | Default                       | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onUsage`        | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `onUsageFailure` | none                          | Called when a provider response arrived, with usage data available, but VernLLM's own post-processing then failed (parsing, validation, or any other post-response error). Fires once per failed attempt with extractable usage. For non-streaming calls, never fires for transport failures or an aborted call. For `stream: true`, this is not guaranteed, a stream can deliver a usage chunk and then fail later (e.g. an idle timeout), in which case it does fire. See <a href="/docs/core/usage-tracking">Usage Tracking</a>. |
+| `logger`         | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `debug`          | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`.                                                                                                                                                                                                                                            |
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                               |
-| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. |
+| Option           | Default  | Notes                                                                                                                                                                                                                                                                                                                       |
+| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. For `stream: true`, a `chunkIdleTimeoutMs` timeout counts as a failure even though it happens mid-stream, unlike other stream failures. |
 
 ## Per call defaults and overrides
 

@@ -11,6 +11,16 @@ export interface VernLLMOptions {
   maxRetries?: number;
   /** Per-attempt timeout in ms. Default 25000 */
   timeoutMs?: number;
+  /**
+   * For `stream: true` calls: max gap allowed between chunks once the
+   * stream has opened, in ms. Resets on every chunk, including keep-alive
+   * pings. `timeoutMs` only covers opening the stream and its first
+   * chunk; this covers every gap after that. Also counts as a
+   * circuit-breaker failure, unlike other mid-stream errors, since a
+   * provider that streams one chunk then stalls should still trip it.
+   * Default 30000. Pass 0 or negative to disable.
+   */
+  chunkIdleTimeoutMs?: number;
   /** Base delay for exponential backoff in ms. Default 500 */
   baseDelayMs?: number;
   /** Default max_tokens for calls that don't override it. Default 1000 */
@@ -35,9 +45,13 @@ export interface VernLLMOptions {
   /**
    * Called when a provider response arrives but VernLLM's own post-processing
    * then fails, after usage data was already present in that response.
-   * Separate from `onUsage`, which only fires on full success. Never fires
-   * for transport failures (timeout, network error, non-retryable status),
-   * since no response means no usage to report.
+   * Separate from `onUsage`, which only fires on full success.
+   *
+   * For non-streaming calls, never fires for transport failures (timeout,
+   * network error, non-retryable status), since no response means no usage
+   * to report. For streaming calls, this is not guaranteed: a stream can
+   * deliver a usage chunk and then fail later (e.g. an idle timeout waiting
+   * for the final close), in which case this does fire.
    */
   onUsageFailure?: OnUsageFailure;
   /** Injectable logger. Defaults to a console-based logger gated by `debug` */

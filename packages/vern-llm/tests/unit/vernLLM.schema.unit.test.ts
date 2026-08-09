@@ -5,7 +5,7 @@ import { LLMError } from '../../src/types/errors.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { at, createMockClient, jsonResponse } from '../helpers.js';
 
-describe('VernLLM.call — Zod schema validation', () => {
+describe('VernLLM.call, Zod schema validation', () => {
   const Schema = z.object({ name: z.string(), skills: z.array(z.string()) });
 
   it('returns typed, validated data on a matching schema', async () => {
@@ -58,7 +58,7 @@ describe('VernLLM.call — Zod schema validation', () => {
   });
 });
 
-describe('VernLLM.call — provider-native jsonSchema mode', () => {
+describe('VernLLM.call, provider-native jsonSchema mode', () => {
   it('sends response_format: json_schema with the given spec', async () => {
     const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm' });
@@ -126,7 +126,7 @@ describe('VernLLM.call — provider-native jsonSchema mode', () => {
   });
 });
 
-describe('VernLLM.call — per-call model override and reasoningEffort', () => {
+describe('VernLLM.call, per-call model override and reasoningEffort', () => {
   it('uses the instance default model when not overridden', async () => {
     const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'default-model' });
@@ -174,7 +174,7 @@ describe('VernLLM.call — per-call model override and reasoningEffort', () => {
   });
 });
 
-describe('VernLLM.call — usage tracking', () => {
+describe('VernLLM.call, usage tracking', () => {
   it('invokes onUsage with mapped token counts and resolved model after success', async () => {
     const onUsage = vi.fn();
     const { client } = createMockClient([
@@ -229,7 +229,7 @@ describe('VernLLM.call — usage tracking', () => {
   });
 });
 
-describe('VernLLM.call — onUsageFailure', () => {
+describe('VernLLM.call, onUsageFailure', () => {
   it('fires onUsageFailure with the spent usage and a validation error, without also firing onUsage', async () => {
     const onUsage = vi.fn();
     const onUsageFailure = vi.fn();

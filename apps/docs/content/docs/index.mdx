@@ -6,7 +6,7 @@ icon: CircleQuestionMark
 
 ## Get production-grade LLM calls, without any bloat
 
-**VernLLM** is a resilience layer for LLM applications. A lightweight wrapper that adds retries, timeouts, circuit breakers, caching, structured outputs, schema validation, usage tracking, and observability with sensible defaults and minimal dependencies.
+**VernLLM** is a resilience layer for LLM applications. A lightweight wrapper that adds retries, timeouts, circuit breakers, caching, streaming, structured outputs, schema validation, usage tracking, and observability with sensible defaults and minimal dependencies.
 
 ```ts title="example.ts"
 import OpenAI from 'openai';
@@ -27,18 +27,29 @@ const llm = new VernLLM({
   },
 });
 
-const summary = await llm.cachedCall({
-  cacheKey: `resume:${resumeId}`,
-  ttl: 3600,
+const getWeather = {
+  name: 'get_weather',
+  description: 'Gets the current weather for a city',
+  parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+};
 
+const city = 'Denver';
+
+const { chunks, finalResult } = await llm.cachedCall({
+  cacheKey: `weather:${city}`,
+  ttl: 60,
   call: {
-    systemPrompt: 'Analyze this resume and return structured hiring insights.',
-    userContent: resumeText,
-    schema: HiringSummarySchema, // Zod Schema
+    userContent: `What's the weather in ${city}?`,
+    tools: [getWeather],
+    stream: true,
   },
 });
 
-// Typed, validated, cached, retried, timeout-protected LLM output.
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+
+const result = await finalResult; // cached, retried, and streamed, tool calls included
 ```
 
 <Cards>
@@ -51,6 +62,9 @@ const summary = await llm.cachedCall({
   <Card title="Retries" href="/docs/core/retries">
     Exponential backoff with jitter and Retry-After awareness
   </Card>
+  <Card title="Streaming" href="/docs/core/streaming">
+    Incremental chunks as the model generates, with the same retry and caching guarantees
+  </Card>
   <Card title="Caching" href="/docs/core/caching">
     Wrap calls with cachedCall, stampede-safe by default
   </Card>
@@ -61,6 +75,7 @@ const summary = await llm.cachedCall({
 - **Retries with backoff**: transient failures get retried automatically. Parse errors, validation errors, and non retryable status codes fail fast instead
 - **Structured output**: pass a Zod schema and get a typed, validated result back
 - **Provider native JSON Schema mode**: constrain generation itself, not just validate after the fact
+- **Streaming**: set `stream: true` on any call and get live chunks alongside the same validated result `call()` would have returned
 - **Caching**: wrap any LLM call with `cachedCall`, and bring your own adapter such as Redis or Upstash
 - **Circuit breaker**: trips after repeated failures and recovers automatically once the provider is healthy again
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP through `fromFetch`

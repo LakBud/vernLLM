@@ -1,0 +1,381 @@
+---
+title: Streaming
+description: Get incremental chunks as the model generates, with the same retry and caching guarantees as a normal call, plus a per-chunk idle timeout
+---
+
+VernLLM supports streaming responses through the same `call()` and `cachedCall()` you already use.
+Set `stream: true`, and everything else, retries, the circuit breaker, schema validation,
+tool calling, and caching keeps working exactly as it does today, just delivered incrementally
+instead of as a single resolved value.
+
+<Callout type="info">
+  VernLLM's streaming preserves the same guarantees as non-streaming `call()`. Retries cover
+  connection failures before the first chunk arrives; a stream that fails partway through does not
+  retry, since replaying it would duplicate output the caller may have already rendered. See{' '}
+  <a href="#what-gets-retried">What gets retried</a> below. Unlike non-streaming `call()`, where
+  `timeoutMs` bounds the whole response, streaming only uses it to bound opening the stream and its
+  first chunk; every gap after that is bounded separately by `chunkIdleTimeoutMs`, see{' '}
+  <a href="#per-chunk-idle-timeout">Per-chunk idle timeout</a> below.
+</Callout>
+
+## Enabling streaming
+
+Pass `stream: true` to `call()`. Instead of resolving to `T` directly, you get back a
+`StreamCallResult<T>`, an object with two fields: `chunks`, an async iterable for live rendering,
+and `finalResult`, a promise that resolves to the same value `call()` would have returned had
+`stream` been omitted:
+
+```ts title="streaming-basic-usage.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Write a short poem about the ocean.',
+  jsonMode: false,
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') {
+    process.stdout.write(chunk.delta);
+  }
+}
+
+const result = await finalResult; // the full, validated response
+```
+
+<Callout type="warn">
+  Setting `stream: true` changes what `call()` returns, from `T` directly to
+  `StreamCallResult<T>`. This is intentional and does not affect calls that omit `stream`, which
+  keep returning `T` exactly as before.
+</Callout>
+
+## The chunk shape
+
+Every chunk delivered through `chunks` is a `StreamChunk`, a discriminated union over three kinds
+of event:
+
+```ts
+type StreamChunk =
+  | { type: 'text-delta'; delta: string }
+  | {
+      type: 'tool_call_delta';
+      index: number;
+      id?: string;
+      name?: string;
+      argsDelta?: string;
+      complete?: boolean;
+    }
+  | { type: 'usage'; usage: TokenUsage };
+```
+
+<Callout>
+  `complete: true` on a `tool_call_delta` means `argsDelta` is the whole set of arguments for that
+  call, not a fragment. This happens for Gemini (its API can't stream function-call arguments
+  incrementally) and for replayed chunks from a `cachedCall` hit. Omitted or `false` for a genuine
+  fragment from providers that do stream incrementally (OpenAI-compatible, Anthropic, Bedrock).
+</Callout>
+
+Check `chunk.type` to branch:
+
+```ts title="streaming-chunk-types.ts"
+for await (const chunk of chunks) {
+  switch (chunk.type) {
+    case 'text-delta':
+      process.stdout.write(chunk.delta);
+      break;
+    case 'tool_call_delta':
+      // accumulate by chunk.index, see Tool calling while streaming below
+      break;
+    case 'usage':
+      console.log('final token usage', chunk.usage);
+      break;
+  }
+}
+```
+
+<Callout>
+  A `usage` chunk, when the provider reports one, always arrives last, after every `text-delta` or
+  `tool_call_delta` chunk for that response. Not every provider sends usage data mid-stream; some
+  only report it in the same place non-streaming responses do. See the{' '}
+  <a href="#usage-metering-and-tracking-while-streaming">usage metering and tracking</a> section
+  below.
+</Callout>
+
+## `finalResult` mirrors non-streaming `call()`
+
+`finalResult` resolves to exactly what `call()` would have returned for the same request had
+`stream` been omitted: a parsed and validated `T` by default, or a `CallWithToolsResult<T>` if
+`tools` was also set. JSON parsing, `schema` validation, and every other post-processing step run
+against the fully accumulated response, not against individual chunks.
+
+This means you can treat `chunks` purely as a live rendering concern and still get the exact same
+typed, validated result your application already relies on:
+
+```ts title="streaming-with-schema.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: resumeText,
+  schema: CandidateSchema,
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') renderPartialText(chunk.delta);
+}
+
+// result is CandidateSchema's inferred type, validated the same way a
+// non-streaming call() would validate it
+const result = await finalResult;
+```
+
+<Callout type="warn">
+  If the stream produces no chunks at all, `finalResult` rejects with `LLMError('Empty LLM
+  response', 'api')`, the same error a non-streaming call throws for an empty response.
+</Callout>
+
+## `chunks` is single-use
+
+`chunks` is an async iterable, not a replayable stream. Iterate it once, from one place. Iterating
+it more than once, or from two places concurrently, does not replay or fork the sequence, both
+consumers share the same underlying buffered stream and split the chunks between them.
+
+Stopping iteration early (`break`ing out of a `for await`) does not cancel the underlying request
+either. The stream keeps running in the background regardless, since `finalResult` still needs to
+settle. If you only care about the final value and never plan to render live output, it's fine to
+never touch `chunks` at all and just `await finalResult`.
+
+<Callout>
+  Chunks emitted before you start iterating are not lost. They're buffered internally for the
+  duration of one stream, so starting to read `chunks` a little late still sees everything from the
+  beginning. That backlog is capped, an unusually large response whose `chunks` is never read at all
+  has its oldest buffered chunks evicted once the backlog grows large. Ordinary consumption, even
+  started somewhat late, stays far under that limit.
+</Callout>
+
+## Tool calling while streaming
+
+`tools` and `stream` combine freely. Tool call arguments arrive incrementally as
+`tool_call_delta` chunks, one or more per tool call, keyed by `index` so you can tell multiple
+concurrent tool calls apart:
+
+```ts title="streaming-tool-calls.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: 'What is the weather in New York?',
+  tools: [weatherTool],
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'tool_call_delta') {
+    console.log(`tool ${chunk.index}: ${chunk.name ?? ''}${chunk.argsDelta ?? ''}`);
+  }
+}
+
+const result = await finalResult; // CallWithToolsResult<T>, same shape as non-streaming
+
+if (result.type === 'tool_calls') {
+  for (const call of result.toolCalls) {
+    console.log(call.name, call.arguments); // fully accumulated, parsed arguments
+  }
+}
+```
+
+`argsDelta` carries a fragment of the JSON-encoded arguments string as it streams in, not parsed
+JSON. VernLLM assembles and parses the full arguments for you once the stream completes, so
+`result.toolCalls[i].arguments` on `finalResult` is the same fully parsed object you'd get from a
+non-streaming tool call. Treat `argsDelta` as display-only unless you have a specific reason to
+parse it incrementally yourself.
+
+See <a href="/docs/core/tool-calling">Tool Calling</a> for everything else about the tool calling
+contract, none of which changes when `stream` is also set.
+
+## Usage metering and tracking while streaming
+
+`reserveUsage` and `refundUsage` work the same way they do for non-streaming calls, with one
+difference in timing: `reserveUsage` runs before the stream opens, but because `call()` must hand
+back `{ chunks, finalResult }` before the real outcome of the stream is known, the refund/report
+step is deferred onto `finalResult` instead of happening inline. `onUsage` fires once `finalResult`
+resolves successfully; `onUsageFailure` fires if the stream fails after usage was already reserved.
+
+See <a href="/docs/core/usage-metering">Usage Metering</a> and{' '}
+
+<a href="/docs/core/usage-tracking">Usage Tracking</a> for the full reference, both apply unchanged.
+
+## What gets retried
+
+Streaming keeps the same retry policy as non-streaming `call()`, applied around opening the
+stream rather than the whole response:
+
+<Cards>
+  <Card title="Failure before the first chunk">
+    Treated like any other transient failure, retried per the configured backoff policy, same as a
+    non-streaming request that fails before receiving a response.
+  </Card>
+  <Card title="Failure after at least one chunk">
+    Not retried. Once chunks have started arriving, the caller may already be rendering them, so
+    VernLLM surfaces the error on `finalResult` rather than silently retrying and producing
+    duplicate or inconsistent output.
+  </Card>
+</Cards>
+
+<Callout type="warn">
+  A mid-stream failure rejects `finalResult` with a normalized `LLMError`, not `chunks` itself. If
+  you only iterate `chunks` and never await or otherwise observe `finalResult`, attach a no-op
+  `.catch()` to it, or Node will report an unhandled rejection once the stream fails.
+</Callout>
+
+The circuit breaker, when configured, records a failure for the stream-opening step, matching
+this same before-first-chunk/after-first-chunk split. Success, correspondingly, is only recorded
+once the stream fully completes, not when the first chunk arrives, so a connection that opens and
+then hangs isn't masked as a success. An idle-timeout failure (see below) is the one exception on
+the failure side: it still counts even though it happens after the first chunk, since a provider
+that reliably streams one chunk and then hangs is exactly the kind of unhealthy behavior the
+breaker exists to catch. See{' '}
+
+<a href="/docs/core/circuit-breaker">Circuit Breaker</a> and
+<a href="/docs/core/retries">Retries</a> for the underlying policy this reuses.
+
+## Per-chunk idle timeout
+
+`timeoutMs` only bounds opening the stream and its first chunk. Every gap after that is bounded
+separately, by `chunkIdleTimeoutMs` (default `30000`, pass `0` or `Infinity` to disable). Without
+it, a connection that opens fine, delivers one chunk, then hangs would never fail on its own.
+
+The clock resets on every chunk, including provider keep-alive pings (see below), so it measures
+the gap since the most recent chunk, not the stream's total duration. If it elapses, `finalResult`
+rejects with `LLMError('timeout')`, same as the stream-open timeout, and the underlying request is
+aborted rather than left running in the background.
+
+```ts
+const llm = new VernLLM({
+  client,
+  model: 'gpt-4o-mini',
+  chunkIdleTimeoutMs: 15_000, // fail if no chunk arrives for 15s
+});
+```
+
+Override it per call for routes that need a different value than the instance default, reasoning
+models with documented long silent gaps, for example:
+
+```ts
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Solve this step by step: ...',
+  reasoningEffort: 'high',
+  stream: true,
+  chunkIdleTimeoutMs: 120_000, // this call only, instance default unaffected
+});
+```
+
+<Callout type="info">
+  A value larger than `setTimeout` can represent (~24.8 days) is capped at that ceiling rather than
+  silently firing almost immediately, the underlying platform timer's own behavior for oversized
+  delays.
+</Callout>
+
+### Provider keep-alive pings
+
+Some providers send periodic keep-alive signals during long pauses in generation: Anthropic's
+documented `ping` events during extended thinking, or an SSE comment line used as a heartbeat.
+`fromAnthropic` and `fromFetch` (for the default SSE framing) both recognize these and reset the
+idle-timeout clock on them. They carry no content, so nothing is surfaced to `chunks` or
+`finalResult`.
+
+## Caching a streaming call
+
+`cachedCall()` supports `stream: true` in any combination with `tools`. The behavior differs
+depending on whether the call is a cache hit, a cache miss, or a miss that coalesces with an
+in-flight call for the same key:
+
+<Cards>
+  <Card title="Cache miss, no other caller in flight">
+    Opens a real stream and relays its `chunks` live to the caller, exactly like a non-cached
+    streaming call, while writing `finalResult` to the cache in the background once it settles.
+  </Card>
+  <Card title="Cache hit">
+    No live generation happens. `finalResult` resolves immediately to the cached value, and `chunks`
+    is a synthesized one-shot replay built from it, so `for await (const c of chunks)` works
+    identically whether the call was a hit or a miss.
+  </Card>
+  <Card title="Miss, but another call for the same key is already in flight">
+    This caller has no live chunks of its own to relay. It's treated like a delayed hit:
+    `finalResult` shares the in-flight trigger's promise, and `chunks` is a one-shot replay built
+    once that promise settles.
+  </Card>
+</Cards>
+
+```ts title="streaming-cached-call.ts"
+const { chunks, finalResult } = await llm.cachedCall({
+  cacheKey: `poem:${topic}`,
+  ttl: 3600,
+  call: {
+    userContent: `Write a short poem about ${topic}.`,
+    jsonMode: false,
+    stream: true,
+  },
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+
+const result = await finalResult;
+```
+
+<Callout type="info">
+  A replayed `chunks` (from a hit or a coalesced joiner) is not a re-simulated token-by-token
+  playback of the original stream. This is deliberate: VernLLM does not fake "live" delivery to
+  preserve a UX feel, the same reasoning already applies to non-streaming cache hits resolving
+  instantly. A coalesced caller therefore does not see the trigger's live tokens, only the completed
+  result once it's ready. For a plain text response this means one flat chunk with the full content;
+  for a tool-call response it means one `tool_call_delta` per cached tool call (each with its full
+  arguments in one shot), followed by an optional trailing text chunk.
+</Callout>
+
+See <a href="/docs/core/caching">Caching</a> for everything else about `cachedCall`, coalescing,
+and cache adapters, all of which apply the same way to streaming calls.
+
+## A note on the call() overload
+
+TypeScript only resolves `call()` to the streaming overload, returning `StreamCallResult<T>`, when
+`stream: true` is visible as a literal at the call site. This is the same caveat that already
+applies to `tools`, see <a href="/docs/core/tool-calling#a-note-on-the-call-overload">the Tool Calling docs</a> for the full explanation.
+
+If you build `params` as a plain `CallParams<T>` and conditionally set `stream` on it, TypeScript
+picks the non-streaming `Promise<T>` overload regardless of what `stream` turns out to be at
+runtime. The actual runtime result still follows `stream`, so this mismatch is silent rather than
+a compile error:
+
+```ts title="streaming-runtime-check.ts"
+const params: CallParams<string> = {
+  userContent: 'Write a short poem about the ocean.',
+  jsonMode: false,
+  stream: someCondition,
+};
+
+// TypeScript infers Promise<string> here, but the real result is a
+// StreamCallResult<string> whenever `stream` evaluates to true. Narrow or
+// cast accordingly rather than relying on the static return type.
+const result = await llm.call(params);
+```
+
+## Provider support
+
+Every adapter implements `createStream` on top of the same client passed to `fromOpenAICompatible`,
+`fromAnthropic`, `fromGemini`, or `fromBedrock`, no separate streaming client is needed:
+
+| Provider          | Native mechanism                                                                |
+| ----------------- | ------------------------------------------------------------------------------- |
+| OpenAI-compatible | Server-Sent Events, same endpoint as `create` with `stream: true`               |
+| Anthropic         | Server-Sent Events over the Messages API's streaming mode                       |
+| Gemini            | The SDK's own streaming method                                                  |
+| Bedrock           | `ConverseStreamCommand`                                                         |
+| `fromFetch`       | Server-Sent Events by default, or a custom frame format via `parseStreamFrames` |
+
+See each adapter's own page for anything streaming-specific to that provider, and{' '}
+
+<a href="/docs/adapters/custom-fetch#streaming">Custom Providers - fromFetch</a> for wiring up
+streaming through the raw HTTP escape hatch.
+
+<Callout>
+  Whether a client passed to an adapter needs to implement anything extra for streaming to work
+  depends on the adapter, most SDKs already expose a streaming method the adapter can call directly.
+  A client that lacks streaming support entirely makes `stream: true` throw a clear
+  `LLMError('validation')` rather than a confusing runtime failure.
+</Callout>

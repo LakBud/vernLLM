@@ -47,7 +47,7 @@ export class CircuitBreaker {
       const elapsed = Date.now() - this.openedAt;
       if (elapsed < this.cooldownMs) {
         throw new LLMError(
-          `Circuit open — provider has failed ${this.consecutiveFailures} times in a row. Retry in ${Math.ceil((this.cooldownMs - elapsed) / 1000)}s.`,
+          `Circuit open, provider has failed ${this.consecutiveFailures} times in a row. Retry in ${Math.ceil((this.cooldownMs - elapsed) / 1000)}s.`,
           'circuit_open',
         );
       }

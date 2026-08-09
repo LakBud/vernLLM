@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromGemini } from '../../../src/adapters/gemini.js';
+import { fromGemini } from '../../../../src/adapters/gemini.js';
 
 describe('Gemini adapter integration', () => {
   it('maps generateContent into LLMClient format', async () => {

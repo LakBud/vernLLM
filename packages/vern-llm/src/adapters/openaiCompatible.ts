@@ -1,6 +1,6 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
 
-import type { ContentBlock, LLMClient } from '../types/index.js';
+import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/index.js';
 
 /** OpenAI's native per-part content shape for a user message. */
 type OpenAIContentPart =
@@ -28,6 +28,77 @@ function toOpenAIContent(blocks: ContentBlock[]): OpenAIContentPart[] {
   );
 }
 
+/** One chunk of an OpenAI-shaped `chat.completions.create({ stream: true })` SSE stream. */
+interface OpenAIStreamChunk {
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        index: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
+/**
+ * Translates VernLLM's provider-agnostic `messages` (the one part of a
+ * request that isn't a pure passthrough for OpenAI-compatible clients) into
+ * OpenAI's native wire shape. Shared between `create` and `createStream` so
+ * both go through identical message translation.
+ */
+function toOpenAIMessages(
+  params: Parameters<LLMClient['chat']['completions']['create']>[0],
+): unknown[] {
+  return params.messages.map((m) => {
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      return { ...m, content: toOpenAIContent(m.content) };
+    }
+
+    if (m.role === 'tool') {
+      const { is_error: _isError, ...openAIToolMessage } = m;
+      return openAIToolMessage;
+    }
+
+    return m;
+  });
+}
+
+/**
+ * Translates one OpenAI-shaped SSE chunk into zero or more `WireStreamChunk`s.
+ * A single chunk can carry a text delta, one or more tool-call argument
+ * deltas (each keyed by `index`, OpenAI's own convention for streaming
+ * parallel tool calls, mirrored directly by VernLLM's `tool_call_delta`
+ * shape so accumulation composes without translation), and/or a final
+ * usage block (present only when `stream_options.include_usage` is set,
+ * which this adapter always sets).
+ */
+function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStreamChunk> {
+  const delta = chunk.choices?.[0]?.delta;
+
+  if (delta?.content) {
+    yield { type: 'text-delta', delta: delta.content };
+  }
+
+  if (delta?.tool_calls?.length) {
+    for (const toolCall of delta.tool_calls) {
+      yield {
+        type: 'tool_call_delta',
+        index: toolCall.index,
+        id: toolCall.id,
+        name: toolCall.function?.name,
+        argumentsDelta: toolCall.function?.arguments,
+      };
+    }
+  }
+
+  if (chunk.usage) {
+    yield { type: 'usage', usage: chunk.usage };
+  }
+}
+
 /**
  * Adapter for any SDK/client whose `chat.completions.create` already
  * matches the OpenAI wire format: this covers most hosted inference
@@ -47,31 +118,83 @@ function toOpenAIContent(blocks: ContentBlock[]): OpenAIContentPart[] {
  * (extra fields, stricter unions, etc.), so this takes `unknown` and casts:
  * the actual compatibility contract is the JSON each provider sends and
  * receives over the wire, not the SDKs TS types.
+ *
+ * `createStream` is implemented by calling the same underlying
+ * `chat.completions.create` with `stream: true` (and, for providers that
+ * support it, `stream_options: { include_usage: true }`, so a final usage
+ * block arrives), the OpenAI SDK, and every OpenAI-compatible client
+ * modeled on it, returns an `AsyncIterable` of SSE chunks instead of a
+ * single completion object when `stream: true` is set. Each chunk is
+ * translated into `WireStreamChunk`(s) via `toWireStreamChunks`.
+ *
+ * Note on long-running reasoning models: this adapter consumes the
+ * underlying SDK's already-parsed stream rather than raw SSE bytes, so
+ * unlike `fromFetch`/`fromAnthropic` it cannot see comment-only keep-alive
+ * ping frames. Combined with `chunkIdleTimeoutMs`'s 30 second default and
+ * `reasoningEffort` (documented to have long silent gaps for o-series and
+ * similar models), a long-running reasoning call on this adapter can trip
+ * the idle timeout even though the provider is still working. Raise or
+ * disable `chunkIdleTimeoutMs` per call for those routes, see `CallParams`.
  */
-export function fromOpenAICompatible(client: unknown): LLMClient {
+export interface OpenAICompatibleAdapterOptions {
+  /**
+   * Whether the provider supports `stream_options.include_usage`. Not
+   * every "OpenAI-compatible" provider is guaranteed to, so this defaults
+   * to `true` (matching OpenAI, Groq, Mistral, and most others observed)
+   * and should be set to `false` for a provider verified not to support
+   * it. When `false`, `stream_options` is omitted entirely and no usage
+   * block will arrive on the stream; callers relying on streamed `usage`
+   * with such a provider won't get one.
+   */
+  supportsStreamUsage?: boolean;
+}
+
+export function fromOpenAICompatible(
+  client: unknown,
+  options: OpenAICompatibleAdapterOptions = {},
+): LLMClient {
   const raw = client as LLMClient;
+  const { supportsStreamUsage = true } = options;
+
+  // The underlying client's `create`, called with `stream: true`, returns
+  // an AsyncIterable of `OpenAIStreamChunk` rather than
+  // `LLMClient['create']`'s normal single-completion return type, hence
+  // `unknown` here and a cast at the call site, same rationale as casting
+  // the whole client above: the wire contract, not the SDK's own TS types,
+  // is what's actually being relied on.
+  const rawCreate = raw.chat.completions.create as unknown as (
+    params: unknown,
+    options: { signal: AbortSignal },
+  ) => Promise<unknown> | AsyncIterable<OpenAIStreamChunk>;
 
   return {
     chat: {
       completions: {
         async create(params, options) {
-          const messages = params.messages.map((m) => {
-            if (m.role === 'user' && Array.isArray(m.content)) {
-              return { ...m, content: toOpenAIContent(m.content) };
-            }
-
-            if (m.role === 'tool') {
-              const { is_error: _isError, ...openAIToolMessage } = m;
-              return openAIToolMessage;
-            }
-
-            return m;
-          });
+          const messages = toOpenAIMessages(params);
 
           return raw.chat.completions.create(
             { ...params, messages } as Parameters<LLMClient['chat']['completions']['create']>[0],
             options,
           );
+        },
+
+        async *createStream(params, options) {
+          const messages = toOpenAIMessages(params);
+
+          const stream = (await rawCreate(
+            {
+              ...params,
+              messages,
+              stream: true,
+              ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+            },
+            options,
+          )) as AsyncIterable<OpenAIStreamChunk>;
+
+          for await (const chunk of stream) {
+            yield* toWireStreamChunks(chunk);
+          }
         },
       },
     },
@@ -83,7 +206,13 @@ export function fromOpenAICompatible(client: unknown): LLMClient {
 /** Groqs SDK matches the OpenAI wire format */
 export const fromGroq = fromOpenAICompatible;
 
-/** Mistrals `chat.completions`-shaped client (or their OpenAI-compat endpoint) */
+/**
+ * Mistrals `chat.completions`-shaped client (or their OpenAI-compat
+ * endpoint). Mistral supports `stream_options.include_usage` (added after
+ * an earlier period where it returned a 422 for unrecognized fields, per
+ * Mistral's changelog and streaming docs), so this is a plain alias like
+ * the others, `supportsStreamUsage` defaults to `true`.
+ */
 export const fromMistral = fromOpenAICompatible;
 
 /** DeepSeeks API is OpenAI-compatible */

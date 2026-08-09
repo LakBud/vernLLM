@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromAnthropic } from '../../../src/adapters/anthropic.js';
-import { VernLLM } from '../../../src/vernLLM.js';
-import { at, makeFakeAnthropicClient } from '../../helpers.js';
+import { fromAnthropic } from '../../../../src/adapters/anthropic.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
+import { at, makeFakeAnthropicClient } from '../../../helpers.js';
 
 describe('Anthropic adapter integration', () => {
   it('maps Anthropic messages API into LLMClient format', async () => {

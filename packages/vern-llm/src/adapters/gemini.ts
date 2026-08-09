@@ -1,5 +1,11 @@
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-import { LLMError, type ContentBlock, type LLMClient, type WireToolCall } from '../types/index.js';
+import {
+  LLMError,
+  type ContentBlock,
+  type LLMClient,
+  type WireStreamChunk,
+  type WireToolCall,
+} from '../types/index.js';
 
 /** Gemini's native per-part content shape for a `contents` entry. */
 type GeminiPart =
@@ -43,6 +49,29 @@ export interface GeminiClient {
     },
     options: { signal: AbortSignal },
   ): Promise<{
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{ text?: string; functionCall?: { name: string; args: unknown } }>;
+      };
+    }>;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+    };
+  }>;
+
+  /**
+   * Optional. Required only for `stream: true` calls. Takes the same
+   * request shape as `generateContent`, yielding an `AsyncIterable` of
+   * partial responses instead of one final one, Gemini's own streaming
+   * shape, each chunk holding the same `candidates[].content.parts[]`
+   * structure as `generateContent`'s response, just incremental.
+   */
+  generateContentStream?(
+    params: Parameters<GeminiClient['generateContent']>[0],
+    options: { signal: AbortSignal },
+  ): AsyncIterable<{
     candidates?: Array<{
       content?: {
         parts?: Array<{ text?: string; functionCall?: { name: string; args: unknown } }>;
@@ -209,6 +238,68 @@ function mergeConsecutiveFunctionResponses(
   return merged;
 }
 
+type GeminiRequest = Parameters<GeminiClient['generateContent']>[0];
+
+/**
+ * Builds the Gemini-shaped request from VernLLM's wire params, shared
+ * between `create` and `createStream` so both go through identical
+ * translation (contents shaping, `responseSchema`/`responseMimeType`
+ * mapping, and tool/toolConfig translation all happen exactly once).
+ */
+function buildGeminiRequest(
+  params: Parameters<LLMClient['chat']['completions']['create']>[0],
+): GeminiRequest {
+  const systemMessage = params.messages.find((m) => m.role === 'system');
+  // Keep user, assistant, and tool turns, in order.
+  const conversationMessages = params.messages.filter(
+    (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
+  );
+
+  const wantsJson = Boolean(params.response_format);
+  const generationConfig: NonNullable<GeminiRequest['generationConfig']> = {
+    ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+    maxOutputTokens: params.max_tokens,
+  };
+
+  if (wantsJson) {
+    generationConfig.responseMimeType = 'application/json';
+  }
+
+  if (params.response_format?.type === 'json_schema') {
+    const { schema, description } = params.response_format.json_schema;
+
+    generationConfig.responseSchema = {
+      ...schema,
+      ...(description ? { description } : {}),
+    };
+  }
+
+  const tools = params.tools?.length
+    ? [
+        {
+          functionDeclarations: params.tools.map((t) => ({
+            name: t.function.name,
+            description: t.function.description,
+            parameters: t.function.parameters,
+          })),
+        },
+      ]
+    : undefined;
+
+  return {
+    model: params.model,
+    contents: mergeConsecutiveFunctionResponses(
+      conversationMessages.map((m) => toGeminiContent(m)),
+    ),
+    systemInstruction: systemMessage
+      ? // System turns are always plain strings; only user turns can carry ContentBlock[]
+        { parts: [{ text: systemMessage.content as string }] }
+      : undefined,
+    generationConfig,
+    ...(tools ? { tools, toolConfig: toGeminiToolConfig(params.tool_choice) } : {}),
+  };
+}
+
 /**
  * Wraps a Gemini client so it satisfies the `LLMClient` interface VernLLM
  * uses for OpenAI-compatible APIs. Gemini's shape differs on nearly every
@@ -225,66 +316,26 @@ function mergeConsecutiveFunctionResponses(
  * and `tools` are mutually exclusive by the time a call reaches here
  * (enforced in vernLLM.ts), so `responseSchema` and `tools` never
  * both apply.
+ *
+ * `createStream` calls `generateContentStream` (optional on `GeminiClient`
+ *, required only if the caller sets `stream: true`) and translates each
+ * partial response into `WireStreamChunk`s. Unlike OpenAI/Anthropic,
+ * Gemini's own function-calling API doesn't stream tool-call arguments
+ * incrementally: a `functionCall` part always arrives whole in one chunk,
+ * so each one is emitted as a single, complete `tool_call_delta` (a
+ * one-shot "delta" containing the full arguments) rather than accumulated
+ * fragments, that's a real difference in the underlying API, not
+ * something this adapter can smooth over. `usageMetadata` is (per Gemini's
+ * own behavior) only reliably present on the last chunk, so the `usage`
+ * `WireStreamChunk` is emitted once, after the stream completes, from
+ * whichever chunk's `usageMetadata` was seen last.
  */
 export function fromGemini(geminiClient: GeminiClient): LLMClient {
   return {
     chat: {
       completions: {
         async create(params, options) {
-          const systemMessage = params.messages.find((m) => m.role === 'system');
-          // Keep user, assistant, and tool turns, in order.
-          const conversationMessages = params.messages.filter(
-            (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
-          );
-
-          const wantsJson = Boolean(params.response_format);
-          const generationConfig: NonNullable<
-            Parameters<GeminiClient['generateContent']>[0]['generationConfig']
-          > = {
-            ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-            maxOutputTokens: params.max_tokens,
-          };
-
-          if (wantsJson) {
-            generationConfig.responseMimeType = 'application/json';
-          }
-
-          if (params.response_format?.type === 'json_schema') {
-            const { schema, description } = params.response_format.json_schema;
-
-            generationConfig.responseSchema = {
-              ...schema,
-              ...(description ? { description } : {}),
-            };
-          }
-
-          const tools = params.tools?.length
-            ? [
-                {
-                  functionDeclarations: params.tools.map((t) => ({
-                    name: t.function.name,
-                    description: t.function.description,
-                    parameters: t.function.parameters,
-                  })),
-                },
-              ]
-            : undefined;
-
-          const response = await geminiClient.generateContent(
-            {
-              model: params.model,
-              contents: mergeConsecutiveFunctionResponses(
-                conversationMessages.map((m) => toGeminiContent(m)),
-              ),
-              systemInstruction: systemMessage
-                ? // System turns are always plain strings; only user turns can carry ContentBlock[]
-                  { parts: [{ text: systemMessage.content as string }] }
-                : undefined,
-              generationConfig,
-              ...(tools ? { tools, toolConfig: toGeminiToolConfig(params.tool_choice) } : {}),
-            },
-            options,
-          );
+          const response = await geminiClient.generateContent(buildGeminiRequest(params), options);
 
           const parts = response.candidates?.[0]?.content?.parts ?? [];
           const text = parts.map((p) => p.text ?? '').join('');
@@ -298,7 +349,7 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
               // a call id (Gemini has no call-id concept at all), so the id
               // here is just the name. This means two calls to the *same*
               // tool within one turn can't be told apart when results come
-              // back — a real limitation of Gemini's own function-calling
+              // back, a real limitation of Gemini's own function-calling
               // API, not something VernLLM can paper over.
               id: p.functionCall!.name,
               type: 'function' as const,
@@ -321,6 +372,68 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
               total_tokens: response.usageMetadata?.totalTokenCount,
             },
           };
+        },
+
+        async *createStream(params, options) {
+          if (!geminiClient.generateContentStream) {
+            throw new LLMError(
+              'stream: true requires a Gemini client with generateContentStream',
+              'validation',
+            );
+          }
+
+          const stream = geminiClient.generateContentStream(buildGeminiRequest(params), options);
+
+          let toolCallIndex = 0;
+          let lastUsage:
+            | NonNullable<Awaited<ReturnType<GeminiClient['generateContent']>>['usageMetadata']>
+            | undefined;
+
+          for await (const chunk of stream) {
+            const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+
+            for (const part of parts) {
+              if (part.text) {
+                yield { type: 'text-delta', delta: part.text };
+              }
+
+              if (part.functionCall) {
+                yield {
+                  type: 'tool_call_delta',
+                  index: toolCallIndex,
+                  id: part.functionCall.name,
+                  name: part.functionCall.name,
+                  argumentsDelta: JSON.stringify(part.functionCall.args ?? {}),
+                  // INVARIANT: assumes Gemini always sends a complete
+                  // function-call args blob per part, no incremental
+                  // streaming, per current API behavior. There is no field
+                  // on this minimal structural type to derive this from.
+                  // If Gemini ever starts streaming args incrementally,
+                  // this becomes silently wrong. See the test titled
+                  // "INVARIANT: hardcodes complete: true on
+                  // tool_call_delta" in gemini.stream.unit.test.ts, which
+                  // exists specifically to catch that drift.
+                  complete: true,
+                } satisfies WireStreamChunk;
+                toolCallIndex++;
+              }
+            }
+
+            if (chunk.usageMetadata) {
+              lastUsage = chunk.usageMetadata;
+            }
+          }
+
+          if (lastUsage) {
+            yield {
+              type: 'usage',
+              usage: {
+                prompt_tokens: lastUsage.promptTokenCount,
+                completion_tokens: lastUsage.candidatesTokenCount,
+                total_tokens: lastUsage.totalTokenCount,
+              },
+            };
+          }
         },
       },
     },

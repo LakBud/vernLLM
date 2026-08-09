@@ -3,7 +3,7 @@ title: Caching
 description: Wrap calls with cachedCall
 ---
 
-vern-llm ships three cache adapters out of the box: `InMemoryCacheAdapter` (exact match),
+VernLLM ships three cache adapters out of the box: `InMemoryCacheAdapter` (exact match),
 `NormalizedCacheAdapter` (normalized/fuzzy match), and `TieredCacheAdapter` (two-tier
 local + shared cache), plus a `CacheAdapter` interface for bringing your own.
 
@@ -208,6 +208,14 @@ underlying request itself should also be cancellable.
   `tool_calls` results, not only final answers. See{' '}
   <a href="/docs/core/tool-calling#caching-tool-calls">Caching tool calls</a> for when that is, and
   isn't, appropriate.
+</Callout>
+
+<Callout>
+  `cachedCall` also supports `stream: true`, in any combination with `tools`. A cache hit or a
+  coalesced joiner replays the cached value as a single flat chunk rather than a re-simulated
+  token-by-token stream. See{' '}
+  <a href="/docs/core/streaming#caching-a-streaming-call">Caching a streaming call</a> for the full
+  behavior across misses, hits, and coalesced callers.
 </Callout>
 
 ```ts title="cached-call.ts"

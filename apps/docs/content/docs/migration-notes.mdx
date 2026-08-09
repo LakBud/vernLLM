@@ -4,7 +4,7 @@ description: Breaking changes between versions, and what to update
 icon: TriangleAlert
 ---
 
-This page tracks breaking changes across `vern-llm` releases. Most releases are additive, this
+This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
 ## 2.0.0: Collapsing `cachedCall`/`cachedLLMCall`
@@ -12,7 +12,7 @@ page only covers the ones that aren't.
 `VernLLM` used to expose two caching methods with overlapping names: a generic `cachedCall({
 cacheKey, ttl, fn })` that cached whatever `fn` returned, with no retry/timeout/circuit-breaker
 guarantees, and `cachedLLMCall({ cacheKey, ttl, call })` that composed `call()`'s resilience
-behavior with caching. This didn't fit vern-llm's scope as a resilience layer for LLM calls
+behavior with caching. This didn't fit VernLLM's scope as a resilience layer for LLM calls
 specifically, and the generic `fn`-based form was really a general-purpose memoizer that happened
 to live on the LLM client.
 

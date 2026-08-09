@@ -3,9 +3,9 @@ title: Gemini
 description: fromGemini adapter
 ---
 
-`fromGemini` wraps the raw Gemini client — not a pre-configured model instance — since the adapter passes `model` through on every call rather than baking it in up front.
+`fromGemini` wraps the raw Gemini client, not a pre-configured model instance, since the adapter passes `model` through on every call rather than baking it in up front.
 
-`GeminiClient` is the public client type exported by `vern-llm` and accepted by `fromGemini`. It allows TypeScript users to type their Gemini client without depending on adapter internals.
+`GeminiClient` is the public client type exported by `VernLLM` and accepted by `fromGemini`. It allows TypeScript users to type their Gemini client without depending on adapter internals.
 
 ## New SDK (`@google/genai`)
 
@@ -39,6 +39,32 @@ within one turn cannot be told apart when results come back. Consecutive functio
 messages from a multi-tool turn are merged back into a single `user` content entry. See{' '}
 
 <a href="/docs/core/tool-calling">Tool Calling</a> for the full reference.
+
+## Streaming
+
+`fromGemini` implements `createStream` on top of the SDK's own streaming method. Text and function
+call parts arriving on each streamed candidate map onto `text-delta` and `tool_call_delta` chunks
+respectively, no extra setup is needed beyond the client already passed to `fromGemini`:
+
+```ts title="gemini-streaming.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Write a short poem about the ocean.',
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+```
+
+<Callout>
+  Gemini's API can't stream function-call arguments incrementally, each `functionCall` part arrives
+  whole in a single chunk. `fromGemini` marks these `tool_call_delta` chunks with `complete: true`,
+  so `argsDelta` is the entire set of arguments, not a fragment. See{' '}
+  <a href="/docs/core/streaming#the-chunk-shape">The chunk shape</a>.
+</Callout>
+
+See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract.
 
 ## Multimodal input
 

@@ -1,6 +1,7 @@
 export { VernLLM } from './vernLLM.js';
 export { CircuitBreaker, type CircuitBreakerOptions } from './circuitBreaker.js';
 export { ConsoleLogger, type Logger } from './logger.js';
+export { parseSseStream, SSE_PING } from './internal/sse.js';
 
 export {
   fromAnthropic,
@@ -69,6 +70,12 @@ export {
   type VernLLMOptions,
   type CallParams,
   type ToolEnabledCallParams,
+  type StreamEnabledCallParams,
+  type StreamCallResult,
+  type StreamChunk,
+  type WireStreamChunk,
+  type CachedStreamCallParams,
+  type CachedStreamToolCallParams,
   type ConversationTurn,
   type ContentBlock,
   type TextBlock,
