@@ -15,24 +15,29 @@ type GeminiPart =
   | { functionResponse: { name: string; response: unknown } };
 
 /**
- * Minimal structural type for VernLLM's two-argument wrapper around Gemini
- * `generateContent`. The wrapper exposes a request shape aligned with the
- * adapter interface, with top-level `systemInstruction` and
- * `generationConfig` fields, while transport options (such as `AbortSignal`)
- * are passed separately as the second argument.
+ * Structural type matching the real `@google/genai` SDK's `ai.models`
+ * object: `generateContent`/`generateContentStream` both take a single
+ * `{ model, contents, config }` argument (config carries
+ * `systemInstruction`, `tools`, `toolConfig`, generation settings, and
+ * `abortSignal` all together), matching the real SDK closely enough that
+ * `fromGemini(ai.models)` works directly, e.g:
+ *
+ * ```ts
+ * import { GoogleGenAI } from '@google/genai';
+ * const ai = new GoogleGenAI({ apiKey: '...' });
+ * const llm = new VernLLM({ client: fromGemini(ai.models), model: 'gemini-2.5-flash' });
+ * ```
  */
 export interface GeminiClient {
-  generateContent(
-    params: {
-      model?: string;
-      contents: Array<{ role: 'user' | 'model'; parts: GeminiPart[] }>;
+  generateContent(params: {
+    model?: string;
+    contents: Array<{ role: 'user' | 'model'; parts: GeminiPart[] }>;
+    config?: {
       systemInstruction?: { parts: Array<{ text: string }> };
-      generationConfig?: {
-        temperature?: number;
-        maxOutputTokens?: number;
-        responseMimeType?: string;
-        responseSchema?: Record<string, unknown>;
-      };
+      temperature?: number;
+      maxOutputTokens?: number;
+      responseMimeType?: string;
+      responseSchema?: Record<string, unknown>;
       tools?: Array<{
         functionDeclarations: Array<{
           name: string;
@@ -46,9 +51,9 @@ export interface GeminiClient {
           allowedFunctionNames?: string[];
         };
       };
-    },
-    options: { signal: AbortSignal },
-  ): Promise<{
+      abortSignal?: AbortSignal;
+    };
+  }): Promise<{
     candidates?: Array<{
       content?: {
         parts?: Array<{ text?: string; functionCall?: { name: string; args: unknown } }>;
@@ -63,26 +68,26 @@ export interface GeminiClient {
 
   /**
    * Optional. Required only for `stream: true` calls. Takes the same
-   * request shape as `generateContent`, yielding an `AsyncIterable` of
-   * partial responses instead of one final one, Gemini's own streaming
-   * shape, each chunk holding the same `candidates[].content.parts[]`
-   * structure as `generateContent`'s response, just incremental.
+   * request shape as `generateContent`. Matching the real SDK's own
+   * `generateContentStream`, this resolves to an `AsyncIterable` (rather
+   * than returning one synchronously) of partial responses, each chunk
+   * holding the same `candidates[].content.parts[]` structure as
+   * `generateContent`'s response, just incremental.
    */
-  generateContentStream?(
-    params: Parameters<GeminiClient['generateContent']>[0],
-    options: { signal: AbortSignal },
-  ): AsyncIterable<{
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{ text?: string; functionCall?: { name: string; args: unknown } }>;
+  generateContentStream?(params: Parameters<GeminiClient['generateContent']>[0]): Promise<
+    AsyncIterable<{
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{ text?: string; functionCall?: { name: string; args: unknown } }>;
+        };
+      }>;
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
       };
-    }>;
-    usageMetadata?: {
-      promptTokenCount?: number;
-      candidatesTokenCount?: number;
-      totalTokenCount?: number;
-    };
-  }>;
+    }>
+  >;
 }
 
 /**
@@ -102,7 +107,9 @@ function toGeminiParts(blocks: ContentBlock[]): GeminiPart[] {
 /** Maps VernLLM's OpenAI-shaped wire `tool_choice` onto Gemini's `functionCallingConfig`. */
 function toGeminiToolConfig(
   toolChoice: Parameters<LLMClient['chat']['completions']['create']>[0]['tool_choice'],
-): NonNullable<Parameters<GeminiClient['generateContent']>[0]['toolConfig']> {
+): NonNullable<
+  NonNullable<Parameters<GeminiClient['generateContent']>[0]['config']>['toolConfig']
+> {
   if (!toolChoice || toolChoice === 'auto') {
     return { functionCallingConfig: { mode: 'AUTO' } };
   }
@@ -239,12 +246,15 @@ function mergeConsecutiveFunctionResponses(
 }
 
 type GeminiRequest = Parameters<GeminiClient['generateContent']>[0];
+type GeminiConfig = NonNullable<GeminiRequest['config']>;
 
 /**
  * Builds the Gemini-shaped request from VernLLM's wire params, shared
  * between `create` and `createStream` so both go through identical
  * translation (contents shaping, `responseSchema`/`responseMimeType`
  * mapping, and tool/toolConfig translation all happen exactly once).
+ * `abortSignal` is folded into `config` by the caller (`create`/
+ * `createStream`), once the request options are available.
  */
 function buildGeminiRequest(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
@@ -256,47 +266,47 @@ function buildGeminiRequest(
   );
 
   const wantsJson = Boolean(params.response_format);
-  const generationConfig: NonNullable<GeminiRequest['generationConfig']> = {
+  const config: GeminiConfig = {
     ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
     maxOutputTokens: params.max_tokens,
+    ...(systemMessage
+      ? // System turns are always plain strings; only user turns can carry ContentBlock[]
+        { systemInstruction: { parts: [{ text: systemMessage.content as string }] } }
+      : {}),
   };
 
   if (wantsJson) {
-    generationConfig.responseMimeType = 'application/json';
+    config.responseMimeType = 'application/json';
   }
 
   if (params.response_format?.type === 'json_schema') {
     const { schema, description } = params.response_format.json_schema;
 
-    generationConfig.responseSchema = {
+    config.responseSchema = {
       ...schema,
       ...(description ? { description } : {}),
     };
   }
 
-  const tools = params.tools?.length
-    ? [
-        {
-          functionDeclarations: params.tools.map((t) => ({
-            name: t.function.name,
-            description: t.function.description,
-            parameters: t.function.parameters,
-          })),
-        },
-      ]
-    : undefined;
+  if (params.tools?.length) {
+    config.tools = [
+      {
+        functionDeclarations: params.tools.map((t) => ({
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters,
+        })),
+      },
+    ];
+    config.toolConfig = toGeminiToolConfig(params.tool_choice);
+  }
 
   return {
     model: params.model,
     contents: mergeConsecutiveFunctionResponses(
       conversationMessages.map((m) => toGeminiContent(m)),
     ),
-    systemInstruction: systemMessage
-      ? // System turns are always plain strings; only user turns can carry ContentBlock[]
-        { parts: [{ text: systemMessage.content as string }] }
-      : undefined,
-    generationConfig,
-    ...(tools ? { tools, toolConfig: toGeminiToolConfig(params.tool_choice) } : {}),
+    config,
   };
 }
 
@@ -335,7 +345,10 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
     chat: {
       completions: {
         async create(params, options) {
-          const response = await geminiClient.generateContent(buildGeminiRequest(params), options);
+          const request = buildGeminiRequest(params);
+          request.config = { ...request.config, abortSignal: options.signal };
+
+          const response = await geminiClient.generateContent(request);
 
           const parts = response.candidates?.[0]?.content?.parts ?? [];
           const text = parts.map((p) => p.text ?? '').join('');
@@ -382,7 +395,10 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
             );
           }
 
-          const stream = geminiClient.generateContentStream(buildGeminiRequest(params), options);
+          const request = buildGeminiRequest(params);
+          request.config = { ...request.config, abortSignal: options.signal };
+
+          const stream = await geminiClient.generateContentStream(request);
 
           let toolCallIndex = 0;
           let lastUsage:

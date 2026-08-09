@@ -32,17 +32,19 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
     const generateContent = vi.fn<GeminiClient['generateContent']>(async () => {
       throw new Error('non-streaming generateContent() should not be called for stream: true');
     });
-    const generateContentStream = vi.fn((_params: unknown, _options: unknown) =>
-      fakeGeminiStream([
-        {
-          candidates: [{ content: { parts: [{ text: '{"city":' }] } }],
-          usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 2, totalTokenCount: 10 },
-        },
-        {
-          candidates: [{ content: { parts: [{ text: '"Denver"}' }] } }],
-          usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 5, totalTokenCount: 13 },
-        },
-      ]),
+    const generateContentStream = vi.fn((_params: unknown) =>
+      Promise.resolve(
+        fakeGeminiStream([
+          {
+            candidates: [{ content: { parts: [{ text: '{"city":' }] } }],
+            usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 2, totalTokenCount: 10 },
+          },
+          {
+            candidates: [{ content: { parts: [{ text: '"Denver"}' }] } }],
+            usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 5, totalTokenCount: 13 },
+          },
+        ]),
+      ),
     );
 
     const llm = new VernLLM({
@@ -75,18 +77,20 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
 
   it('streams a complete, one-shot functionCall part that accumulates into the same validated ToolCall[] a non-streaming call would return', async () => {
     const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
-    const generateContentStream = vi.fn((_params: unknown, _options: unknown) =>
-      fakeGeminiStream([
-        {
-          candidates: [
-            {
-              content: {
-                parts: [{ functionCall: { name: 'get_weather', args: { city: 'Denver' } } }],
+    const generateContentStream = vi.fn((_params: unknown) =>
+      Promise.resolve(
+        fakeGeminiStream([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [{ functionCall: { name: 'get_weather', args: { city: 'Denver' } } }],
+                },
               },
-            },
-          ],
-        },
-      ]),
+            ],
+          },
+        ]),
+      ),
     );
 
     const llm = new VernLLM({

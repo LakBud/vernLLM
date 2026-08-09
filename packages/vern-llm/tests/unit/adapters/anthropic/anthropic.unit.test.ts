@@ -238,6 +238,60 @@ describe('fromAnthropic', () => {
     ]);
   });
 
+  it('throws a validation LLMError when a json_schema tool schema is missing "type": "object"', async () => {
+    const { client } = makeFakeAnthropicToolClient('Profile', { ok: true });
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'm',
+          temperature: 0.2,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'Profile',
+              // Missing `type: 'object'`, which every provider's
+              // function-calling API requires.
+              schema: { properties: { ok: { type: 'boolean' } } },
+            },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
+
+  it('throws a validation LLMError when a real tool\'s parameters schema is missing "type": "object"', async () => {
+    const { client } = makeFakeAnthropicClient('unused');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'm',
+          temperature: 0.2,
+          max_tokens: 10,
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: 'Gets the weather for a city',
+                // Missing `type: 'object'`.
+                parameters: { properties: { city: { type: 'string' } } },
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: 'weather?' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
+
   it('handles parallel tool_use responses and continuation requests with merged tool_result blocks', async () => {
     const create = vi
       .fn<AnthropicClient['messages']['create']>()
@@ -484,7 +538,12 @@ describe('fromAnthropic, merges multiple tool results into one user turn', () =>
         model: 'm',
         temperature: 0.2,
         max_tokens: 10,
-        tools: [{ type: 'function', function: { name: 't', description: 'd', parameters: {} } }],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 't', description: 'd', parameters: { type: 'object' } },
+          },
+        ],
         messages: [
           {
             role: 'assistant',

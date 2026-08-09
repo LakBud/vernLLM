@@ -3,9 +3,32 @@ packages:
   - 'apps/*'
 
 allowBuilds:
+  '@google/genai': true
   esbuild: true
+  protobufjs: true
   rolldown: true
   sharp: false
   workerd: false
 
 minimumReleaseAge: 720
+
+# Deep transitive deps flagged deprecated by npm. Only `glob` is overridden:
+# old `glob` carries real known CVEs and current majors are not deprecated,
+# so bumping it is a genuine fix. `intersection-observer@0.12.2` and
+# `node-domexception@2.0.2` are NOT overridden: both are deprecated at
+# *every* published version (the polyfills themselves are obsolete now
+# that browsers/Node ship the native APIs), so there's no non-deprecated
+# version to move to — the warning is permanent, harmless noise from deep
+# transitive deps (@lobehub/icons -> ahooks -> intersection-observer;
+# @google/genai -> google-auth-library -> node-fetch -> node-domexception)
+# that isn't fixable from this workspace.
+overrides:
+  glob: ^13.0.6
+
+peerDependencyRules:
+  allowedVersions:
+    # @emoji-mart/react@1.1.1 (pulled in transitively by fumadocs-ui, no
+    # newer release exists) declares a React 16-18 peer range but works
+    # fine under React 19 in practice; this only silences the false-alarm
+    # peer warning, it doesn't change what's installed.
+    '@emoji-mart/react>react': '19'

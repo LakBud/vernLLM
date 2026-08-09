@@ -50,7 +50,13 @@
     "prepublishOnly": "pnpm run typecheck && pnpm run build"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1106.0",
     "@changesets/cli": "^2.31.1",
+    "@google/genai": "^2.16.0",
+    "@smithy/eventstream-serde-node": "^4.4.16",
+    "@smithy/node-http-handler": "^4.9.13",
+    "@smithy/util-utf8": "^4.4.16",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
     "openai": "^7.4.0",

@@ -1,158 +1,174 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
-import { fromGemini } from '../../../../src/adapters/gemini.js';
+import { fromGemini, type GeminiClient } from '../../../../src/index.js';
 
-describe('Gemini adapter integration', () => {
-  it('maps generateContent into LLMClient format', async () => {
-    const gemini = {
-      generateContent: vi.fn(async () => ({
+async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const item of iterable) out.push(item);
+  return out;
+}
+
+/** A fake Gemini `generateContentStream` response: an async iterable of partial responses. */
+function fakeGeminiStream(
+  chunks: unknown[],
+  onReturn?: () => void | Promise<void>,
+): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      let index = 0;
+      return {
+        async next() {
+          if (index >= chunks.length) return { done: true, value: undefined };
+          const value = chunks[index];
+          index++;
+          return { done: false, value };
+        },
+        async return() {
+          await onReturn?.();
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  };
+}
+
+function makeFakeStreamingGeminiClient(chunks: unknown[], onReturn?: () => void | Promise<void>) {
+  const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
+  const generateContentStream = vi.fn((_params: unknown) =>
+    Promise.resolve(fakeGeminiStream(chunks, onReturn) as AsyncIterable<never>),
+  );
+
+  return {
+    client: { generateContent, generateContentStream } as unknown as GeminiClient,
+    generateContentStream,
+  };
+}
+
+describe('fromGemini().chat.completions.createStream', () => {
+  it('translates part.text into text-delta WireStreamChunks', async () => {
+    const { client } = makeFakeStreamingGeminiClient([
+      { candidates: [{ content: { parts: [{ text: 'Hello, ' }] } }] },
+      { candidates: [{ content: { parts: [{ text: 'world!' }] } }] },
+    ]);
+    const adapted = fromGemini(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'gemini-2.5-flash', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([
+      { type: 'text-delta', delta: 'Hello, ' },
+      { type: 'text-delta', delta: 'world!' },
+    ]);
+  });
+
+  it('INVARIANT: hardcodes complete: true on tool_call_delta (Gemini does not stream tool-call arguments incrementally); if this ever fails, Gemini changed and gemini.ts needs a real completion signal', async () => {
+    const { client } = makeFakeStreamingGeminiClient([
+      {
         candidates: [
           {
-            content: {
-              parts: [
-                {
-                  text: '{"hello":"world"}',
-                },
-              ],
+            content: { parts: [{ functionCall: { name: 'get_weather', args: { city: 'NYC' } } }] },
+          },
+        ],
+      },
+    ]);
+    const adapted = fromGemini(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        {
+          model: 'gemini-2.5-flash',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'weather?' }],
+          tools: [
+            {
+              type: 'function',
+              function: { name: 'get_weather', description: 'gets weather', parameters: {} },
             },
-          },
-        ],
-        usageMetadata: {
-          promptTokenCount: 10,
-          candidatesTokenCount: 5,
-          totalTokenCount: 15,
+          ],
         },
-      })),
-    };
-
-    const client = fromGemini(gemini);
-
-    const result = await client.chat.completions.create(
-      {
-        model: 'gemini-test',
-        temperature: 0.1,
-        max_tokens: 100,
-        messages: [
-          {
-            role: 'user',
-            content: 'hello',
-          },
-        ],
-        response_format: {
-          type: 'json_object',
-        },
-      },
-      {
-        signal: new AbortController().signal,
-      },
+        { signal: new AbortController().signal },
+      ),
     );
 
-    expect(result.choices?.[0]?.message?.content).toBe('{"hello":"world"}');
-
-    expect(result.usage?.total_tokens).toBe(15);
-
-    expect(gemini.generateContent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'gemini-test',
-        generationConfig: expect.objectContaining({
-          responseMimeType: 'application/json',
-        }),
-      }),
-      expect.anything(),
-    );
+    expect(chunks).toEqual([
+      {
+        type: 'tool_call_delta',
+        index: 0,
+        id: 'get_weather',
+        name: 'get_weather',
+        argumentsDelta: '{"city":"NYC"}',
+        complete: true,
+      },
+    ]);
   });
 
-  it('sends prior assistant turns as Geminis "model" role instead of dropping them', async () => {
-    const gemini = {
-      generateContent: vi.fn(async () => ({
-        candidates: [{ content: { parts: [{ text: 'About 2.1 million.' }] } }],
-        usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 6, totalTokenCount: 26 },
-      })),
-    };
-
-    const client = fromGemini(gemini);
-
-    await client.chat.completions.create(
+  it('emits a single usage WireStreamChunk after the stream completes, from the last chunk carrying usageMetadata', async () => {
+    const { client } = makeFakeStreamingGeminiClient([
       {
-        model: 'gemini-test',
-        temperature: 0.1,
-        max_tokens: 100,
-        messages: [
-          { role: 'system', content: 'You are helpful.' },
-          { role: 'user', content: "What's the capital of France?" },
-          { role: 'assistant', content: 'Paris.' },
-          { role: 'user', content: "What's its population?" },
-        ],
+        candidates: [{ content: { parts: [{ text: 'hi' }] } }],
+        usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1, totalTokenCount: 4 },
       },
+      {
+        candidates: [{ content: { parts: [{ text: ' there' }] } }],
+        usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 2, totalTokenCount: 5 },
+      },
+    ]);
+    const adapted = fromGemini(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'gemini-2.5-flash', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks.at(-1)).toEqual({
+      type: 'usage',
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    });
+    // Only one usage chunk, even though two chunks carried usageMetadata.
+    expect(chunks.filter((c) => c.type === 'usage')).toHaveLength(1);
+  });
+
+  it('throws LLMError(validation) when the client has no generateContentStream', async () => {
+    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
+    const adapted = fromGemini({ generateContent });
+
+    await expect(
+      collect(
+        adapted.chat.completions.createStream!(
+          {
+            model: 'gemini-2.5-flash',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ),
+    ).rejects.toMatchObject({ type: 'validation' });
+  });
+
+  it("propagates .return() on the outer generator down to the underlying SDK stream's own .return()", async () => {
+    const onReturn = vi.fn();
+    const { client } = makeFakeStreamingGeminiClient(
+      [{ candidates: [{ content: { parts: [{ text: 'partial' }] } }] }],
+      onReturn,
+    );
+    const adapted = fromGemini(client);
+
+    const stream = adapted.chat.completions.createStream!(
+      { model: 'gemini-2.5-flash', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
       { signal: new AbortController().signal },
     );
+    const iterator = stream[Symbol.asyncIterator]();
 
-    expect(gemini.generateContent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contents: [
-          { role: 'user', parts: [{ text: "What's the capital of France?" }] },
-          { role: 'model', parts: [{ text: 'Paris.' }] },
-          { role: 'user', parts: [{ text: "What's its population?" }] },
-        ],
-      }),
-      expect.anything(),
-    );
-  });
+    await iterator.next();
+    await iterator.return?.(undefined);
 
-  it('passes multimodal user content into Gemini inlineData parts', async () => {
-    const gemini = {
-      generateContent: vi.fn(async () => ({
-        candidates: [{ content: { parts: [{ text: 'I see an image.' }] } }],
-        usageMetadata: {
-          promptTokenCount: 20,
-          candidatesTokenCount: 5,
-          totalTokenCount: 25,
-        },
-      })),
-    };
-
-    const client = fromGemini(gemini);
-
-    const result = await client.chat.completions.create(
-      {
-        model: 'gemini-test',
-        temperature: 0.1,
-        max_tokens: 100,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: "What's in this image?" },
-              { type: 'image', data: 'ZmFrZWJhc2U2NA==', mimeType: 'image/png' },
-            ],
-          },
-        ],
-      },
-      {
-        signal: new AbortController().signal,
-      },
-    );
-
-    expect(result.choices?.[0]?.message?.content).toBe('I see an image.');
-
-    expect(gemini.generateContent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: "What's in this image?" },
-              {
-                inlineData: {
-                  mimeType: 'image/png',
-                  data: 'ZmFrZWJhc2U2NA==',
-                },
-              },
-            ],
-          },
-        ],
-      }),
-      expect.anything(),
-    );
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });

@@ -135,7 +135,11 @@ describe('fromAnthropic().chat.completions.createStream', () => {
           tools: [
             {
               type: 'function',
-              function: { name: 'get_weather', description: 'gets weather', parameters: {} },
+              function: {
+                name: 'get_weather',
+                description: 'gets weather',
+                parameters: { type: 'object' },
+              },
             },
           ],
         },
