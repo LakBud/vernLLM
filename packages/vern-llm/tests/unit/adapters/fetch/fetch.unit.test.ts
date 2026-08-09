@@ -20,6 +20,58 @@ describe('fromFetch', () => {
     vi.unstubAllGlobals();
   });
 
+  it('maps toolCalls from mapResponse into wire tool_calls', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        text: '',
+        tool_calls: [{ id: 'call_1', name: 'get_weather', args: '{"city":"NYC"}' }],
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com/generate',
+      mapRequest: (params) => ({ model: params.model, tools: params.tools }),
+      mapResponse: (json: unknown) => {
+        const j = json as {
+          text: string;
+          tool_calls?: Array<{ id: string; name: string; args: string }>;
+        };
+
+        return {
+          content: j.text,
+          toolCalls: j.tool_calls?.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.args })),
+        };
+      },
+    });
+
+    const result = await client.chat.completions.create(
+      {
+        model: 'example-model',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather', description: 'get weather', parameters: {} },
+          },
+        ],
+        messages: [{ role: 'user', content: 'weather in NYC?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'get_weather', arguments: '{"city":"NYC"}' },
+      },
+    ]);
+  });
+
   it('builds the request via url/headers/mapRequest and parses the response via mapResponse', async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
       ok: true,

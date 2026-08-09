@@ -6,7 +6,7 @@ Added first-class tool calling support.
 
 `call()` now accepts `tools`, an array of `ToolDefinition`s the model may request, and an optional `toolChoice` to control whether and which tool is used. When `tools` is set, `call()` returns a `CallWithToolsResult<T>` discriminated union (`{ type: 'content', content }` or `{ type: 'tool_calls', toolCalls, content? }`) instead of `T` directly. VernLLM never executes tools itself, applications run them and continue the conversation by appending an assistant `toolCalls` turn and a matching `tool` turn to `history`.
 
-`fromAnthropic`, `fromBedrock`, `fromGemini`, and the OpenAI-compatible adapters all translate `tools`/`toolChoice`/`tool_calls` into that provider's native tool-calling mechanism. `fromFetch` does not support tool calling yet, its `mapResponse` has no way to return `tool_calls`. `cachedLLMCall()` supports tool-enabled calls the same way it supports plain ones.
+`fromAnthropic`, `fromBedrock`, `fromGemini`, and the OpenAI-compatible adapters all translate `tools`/`toolChoice`/`tool_calls` into that provider's native tool-calling mechanism. `fromFetch` supports tool calling too: `mapResponse` can return a `toolCalls` array alongside `content`. `cachedLLMCall()` supports tool-enabled calls the same way it supports plain ones.
 
 This is a major release because of two breaking type changes:
 

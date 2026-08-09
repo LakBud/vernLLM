@@ -259,12 +259,13 @@ verified against the compiler rather than guessed at.
 Every adapter translates VernLLM's OpenAI shaped `tools`/`tool_choice`/`tool_calls` into that
 provider's native mechanism:
 
-| Provider          | Native mechanism                                            |
-| ----------------- | ----------------------------------------------------------- |
-| OpenAI-compatible | Passed through as is, VernLLM's wire format already matches |
-| Anthropic         | `tool_use` / `tool_result` content blocks                   |
-| Bedrock           | Converse's `toolUse` / `toolResult` content blocks          |
-| Gemini            | `functionCall` / `functionResponse` parts                   |
+| Provider             | Native mechanism                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAI-compatible    | Passed through as is, VernLLM's wire format already matches                                                                                                       |
+| Anthropic            | `tool_use` / `tool_result` content blocks                                                                                                                         |
+| Bedrock              | Converse's `toolUse` / `toolResult` content blocks                                                                                                                |
+| Gemini               | `functionCall` / `functionResponse` parts                                                                                                                         |
+| Custom / `fromFetch` | Whatever your provider's own wire format is; `mapRequest`/`mapResponse` translate it, see <a href="/docs/adapters/custom-fetch#tool-calling">Custom Providers</a> |
 
 <Callout>
   Gemini has no call id concept. VernLLM's Gemini adapter uses the function name as the wire tool

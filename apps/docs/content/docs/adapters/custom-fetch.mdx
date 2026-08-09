@@ -30,14 +30,64 @@ Non-2xx responses throw with `.status` set, so `nonRetryableStatus` still fails 
 
 For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-Type` header, since those methods don't support a request body.
 
-<Callout type="warn">
-  `fromFetch` does not support `tools` yet. `mapRequest` receives the raw `params` object,
-  including `tools`/`tool_choice` if you set them, so you could forward them into your own request
-  shape, but `mapResponse` only produces `{ content, usage? }`, with no way to return `tool_calls`.
-  A model that calls a tool through `fromFetch` today has its tool request silently dropped rather
-  than surfaced through `CallWithToolsResult`. See <a href="/docs/core/tool-calling">Tool
-  Calling</a> for the adapters that do support it.
+<Callout type="info">
+  `fromFetch` supports tool calling. `mapRequest` receives `params.tools`/`params.toolChoice` like
+  any other adapter, and `mapResponse` can return a `toolCalls` array alongside (or instead of)
+  `content` to surface the model's tool requests through `CallWithToolsResult`. See{' '}
+  <a href="#tool-calling">Tool calling</a> below.
 </Callout>
+
+## Tool calling
+
+Forward `params.tools`/`params.toolChoice` into your provider's own request shape inside
+`mapRequest`, and return a `toolCalls` array from `mapResponse` when the provider's response
+includes one. Each entry needs `id`, `name`, and `arguments` already JSON-_encoded_ as a string,
+the same wire format every other adapter produces, VernLLM parses (and validates, if
+`argumentsSchema` was set) that string internally:
+
+```ts title="fromfetch-tool-calling.ts"
+import { VernLLM, fromFetch } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: fromFetch({
+    url: 'https://api.example.com/v1/generate',
+    headers: () => ({ Authorization: `Bearer ${process.env.EXAMPLE_API_KEY}` }),
+    mapRequest: (params) => ({
+      model: params.model,
+      prompt: params.messages.map((m) => m.content).join('\n\n'),
+      max_tokens: params.max_tokens,
+      tools: params.tools?.map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      })),
+      tool_choice: params.tool_choice,
+    }),
+    mapResponse: (json) => ({
+      content: json.output,
+      usage: { promptTokens: json.usage?.input, completionTokens: json.usage?.output },
+      toolCalls: json.tool_calls?.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        arguments: JSON.stringify(tc.arguments),
+      })),
+    }),
+  }),
+  model: 'example-model-v1',
+});
+```
+
+<Callout type="warn">
+  `content` may be empty or omitted on a pure tool-call turn, don't assume `mapResponse` always has
+  text to return. `toolCalls` can be omitted (or left `undefined`) entirely on calls that didn't
+  request a tool; an empty array is treated identically to `undefined`, so there's no need to
+  special case it either way.
+</Callout>
+
+For `stream: true`, tool-call deltas go through the existing `mapStreamEvent` seam, see{' '}
+
+<a href="#streaming">Streaming</a> below, there's no separate config for streaming vs non-streaming
+tool calls.
 
 ## Streaming
 
