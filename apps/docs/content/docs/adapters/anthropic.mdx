@@ -71,6 +71,13 @@ any real `tools` you pass are built and sent exactly as they would be without `j
 On a model not covered by `nativeStructuredOutputModels`, combining `tools` with `jsonSchema` still
 throws `LLMError('validation')`, naming the model and pointing at this option.
 
+<Callout type="warn">
+  `output_config.format` only sends `type` and `schema`, matching the real Anthropic API exactly.
+  Unlike the legacy forced-tool-call path (where `jsonSchema`'s `description` and `strict` become
+  real `Tool` fields), neither has an equivalent here, and `jsonSchema.name` never reaches this
+  particular request at all.
+</Callout>
+
 ## Streaming
 
 `fromAnthropic` implements `createStream` on top of the Messages API's own streaming mode. Anthropic's

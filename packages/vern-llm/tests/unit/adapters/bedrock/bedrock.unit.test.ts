@@ -871,13 +871,18 @@ describe('fromBedrock, native structured output', () => {
       toolChoice: { auto: {} },
     });
 
+    // Nested under structure.jsonSchema, schema JSON-encoded as a string,
+    // matching the real Bedrock Converse API exactly; no strict field.
     expect(sentParams.outputConfig).toEqual({
       textFormat: {
         type: 'json_schema',
-        schema: { type: 'object' },
-        name: 'Out',
-        description: 'desc',
-        strict: true,
+        structure: {
+          jsonSchema: {
+            schema: JSON.stringify({ type: 'object' }),
+            name: 'Out',
+            description: 'desc',
+          },
+        },
       },
     });
 
@@ -907,9 +912,9 @@ describe('fromBedrock, native structured output', () => {
     expect(sentParams.outputConfig).toEqual({
       textFormat: {
         type: 'json_schema',
-        schema: { type: 'object' },
-        name: 'Candidate',
-        strict: undefined,
+        structure: {
+          jsonSchema: { schema: JSON.stringify({ type: 'object' }), name: 'Candidate' },
+        },
       },
     });
     expect(result.choices?.[0]?.message?.content).toBe('{"name":"Ada"}');

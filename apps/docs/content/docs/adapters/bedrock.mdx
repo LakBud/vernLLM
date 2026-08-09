@@ -152,6 +152,34 @@ while any real `tools` you pass are built and sent exactly as they would be with
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
 `jsonSchema` still throws `LLMError('validation')`, naming the model and pointing at this option.
 
+<Callout type="warn">
+  `outputConfig.textFormat`'s shape is not flat, and not the parsed-object schema every other part
+  of this adapter builds. The real Bedrock Converse API nests the schema one level deeper, under
+  `structure.jsonSchema`, and requires `schema` there as a JSON-encoded *string*:
+
+```json title="outputConfig-shape.json"
+{
+  "outputConfig": {
+    "textFormat": {
+      "type": "json_schema",
+      "structure": {
+        "jsonSchema": {
+          "schema": "{\"type\":\"object\",\"properties\":{...}}",
+          "name": "WeatherReport",
+          "description": "optional"
+        }
+      }
+    }
+  }
+}
+```
+
+`name` and `description` are accepted here, unlike Anthropic's native mechanism, but there is no
+`strict` field, unlike Bedrock's own tool-based schema (`toolSpec.inputSchema.json`, used on the
+legacy path), which takes a parsed object and does have `strict`.
+
+</Callout>
+
 ## Streaming
 
 `fromBedrock` implements `createStream` on top of `ConverseStreamCommand`. `contentBlockDelta`

@@ -67,8 +67,8 @@ const result = await llm.call({
 ```
 
 - **`jsonSchema` implies JSON mode.** It overrides `jsonMode: false` and sends the request as structured JSON.
-  **`strict` is forwarded when supported by the adapter.** Enforcement depends on the adapter: OpenAI/Groq use JSON Schema mode, Anthropic uses tool strictness, Bedrock forwards tool strictness where supported, and Gemini uses schema-based structured output without relying on `strict`.
-- **`description` is forwarded where supported.** OpenAI-shaped providers receive it in the schema object. Anthropic and Bedrock include it in generated tool definitions. Gemini includes it in `responseSchema`.
+  **`strict` is forwarded when supported by the adapter.** Enforcement depends on the adapter and the mechanism it uses: OpenAI/Groq use JSON Schema mode, Gemini uses schema-based structured output without relying on `strict`. On Anthropic and Bedrock, this only applies to the legacy forced-single-tool-call mechanism (Anthropic's tool strictness, Bedrock's tool strictness where supported); their native structured-output mechanism (see <a href="#combining-with-tools">Combining with tools</a>) has no `strict` field at all, on either provider.
+- **`description` is forwarded where supported.** OpenAI-shaped providers receive it in the schema object. Gemini includes it in `responseSchema`. On Anthropic and Bedrock, this again only applies to the legacy forced-single-tool-call mechanism, where it's included in the generated tool definition; Anthropic's native mechanism has no `description` field, and Bedrock's native mechanism does accept one, but nested differently from every other schema field these adapters build (see below).
 
 <Callout>
   Anthropic uses native tool use for structured output. The schema is passed as the tool
@@ -127,3 +127,28 @@ const result = await llm.call({
 On a model not covered by `nativeStructuredOutputModels`, `jsonSchema` alone (no `tools`) is
 unaffected and keeps working exactly as before, forced tool-use, described above. The restriction
 only applies when both `tools` and `jsonSchema` are set on the same call.
+
+### Wire shape on the native path
+
+Each provider's native mechanism has a narrower field set than the legacy forced-tool-call path,
+matched exactly to what each provider's real API accepts:
+
+<Cards>
+  <Card title="Anthropic: output_config.format">
+    Only `type` and `schema` are sent. There is no `name`, `description`, or `strict` field on this
+    mechanism at all, unlike Anthropic's tool-based schema (used on the legacy path), which does
+    have all three.
+  </Card>
+  <Card title="Bedrock: outputConfig.textFormat">
+    The schema is nested one level deeper than every other schema shape these adapters build, under
+    `structure.jsonSchema`, and `schema` itself must be a JSON-encoded *string*, not a parsed
+    object. `name` and `description` are still accepted here, nested at that same level, but there
+    is no `strict` field, unlike Bedrock's tool-based schema (`toolSpec.inputSchema.json`, used on
+    the legacy path), which accepts a parsed object and does have `strict`.
+  </Card>
+</Cards>
+
+Both shapes are verified against the real `@anthropic-ai/sdk` and `@aws-sdk/client-bedrock-runtime`
+clients in this package's own test suite, not just asserted internally, so a request built by
+`fromAnthropic`/`fromBedrock` for a covered model is confirmed to actually reach the wire in the
+shape each provider's real SDK expects.

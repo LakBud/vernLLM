@@ -72,14 +72,24 @@ export interface BedrockConverseClient {
        * `BedrockAdapterOptions`); other models keep getting `jsonSchema`
        * emulated as a forced single tool call via `toolConfig`, the
        * pre-existing behavior.
+       *
+       * Matches the real Bedrock Converse API's `outputConfig.textFormat`
+       * shape exactly: the schema itself is nested one level deeper, under
+       * `structure.jsonSchema`, not flat on `textFormat`, and `schema` is
+       * a JSON-encoded *string*, not a parsed object, unlike every other
+       * schema field this adapter builds (`toolSpec.inputSchema.json`
+       * included). There is no `strict` field here, unlike `toolSpec`.
        */
       outputConfig?: {
         textFormat: {
           type: 'json_schema';
-          schema: Record<string, unknown>;
-          name?: string;
-          description?: string;
-          strict?: boolean;
+          structure: {
+            jsonSchema: {
+              schema: string;
+              name?: string;
+              description?: string;
+            };
+          };
         };
       };
     },
@@ -320,13 +330,21 @@ function buildBedrockRequest(
     // Native path: the schema goes in its own request field, independent
     // of toolConfig, so real tools (if any) are built exactly like the
     // tools-only branch below and sent alongside it.
-    const { schema, description, strict } = jsonSchema;
+    //
+    // Unlike every other schema this adapter builds, the real Bedrock
+    // Converse API requires `schema` here as a JSON-encoded *string*, not
+    // a parsed object, nested under `structure.jsonSchema` rather than
+    // flat on `textFormat`. There is no `strict` field on this path,
+    // unlike `toolSpec`.
+    const { schema, description } = jsonSchema;
 
     outputConfig = {
-      // Not defaulted here: vernLLM.ts's buildResponseFormat already
-      // resolves `strict` to `true` when the caller didn't set it, so by
-      // the time it reaches this adapter it's never `undefined`.
-      textFormat: { type: 'json_schema', schema, name: schemaName, description, strict },
+      textFormat: {
+        type: 'json_schema',
+        structure: {
+          jsonSchema: { schema: JSON.stringify(schema), name: schemaName, description },
+        },
+      },
     };
 
     if (params.tools?.length) {
@@ -406,7 +424,10 @@ function buildBedrockRequest(
  * `options.nativeStructuredOutputModels` (opt-in, unset by default), is
  * sent as `outputConfig.textFormat`, its own request field, independent of
  * `toolConfig`, so it can be combined with real, caller-supplied `tools`
- * in the same request.
+ * in the same request. Matches the real Converse API's shape exactly: the
+ * schema is nested under `structure.jsonSchema` and JSON-encoded as a
+ * string, not the parsed object `toolConfig`'s tool schemas use, and there
+ * is no `strict` field on this path.
  *
  * On any other model (the default), `response_format: json_schema` is
  * mapped to Converse's `toolConfig` instead: a single tool is defined from

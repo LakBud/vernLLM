@@ -736,15 +736,12 @@ describe('fromAnthropic, native structured output', () => {
     ]);
     expect(sentParams.tool_choice).toEqual({ type: 'auto' });
 
-    // The schema goes in its own output_config field, not into tools.
+    // The schema goes in its own output_config field, not into tools. Only
+    // type and schema are sent: the real Anthropic API's output_config.format
+    // has no name/description/strict fields to forward `json_schema`'s
+    // description/strict into, unlike the legacy forced-tool-call path.
     expect(sentParams.output_config).toEqual({
-      format: {
-        type: 'json_schema',
-        schema: { type: 'object' },
-        name: 'Out',
-        description: 'desc',
-        strict: true,
-      },
+      format: { type: 'json_schema', schema: { type: 'object' } },
     });
 
     // No forced-tool-call unwrapping: the text content passes through as-is.
@@ -778,12 +775,7 @@ describe('fromAnthropic, native structured output', () => {
 
     expect(sentParams.tools).toBeUndefined();
     expect(sentParams.output_config).toEqual({
-      format: {
-        type: 'json_schema',
-        schema: { type: 'object' },
-        name: 'Candidate',
-        strict: undefined,
-      },
+      format: { type: 'json_schema', schema: { type: 'object' } },
     });
     expect(result.choices?.[0]?.message?.content).toBe('{"name":"Ada"}');
   });

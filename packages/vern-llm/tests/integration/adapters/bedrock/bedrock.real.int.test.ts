@@ -187,6 +187,98 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
     });
   });
 
+  it(
+    'sends jsonSchema as outputConfig.textFormat alongside real tools against a real Bedrock ' +
+      'Converse client, on a model covered by nativeStructuredOutputModels',
+    async () => {
+      server = await startRealSdkServer([
+        {
+          body: {
+            output: {
+              message: {
+                role: 'assistant',
+                content: [{ text: '{"headline":"Native works","score":10}' }],
+              },
+            },
+            stopReason: 'end_turn',
+            usage: { inputTokens: 26, outputTokens: 11, totalTokens: 37 },
+          },
+        },
+      ]);
+
+      const client = fromBedrock(wrapBedrockClient(makeClient()), {
+        nativeStructuredOutputModels: ['anthropic.claude-native-test'],
+      });
+
+      const result = await client.chat.completions.create(
+        {
+          model: 'anthropic.claude-native-test',
+          max_tokens: 200,
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'Summary',
+              schema: {
+                type: 'object',
+                properties: { headline: { type: 'string' }, score: { type: 'number' } },
+                required: ['headline', 'score'],
+              },
+            },
+          },
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_context',
+                description: 'Fetches additional context',
+                parameters: { type: 'object', properties: {} },
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: 'Summarize the test results.' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(JSON.parse(result.choices?.[0]?.message?.content ?? '')).toEqual({
+        headline: 'Native works',
+        score: 10,
+      });
+
+      // Real Converse client, real wire body: outputConfig.textFormat
+      // nests the schema under structure.jsonSchema, JSON-encoded as a
+      // string (not the parsed object toolConfig's tool schemas use), and
+      // has no strict field, matching the real Bedrock API exactly. Real
+      // `tools` are sent unmodified in the normal toolConfig field,
+      // alongside outputConfig, not instead of it.
+      const sent = at(server.requests, 0);
+      expect(sent.body).toMatchObject({
+        outputConfig: {
+          textFormat: {
+            type: 'json_schema',
+            structure: {
+              jsonSchema: {
+                schema: JSON.stringify({
+                  type: 'object',
+                  properties: { headline: { type: 'string' }, score: { type: 'number' } },
+                  required: ['headline', 'score'],
+                }),
+                name: 'Summary',
+              },
+            },
+          },
+        },
+        toolConfig: {
+          tools: [
+            expect.objectContaining({
+              toolSpec: expect.objectContaining({ name: 'get_context' }),
+            }),
+          ],
+        },
+      });
+    },
+  );
+
   it('surfaces a real Bedrock SDK error (429/ThrottlingException) to the caller with the correct status', async () => {
     server = await startRealSdkServer([
       {

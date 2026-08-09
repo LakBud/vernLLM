@@ -58,14 +58,18 @@ export interface AnthropicClient {
          * `AnthropicAdapterOptions`); other models keep getting
          * `jsonSchema` emulated as a forced single tool call, the
          * pre-existing behavior.
+         *
+         * Matches the real Anthropic API's `output_config.format` shape
+         * exactly: just `type` and `schema`, no `name`/`description`/
+         * `strict`. Those three exist on VernLLM's own `jsonSchema` API
+         * (and are still forwarded on the legacy forced-tool-call path,
+         * where they're real `Tool` fields), but the native structured-
+         * output endpoint has no equivalent for any of them.
          */
         output_config?: {
           format: {
             type: 'json_schema';
             schema: Record<string, unknown>;
-            name?: string;
-            description?: string;
-            strict?: boolean;
           };
         };
       },
@@ -258,16 +262,14 @@ function buildAnthropicRequestBody(
     // Native path: the schema goes in its own request field, independent
     // of tools/tool_choice, so real tools (if any) are built exactly like
     // the tools-only branch below and sent alongside it.
-    outputFormat = {
-      type: 'json_schema',
-      schema: jsonSchema.schema,
-      name: schemaName,
-      description: jsonSchema.description,
-      // Not defaulted here: vernLLM.ts's buildResponseFormat already
-      // resolves `strict` to `true` when the caller didn't set it, so by
-      // the time it reaches this adapter it's never `undefined`.
-      strict: jsonSchema.strict,
-    };
+    //
+    // Only `type` and `schema` are sent: the real Anthropic API's
+    // `output_config.format` has no `name`/`description`/`strict` fields,
+    // unlike the legacy forced-tool-call path below, where those are real
+    // `Tool` fields. `schemaName` is still required and validated above
+    // (a caller-facing identifier, useful for logging/debugging on their
+    // end), it just never reaches this particular wire request.
+    outputFormat = { type: 'json_schema', schema: jsonSchema.schema };
 
     if (params.tools?.length) {
       ({ tools, toolChoice } = buildAnthropicTools(params.tools, params.tool_choice));
@@ -343,7 +345,9 @@ export interface AnthropicAdapterOptions {
  * `response_format: json_schema`, on a model covered by
  * `options.nativeStructuredOutputModels`, is sent as `output_config.format`,
  * its own request field, independent of `tools`/`tool_choice`, so it can be
- * combined with real, caller-supplied `tools` in the same request.
+ * combined with real, caller-supplied `tools` in the same request. Only
+ * `type` and `schema` are sent on this path, the real Anthropic API's
+ * `output_config.format` has no `name`/`description`/`strict` fields.
  *
  * On any other model (the default, since `nativeStructuredOutputModels` is
  * opt-in), `response_format: json_schema` is mapped to Anthropic's forced

@@ -129,6 +129,90 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
     });
   });
 
+  it(
+    'sends jsonSchema as output_config.format alongside real tools against a real Anthropic ' +
+      'SDK client, on a model covered by nativeStructuredOutputModels',
+    async () => {
+      server = await startRealSdkServer([
+        {
+          body: {
+            id: 'msg_native',
+            type: 'message',
+            role: 'assistant',
+            model: 'claude-native-test',
+            content: [{ type: 'text', text: '{"headline":"Native works","score":10}' }],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 28, output_tokens: 11 },
+          },
+        },
+      ]);
+
+      const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url });
+      const client = fromAnthropic(anthropic, {
+        nativeStructuredOutputModels: ['claude-native-test'],
+      });
+
+      const result = await client.chat.completions.create(
+        {
+          model: 'claude-native-test',
+          max_tokens: 200,
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'Summary',
+              schema: {
+                type: 'object',
+                properties: { headline: { type: 'string' }, score: { type: 'number' } },
+                required: ['headline', 'score'],
+              },
+            },
+          },
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_context',
+                description: 'Fetches additional context',
+                parameters: { type: 'object', properties: {} },
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: 'Summarize the test results.' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(JSON.parse(result.choices?.[0]?.message?.content ?? '')).toEqual({
+        headline: 'Native works',
+        score: 10,
+      });
+
+      // Real SDK, real wire body: output_config.format has only type and
+      // schema, no name/description/strict, matching the real Anthropic
+      // API exactly (unlike the legacy forced-tool-call path above, where
+      // the schema becomes a real `Tool` with those fields). Real `tools`
+      // are sent unmodified in the normal `tools` field, alongside it, not
+      // instead of it.
+      const sent = at(server.requests, 0);
+      expect(sent.body).toMatchObject({
+        output_config: {
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: { headline: { type: 'string' }, score: { type: 'number' } },
+              required: ['headline', 'score'],
+            },
+          },
+        },
+        tools: [expect.objectContaining({ name: 'get_context' })],
+      });
+      expect(
+        (sent.body as { output_config: { format: object } }).output_config.format,
+      ).not.toHaveProperty('name');
+    },
+  );
+
   it('surfaces a real Anthropic SDK error (429) through VernLLM retry handling', async () => {
     server = await startRealSdkServer([
       {
