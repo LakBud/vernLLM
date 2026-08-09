@@ -31,7 +31,7 @@ Non-2xx responses throw with `.status` set, so `nonRetryableStatus` still fails 
 For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-Type` header, since those methods don't support a request body.
 
 <Callout type="info">
-  `fromFetch` supports tool calling. `mapRequest` receives `params.tools`/`params.toolChoice` like
+  `fromFetch` supports tool calling. `mapRequest` receives `params.tools`/`params.tool_choice` like
   any other adapter, and `mapResponse` can return a `toolCalls` array alongside (or instead of)
   `content` to surface the model's tool requests through `CallWithToolsResult`. See{' '}
   <a href="#tool-calling">Tool calling</a> below.
@@ -39,7 +39,7 @@ For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-T
 
 ## Tool calling
 
-Forward `params.tools`/`params.toolChoice` into your provider's own request shape inside
+Forward `params.tools`/`params.tool_choice` into your provider's own request shape inside
 `mapRequest`, and return a `toolCalls` array from `mapResponse` when the provider's response
 includes one. Each entry needs `id`, `name`, and `arguments` already JSON-_encoded_ as a string,
 the same wire format every other adapter produces, VernLLM parses (and validates, if
@@ -63,15 +63,23 @@ const llm = new VernLLM({
       })),
       tool_choice: params.tool_choice,
     }),
-    mapResponse: (json) => ({
-      content: json.output,
-      usage: { promptTokens: json.usage?.input, completionTokens: json.usage?.output },
-      toolCalls: json.tool_calls?.map((tc) => ({
-        id: tc.id,
-        name: tc.name,
-        arguments: JSON.stringify(tc.arguments),
-      })),
-    }),
+    mapResponse: (json: unknown) => {
+      const body = json as {
+        output: string;
+        usage?: { input?: number; output?: number };
+        tool_calls?: Array<{ id: string; name: string; arguments: unknown }>;
+      };
+
+      return {
+        content: body.output,
+        usage: { promptTokens: body.usage?.input, completionTokens: body.usage?.output },
+        toolCalls: body.tool_calls?.map((tc) => ({
+          id: tc.id,
+          name: tc.name,
+          arguments: JSON.stringify(tc.arguments),
+        })),
+      };
+    },
   }),
   model: 'example-model-v1',
 });

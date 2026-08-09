@@ -80,11 +80,15 @@ export interface FetchAdapterConfig {
    * calls and no text.
    *
    * `toolCalls`, when the model requested one or more tools, is the list of
-   * calls in `WireToolCall`'s OpenAI-`function`-wrapped shape: each entry's
-   * `id`/`name` plus its arguments already JSON-*encoded* as a string (not
-   * the parsed object), mirroring the wire format every OpenAI-compatible
-   * provider uses. VernLLM parses (and validates, if `argumentsSchema` was
-   * set) that string internally, mapResponse doesn't need to do that itself.
+   * calls as flat `{ id, name, arguments }` entries (matching this config's
+   * own `toolCalls?: Array<{ id: string; name: string; arguments: string }>`
+   * return type below), each entry's `arguments` already JSON-*encoded* as a
+   * string (not the parsed object), mirroring the wire format every
+   * OpenAI-compatible provider uses. `fromFetch` itself converts these into
+   * `WireToolCall`'s `type`/`function`-wrapped shape before returning them
+   * from `create`. VernLLM parses (and validates, if `argumentsSchema` was
+   * set) the arguments string internally, mapResponse doesn't need to do
+   * that itself.
    */
   mapResponse: (json: unknown) => {
     content?: string;
@@ -278,11 +282,19 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
           const json = await res.json();
           const { content, usage, toolCalls } = config.mapResponse(json);
 
-          const wireToolCalls: WireToolCall[] | undefined = toolCalls?.map((tc) => ({
-            id: tc.id,
-            type: 'function',
-            function: { name: tc.name, arguments: tc.arguments },
-          }));
+          // `.length` guard, not just truthiness: an empty array is
+          // semantically "no tool calls", same as `undefined`. Kept
+          // explicit here rather than relying on downstream consumers
+          // (e.g. `finalizeResponse`'s `wireToolCalls?.length` check) to
+          // treat `[]` as absent, so this stays correct even if that
+          // convention ever changes.
+          const wireToolCalls: WireToolCall[] | undefined = toolCalls?.length
+            ? toolCalls.map((tc) => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.name, arguments: tc.arguments },
+              }))
+            : undefined;
 
           return {
             choices: [

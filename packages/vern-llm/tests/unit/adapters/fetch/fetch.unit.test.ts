@@ -72,6 +72,46 @@ describe('fromFetch', () => {
     ]);
   });
 
+  it('omits tool_calls entirely when mapResponse returns an empty toolCalls array', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ text: 'no tools needed' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com/generate',
+      mapRequest: (params) => ({ model: params.model, tools: params.tools }),
+      // Deliberately always returns `toolCalls: []` instead of leaving it
+      // `undefined`, to guard against the array-truthiness footgun: an
+      // empty array must be treated the same as `undefined`.
+      mapResponse: (json: unknown) => {
+        const j = json as { text: string };
+
+        return { content: j.text, toolCalls: [] };
+      },
+    });
+
+    const result = await client.chat.completions.create(
+      {
+        model: 'example-model',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather', description: 'get weather', parameters: {} },
+          },
+        ],
+        messages: [{ role: 'user', content: 'weather in NYC?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.tool_calls).toBeUndefined();
+  });
+
   it('builds the request via url/headers/mapRequest and parses the response via mapResponse', async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
       ok: true,
