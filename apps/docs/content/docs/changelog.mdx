@@ -8,6 +8,86 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 2.0.0
+
+### Major Changes
+
+- c9c7414: Collapsed `cachedCall`/`cachedLLMCall` into a single public `cachedCall`.
+
+  Previously `VernLLM` exposed two caching methods: a generic `cachedCall({ cacheKey, ttl, fn })` that cached whatever `fn` returned with no retry/timeout/circuit-breaker guarantees, and `cachedLLMCall({ cacheKey, ttl, call })` that composed `call()` (retry/timeout/circuit-breaker) with caching. This split didn't match vern-llm's "production-ready resilience for LLM calls" scope, and the generic form was really a general-purpose memoizer that happened to live on the LLM client.
+
+  `cachedLLMCall` is renamed to `cachedCall`. The public `cachedCall()` now always composes `call()` internally, so cached results get the same retry/timeout/circuit-breaker behavior as any other LLM call. There is no longer a public way to cache an arbitrary non-LLM function through `VernLLM`. If you were using the old fn-based `cachedCall({ fn })` for general-purpose caching or coalescing unrelated to an LLM call, switch to a dedicated caching library (e.g. `async-cache-dedupe`) at the application level instead.
+
+  Type renames to match:
+
+  - `CachedLLMCallParams<T>` → `CachedCallParams<T>` (now the public type for `cachedCall()` without tools).
+  - `CachedLLMToolCallParams<T>` → `CachedToolCallParams<T>` (public type for `cachedCall()` with tools).
+  - The old generic `CachedCallParams<T>` (the `fn`-based shape) is no longer exported from the package.
+
+  See the Migration Notes for details.
+
+- 7cdfb6b: Added first-class tool calling support.
+
+  `call()` now accepts `tools`, an array of `ToolDefinition`s the model may request, and an optional `toolChoice` to control whether and which tool is used. When `tools` is set, `call()` returns a `CallWithToolsResult<T>` discriminated union (`{ type: 'content', content }` or `{ type: 'tool_calls', toolCalls, content? }`) instead of `T` directly. VernLLM never executes tools itself, applications run them and continue the conversation by appending an assistant `toolCalls` turn and a matching `tool` turn to `history`.
+
+  `fromAnthropic`, `fromBedrock`, `fromGemini`, and the OpenAI-compatible adapters all translate `tools`/`toolChoice`/`tool_calls` into that provider's native tool-calling mechanism. `fromFetch` supports tool calling too: `mapResponse` can return a `toolCalls` array alongside `content`. `cachedLLMCall()` supports tool-enabled calls the same way it supports plain ones.
+
+  This is a major release because of two breaking type changes:
+
+  - `ConversationTurn` is now a discriminated union instead of one flat `{ role, content }` shape, adding a `tool` case and making `content` optional on `assistant` turns. Constructing turns is unaffected; code that reads `turn.content` on an `assistant` turn assuming it's always a `string`, or that used an exhaustive `switch`/`assertNever` pattern over `role`, will need updating.
+  - `LLMClient.messages` widened to include tool turns and `tool_calls` on assistant messages. This only affects hand-written `LLMClient` implementations that bypass the built-in adapters. Any such adapter that declares or processes the message type, not only ones with an exhaustive role switch, needs to update its types and handle tool messages and assistant `tool_calls` correctly.
+
+  See the Tool Calling docs and Migration Notes for details.
+
+### Minor Changes
+
+- 94203cf: Improve provider SDK compatibility and adapter support across Anthropic, Gemini, OpenAI-compatible, and Bedrock providers. Adds stronger schema validation, streaming and cancellation handling, improved error handling, and expanded real-SDK integration coverage.
+- 64839b2: Fixed several gaps in streaming (`stream: true`).
+
+  Added a `chunkIdleTimeoutMs` option (default 30000ms, `0` disables it) that bounds the gap between chunks after the first. Previously only stream-open and the first chunk were bounded by `timeoutMs`, so a connection that streamed one chunk then hung would never fail. An idle-timeout failure now also trips the circuit breaker, unlike other mid-stream failures, since a provider that reliably streams one chunk then hangs would otherwise never trip it.
+
+  Added `complete?: boolean` to `StreamChunk`/`WireStreamChunk`'s `tool_call_delta` variant. Gemini always delivers a `functionCall`'s arguments whole in one chunk, indistinguishable before now from a genuine fragment from other providers. Gemini's adapter and cache-replay chunks (`buildReplayChunks`) now set it.
+
+  Chunk buffer eviction is now logged at debug level when a caller doesn't read `chunks` (or falls far behind), so missing chunks in a reconstructed stream can be traced back to eviction instead of looking like a transport bug.
+
+  Added a `ping` variant to `WireStreamChunk` for provider keep-alive signals with no content. `fromFetch` (SSE comment-line pings, via a new exported `SSE_PING` sentinel) and `fromAnthropic` (Anthropic's documented `ping` events) both recognize these and reset the idle timer, instead of silently dropping them and risking a timeout on an actively alive long-running stream.
+
+  This is purely additive. Existing callers, and adapters that don't emit `ping` or set `complete`, are unaffected.
+
+- bc1fc46: Added `onUsageFailure`, an opt-in hook that reports token usage for calls that spent real tokens but then failed on VernLLM's own post-response handling, such as parse or schema validation errors, instead of silently dropping that spend.
+
+  `onUsage` only fires on full success, so there was previously no way to know a failed call had still cost tokens. `onUsageFailure` fills that gap: it fires once per failed attempt when the provider response included usage data, receiving the same `TokenUsage` shape as `onUsage` plus the `LLMError` that caused the failure. It covers any error thrown after a response arrives, not just parse/validation, and is skipped for transport failures (timeout, network error, non-retryable status) and for calls that were aborted, since in both cases there is no usage to report or the error type would not match what `call()` ultimately throws.
+
+  This is purely additive. `onUsage`'s existing contract is unchanged, and no action is needed for existing integrations.
+
+  See the [Usage Tracking](https://vernllm.vercel.app/docs/core/usage-tracking) docs for the full shape and firing semantics.
+
+- 56aeab6: Added streaming support to the generic `fromFetch` adapter.
+
+  Three new optional `FetchAdapterConfig` fields wire up streaming for any OpenAI-compatible-shaped HTTP endpoint: `requestStream` opens the streaming HTTP request (defaults to native `fetch`), `parseStreamFrames` splits the raw response bytes into individual event payloads (defaults to Server-Sent Events framing), and `mapStreamEvent` maps one parsed event into zero, one, or more `WireStreamChunk`s. `mapStreamEvent` is required for `stream: true` calls; a config that omits it now throws a clear `LLMError('validation')` instead of failing silently or confusingly mid-stream.
+
+  Also fixed a related correctness bug: `fromOpenAICompatible` and its aliases previously sent `stream_options: { include_usage: true }` unconditionally on every streamed call. Not every OpenAI-compatible provider supports that field, so a provider that rejects unrecognized parameters could fail every streamed call outright, which is what Mistral used to do. `stream_options` is now gated behind a new `supportsStreamUsage` adapter option, defaulting to `true`. This default was verified directly against provider docs for Groq, DeepSeek, Mistral, Perplexity, and LM Studio, all of which support the field, so existing callers keep getting usage in their stream exactly as before. Pass `{ supportsStreamUsage: false }` only for a provider you've confirmed rejects it.
+
+  This is purely additive. Existing `fromFetch` configs without the new streaming fields, and existing OpenAI-compatible aliases, are unaffected.
+
+- c536167: Added a way to opt out of VernLLM's `temperature: 0.2` default and let the provider apply its own default instead.
+
+  Pass `temperature: null` on a call, or `defaultTemperature: null` on the `VernLLM` instance, and `temperature` is omitted from the request entirely rather than sent as `0.2`. A per-call `temperature` still wins over the instance-level `defaultTemperature`, which still wins over the `0.2` fallback, same resolution order as `maxTokens`/`defaultMaxTokens`.
+
+  This is purely additive for normal `call()` usage. Omitting `temperature` everywhere keeps sending `0.2` exactly as before, no behavior changes for existing callers.
+
+  One narrow caveat: making this work required widening `LLMClient`'s wire-level `temperature: number` to `temperature?: number`. This only affects hand-written `LLMClient` implementations that assume `params.temperature` is always a `number` without checking whether it's `undefined`, every built-in adapter (`fromAnthropic`, `fromBedrock`, `fromGemini`, `fromFetch`, OpenAI-compatible) is unaffected. See Migration Notes for details.
+
+- 9fc3ee6: Added tool calling support to the generic `fromFetch` adapter.
+
+  `mapResponse` can now return an optional `toolCalls` array alongside `content`: `{ id, name, arguments }` per call, with `arguments` already JSON-encoded as a string, the same wire format every other adapter produces. `fromFetch` translates these into `WireToolCall`s so `call()` surfaces them through `CallWithToolsResult` exactly like the built-in provider adapters. `mapRequest` already received the full request (including `tools`/`toolChoice`) before this change, so only the response side needed a new seam.
+
+  `content` is now optional on `mapResponse`'s return type too, since a pure tool-call turn may have no text. An empty `toolCalls` array is treated identically to an omitted one, no special-casing needed either way.
+
+  This is purely additive. Existing `fromFetch` configs that never set `tools` and return only `{ content, usage? }` from `mapResponse` are unaffected.
+
+  See the Custom Providers docs for a full example.
+
 ## 1.7.1
 
 ### Patch Changes
@@ -351,3 +431,4 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 ### Minor Changes
 
 - dbce6e2: created a `tsconfig.base.json` which the `tsconfig.json` extends from
+
