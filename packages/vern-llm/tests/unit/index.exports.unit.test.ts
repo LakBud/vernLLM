@@ -5,6 +5,8 @@ import {
   fromOpenAICompatible,
   NormalizedCacheAdapter,
   TieredCacheAdapter,
+  parseSseStream,
+  SSE_PING,
   type AnthropicClient,
   type BedrockConverseClient,
   type GeminiClient,
@@ -21,6 +23,13 @@ describe('package entrypoint exports', () => {
   it('exports cache adapters at runtime', () => {
     expect(NormalizedCacheAdapter).toBeDefined();
     expect(TieredCacheAdapter).toBeDefined();
+  });
+
+  it('exports parseSseStream and SSE_PING from the package root, not just internal/sse.js', () => {
+    expect(parseSseStream).toBeDefined();
+    expect(typeof parseSseStream).toBe('function');
+    expect(SSE_PING).toBeDefined();
+    expect(typeof SSE_PING).toBe('symbol');
   });
 
   it('exports public client and schema types', () => {

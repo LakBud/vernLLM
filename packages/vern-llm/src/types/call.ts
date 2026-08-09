@@ -73,6 +73,15 @@ export interface CallParams<T = unknown> extends UsageHooks {
   requestId?: string;
   signal?: AbortSignal;
 
+  /**
+   * Per-call override for the instance's `chunkIdleTimeoutMs` (max gap
+   * between stream chunks once opened). Only applies when `stream: true`.
+   * Useful for routes using reasoning-heavy models with documented long
+   * silent gaps mid-stream. Pass 0 to disable the idle timeout for this
+   * call.
+   */
+  chunkIdleTimeoutMs?: number;
+
   /** Overrides the instance model for this call. */
   model?: string;
 

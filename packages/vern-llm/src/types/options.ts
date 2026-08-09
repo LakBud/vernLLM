@@ -45,9 +45,13 @@ export interface VernLLMOptions {
   /**
    * Called when a provider response arrives but VernLLM's own post-processing
    * then fails, after usage data was already present in that response.
-   * Separate from `onUsage`, which only fires on full success. Never fires
-   * for transport failures (timeout, network error, non-retryable status),
-   * since no response means no usage to report.
+   * Separate from `onUsage`, which only fires on full success.
+   *
+   * For non-streaming calls, never fires for transport failures (timeout,
+   * network error, non-retryable status), since no response means no usage
+   * to report. For streaming calls, this is not guaranteed: a stream can
+   * deliver a usage chunk and then fail later (e.g. an idle timeout waiting
+   * for the final close), in which case this does fire.
    */
   onUsageFailure?: OnUsageFailure;
   /** Injectable logger. Defaults to a console-based logger gated by `debug` */

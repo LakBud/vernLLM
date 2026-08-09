@@ -367,8 +367,9 @@ export class VernLLM {
    * adapter's `createStream` uses internally for its first network
    * round-trip.
    *
-   * Circuit-breaker success is recorded on the first chunk actually
-   * arriving, the same reliability boundary `executeCall` uses.
+   * Circuit-breaker success is recorded once the stream fully completes,
+   * not on the first chunk arriving, so a connection that opens but then
+   * dies mid-stream isn't masked as a success (see `buildStreamResult`).
    */
   private async executeStreamCall<T>(
     params: CallParams<T>,
@@ -386,6 +387,18 @@ export class VernLLM {
       throw new LLMError('stream: true requires a client/adapter with createStream', 'validation');
     }
 
+    // One controller for the entire stream, not just opening it. Adapters
+    // already thread this signal into their transport for the life of the
+    // request (that's how user-initiated cancellation works today), so
+    // reusing it for the idle timeout means the same abort() call that
+    // fires when the stream goes idle mid-way also tears down the
+    // underlying connection, instead of only rejecting VernLLM's own
+    // promise while the transport stays open.
+    const streamController = new AbortController();
+    const combinedExternal = params.signal
+      ? AbortSignal.any([params.signal, streamController.signal])
+      : streamController.signal;
+
     const { iterator, first } = await withTimeout(
       async (attemptSignal) => {
         const streamIterator = createStream(request, { signal: attemptSignal })[
@@ -396,22 +409,28 @@ export class VernLLM {
         return { iterator: streamIterator, first: firstResult };
       },
       this.timeoutMs,
-      params.signal,
+      combinedExternal,
     );
 
     // An immediately-exhausted stream (no chunks at all) is the streaming
     // equivalent of `executeCall`'s empty-response check: surface the same
     // `LLMError('Empty LLM response', 'api')` so retry behaves identically
     // whether the empty result came from a non-streaming or streaming
-    // attempt, rather than silently recording connection-time success for
-    // an attempt that produced nothing.
+    // attempt.
     if (first.done) {
       throw new LLMError('Empty LLM response', 'api');
     }
 
-    this.breaker?.recordSuccess();
-
-    return this.buildStreamResult(iterator, first, params, useJson, requestId, model, attempt);
+    return this.buildStreamResult(
+      iterator,
+      first,
+      params,
+      useJson,
+      requestId,
+      model,
+      attempt,
+      streamController,
+    );
   }
 
   /**
@@ -426,9 +445,10 @@ export class VernLLM {
    * happens here along with the one `reportUsageFailure` call for them.
    * The second catch, around `finalizeResponse`, does not re-normalize or
    * re-report since `finalizeResponse` already does both internally.
-   * Neither catch touches the circuit breaker: a mid-stream failure isn't
-   * connection-time evidence, since that was already recorded as a
-   * success once the first chunk arrived.
+   * Circuit-breaker success is only recorded once the stream fully
+   * completes, not when the first chunk arrives, so a connection that
+   * opens and then dies mid-way still counts as a failure below instead
+   * of masking it.
    */
   private buildStreamResult<T>(
     iterator: AsyncIterator<WireStreamChunk>,
@@ -438,6 +458,7 @@ export class VernLLM {
     requestId: string,
     model: string,
     attempt: number,
+    streamController: AbortController,
   ): { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T | CallWithToolsResult<T>> } {
     let resolveFinal!: (value: T | CallWithToolsResult<T>) => void;
     let rejectFinal!: (error: unknown) => void;
@@ -462,6 +483,7 @@ export class VernLLM {
     }> = [];
     let streamDone = false;
     let streamError: unknown;
+    let hasLoggedEviction = false;
 
     const push = (chunk: StreamChunk) => {
       const waiter = pending.shift();
@@ -477,11 +499,16 @@ export class VernLLM {
         // Nothing else surfaces this: without a log, a caller that never
         // read (or fell behind on) `chunks` has no way to tell eviction,
         // not a provider or transport bug, is why chunks are missing.
-        this.logger.debug(
-          `[VernLLM] stream chunk buffer exceeded cap (${MAX_BUFFERED_CHUNKS}), evicting ` +
-            `${buffered.length - MAX_BUFFERED_CHUNKS} oldest chunk(s); buffered=${buffered.length}. ` +
-            'The chunks iterable was never read (or fell far behind) for this stream.',
-        );
+        // Logged once per stream, not on every crossing, so an ignored
+        // high-volume stream doesn't spam dozens of near-identical lines.
+        if (!hasLoggedEviction) {
+          hasLoggedEviction = true;
+          this.logger.debug(
+            `[VernLLM] stream chunk buffer exceeded cap (${MAX_BUFFERED_CHUNKS}), evicting ` +
+              `${buffered.length - MAX_BUFFERED_CHUNKS} oldest chunk(s); buffered=${buffered.length}. ` +
+              'The chunks iterable was never read (or fell far behind) for this stream.',
+          );
+        }
 
         // Trim back down to the cap in one batch operation instead of
         // `shift()`ing a single element off on every push once the cap is
@@ -586,18 +613,42 @@ export class VernLLM {
             push({ type: 'usage', usage });
           }
 
-          result = await withChunkIdleTimeout(() => iterator.next(), this.chunkIdleTimeoutMs);
+          result = await withChunkIdleTimeout(
+            () => iterator.next(),
+            params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs,
+            () => streamController.abort(),
+            this.logger,
+          );
         }
       } catch (error) {
         // Best-effort cleanup for a processing-time throw (as opposed to
         // `iterator.next()` rejecting, which usually means the adapter's
-        // own generator already cleaned up). Closes the underlying
-        // connection or reader lock if it's still open.
+        // own generator already cleaned up). Two independent layers,
+        // since neither is guaranteed to reach every SDK on its own:
+        //
+        // 1. `iterator.return()`: `iterator` is the async generator
+        //    returned by the adapter's `createStream`, and every
+        //    adapter's `createStream` body is a `for await...of` over
+        //    the SDK's raw stream. Calling `.return()` on a generator
+        //    suspended inside a `for await...of` forwards `.return()` to
+        //    the iterable being iterated, standard IteratorClose
+        //    behavior, so this one call closes the whole chain down to
+        //    the SDK's own stream, as long as the SDK's stream
+        //    implements `.return()` (true for every adapter here, see
+        //    the "propagates .return()" test in each adapter's stream
+        //    unit tests).
+        // 2. `streamController.abort()`: aborts the same signal every
+        //    adapter received for this call. SDKs that honor an
+        //    AbortSignal for the life of the request, arguably the more
+        //    common pattern than implementing custom `.return()`
+        //    forwarding, get closed this way even if layer 1 has nothing
+        //    to forward to.
         try {
           await iterator.return?.();
         } catch {
           // Cleanup failing isn't the error being reported; swallow it.
         }
+        streamController.abort();
 
         const normalized = normalizeError(error, params.signal);
 
@@ -609,7 +660,7 @@ export class VernLLM {
         }
 
         if (usage && normalized.type !== 'aborted') {
-          this.reportUsageFailure(usage, normalized, attempt);
+          this.reportUsageFailure(usage, normalized, attempt, true);
         }
 
         fail(normalized);
@@ -619,6 +670,7 @@ export class VernLLM {
       }
 
       finish();
+      this.breaker?.recordSuccess();
 
       try {
         const wireToolCalls: WireToolCall[] | undefined = toolCallAcc.size
@@ -1012,14 +1064,27 @@ export class VernLLM {
    * spend) already arrived. Swallows and logs any error `onUsageFailure`
    * itself throws.
    */
-  private reportUsageFailure(usage: TokenUsage, error: LLMError, attempt: number): void {
+  private reportUsageFailure(
+    usage: TokenUsage,
+    error: LLMError,
+    attempt: number,
+    terminal = false,
+  ): void {
     // Falls back to promptTokens + completionTokens if totalTokens is 0
     // (e.g. a hand-rolled client that omits the total), so the log
     // doesn't understate real spend.
     const displayTokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
 
+    // A mid-stream failure is terminal for that call (no further attempts
+    // for this stream), unlike a stream-open failure where attempt N+1 may
+    // still follow. Label them differently so the log doesn't imply a
+    // retry that isn't coming.
+    const attemptText = terminal
+      ? 'mid-stream failure (terminal, no further attempts)'
+      : `attempt ${attempt + 1}/${this.maxRetries + 1}`;
+
     this.logger.warn(
-      `[VernLLM:${usage.requestId}] usage failure, attempt ${attempt + 1}/${this.maxRetries + 1}: ` +
+      `[VernLLM:${usage.requestId}] usage failure, ${attemptText}: ` +
         `type=${error.type} tokens=${displayTokens}`,
     );
 

@@ -126,6 +126,15 @@ function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStreamChun
  * modeled on it, returns an `AsyncIterable` of SSE chunks instead of a
  * single completion object when `stream: true` is set. Each chunk is
  * translated into `WireStreamChunk`(s) via `toWireStreamChunks`.
+ *
+ * Note on long-running reasoning models: this adapter consumes the
+ * underlying SDK's already-parsed stream rather than raw SSE bytes, so
+ * unlike `fromFetch`/`fromAnthropic` it cannot see comment-only keep-alive
+ * ping frames. Combined with `chunkIdleTimeoutMs`'s 30 second default and
+ * `reasoningEffort` (documented to have long silent gaps for o-series and
+ * similar models), a long-running reasoning call on this adapter can trip
+ * the idle timeout even though the provider is still working. Raise or
+ * disable `chunkIdleTimeoutMs` per call for those routes, see `CallParams`.
  */
 export interface OpenAICompatibleAdapterOptions {
   /**

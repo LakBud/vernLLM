@@ -1,5 +1,6 @@
 import { LLMError } from '../types/errors.js';
 
+import type { Logger } from '../logger.js';
 import type { LLMClient, WireToolCall } from '../types/client.js';
 import type { StreamChunk } from '../types/stream.js';
 import type { CallWithToolsResult, ToolCall, ToolDefinition } from '../types/tools.js';
@@ -118,6 +119,24 @@ export function describeError(err: unknown): string {
 }
 
 /**
+ * `setTimeout` silently clamps any delay above this (~24.8 days) or
+ * `Infinity` down to ~1ms instead of erroring, so a caller passing
+ * `Infinity` as "no timeout" gets the opposite of what they asked for.
+ * Both timeout helpers below guard against this explicitly.
+ */
+const MAX_SETTIMEOUT_MS = 2_147_483_647;
+
+/** True when a timeout value should be treated as "disabled" rather than passed to `setTimeout`. */
+function isTimeoutDisabled(ms: number | undefined): boolean {
+  return !ms || ms <= 0 || ms === Infinity;
+}
+
+/** Caps a timeout at the largest delay `setTimeout` actually honors. */
+function clampTimeoutMs(ms: number): number {
+  return Math.min(ms, MAX_SETTIMEOUT_MS);
+}
+
+/**
  * Runs an async function and cancels it if it takes longer than the given
  * timeout. Creates an internal abort controller that fires after the
  * timeout elapses, and combines it with any external signal the caller
@@ -127,6 +146,9 @@ export function describeError(err: unknown): string {
  * continue to propagate as aborted errors. The internal timer is always
  * cleared afterward, whether the function succeeds, fails, or is aborted,
  * so nothing is left running in the background.
+ *
+ * `timeoutMs` of `Infinity` (or any value beyond what `setTimeout` can
+ * represent) disables the timeout rather than firing almost immediately.
  */
 export async function withTimeout<T>(
   fn: (signal: AbortSignal) => Promise<T>,
@@ -135,9 +157,11 @@ export async function withTimeout<T>(
 ): Promise<T> {
   const controller = new AbortController();
 
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+  const timer = isTimeoutDisabled(timeoutMs)
+    ? undefined
+    : setTimeout(() => {
+        controller.abort();
+      }, clampTimeoutMs(timeoutMs));
 
   const signal = externalSignal
     ? AbortSignal.any([externalSignal, controller.signal])
@@ -167,31 +191,61 @@ export async function withTimeout<T>(
  * opening the stream and its first chunk). Without this, a connection
  * that streams one chunk then hangs would never fail.
  *
- * `timeoutMs` of 0/undefined disables the check. Otherwise rejects with
- * `LLMError('timeout')` if `next()` doesn't settle in time. The clock
- * resets on every call, so the window is measured from the most recent
- * chunk, not from stream start.
+ * `timeoutMs` of 0/undefined/`Infinity` disables the check. Otherwise
+ * rejects with `LLMError('timeout')` if `next()` doesn't settle in time.
+ * The clock resets on every call, so the window is measured from the most
+ * recent chunk, not from stream start.
+ *
+ * `onIdle`, if given, is called the moment the timer fires (before the
+ * rejection), so callers can abort the underlying transport instead of
+ * just walking away from an unread promise. `logger`, if given, records a
+ * debug line if `next()` still settles *after* the idle timeout already
+ * rejected. `resolve`/`reject` on an already-settled promise is otherwise
+ * a silent no-op, so without this the late chunk (possibly the final
+ * usage chunk) would vanish with no trace.
  */
 export function withChunkIdleTimeout<T>(
   next: () => Promise<IteratorResult<T>>,
   timeoutMs: number | undefined,
+  onIdle?: () => void,
+  logger?: Pick<Logger, 'debug'>,
 ): Promise<IteratorResult<T>> {
-  if (!timeoutMs || timeoutMs <= 0) {
+  if (isTimeoutDisabled(timeoutMs)) {
     return next();
   }
 
+  const activeTimeoutMs = timeoutMs as number;
+
+  let settled = false;
+
   return new Promise<IteratorResult<T>>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new LLMError(`No stream chunk received for ${timeoutMs}ms (idle timeout)`, 'timeout'));
-    }, timeoutMs);
+      settled = true;
+      onIdle?.();
+      reject(
+        new LLMError(`No stream chunk received for ${activeTimeoutMs}ms (idle timeout)`, 'timeout'),
+      );
+    }, clampTimeoutMs(activeTimeoutMs));
 
     next().then(
       (result) => {
         clearTimeout(timer);
+        if (settled) {
+          logger?.debug('[VernLLM] chunk resolved after idle timeout already fired; discarding');
+          return;
+        }
+        settled = true;
         resolve(result);
       },
       (error: unknown) => {
         clearTimeout(timer);
+        if (settled) {
+          logger?.debug(
+            '[VernLLM] chunk rejection arrived after idle timeout already fired; discarding',
+          );
+          return;
+        }
+        settled = true;
         reject(error);
       },
     );

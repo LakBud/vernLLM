@@ -9,7 +9,10 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 /** A fake Anthropic SSE stream, as `messages.create({ stream: true })` returns. */
-function fakeAnthropicStream(events: unknown[]): AsyncIterable<unknown> {
+function fakeAnthropicStream(
+  events: unknown[],
+  onReturn?: () => void | Promise<void>,
+): AsyncIterable<unknown> {
   return {
     [Symbol.asyncIterator]() {
       let index = 0;
@@ -20,13 +23,22 @@ function fakeAnthropicStream(events: unknown[]): AsyncIterable<unknown> {
           index++;
           return { done: false, value };
         },
+        async return() {
+          await onReturn?.();
+          return { done: true, value: undefined };
+        },
       };
     },
   };
 }
 
-function makeFakeStreamingAnthropicClient(events: unknown[]) {
-  const create = vi.fn(async (_params: unknown, _options: unknown) => fakeAnthropicStream(events));
+function makeFakeStreamingAnthropicClient(
+  events: unknown[],
+  onReturn?: () => void | Promise<void>,
+) {
+  const create = vi.fn(async (_params: unknown, _options: unknown) =>
+    fakeAnthropicStream(events, onReturn),
+  );
   return { client: { messages: { create } } as unknown as AnthropicClient, create };
 }
 
@@ -300,5 +312,36 @@ describe('fromAnthropic().chat.completions.createStream', () => {
         ),
       ),
     ).rejects.toMatchObject({ type: 'validation' });
+  });
+
+  it("propagates .return() on the outer generator down to the underlying SDK stream's own .return(), so VernLLM's mid-stream cleanup actually closes the connection", async () => {
+    const onReturn = vi.fn();
+    const { client } = makeFakeStreamingAnthropicClient(
+      [
+        { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } },
+      ],
+      onReturn,
+    );
+    const adapted = fromAnthropic(client);
+
+    const stream = adapted.chat.completions.createStream!(
+      { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+
+    // Pull one chunk, then abandon iteration early, as VernLLM does when a
+    // mid-stream error (e.g. an idle timeout) fires: it calls
+    // `iterator.return?.()` on this generator rather than continuing to
+    // pull. This relies on the language's own IteratorClose semantics for
+    // `for await...of`, calling `.return()` on a generator suspended
+    // inside one forwards `.return()` to the inner iterable being
+    // consumed, without any adapter-specific cancellation code needed.
+    await iterator.next();
+    await iterator.return?.(undefined);
+
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });

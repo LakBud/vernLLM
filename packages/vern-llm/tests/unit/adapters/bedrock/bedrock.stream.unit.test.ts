@@ -9,7 +9,10 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 /** A fake Bedrock ConverseStream event sequence, as `{ stream }` returns. */
-function fakeBedrockStream(events: unknown[]): AsyncIterable<unknown> {
+function fakeBedrockStream(
+  events: unknown[],
+  onReturn?: () => void | Promise<void>,
+): AsyncIterable<unknown> {
   return {
     [Symbol.asyncIterator]() {
       let index = 0;
@@ -20,15 +23,19 @@ function fakeBedrockStream(events: unknown[]): AsyncIterable<unknown> {
           index++;
           return { done: false, value };
         },
+        async return() {
+          await onReturn?.();
+          return { done: true, value: undefined };
+        },
       };
     },
   };
 }
 
-function makeFakeStreamingBedrockClient(events: unknown[]) {
+function makeFakeStreamingBedrockClient(events: unknown[], onReturn?: () => void | Promise<void>) {
   const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({}));
   const converseStream = vi.fn(async (_params: unknown, _options: unknown) => ({
-    stream: fakeBedrockStream(events),
+    stream: fakeBedrockStream(events, onReturn),
   }));
 
   return {
@@ -215,5 +222,170 @@ describe('fromBedrock().chat.completions.createStream', () => {
         ),
       ),
     ).rejects.toMatchObject({ type: 'validation' });
+  });
+
+  describe('mid-stream AWS exception events', () => {
+    it('surfaces throttlingException as LLMError(api, 429) instead of silently dropping it', async () => {
+      const { client } = makeFakeStreamingBedrockClient([
+        { contentBlockStart: { contentBlockIndex: 0, start: {} } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'partial' } } },
+        { throttlingException: { message: 'Too many requests' } },
+      ]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({ type: 'api', status: 429, message: 'Too many requests' });
+    });
+
+    it('surfaces validationException as LLMError(validation)', async () => {
+      const { client } = makeFakeStreamingBedrockClient([
+        { validationException: { message: 'Malformed request' } },
+      ]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({ type: 'validation', message: 'Malformed request' });
+    });
+
+    it('surfaces internalServerException as LLMError(api, 500)', async () => {
+      const { client } = makeFakeStreamingBedrockClient([
+        { internalServerException: { message: 'Something went wrong on AWS' } },
+      ]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({ type: 'api', status: 500, message: 'Something went wrong on AWS' });
+    });
+
+    it('surfaces serviceUnavailableException as LLMError(api, 503)', async () => {
+      const { client } = makeFakeStreamingBedrockClient([
+        { serviceUnavailableException: { message: 'Bedrock is temporarily unavailable' } },
+      ]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({ type: 'api', status: 503 });
+    });
+
+    it('surfaces modelStreamErrorException as LLMError(api), using its own status code when present', async () => {
+      const { client } = makeFakeStreamingBedrockClient([
+        { modelStreamErrorException: { message: 'Model stream failed', originalStatusCode: 424 } },
+      ]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({ type: 'api', status: 424, message: 'Model stream failed' });
+    });
+
+    it('does not treat an exception event as if the stream simply ended (regression: previously silently truncated instead of throwing)', async () => {
+      const { client } = makeFakeStreamingBedrockClient([
+        { contentBlockStart: { contentBlockIndex: 0, start: {} } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'partial output' } } },
+        { throttlingException: { message: 'Too many requests' } },
+        // These would only be reached if the exception event were
+        // mistakenly ignored and iteration continued past it.
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: ' more text' } } },
+        { messageStop: { stopReason: 'end_turn' } },
+      ]);
+      const adapted = fromBedrock(client);
+
+      const collected: unknown[] = [];
+
+      await expect(
+        (async () => {
+          for await (const chunk of adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          )) {
+            collected.push(chunk);
+          }
+        })(),
+      ).rejects.toMatchObject({ type: 'api', status: 429 });
+
+      // Only the real content before the exception was yielded, the
+      // exception stopped iteration instead of being skipped over.
+      expect(collected).toEqual([{ type: 'text-delta', delta: 'partial output' }]);
+    });
+  });
+
+  it("propagates .return() on the outer generator down to the underlying SDK stream's own .return()", async () => {
+    const onReturn = vi.fn();
+    const { client } = makeFakeStreamingBedrockClient(
+      [
+        { contentBlockStart: { contentBlockIndex: 0, start: {} } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'partial' } } },
+      ],
+      onReturn,
+    );
+    const adapted = fromBedrock(client);
+
+    const stream = adapted.chat.completions.createStream!(
+      {
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+
+    await iterator.next();
+    await iterator.return?.(undefined);
+
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });

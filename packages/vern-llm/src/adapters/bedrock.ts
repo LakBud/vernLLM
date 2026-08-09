@@ -114,7 +114,18 @@ type BedrockConverseStreamEvent =
       metadata: {
         usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
       };
-    };
+    }
+  // The above are the happy-path events. Bedrock Converse streams can also
+  // emit these as in-band exception events (not promise rejections), so
+  // they need to be modeled and handled explicitly below, an unmatched
+  // event previously fell through the if/else chain silently, either
+  // truncating output or leaving the stream hanging until an unrelated
+  // idle timeout fired.
+  | { internalServerException: { message?: string } }
+  | { modelStreamErrorException: { message?: string; originalStatusCode?: number } }
+  | { validationException: { message?: string } }
+  | { throttlingException: { message?: string } }
+  | { serviceUnavailableException: { message?: string } };
 
 /** Maps a `ContentBlock` image MIME type, already validated, to Converse's `format` enum. */
 function toBedrockImageFormat(mimeType: string): BedrockImageFormat {
@@ -466,6 +477,36 @@ export function fromBedrock(
                   total_tokens: event.metadata.usage.totalTokens,
                 },
               };
+            } else if ('throttlingException' in event) {
+              throw new LLMError(
+                event.throttlingException.message ?? 'Bedrock throttled the request mid-stream',
+                'api',
+                429,
+              );
+            } else if ('validationException' in event) {
+              throw new LLMError(
+                event.validationException.message ?? 'Bedrock rejected the request mid-stream',
+                'validation',
+              );
+            } else if (
+              'internalServerException' in event ||
+              'serviceUnavailableException' in event ||
+              'modelStreamErrorException' in event
+            ) {
+              const detail =
+                ('internalServerException' in event && event.internalServerException.message) ||
+                ('serviceUnavailableException' in event &&
+                  event.serviceUnavailableException.message) ||
+                ('modelStreamErrorException' in event && event.modelStreamErrorException.message) ||
+                'Bedrock reported a mid-stream error';
+
+              const status =
+                ('modelStreamErrorException' in event &&
+                  event.modelStreamErrorException.originalStatusCode) ||
+                ('serviceUnavailableException' in event && 503) ||
+                500;
+
+              throw new LLMError(detail, 'api', status);
             }
           }
         },

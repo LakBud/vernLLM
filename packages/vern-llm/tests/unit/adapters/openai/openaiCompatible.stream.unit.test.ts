@@ -9,7 +9,10 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 /** A fake OpenAI-shaped SSE stream, as `chat.completions.create({ stream: true })` returns. */
-function fakeOpenAIStream(chunks: unknown[]): AsyncIterable<unknown> {
+function fakeOpenAIStream(
+  chunks: unknown[],
+  onReturn?: () => void | Promise<void>,
+): AsyncIterable<unknown> {
   return {
     [Symbol.asyncIterator]() {
       let index = 0;
@@ -19,6 +22,10 @@ function fakeOpenAIStream(chunks: unknown[]): AsyncIterable<unknown> {
           const value = chunks[index];
           index++;
           return { done: false, value };
+        },
+        async return() {
+          await onReturn?.();
+          return { done: true, value: undefined };
         },
       };
     },
@@ -208,5 +215,24 @@ describe('fromOpenAICompatible().chat.completions.createStream', () => {
         ],
       },
     ]);
+  });
+
+  it("propagates .return() on the outer generator down to the underlying SDK stream's own .return()", async () => {
+    const onReturn = vi.fn();
+    const create = vi.fn(async (_params: unknown, _options: unknown) =>
+      fakeOpenAIStream([{ choices: [{ delta: { content: 'partial' } }] }], onReturn),
+    );
+    const adapted = fromOpenAICompatible({ chat: { completions: { create } } });
+
+    const stream = adapted.chat.completions.createStream!(
+      { model: 'gpt-4o', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+
+    await iterator.next();
+    await iterator.return?.(undefined);
+
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });

@@ -404,8 +404,15 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
                   id: part.functionCall.name,
                   name: part.functionCall.name,
                   argumentsDelta: JSON.stringify(part.functionCall.args ?? {}),
-                  // Gemini can't stream function-call args incrementally:
-                  // this is always the whole thing, not a fragment.
+                  // INVARIANT: assumes Gemini always sends a complete
+                  // function-call args blob per part, no incremental
+                  // streaming, per current API behavior. There is no field
+                  // on this minimal structural type to derive this from.
+                  // If Gemini ever starts streaming args incrementally,
+                  // this becomes silently wrong. See the test titled
+                  // "INVARIANT: hardcodes complete: true on
+                  // tool_call_delta" in gemini.stream.unit.test.ts, which
+                  // exists specifically to catch that drift.
                   complete: true,
                 } satisfies WireStreamChunk;
                 toolCallIndex++;

@@ -606,6 +606,28 @@ describe('VernLLM.call, stream: true', () => {
     const message = debug.mock.calls.map(([msg]) => String(msg)).join('\n');
     expect(message).toContain('evicting');
   });
+
+  it('logs the eviction warning exactly once per stream, even when the backlog crosses the cap many times over', async () => {
+    // MAX_BUFFERED_CHUNKS is 10,000 and eviction logs once every time
+    // buffered.length crosses 2x that. A stream this large would cross
+    // that line many times over if each crossing logged separately, this
+    // asserts a single log line regardless of how far past the cap an
+    // ignored stream grows.
+    const wireChunks: WireStreamChunk[] = Array.from({ length: 150_000 }, () => ({
+      type: 'text-delta',
+      delta: 'x',
+    }));
+    const { client } = createMockStreamingClient([wireChunks]);
+    const debug = vi.fn();
+    const logger = { debug, warn: vi.fn(), error: vi.fn() };
+    const llm = new VernLLM({ client, model: 'test-model', logger });
+
+    const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    await finalResult;
+
+    const evictionLogs = debug.mock.calls.filter(([msg]) => String(msg).includes('evicting'));
+    expect(evictionLogs).toHaveLength(1);
+  });
 });
 
 describe('VernLLM.call, stream: true, per-chunk idle timeout', () => {
@@ -701,6 +723,101 @@ describe('VernLLM.call, stream: true, per-chunk idle timeout', () => {
     await expect(finalResult).resolves.toBe('ok');
   });
 
+  it('a per-call chunkIdleTimeoutMs override lets a slow call survive despite a stricter instance default', async () => {
+    const { client } = createMockStreamingClient([
+      () => ({
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (step === 0) {
+                step++;
+                return { done: false, value: { type: 'text-delta', delta: 'first' } };
+              }
+              // Gap would exceed the instance default (10ms) but not the
+              // per-call override (100ms), standing in for a
+              // reasoning-heavy call on a route where the instance
+              // default is otherwise tuned for fast, chatty routes.
+              await new Promise((resolve) => setTimeout(resolve, 30));
+              return { done: true, value: undefined };
+            },
+          };
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', chunkIdleTimeoutMs: 10 });
+
+    const { finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+      chunkIdleTimeoutMs: 100,
+    });
+
+    await expect(finalResult).resolves.toBe('first');
+  });
+
+  it('a per-call chunkIdleTimeoutMs of 0 disables the idle timeout for that call regardless of the instance default', async () => {
+    const { client } = createMockStreamingClient([
+      () => ({
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (step === 0) {
+                step++;
+                return { done: false, value: { type: 'text-delta', delta: 'first' } };
+              }
+              await new Promise((resolve) => setTimeout(resolve, 30));
+              return { done: true, value: undefined };
+            },
+          };
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', chunkIdleTimeoutMs: 10 });
+
+    const { finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+      chunkIdleTimeoutMs: 0,
+    });
+
+    await expect(finalResult).resolves.toBe('first');
+  });
+
+  it('falls back to the instance chunkIdleTimeoutMs when no per-call override is given', async () => {
+    const { client } = createMockStreamingClient([
+      () => ({
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (step === 0) {
+                step++;
+                return { done: false, value: { type: 'text-delta', delta: 'first' } };
+              }
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              return { done: false, value: { type: 'text-delta', delta: 'never seen' } };
+            },
+          };
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', chunkIdleTimeoutMs: 10 });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await drain(chunks).catch(() => {});
+
+    await expect(finalResult).rejects.toMatchObject({ type: 'timeout' });
+  });
+
   it('does not treat a fast-arriving second chunk as an idle-timeout failure', async () => {
     const { client } = createMockStreamingClient([
       [
@@ -715,7 +832,7 @@ describe('VernLLM.call, stream: true, per-chunk idle timeout', () => {
     await expect(finalResult).resolves.toBe('ab');
   });
 
-  it('trips the circuit breaker on an idle-timeout failure, even though the first chunk already recorded a breaker success', async () => {
+  it('trips the circuit breaker on an idle-timeout failure, even though real content already flowed', async () => {
     const { client } = createMockStreamingClient([
       () => ({
         [Symbol.asyncIterator]() {
@@ -749,10 +866,70 @@ describe('VernLLM.call, stream: true, per-chunk idle timeout', () => {
     await drain(chunks).catch(() => {});
     await expect(finalResult).rejects.toBeInstanceOf(LLMError);
 
-    // A provider that reliably opens a connection, streams exactly one
-    // chunk, then hangs would otherwise record a breaker success on every
-    // call (the first chunk always arrives) while failing every call via
-    // timeout, the breaker must still open.
+    // A provider that streams one chunk then hangs never reaches
+    // `finish()`, so it never records a success either, the idle timeout
+    // is the only outcome recorded for this call and the breaker opens.
+    expect(llm.getCircuitState()).toBe('open');
+  });
+
+  it('does not record a circuit-breaker success on first-chunk arrival, only once the stream fully completes', async () => {
+    // A stream that opens, delivers one chunk, then times out must not
+    // leave the circuit in a state where that timeout was ever masked by
+    // an earlier success. Two back-to-back calls, both hang after their
+    // first chunk, must both count toward the threshold instead of the
+    // counter being reset by a premature connect-time success in between.
+    const { client } = createMockStreamingClient([
+      () => ({
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (step === 0) {
+                step++;
+                return { done: false, value: { type: 'text-delta', delta: 'first' } };
+              }
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              return { done: false, value: { type: 'text-delta', delta: 'never seen' } };
+            },
+          };
+        },
+      }),
+      () => ({
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (step === 0) {
+                step++;
+                return { done: false, value: { type: 'text-delta', delta: 'first' } };
+              }
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              return { done: false, value: { type: 'text-delta', delta: 'never seen' } };
+            },
+          };
+        },
+      }),
+    ]);
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      chunkIdleTimeoutMs: 10,
+      circuitBreaker: { threshold: 2 },
+    });
+
+    const first = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    await drain(first.chunks).catch(() => {});
+    await first.finalResult.catch(() => {});
+
+    // One failure recorded so far, below threshold: still closed.
+    expect(llm.getCircuitState()).toBe('closed');
+
+    const second = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    await drain(second.chunks).catch(() => {});
+    await second.finalResult.catch(() => {});
+
+    // Two failures now: this only works if the first call's own
+    // first-chunk arrival didn't reset the counter back to 0 in between.
     expect(llm.getCircuitState()).toBe('open');
   });
 
@@ -790,6 +967,41 @@ describe('VernLLM.call, stream: true, per-chunk idle timeout', () => {
     await expect(finalResult).rejects.toBeInstanceOf(LLMError);
 
     expect(llm.getCircuitState()).toBe('closed');
+  });
+
+  it("aborts the signal passed to createStream when the idle timeout fires, tearing down the transport instead of only rejecting VernLLM's own promise", async () => {
+    const { client, createStream } = createMockStreamingClient([
+      () => ({
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            async next(): Promise<IteratorResult<WireStreamChunk>> {
+              if (step === 0) {
+                step++;
+                return { done: false, value: { type: 'text-delta', delta: 'first' } };
+              }
+              // Never resolves, standing in for a transport that would
+              // otherwise stay open forever if nothing tore it down.
+              await new Promise(() => {});
+              return { done: false, value: { type: 'text-delta', delta: 'never seen' } };
+            },
+          };
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', chunkIdleTimeoutMs: 10 });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    await drain(chunks).catch(() => {});
+    await expect(finalResult).rejects.toMatchObject({ type: 'timeout' });
+
+    const [, options] = createStream.mock.calls[0] as [unknown, { signal: AbortSignal }];
+    expect(options.signal.aborted).toBe(true);
   });
 });
 
