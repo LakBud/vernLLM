@@ -105,6 +105,13 @@ Existing string-based calls remain fully compatible.
     exclusive with `tools` themselves, see <a href="/docs/API-reference/notes">Notes</a>). See{' '}
     <a href="/docs/core/streaming">Streaming</a>.
   </Card>
+  <Card title="chunkIdleTimeoutMs">
+    `number`, optional. Only applies when `stream: true`. Overrides the instance's
+    `chunkIdleTimeoutMs` for this call, pass `0` or `Infinity` to disable the idle timeout for just
+    this call. Useful for routes that need a longer allowance than the instance default, reasoning
+    models with long silent gaps, for example. See{' '}
+    <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
+  </Card>
 </Cards>
 
 ## Model & generation

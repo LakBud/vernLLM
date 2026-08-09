@@ -96,6 +96,13 @@ const llm = new VernLLM({
   <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
 </Callout>
 
+<Callout type="info">
+  `parseSseStream` and the `SSE_PING` sentinel yields for comment-only frames, the same parser and
+  ping detection `fromFetch` uses internally under the default SSE framing, are exported from
+  `vern-llm` too. Useful if a custom `parseStreamFrames` still wants VernLLM's own SSE parsing (and
+  ping handling) rather than reimplementing it.
+</Callout>
+
 `mapRequest` receives the same `params` object for both `create` and `createStream`, `mapRequest`
 itself does not change based on whether the call is streaming. If your provider's streaming
 endpoint needs a different request shape (e.g. a `stream: true` flag in the body), check

@@ -28,12 +28,13 @@ const analysis = await llm.call({
 
 ## What can be overridden per call
 
-| Field             | Falls back to                                                                                                                                 |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`           | The instance's `model` option                                                                                                                 |
-| `maxTokens`       | The instance's `defaultMaxTokens` (`1000`)                                                                                                    |
-| `temperature`     | `0.2`, used only when both the per-call value and `defaultTemperature` are `undefined`. Either one set to `null` omits `temperature` instead. |
-| `reasoningEffort` | Omitted from the request entirely; the provider's own default applies                                                                         |
+| Field                | Falls back to                                                                                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`              | The instance's `model` option                                                                                                                                          |
+| `maxTokens`          | The instance's `defaultMaxTokens` (`1000`)                                                                                                                             |
+| `temperature`        | `0.2`, used only when both the per-call value and `defaultTemperature` are `undefined`. Either one set to `null` omits `temperature` instead.                          |
+| `reasoningEffort`    | Omitted from the request entirely; the provider's own default applies                                                                                                  |
+| `chunkIdleTimeoutMs` | The instance's `chunkIdleTimeoutMs` (`30000`). Only applies when `stream: true`. See <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>. |
 
 <Callout type="warn">
   `temperature` isn't left unset when you don't pass it &mdash; VernLLM defaults it to `0.2` itself.
@@ -68,7 +69,9 @@ This page goes into more depth on when and how to reach for overrides.
   Retry/timeout/circuit-breaker behavior (`maxRetries`, `timeoutMs`, `baseDelayMs`,
   `nonRetryableStatus`, `circuitBreaker`) is instance-level only and cannot be changed per call. If
   different calls need different resilience settings, use separate `VernLLM` instances that share
-  the same underlying `client`.
+  the same underlying `client`. `chunkIdleTimeoutMs` is the one exception, it's overridable per call
+  since `stream: true` calls often need a different idle allowance than the instance default, see{' '}
+  <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
 </Callout>
 
 ## Common pattern: cheap default, expensive escalation

@@ -222,10 +222,12 @@ stream rather than the whole response:
 </Callout>
 
 The circuit breaker, when configured, records a failure for the stream-opening step, matching
-this same before-first-chunk/after-first-chunk split, with one exception: an idle-timeout failure
-(see below) still counts, even though it happens after the first chunk. A provider that reliably
-streams one chunk and then hangs is exactly the kind of unhealthy behavior the breaker exists to
-catch. See{' '}
+this same before-first-chunk/after-first-chunk split. Success, correspondingly, is only recorded
+once the stream fully completes, not when the first chunk arrives, so a connection that opens and
+then hangs isn't masked as a success. An idle-timeout failure (see below) is the one exception on
+the failure side: it still counts even though it happens after the first chunk, since a provider
+that reliably streams one chunk and then hangs is exactly the kind of unhealthy behavior the
+breaker exists to catch. See{' '}
 
 <a href="/docs/core/circuit-breaker">Circuit Breaker</a> and
 <a href="/docs/core/retries">Retries</a> for the underlying policy this reuses.
@@ -233,12 +235,13 @@ catch. See{' '}
 ## Per-chunk idle timeout
 
 `timeoutMs` only bounds opening the stream and its first chunk. Every gap after that is bounded
-separately, by `chunkIdleTimeoutMs` (default `30000`, pass `0` to disable). Without it, a
-connection that opens fine, delivers one chunk, then hangs would never fail on its own.
+separately, by `chunkIdleTimeoutMs` (default `30000`, pass `0` or `Infinity` to disable). Without
+it, a connection that opens fine, delivers one chunk, then hangs would never fail on its own.
 
 The clock resets on every chunk, including provider keep-alive pings (see below), so it measures
 the gap since the most recent chunk, not the stream's total duration. If it elapses, `finalResult`
-rejects with `LLMError('timeout')`, same as the stream-open timeout.
+rejects with `LLMError('timeout')`, same as the stream-open timeout, and the underlying request is
+aborted rather than left running in the background.
 
 ```ts
 const llm = new VernLLM({
@@ -247,6 +250,24 @@ const llm = new VernLLM({
   chunkIdleTimeoutMs: 15_000, // fail if no chunk arrives for 15s
 });
 ```
+
+Override it per call for routes that need a different value than the instance default, reasoning
+models with documented long silent gaps, for example:
+
+```ts
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Solve this step by step: ...',
+  reasoningEffort: 'high',
+  stream: true,
+  chunkIdleTimeoutMs: 120_000, // this call only, instance default unaffected
+});
+```
+
+<Callout type="info">
+  A value larger than `setTimeout` can represent (~24.8 days) is capped at that ceiling rather than
+  silently firing almost immediately, the underlying platform timer's own behavior for oversized
+  delays.
+</Callout>
 
 ### Provider keep-alive pings
 

@@ -68,10 +68,16 @@ const llm = new VernLLM({
 <Callout>
   `onUsageFailure` fires once per failed attempt with extractable usage, not once per logical
   `call()`. A call that fails once and then succeeds on retry fires `onUsageFailure` for the failed
-  attempt and `onUsage` for the successful one, both carrying their own real usage. It never fires
-  for transport failures (timeout, network error, non-retryable status) or when the call was
-  aborted, since in both cases there's no honest number, or no matching error type, to report. If
-  the `onUsageFailure` callback itself throws, that failure is logged and swallowed, same as
+  attempt and `onUsage` for the successful one, both carrying their own real usage. For
+  non-streaming calls, it never fires for transport failures (timeout, network error, non-retryable
+  status) or when the call was aborted, since in both cases there's no honest number, or no matching
+  error type, to report. For `stream: true`, this is not guaranteed: a stream can deliver a usage
+  chunk and then fail later (e.g. an idle timeout waiting for the final close), in which case it
+  does fire, see{' '}
+  <a href="/docs/core/streaming#usage-metering-and-tracking-while-streaming">
+    Usage metering and tracking while streaming
+  </a>
+  . If the `onUsageFailure` callback itself throws, that failure is logged and swallowed, same as
   `onUsage`.
 </Callout>
 
