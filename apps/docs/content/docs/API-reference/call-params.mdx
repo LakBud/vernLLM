@@ -83,9 +83,10 @@ Existing string-based calls remain fully compatible.
   <Card title="tools">
     `ToolDefinition[]`, optional. Tools the model may call. Setting `tools` changes what `call()`
     returns, from `T` directly to a `CallWithToolsResult<T>` discriminated union. By default,
-    mutually exclusive with `jsonSchema` (not `schema`, which stays compatible), except on
-    Anthropic/Bedrock models opted into `nativeStructuredOutputModels`. Must not be an empty
-    array. See <a href="/docs/core/tool-calling">Tool Calling</a>.
+    mutually exclusive with `jsonSchema` on Anthropic and Bedrock only, except on models opted
+    into `nativeStructuredOutputModels`; Gemini and OpenAI-compatible clients never restrict the
+    combination at all. Never mutually exclusive with `schema`, on any provider. Must not be an
+    empty array. See <a href="/docs/core/tool-calling">Tool Calling</a>.
   </Card>
   <Card title="toolChoice">
     `'auto' | 'none' | 'required' | { name: string }`, optional. Defaults to `'auto'` when `tools`

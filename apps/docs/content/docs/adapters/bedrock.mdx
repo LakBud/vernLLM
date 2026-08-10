@@ -57,7 +57,7 @@ const llm = new VernLLM({
 
 ## Structured output via tool use
 
-When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text.
+When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text. This is the default behavior for every model; see <a href="#combining-tools-with-jsonschema">Combining tools with jsonSchema</a> below for the native alternative available on models covered by `nativeStructuredOutputModels`, which uses `outputConfig.textFormat` instead and composes with real `tools`.
 
 ```ts title="bedrock-structured-output.ts"
 import { z } from 'zod';
@@ -141,12 +141,7 @@ const llm = new VernLLM({
 });
 ```
 
-There is no built-in default list, see{' '}
-
-<a href="/docs/core/structured-output#combining-with-tools">
-  Structured Output → Combining with tools
-</a>
-for why. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
+There is no built-in default list, see <a href="/docs/core/structured-output#combining-with-tools">Structured Output → Combining with tools</a> for why. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
 tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
 while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with

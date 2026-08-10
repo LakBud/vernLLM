@@ -60,16 +60,11 @@ const llm = new VernLLM({
 });
 ```
 
-There is no built-in default list, see{' '}
-
-<a href="/docs/core/structured-output#combining-with-tools">
-  Structured Output → Combining with tools
-</a>
-for why. On a covered model, `jsonSchema` is sent as `output_config.format` instead of a forced tool
-call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed, while
-any real `tools` you pass are built and sent exactly as they would be without `jsonSchema` present.
-On a model not covered by `nativeStructuredOutputModels`, combining `tools` with `jsonSchema` still
-throws `LLMError('validation')`, naming the model and pointing at this option.
+There is no built-in default list, see <a href="/docs/core/structured-output#combining-with-tools">Structured Output → Combining with tools</a> for why. On a covered model, `jsonSchema` is sent as `output_config.format` instead of a forced
+tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
+while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
+present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
+`jsonSchema` still throws `LLMError('validation')`, naming the model and pointing at this option.
 
 <Callout type="warn">
   `output_config.format` only sends `type` and `schema`, matching the real Anthropic API exactly.

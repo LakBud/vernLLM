@@ -346,12 +346,8 @@ function buildBedrockRequest(
         },
       },
     };
-
-    if (params.tools?.length) {
-      toolConfig = buildBedrockToolConfig(params.tools, params.tool_choice);
-    }
   } else if (jsonSchema && schemaName) {
-    // Legacy path: jsonSchema alone (or with tools, on a native model —
+    // Legacy path: jsonSchema alone (or with tools, on a native model;
     // see above), on a model without native support, becomes a forced
     // single tool call via toolConfig, unchanged from before this adapter
     // had a native path.
@@ -370,7 +366,13 @@ function buildBedrockRequest(
     jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
   }
 
-  if (!jsonSchema && params.tools?.length) {
+  // Runs after the branch chain, unified across every case that still
+  // wants real tools built: the native-with-tools case above (toolConfig
+  // still unset there, only outputConfig is), and the no-jsonSchema-at-all
+  // case. `toolName` is the one signal that distinguishes them from the
+  // legacy forced-single-tool-call branch, which builds its own toolConfig
+  // inline and must not be overwritten here.
+  if (params.tools?.length && !toolName) {
     toolConfig = buildBedrockToolConfig(params.tools, params.tool_choice);
   }
 

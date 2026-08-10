@@ -71,17 +71,24 @@ const result = await llm.call({
 - **`description` is forwarded where supported.** OpenAI-shaped providers receive it in the schema object. Gemini includes it in `responseSchema`. On Anthropic and Bedrock, this again only applies to the legacy forced-single-tool-call mechanism, where it's included in the generated tool definition; Anthropic's native mechanism has no `description` field, and Bedrock's native mechanism does accept one, but nested differently from every other schema field these adapters build (see below).
 
 <Callout>
-  Anthropic uses native tool use for structured output. The schema is passed as the tool
-  `input_schema` and `tool_choice` forces the model to call it. A client-side `schema` is still
-  recommended when you need validation guarantees across providers.
+  Anthropic uses native tool use for structured output on models not covered by
+  `nativeStructuredOutputModels`, the legacy path described above: the schema is passed as the tool
+  `input_schema` and `tool_choice` forces the model to call it. On a covered model, `jsonSchema` is
+  sent through `output_config.format` instead (see{' '}
+  <a href="#combining-with-tools">Combining with tools</a>). A client-side `schema` is still
+  recommended when you need validation guarantees across providers, regardless of which path is
+  used.
 </Callout>
 
 ## Combining with tools
 
-By default, `jsonSchema` and `tools` cannot be used together. On Anthropic and Bedrock,
+By default, on Anthropic and Bedrock, `jsonSchema` and `tools` cannot be used together.
 `jsonSchema` is emulated as a forced single tool call, which occupies the same request field real,
 caller-supplied `tools` need. Setting both throws `LLMError('validation')` before a request is
-sent.
+sent. Gemini and OpenAI-compatible clients never had this restriction and don't need
+`nativeStructuredOutputModels` at all: Gemini builds `responseSchema` and `tools` as independent,
+unconditional fields, and OpenAI-compatible clients pass `response_format`/`tools` straight
+through, so `jsonSchema` and `tools` always compose there.
 
 Both providers also support a schema-constrained output mechanism, `output_config.format` on
 Anthropic and `outputConfig.textFormat` on Bedrock, that lives in its own request field,

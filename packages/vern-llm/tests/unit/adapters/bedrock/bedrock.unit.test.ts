@@ -1114,4 +1114,101 @@ describe('fromBedrock, native structured output', () => {
 
     expect(converse).toHaveBeenCalledOnce();
   });
+
+  it(
+    'streams a native model correctly with real tools present: outputConfig is sent, text ' +
+      'surfaces as text-delta, and the concurrent real tool call surfaces as tool_call_delta',
+    async () => {
+      // Small local streaming fake, matching bedrock.stream.unit.test.ts's
+      // fakeBedrockStream/makeFakeStreamingBedrockClient shape, kept local
+      // here since this is the only streaming test in this file (every
+      // other streaming case lives in bedrock.stream.unit.test.ts; this
+      // one belongs alongside the other native-structured-output cases
+      // instead, since it's specifically about the interaction between
+      // `nativeStructuredOutputModels` and `createStream`, not streaming
+      // mechanics in general).
+      function fakeStream(events: unknown[]): AsyncIterable<unknown> {
+        return {
+          [Symbol.asyncIterator]() {
+            let index = 0;
+            return {
+              async next() {
+                if (index >= events.length) return { done: true, value: undefined };
+                return { done: false, value: events[index++] };
+              },
+            };
+          },
+        };
+      }
+
+      const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({}));
+      const converseStream = vi.fn(async (_params: unknown, _options: unknown) => ({
+        stream: fakeStream([
+          { contentBlockStart: { contentBlockIndex: 0, start: {} } },
+          { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '{"ok":true}' } } },
+          { contentBlockStop: { contentBlockIndex: 0 } },
+          {
+            contentBlockStart: {
+              contentBlockIndex: 1,
+              start: { toolUse: { toolUseId: 'call_1', name: 'get_weather' } },
+            },
+          },
+          {
+            contentBlockDelta: {
+              contentBlockIndex: 1,
+              delta: { toolUse: { input: '{"city":"NYC"}' } },
+            },
+          },
+          { contentBlockStop: { contentBlockIndex: 1 } },
+          { metadata: { usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 } } },
+        ]),
+      }));
+
+      const adapted = fromBedrock(
+        { converse, converseStream } as unknown as BedrockConverseClient,
+        { nativeStructuredOutputModels: [nativeModel] },
+      );
+
+      const chunks: unknown[] = [];
+      for await (const chunk of adapted.chat.completions.createStream!(
+        {
+          model: nativeModel,
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Out', schema: { type: 'object' } },
+          },
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: 'weather',
+                parameters: { type: 'object' },
+              },
+            },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      )) {
+        chunks.push(chunk);
+      }
+
+      const [sentParams] = converseStream.mock.calls[0] as [Record<string, unknown>, unknown];
+      expect(sentParams.outputConfig).toEqual({
+        textFormat: {
+          type: 'json_schema',
+          structure: { jsonSchema: { schema: JSON.stringify({ type: 'object' }), name: 'Out' } },
+        },
+      });
+
+      expect(chunks).toEqual([
+        { type: 'text-delta', delta: '{"ok":true}' },
+        { type: 'tool_call_delta', index: 1, id: 'call_1', name: 'get_weather' },
+        { type: 'tool_call_delta', index: 1, argumentsDelta: '{"city":"NYC"}' },
+        { type: 'usage', usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } },
+      ]);
+    },
+  );
 });
