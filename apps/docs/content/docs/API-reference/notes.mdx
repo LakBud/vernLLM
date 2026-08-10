@@ -9,7 +9,7 @@ description: Requirements, edge cases, and dependency behavior
 - Per attempt timeouts throw `LLMError('timeout')` and can be retried like other transient failures.
 - `jsonMode: false` skips JSON parsing entirely and returns the raw string.
 - `jsonMode` defaults to `false`, not `true`, on any call that sets `tools`.
-- `tools` and `jsonSchema`/`schema` are mutually exclusive on the same call and throw `LLMError('validation')` if combined.
+- `tools` and `schema` are never mutually exclusive, on any provider; `schema` only validates parsed JSON text and never touches request fields tool calling uses. `tools` and `jsonSchema` are mutually exclusive by default on Anthropic and Bedrock only, and throw `LLMError('validation')` if combined there, except on models opted into `nativeStructuredOutputModels`. Gemini and OpenAI-compatible clients never restrict `tools` + `jsonSchema` at all. See <a href="/docs/core/structured-output#combining-with-tools">Structured Output</a>.
 - `fromFetch` supports tool calling: `mapResponse` can return a `toolCalls` array (id/name/JSON-encoded-arguments-string) alongside `content`, translated into the same `WireToolCall` shape every other adapter produces.
 - `stream: true` requires the underlying client/adapter to implement `createStream`. A client that doesn't throws a clear `LLMError('validation')` rather than a confusing runtime failure.
 - A streaming call that fails after at least one chunk has already arrived is not retried, only a failure before the first chunk is. See <a href="/docs/core/streaming#what-gets-retried">What gets retried</a>.

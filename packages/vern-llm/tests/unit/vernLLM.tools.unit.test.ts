@@ -233,18 +233,24 @@ describe('VernLLM.call, multi-turn continuation via history', () => {
 });
 
 describe('VernLLM.call, validation', () => {
-  it('throws when combined with jsonSchema', async () => {
-    const { client } = createMockClient([textResponse('ok')]);
-    const llm = new VernLLM({ client, model: 'test-model' });
+  it(
+    'no longer rejects tools combined with jsonSchema at the orchestration layer: Anthropic and ' +
+      'Bedrock now support sending both in one request on models with native structured output, so ' +
+      'this is left to each adapter (which knows its own model-capability list) rather than being ' +
+      'a blanket rejection here',
+    async () => {
+      const { client } = createMockClient([textResponse('{"a":1}')]);
+      const llm = new VernLLM({ client, model: 'test-model' });
 
-    await expect(
-      llm.call({
-        userContent: 'hi',
-        tools: [weatherTool],
-        jsonSchema: { name: 'out', schema: { type: 'object' } },
-      }),
-    ).rejects.toMatchObject({ type: 'validation' });
-  });
+      await expect(
+        llm.call({
+          userContent: 'hi',
+          tools: [weatherTool],
+          jsonSchema: { name: 'out', schema: { type: 'object' } },
+        }),
+      ).resolves.toMatchObject({ type: 'content', content: { a: 1 } });
+    },
+  );
 
   it('validates tool call arguments against argumentsSchema when provided', async () => {
     const { client } = createMockClient([

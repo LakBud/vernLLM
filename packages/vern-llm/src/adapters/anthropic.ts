@@ -3,6 +3,10 @@ import {
   type SupportedImageMimeType,
 } from '../internal/imageFormat.js';
 import {
+  supportsNativeStructuredOutput,
+  type ModelCapabilityOverride,
+} from '../internal/nativeStructuredOutput.js';
+import {
   LLMError,
   type ContentBlock,
   type LLMClient,
@@ -46,6 +50,28 @@ export interface AnthropicClient {
           | { type: 'any' }
           | { type: 'none' }
           | { type: 'tool'; name: string };
+        /**
+         * Native, schema-constrained output: a separate request field from
+         * `tools`/`tool_choice`, so it can be sent alongside real tool
+         * calls. Only built by this adapter for models covered by
+         * `nativeStructuredOutputModels` (opt-in, see
+         * `AnthropicAdapterOptions`); other models keep getting
+         * `jsonSchema` emulated as a forced single tool call, the
+         * pre-existing behavior.
+         *
+         * Matches the real Anthropic API's `output_config.format` shape
+         * exactly: just `type` and `schema`, no `name`/`description`/
+         * `strict`. Those three exist on VernLLM's own `jsonSchema` API
+         * (and are still forwarded on the legacy forced-tool-call path,
+         * where they're real `Tool` fields), but the native structured-
+         * output endpoint has no equivalent for any of them.
+         */
+        output_config?: {
+          format: {
+            type: 'json_schema';
+            schema: Record<string, unknown>;
+          };
+        };
       },
       options: { signal: AbortSignal },
     ): Promise<{
@@ -145,6 +171,32 @@ type AnthropicStreamEvent =
 type AnthropicRequestBody = Parameters<AnthropicClient['messages']['create']>[0];
 
 /**
+ * Maps VernLLM's OpenAI-shaped wire `tools`/`tool_choice` into Anthropic's
+ * `tools`/`tool_choice` shape. Shared by the two call sites that build real
+ * (non-schema-forced) tool definitions: the plain tools-only branch, and
+ * the native-structured-output branch, which sends real tools alongside
+ * `output_config` rather than instead of it.
+ */
+function buildAnthropicTools(
+  tools: NonNullable<Parameters<LLMClient['chat']['completions']['create']>[0]['tools']>,
+  toolChoiceParam: Parameters<LLMClient['chat']['completions']['create']>[0]['tool_choice'],
+): {
+  tools: NonNullable<Parameters<AnthropicClient['messages']['create']>[0]['tools']>;
+  toolChoice: Parameters<AnthropicClient['messages']['create']>[0]['tool_choice'];
+} {
+  return {
+    tools: tools.map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+      // Tool parameters are always object schemas in practice (every
+      // provider's function-calling API requires it).
+      input_schema: assertObjectSchema(t.function.parameters, t.function.name),
+    })),
+    toolChoice: toAnthropicToolChoice(toolChoiceParam),
+  };
+}
+
+/**
  * Builds the Anthropic-shaped request body from VernLLM's wire params,
  * shared between `create` and `createStream` so both go through identical
  * translation (system prompt, message shaping, and the jsonSchema →
@@ -152,13 +204,19 @@ type AnthropicRequestBody = Parameters<AnthropicClient['messages']['create']>[0]
  * point).
  *
  * Returns `toolName` alongside the body: when set, the model was forced to
- * call a single synthetic tool standing in for `jsonSchema` output, and
+ * call a single synthetic tool standing in for `jsonSchema` output (the
+ * legacy path, for models without native structured-output support), and
  * both `create` and `createStream` need to know this so they can unwrap
  * that tool call back into plain text content instead of treating it like
- * a real tool call.
+ * a real tool call. On the native path (model supports `output_config`),
+ * `toolName` is `undefined`: the schema-conforming JSON already arrives as
+ * ordinary text content, nothing to unwrap, and any real tool calls in
+ * `params.tools` are left for the normal, non-forced tool-call handling
+ * both `create` and `createStream` already do when `toolName` is unset.
  */
 function buildAnthropicRequestBody(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
+  nativeStructuredOutputModels?: ModelCapabilityOverride,
 ): { body: AnthropicRequestBody; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -170,25 +228,59 @@ function buildAnthropicRequestBody(
     (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
   );
 
-  const toolName =
-    params.response_format?.type === 'json_schema'
-      ? params.response_format.json_schema.name.trim()
-      : undefined;
+  const jsonSchema =
+    params.response_format?.type === 'json_schema' ? params.response_format.json_schema : undefined;
 
-  if (params.response_format?.type === 'json_schema' && !toolName) {
+  const schemaName = jsonSchema?.name.trim();
+
+  if (jsonSchema && !schemaName) {
     throw new LLMError('json_schema.name must not be empty.', 'validation');
   }
 
+  const isNative =
+    Boolean(jsonSchema) &&
+    supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels);
+
+  if (jsonSchema && params.tools?.length && !isNative) {
+    throw new LLMError(
+      `Anthropic model "${params.model}" is not covered by nativeStructuredOutputModels, so ` +
+        '`jsonSchema` is emulated as a forced single tool call there, which collides with the ' +
+        '`tools` you also provided. Either drop `tools` or `jsonSchema` for this call, or pass ' +
+        "this model in fromAnthropic's `nativeStructuredOutputModels` option once you've " +
+        "confirmed it supports Anthropic's `output_config.format`.",
+      'validation',
+    );
+  }
+
+  let toolName: string | undefined;
   let jsonInstruction: string | undefined;
+  let outputFormat: NonNullable<AnthropicRequestBody['output_config']>['format'] | undefined;
   let tools: NonNullable<Parameters<AnthropicClient['messages']['create']>[0]['tools']> | undefined;
   let toolChoice: Parameters<AnthropicClient['messages']['create']>[0]['tool_choice'];
 
-  if (params.response_format?.type === 'json_schema' && toolName) {
-    // jsonSchema and real `tools` are mutually exclusive by the time
-    // a call reaches here (enforced in vernLLM.ts), so this branch
-    // and the `params.tools` branch below never both apply.
-    const { schema, description, strict } = params.response_format.json_schema;
+  if (jsonSchema && isNative) {
+    // Native path: the schema goes in its own request field, independent
+    // of tools/tool_choice, so real tools (if any) are built exactly like
+    // the tools-only branch below and sent alongside it.
+    //
+    // Only `type` and `schema` are sent: the real Anthropic API's
+    // `output_config.format` has no `name`/`description`/`strict` fields,
+    // unlike the legacy forced-tool-call path below, where those are real
+    // `Tool` fields. `schemaName` is still required and validated above
+    // (a caller-facing identifier, useful for logging/debugging on their
+    // end), it just never reaches this particular wire request.
+    outputFormat = { type: 'json_schema', schema: jsonSchema.schema };
 
+    if (params.tools?.length) {
+      ({ tools, toolChoice } = buildAnthropicTools(params.tools, params.tool_choice));
+    }
+  } else if (jsonSchema && schemaName) {
+    // Legacy path: jsonSchema alone (or with tools, on a native model — see
+    // above), on a model without native support, becomes a forced single
+    // tool call, unchanged from before this adapter had a native path.
+    const { schema, description, strict } = jsonSchema;
+
+    toolName = schemaName;
     // VernLLM's public `jsonSchema` API accepts a freeform JSON Schema
     // object (`Record<string, unknown>`), not necessarily typed with a
     // literal `type: 'object'`, but tool/function parameters are always
@@ -200,17 +292,15 @@ function buildAnthropicRequestBody(
     ];
     toolChoice = { type: 'tool', name: toolName };
   } else if (params.response_format?.type === 'json_object') {
-    // No schema to build a tool from, fall back to a prompt instruction
+    // No schema to build a tool from, fall back to a prompt instruction.
+    // This does not exclude real `tools`: `json_object` mode is just a
+    // system-prompt nudge, not a request field that could collide with
+    // `tools`/`tool_choice`, so both are set independently below.
     jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
-  } else if (params.tools?.length) {
-    tools = params.tools.map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      // Same convention as above: tool parameters are always object
-      // schemas in practice.
-      input_schema: assertObjectSchema(t.function.parameters, t.function.name),
-    }));
-    toolChoice = toAnthropicToolChoice(params.tool_choice);
+  }
+
+  if (!jsonSchema && params.tools?.length) {
+    ({ tools, toolChoice } = buildAnthropicTools(params.tools, params.tool_choice));
   }
 
   // `reasoning_effort` (OpenAI o-series/gpt-5 style) has no direct Anthropic
@@ -226,26 +316,61 @@ function buildAnthropicRequestBody(
     system: system || undefined,
     messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toAnthropicMessage(m))),
     ...(tools ? { tools, tool_choice: toolChoice } : {}),
+    ...(outputFormat ? { output_config: { format: outputFormat } } : {}),
   };
 
   return { body, toolName };
+}
+
+/** Optional configuration for `fromAnthropic`. */
+export interface AnthropicAdapterOptions {
+  /**
+   * Which models support native, schema-constrained output
+   * (`output_config.format`), independent of `tools`/`tool_choice`, so it
+   * can be combined with real `tools` in one request. Pass a static list
+   * of model IDs (verified against Anthropic's own docs) or a predicate.
+   *
+   * There is no built-in default here (see `supportsNativeStructuredOutput`
+   * for why). Left unset, every model uses the older forced-single-tool-
+   * call emulation, and `tools` + `jsonSchema` together is rejected,
+   * exactly this adapter's behavior before native support was added.
+   */
+  nativeStructuredOutputModels?: ModelCapabilityOverride;
 }
 
 /**
  * Wraps an Anthropic SDK client so it satisfies the same `LLMClient`
  * interface VernLLM uses for OpenAI/Groq.
  *
- * `response_format: json_schema` is mapped to Anthropic's forced tool-use:
- * a single tool is defined with `input_schema` set to the caller's schema,
- * `description` forwarded when provided, and `strict` forwarded when set.
- * `tool_choice` forces the model to call it. Provider-constrained schema
- * matching applies only when `strict: true` is forwarded and supported.
+ * `response_format: json_schema`, on a model covered by
+ * `options.nativeStructuredOutputModels`, is sent as `output_config.format`,
+ * its own request field, independent of `tools`/`tool_choice`, so it can be
+ * combined with real, caller-supplied `tools` in the same request. Only
+ * `type` and `schema` are sent on this path, the real Anthropic API's
+ * `output_config.format` has no `name`/`description`/`strict` fields.
+ *
+ * On any other model (the default, since `nativeStructuredOutputModels` is
+ * opt-in), `response_format: json_schema` is mapped to Anthropic's forced
+ * tool-use instead: a single tool is defined with `input_schema` set to
+ * the caller's schema, `description` forwarded when provided, and `strict`
+ * forwarded when set, and `tool_choice` forces the model to call it. This
+ * legacy path cannot be combined with real `tools` (both would need the
+ * same `tools`/`tool_choice` field), and a call that tries throws
+ * `LLMError('validation')` before reaching the API. Provider-constrained
+ * schema matching applies only when `strict: true` is forwarded and
+ * supported.
  *
  * `response_format: json_object` (no schema to build a tool from) falls
  * back to a system-prompt instruction, since there's nothing to constrain
- * generation against.
+ * generation against. Unlike `jsonSchema`, this combines with real `tools`
+ * freely on every model: it's a prompt nudge, not a request field, so
+ * there's nothing for it to collide with.
  */
-export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
+export function fromAnthropic(
+  anthropicClient: AnthropicClient,
+  options?: AnthropicAdapterOptions,
+): LLMClient {
+  const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
   // The Anthropic SDK's `messages.create`, called with `stream: true`,
   // returns an AsyncIterable of `AnthropicStreamEvent` rather than
   // `AnthropicClient['messages']['create']`'s normal single-message return
@@ -263,7 +388,10 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
     chat: {
       completions: {
         async create(params, options) {
-          const { body, toolName } = buildAnthropicRequestBody(params);
+          const { body, toolName } = buildAnthropicRequestBody(
+            params,
+            nativeStructuredOutputModels,
+          );
 
           const response = await anthropicClient.messages.create(body, options);
 
@@ -326,7 +454,10 @@ export function fromAnthropic(anthropicClient: AnthropicClient): LLMClient {
         },
 
         async *createStream(params, options) {
-          const { body, toolName } = buildAnthropicRequestBody(params);
+          const { body, toolName } = buildAnthropicRequestBody(
+            params,
+            nativeStructuredOutputModels,
+          );
 
           const stream = (await rawMessagesCreate(
             { ...body, stream: true },

@@ -82,9 +82,11 @@ Existing string-based calls remain fully compatible.
 <Cards>
   <Card title="tools">
     `ToolDefinition[]`, optional. Tools the model may call. Setting `tools` changes what `call()`
-    returns, from `T` directly to a `CallWithToolsResult<T>` discriminated union. Mutually
-    exclusive with `jsonSchema`/`schema`, and must not be an empty array. See{' '}
-    <a href="/docs/core/tool-calling">Tool Calling</a>.
+    returns, from `T` directly to a `CallWithToolsResult<T>` discriminated union. By default,
+    mutually exclusive with `jsonSchema` on Anthropic and Bedrock only, except on models opted
+    into `nativeStructuredOutputModels`; Gemini and OpenAI-compatible clients never restrict the
+    combination at all. Never mutually exclusive with `schema`, on any provider. Must not be an
+    empty array. See <a href="/docs/core/tool-calling">Tool Calling</a>.
   </Card>
   <Card title="toolChoice">
     `'auto' | 'none' | 'required' | { name: string }`, optional. Defaults to `'auto'` when `tools`
@@ -101,8 +103,9 @@ Existing string-based calls remain fully compatible.
     (`{ chunks, finalResult }`) instead of resolving directly to `T`. Requires TypeScript to see
     `stream: true` as a literal at the call site to select the streaming overload, see{' '}
     <a href="/docs/core/streaming#a-note-on-the-call-overload">the streaming overload note</a>.
-    Combines freely with `tools`, or with `schema`/`jsonSchema` (those two remain mutually
-    exclusive with `tools` themselves, see <a href="/docs/API-reference/notes">Notes</a>). See{' '}
+    Combines freely with `tools`, and with `schema`. `jsonSchema` remains mutually exclusive with
+    `tools` by default (opt-in exception on Anthropic/Bedrock, see{' '}
+    <a href="/docs/core/structured-output#combining-with-tools">Structured Output</a>). See{' '}
     <a href="/docs/core/streaming">Streaming</a>.
   </Card>
   <Card title="chunkIdleTimeoutMs">

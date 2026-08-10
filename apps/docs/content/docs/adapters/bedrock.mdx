@@ -57,7 +57,7 @@ const llm = new VernLLM({
 
 ## Structured output via tool use
 
-When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text.
+When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text. This is the default behavior for every model; see <a href="#combining-tools-with-jsonschema">Combining tools with jsonSchema</a> below for the native alternative available on models covered by `nativeStructuredOutputModels`, which uses `outputConfig.textFormat` instead and composes with real `tools`.
 
 ```ts title="bedrock-structured-output.ts"
 import { z } from 'zod';
@@ -117,6 +117,63 @@ const llm = new VernLLM({
 ```
 
 This is opt-in and only affects calls that set `jsonSchema`; plain text and `json_object` calls are never preflight-checked, and by default (no `toolUseSupportedModels` configured) no preflight check runs at all.
+
+The same preflight also runs when a `jsonSchema` call ends up sending `toolConfig` for any reason, including the native-structured-output path below when real `tools` are sent alongside `outputConfig`, since that still requires Converse tool-use support even though `outputConfig` itself doesn't.
+
+## Combining tools with jsonSchema
+
+By default, `jsonSchema` and `tools` cannot be used in the same call: `jsonSchema` is emulated as
+a forced single tool call via `toolConfig`, which occupies the same field real tools need.
+
+Bedrock Converse also supports native, schema-constrained output, `outputConfig.textFormat`, a
+request field independent of `toolConfig`, so it composes with real `tools` on models that support
+it. This is opt-in, pass `nativeStructuredOutputModels` as part of the second argument to
+`fromBedrock`:
+
+```ts title="bedrock-native-structured-output.ts"
+const llm = new VernLLM({
+  client: fromBedrock(converseClient, {
+    nativeStructuredOutputModels: ['anthropic.claude-native-model-id'],
+    // ...or a predicate:
+    // nativeStructuredOutputModels: (modelId) => modelId.startsWith('anthropic.claude-4'),
+  }),
+  model: 'anthropic.claude-native-model-id',
+});
+```
+
+There is no built-in default list, see <a href="/docs/core/structured-output#combining-with-tools">Structured Output → Combining with tools</a> for why. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
+tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
+while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
+present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
+`jsonSchema` still throws `LLMError('validation')`, naming the model and pointing at this option.
+
+<Callout type="warn">
+  `outputConfig.textFormat`'s shape is not flat, and not the parsed-object schema every other part
+  of this adapter builds. The real Bedrock Converse API nests the schema one level deeper, under
+  `structure.jsonSchema`, and requires `schema` there as a JSON-encoded *string*:
+
+```json title="outputConfig-shape.json"
+{
+  "outputConfig": {
+    "textFormat": {
+      "type": "json_schema",
+      "structure": {
+        "jsonSchema": {
+          "schema": "{\"type\":\"object\",\"properties\":{...}}",
+          "name": "WeatherReport",
+          "description": "optional"
+        }
+      }
+    }
+  }
+}
+```
+
+`name` and `description` are accepted here, unlike Anthropic's native mechanism, but there is no
+`strict` field, unlike Bedrock's own tool-based schema (`toolSpec.inputSchema.json`, used on the
+legacy path), which takes a parsed object and does have `strict`.
+
+</Callout>
 
 ## Streaming
 

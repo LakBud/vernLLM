@@ -213,11 +213,30 @@ tool turns fit into `history` more generally.
   call instead.
 </Callout>
 
-## Mutual exclusivity with jsonSchema
+## Combining with jsonSchema
 
-`tools` cannot be combined with `jsonSchema` or `schema`. On Anthropic and Bedrock, `jsonSchema` is
-implemented internally as a forced single tool call, which would collide with real tools. Setting
-both throws `LLMError('validation')` before a request is sent.
+By default, on Anthropic and Bedrock, `tools` and `jsonSchema` cannot be combined. `jsonSchema` is
+implemented internally as a forced single tool call, which collides with real, caller-supplied
+tools occupying the same request field. Setting both throws `LLMError('validation')` before a
+request is sent. Gemini and OpenAI-compatible clients never had this restriction: Gemini builds
+`responseSchema` and `tools` as independent, unconditional fields, and OpenAI-compatible clients
+pass `response_format`/`tools` straight through, so `jsonSchema` and `tools` always compose there,
+no opt-in needed.
+
+Both providers also support a schema-constrained output mechanism that lives in its own request
+field, independent of tool calling, so this restriction doesn't apply on models covered by
+`nativeStructuredOutputModels`, a caller-supplied, opt-in list. See{' '}
+
+<a href="/docs/core/structured-output#combining-with-tools">
+  Structured Output → Combining with tools
+</a>
+for how to enable it.
+
+`tools` and `schema` (client-side validation, not `jsonSchema`) are never mutually exclusive.
+`schema` only validates parsed JSON text and never touches the request fields tool calling uses.
+Likewise, `jsonMode: true` alongside `tools` (a plain `json_object`-style prompt instruction, no
+schema) always composes: it's a system-prompt nudge on every adapter, not a request field that
+could collide with `tools`.
 
 `jsonMode` also defaults to `false` when `tools` is set, since forcing a JSON response format
 alongside tool calling is unreliable across providers. Pass `jsonMode: true` explicitly if you

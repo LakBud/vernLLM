@@ -876,15 +876,6 @@ export class VernLLM {
     const temperature =
       params.temperature === undefined ? this.defaultTemperature : params.temperature;
 
-    if (tools && (jsonSchema || params.schema)) {
-      throw new LLMError(
-        '`tools` cannot be combined with `jsonSchema`/`schema`: on Anthropic and Bedrock, ' +
-          'jsonSchema is implemented internally as a forced single-tool call, which would ' +
-          'collide with real tools. Use one or the other.',
-        'validation',
-      );
-    }
-
     if (tools && tools.length === 0) {
       throw new LLMError(
         '`tools` was an empty array. This is almost always a bug (e.g. a filtered tool list ' +
