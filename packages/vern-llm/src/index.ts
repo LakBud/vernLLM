@@ -1,5 +1,13 @@
 export { VernLLM } from './vernLLM.js';
 export { CircuitBreaker, type CircuitBreakerOptions, type CircuitState } from './circuitBreaker.js';
+export {
+  RateLimiter,
+  defaultEstimateTokens,
+  type RateLimitOptions,
+  type RateLimitReason,
+  type RateLimitAcquireResult,
+  type WireRequest,
+} from './rateLimit.js';
 export { ConsoleLogger, type Logger } from './logger.js';
 export { parseSseStream, SSE_PING } from './internal/sse.js';
 

@@ -320,7 +320,15 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
   const retryAfterMs = extractRetryAfterMs(error);
 
   if (status !== undefined) {
-    return new LLMError('LLM request failed', 'api', status, undefined, error, retryAfterMs);
+    return new LLMError(
+      'LLM request failed',
+      'api',
+      status,
+      undefined,
+      error,
+      retryAfterMs,
+      status === 429 ? 'provider_rate_limited' : undefined,
+    );
   }
 
   return new LLMError('LLM request failed', 'unknown', undefined, undefined, error, retryAfterMs);

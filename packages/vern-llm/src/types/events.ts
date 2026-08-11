@@ -36,6 +36,17 @@ export type VernLLMEvent =
       from: CircuitState;
       to: CircuitState;
       consecutiveFailures: number;
+    }
+  | {
+      kind: 'rate_limited';
+      requestId: string;
+      provider: string;
+      /** The model actually resolved for this call (honors a per-call `model` override). */
+      model: string;
+      /** How long this attempt sat queued for capacity before it was let through. */
+      waitedMs: number;
+      /** Which configured bucket was blocking this attempt just before it cleared. */
+      reason: 'concurrency' | 'rpm' | 'tpm';
     };
 
 export type OnEvent = (event: VernLLMEvent) => void;

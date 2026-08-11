@@ -1,5 +1,6 @@
 import type { CircuitBreakerOptions } from '../circuitBreaker.js';
 import type { Logger } from '../logger.js';
+import type { RateLimitOptions } from '../rateLimit.js';
 import type { CacheAdapter } from './cache.js';
 import type { LLMClient } from './client.js';
 import type { OnEvent } from './events.js';
@@ -74,4 +75,12 @@ export interface VernLLMOptions {
    * return value is never read, so it cannot influence the call.
    */
   onEvent?: OnEvent;
+  /**
+   * Client-side rate limiting. Queues calls locally to stay under the
+   * configured requests/tokens-per-minute or concurrency caps, instead of
+   * letting the provider reject them. Independent of the `Retry-After`
+   * handling already applied to a provider 429: this avoids tripping the
+   * limit in the first place. Omit for unlimited (the default).
+   */
+  rateLimit?: RateLimitOptions;
 }
