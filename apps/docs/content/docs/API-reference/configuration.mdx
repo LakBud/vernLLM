@@ -19,6 +19,7 @@ const llm = new VernLLM({
   defaultMaxTokens: 1000,
   nonRetryableStatus: [400, 401, 403, 404, 422],
   circuitBreaker: true,
+  rateLimit: { requestsPerMinute: 500, tokensPerMinute: 200_000, maxConcurrent: 20 },
   debug: false,
   cache: new InMemoryCacheAdapter(), // optional; in-memory, not shared across processes
   parseJson: (content) => {
@@ -94,9 +95,7 @@ in memory. When the limit is reached, the oldest entries are removed first.
 
 Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
 (normalizes keys before matching, case, whitespace, punctuation) and `TieredCacheAdapter`
-(checks a fast local adapter first, falling back to a shared one). See
-
-<a href="/docs/core/caching">Caching</a> for usage.
+(checks a fast local adapter first, falling back to a shared one). See <a href="/docs/core/caching">Caching</a> for usage.
 
 | Option  | Default                      | Notes                                                                                                                                                                                                                                 |
 | ------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -104,65 +103,35 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 ## Observability
 
-| Option           | Default                       | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ---------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onUsage`        | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response. The usage object includes `provider`, which is the `name` configured on this instance.                                                                                                                                                                                                                                                                                                                 |
-| `onUsageFailure` | none                          | Called when a provider response arrived, with usage data available, but VernLLM's own post-processing then failed (parsing, validation, or any other post-response error). Fires once per failed attempt with extractable usage. For non-streaming calls, never fires for transport failures or an aborted call. For `stream: true`, this is not guaranteed, a stream can deliver a usage chunk and then fail later (e.g. an idle timeout), in which case it does fire. See <a href="/docs/core/usage-tracking">Usage Tracking</a>. |
-| `onEvent`        | none                          | Receives observability events for retries and circuit state transitions. Events include the configured `provider` label and resolved `model`. The handler is fire and forget and cannot change the call result or retry behavior.                                                                                                                                                                                                                                                                                                   |
-| `logger`         | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                                                                                                                                                                                                                                                                         |
-| `debug`          | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`.                                                                                                                                                                                                                                            |
+| Option           | Default                       | Notes                                                                                                                                                                                                                                                                                        |
+| ---------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onUsage`        | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response. The usage object includes `provider`, which is the `name` configured on this instance.                                                                          |
+| `onUsageFailure` | none                          | Called when a provider response arrived, with usage data available, but VernLLM's own post-processing then failed (parsing, validation, or any other post-response error). Fires once per failed attempt with extractable usage. See <a href="/docs/core/usage-tracking">Usage Tracking</a>. |
+| `onEvent`        | none                          | Receives one event per retry, circuit state transition, or rate limit wait. Fire and forget; cannot change the call result or retry behavior. See <a href="/docs/core/observability">Observability</a>.                                                                                      |
+| `logger`         | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                                  |
+| `debug`          | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`.     |
 
-### Events
-
-`onEvent` receives one event for each retry and each real circuit state transition.
-
-The currently emitted event kinds are:
-
-### `retry`
-
-Emitted immediately before VernLLM waits for the retry backoff delay.
-
-```ts title="retry-event.ts"
-{
-  kind: 'retry',
-  requestId: string,
-  provider: string,
-  model: string,
-  attempt: number,
-  maxRetries: number,
-  delayMs: number,
-  retryAfterHonored: boolean,
-  error: LLMError,
-}
-```
-
-`attempt` is the retry ordinal, starting at `1`. `model` is the model resolved for the call,
-including a per call `model` override.
-
-### `circuit_state`
-
-Emitted after a real circuit state transition. No event is emitted when the state remains unchanged.
-
-```ts title="circuit-state-event.ts"
-{
-  kind: 'circuit_state',
-  provider: string,
-  model: string,
-  from: 'closed' | 'open' | 'half-open',
-  to: 'closed' | 'open' | 'half-open',
-  consecutiveFailures: number,
-}
-```
-
-When `isolateByModel` is disabled, the `model` identifies the call that triggered the transition,
-while the failure counter remains shared across models. When `isolateByModel` is enabled, the
-transition belongs exclusively to that model's circuit.
+See <a href="/docs/core/observability">Observability</a> for the full `onEvent` union, including the
+`retry`, `circuit_state`, and `rate_limited` event shapes.
 
 ## Circuit breaker
 
 | Option           | Default  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ---------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, onStateChange }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. For `stream: true`, a `chunkIdleTimeoutMs` timeout counts as a failure even though it happens mid-stream, unlike other stream failures. `unknown_tool` and `duplicate_tool_call_id` tool contract failures never count as a failure. `isolateByModel` (default `false`) tracks a separate circuit per resolved model instead of one shared circuit for the instance; `getCircuitState()` then takes an optional `model` parameter to match. |
+
+## Rate limiting
+
+| Option      | Default   | Notes                                                                                                                                                                                                                                                                                                                                                 |
+| ----------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rateLimit` | unlimited | `{ requestsPerMinute, tokensPerMinute, maxConcurrent, maxQueueMs, maxQueueSize, estimateTokens }`. Queues calls locally to stay under configured limits instead of letting the provider reject them. Every field is independent and optional; omitting one leaves that dimension unlimited. See <a href="/docs/core/rate-limiting">Rate Limiting</a>. |
+
+A call fails immediately with `LLMError('quota_exceeded')` and `code: 'local_rate_limit'`, and is
+never retried, in three cases: the queue wait exceeded `maxQueueMs`, the queue was already at
+`maxQueueSize`, or the call's estimated token cost exceeds the configured `tokensPerMinute` ceiling
+outright (no amount of waiting could ever satisfy it, so it's rejected on arrival rather than
+queued). A real provider 429 is unaffected in shape but now also carries
+`code: 'provider_rate_limited'`. See <a href="/docs/core/error-handling#error-codes">Error codes</a>.
 
 ## Per call defaults and overrides
 

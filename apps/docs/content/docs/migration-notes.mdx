@@ -144,9 +144,7 @@ support tool calling yet, the minimum fix is exhaustiveness only, add a case tha
 rejects `role === 'tool'`, since VernLLM only ever sends one when the caller opted in with
 `tools`.
 
-See <a href="/docs/core/tool-calling">Tool Calling</a> for the full feature, and
-
-<a href="/docs/API-reference/configuration">Configuration</a> for the `LLMClient` field reference.
+See <a href="/docs/core/tool-calling">Tool Calling</a> for the full feature, and <a href="/docs/API-reference/configuration">Configuration</a> for the `LLMClient` field reference.
 
 ### `LLMClient.temperature` is now optional
 
@@ -173,9 +171,7 @@ temperature?: number;
 
 To update a custom `LLMClient`, handle `params.temperature` being `undefined` the same way you'd
 already handle any other optional field, omit it from the outgoing request, or substitute your own
-default before forwarding it. See
-
-<a href="/docs/API-reference/configuration">Configuration</a> for `defaultTemperature`'s full
+default before forwarding it. See <a href="/docs/API-reference/configuration">Configuration</a> for `defaultTemperature`'s full
 behavior.
 
 ## Nothing else changed

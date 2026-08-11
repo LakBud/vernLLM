@@ -42,6 +42,13 @@ Does not count as a failure:
 - `LLMError('aborted')`
 - `LLMError('api')` with `code: 'unknown_tool'`
 - `LLMError('api')` with `code: 'duplicate_tool_call_id'`
+- `LLMError('quota_exceeded')` with `code: 'local_rate_limit'`, a local `rateLimit` rejection that
+  never reached the provider, whether from a queue giving up or from a call rejected outright before
+  it ever queued. See{' '}
+  <a href="/docs/core/rate-limiting#interaction-with-the-circuit-breaker">
+    Interaction with the circuit breaker
+  </a>
+  .
 
 The tool contract errors are model response defects rather than provider health failures. An
 `unknown_tool` error means the model requested a tool that was not offered. A
@@ -76,9 +83,7 @@ See <a href="/docs/guides/provider-fallback">Provider Fallback</a> for a setup w
 providers.
 
 Within a single instance, the default is one shared circuit for every call regardless of which
-model was used. This includes calls that provide a per call `model` override. See
-
-<a href="/docs/guides/per-call-overrides">Per Call Overrides</a>.
+model was used. This includes calls that provide a per call `model` override. See <a href="/docs/guides/per-call-overrides">Per Call Overrides</a>.
 
 Sharing the circuit is useful when several models use the same underlying provider because a burst
 of failures on any model can indicate that the provider itself is struggling.

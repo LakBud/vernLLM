@@ -94,6 +94,39 @@ describe('normalizeError', () => {
     expect(normalizeError(original)).toBe(original);
   });
 
+  it('tags an already-normalized LLMError carrying status 429 with code "provider_rate_limited"', () => {
+    const original = new LLMError('rate limited', 'api', 429);
+
+    const result = normalizeError(original);
+
+    expect(result).toBe(original);
+    expect(result.code).toBe('provider_rate_limited');
+  });
+
+  it('does not overwrite an existing code on an already-normalized 429 LLMError', () => {
+    const original = new LLMError(
+      'rate limited',
+      'api',
+      429,
+      undefined,
+      undefined,
+      undefined,
+      'local_rate_limit',
+    );
+
+    const result = normalizeError(original);
+
+    expect(result.code).toBe('local_rate_limit');
+  });
+
+  it('does not add a code to an already-normalized LLMError with a non-429 status', () => {
+    const original = new LLMError('server error', 'api', 500);
+
+    const result = normalizeError(original);
+
+    expect(result.code).toBeUndefined();
+  });
+
   it('wraps an error carrying an http status as type "api" and preserves the status', () => {
     const result = normalizeError({ status: 500 });
 

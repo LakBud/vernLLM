@@ -13,7 +13,11 @@ export type LLMErrorType =
  * alone is too coarse to act on. Optional and additive: errors thrown
  * before a given code existed simply omit it.
  */
-export type LLMErrorCode = 'unknown_tool' | 'duplicate_tool_call_id';
+export type LLMErrorCode =
+  | 'unknown_tool'
+  | 'duplicate_tool_call_id'
+  | 'local_rate_limit'
+  | 'provider_rate_limited';
 
 /** One tool call's contract failure, used to report every bad call in a response at once. */
 export interface ToolIssue {

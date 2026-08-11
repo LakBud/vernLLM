@@ -20,6 +20,7 @@ import {
   buildReplayChunksFromPromise,
 } from './internal/vernLLM.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
+import { RateLimiter } from './rateLimit.js';
 import {
   InMemoryCacheAdapter,
   LLMError,
@@ -80,6 +81,7 @@ export class VernLLM {
   private readonly breaker?: CircuitBreaker;
   private readonly providerName: string;
   private readonly onEvent?: VernLLMOptions['onEvent'];
+  private readonly limiter?: RateLimiter;
 
   /**
    * @param options Client, model, and tunables. Defaults: `maxRetries` 1,
@@ -109,6 +111,7 @@ export class VernLLM {
     this.logger = options.logger ?? new ConsoleLogger(options.debug ?? false);
     this.providerName = options.name ?? 'primary';
     this.onEvent = options.onEvent;
+    this.limiter = options.rateLimit ? new RateLimiter(options.rateLimit) : undefined;
 
     const breakerOptions =
       typeof options.circuitBreaker === 'object' ? options.circuitBreaker : undefined;
@@ -285,33 +288,63 @@ export class VernLLM {
   ): Promise<T | CallWithToolsResult<T>> {
     const { useJson, model, request } = this.buildRequestPayload(params);
 
-    const response = await withTimeout(
-      (attemptSignal) => this.client.chat.completions.create(request, { signal: attemptSignal }),
-      this.timeoutMs,
-      params.signal,
-    );
+    // A retry is a real request, so capacity is acquired per attempt
+    // (inside the retry loop, via `executeCall` being re-invoked), not
+    // once for the whole call.
+    let release: ((actualTokens?: number) => void) | undefined;
 
-    // Extracted right after the response arrives, before anything else
-    // touches it, so a post-response failure still gets its usage reported.
-    const usage = this.extractUsage(response, requestId, model);
+    if (this.limiter) {
+      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
+      release = acquired.release;
 
-    // Raw and unvalidated on purpose. Extraction (including `.trim()`,
-    // which throws on a non-string `content`) happens inside
-    // `finalizeResponse`'s try/catch, so a malformed response still gets
-    // normalized and its usage failure reported.
-    const rawContent = response.choices?.[0]?.message?.content;
-    const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+      if (acquired.waitedMs > 0) {
+        this.reportEvent({
+          kind: 'rate_limited',
+          requestId,
+          provider: this.providerName,
+          model,
+          waitedMs: acquired.waitedMs,
+          reason: acquired.reason ?? 'rpm',
+        });
+      }
+    }
 
-    return this.finalizeResponse(
-      rawContent,
-      wireToolCalls,
-      params,
-      useJson,
-      model,
-      usage,
-      requestId,
-      attempt,
-    );
+    try {
+      const response = await withTimeout(
+        (attemptSignal) => this.client.chat.completions.create(request, { signal: attemptSignal }),
+        this.timeoutMs,
+        params.signal,
+      );
+
+      // Extracted right after the response arrives, before anything else
+      // touches it, so a post-response failure still gets its usage reported.
+      const usage = this.extractUsage(response, requestId, model);
+
+      // Reconcile against real usage, then hand off so `finally` below
+      // can't release a second time.
+      release?.(this.actualTokensFor(usage));
+      release = undefined;
+
+      // Raw and unvalidated on purpose. Extraction (including `.trim()`,
+      // which throws on a non-string `content`) happens inside
+      // `finalizeResponse`'s try/catch, so a malformed response still gets
+      // normalized and its usage failure reported.
+      const rawContent = response.choices?.[0]?.message?.content;
+      const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+
+      return this.finalizeResponse(
+        rawContent,
+        wireToolCalls,
+        params,
+        useJson,
+        model,
+        usage,
+        requestId,
+        attempt,
+      );
+    } finally {
+      release?.();
+    }
   }
 
   /**
@@ -427,6 +460,27 @@ export class VernLLM {
       throw new LLMError('stream: true requires a client/adapter with createStream', 'validation');
     }
 
+    // A stream holds a real connection for its whole life, so its
+    // capacity is released on completion (in `buildStreamResult`), not
+    // once opening succeeds.
+    let release: ((actualTokens?: number) => void) | undefined;
+
+    if (this.limiter) {
+      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
+      release = acquired.release;
+
+      if (acquired.waitedMs > 0) {
+        this.reportEvent({
+          kind: 'rate_limited',
+          requestId,
+          provider: this.providerName,
+          model,
+          waitedMs: acquired.waitedMs,
+          reason: acquired.reason ?? 'rpm',
+        });
+      }
+    }
+
     // One controller for the entire stream, not just opening it. Adapters
     // already thread this signal into their transport for the life of the
     // request (that's how user-initiated cancellation works today), so
@@ -439,38 +493,50 @@ export class VernLLM {
       ? AbortSignal.any([params.signal, streamController.signal])
       : streamController.signal;
 
-    const { iterator, first } = await withTimeout(
-      async (attemptSignal) => {
-        const streamIterator = createStream(request, { signal: attemptSignal })[
-          Symbol.asyncIterator
-        ]();
-        const firstResult = await streamIterator.next();
+    try {
+      const { iterator, first } = await withTimeout(
+        async (attemptSignal) => {
+          const streamIterator = createStream(request, { signal: attemptSignal })[
+            Symbol.asyncIterator
+          ]();
+          const firstResult = await streamIterator.next();
 
-        return { iterator: streamIterator, first: firstResult };
-      },
-      this.timeoutMs,
-      combinedExternal,
-    );
+          return { iterator: streamIterator, first: firstResult };
+        },
+        this.timeoutMs,
+        combinedExternal,
+      );
 
-    // An immediately-exhausted stream (no chunks at all) is the streaming
-    // equivalent of `executeCall`'s empty-response check: surface the same
-    // `LLMError('Empty LLM response', 'api')` so retry behaves identically
-    // whether the empty result came from a non-streaming or streaming
-    // attempt.
-    if (first.done) {
-      throw new LLMError('Empty LLM response', 'api');
+      // An immediately-exhausted stream (no chunks at all) is the streaming
+      // equivalent of `executeCall`'s empty-response check: surface the same
+      // `LLMError('Empty LLM response', 'api')` so retry behaves identically
+      // whether the empty result came from a non-streaming or streaming
+      // attempt.
+      if (first.done) {
+        throw new LLMError('Empty LLM response', 'api');
+      }
+
+      const result = this.buildStreamResult(
+        iterator,
+        first,
+        params,
+        useJson,
+        requestId,
+        model,
+        attempt,
+        streamController,
+        release,
+      );
+
+      // Ownership of `release` passes to `buildStreamResult` from here.
+      release = undefined;
+
+      return result;
+    } finally {
+      // Only reached if opening the stream itself threw; a successful
+      // open hands `release` off above and leaves this a no-op.
+      release?.();
     }
-
-    return this.buildStreamResult(
-      iterator,
-      first,
-      params,
-      useJson,
-      requestId,
-      model,
-      attempt,
-      streamController,
-    );
   }
 
   /**
@@ -499,6 +565,7 @@ export class VernLLM {
     model: string,
     attempt: number,
     streamController: AbortController,
+    release?: (actualTokens?: number) => void,
   ): { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T | CallWithToolsResult<T>> } {
     let resolveFinal!: (value: T | CallWithToolsResult<T>) => void;
     let rejectFinal!: (error: unknown) => void;
@@ -704,6 +771,8 @@ export class VernLLM {
           this.reportUsageFailure(usage, normalized, attempt, true);
         }
 
+        release?.(this.actualTokensFor(usage));
+
         fail(normalized);
         rejectFinal(normalized);
 
@@ -712,6 +781,7 @@ export class VernLLM {
 
       finish();
       this.breaker?.recordSuccess(model);
+      release?.(this.actualTokensFor(usage));
 
       try {
         const wireToolCalls: WireToolCall[] | undefined = toolCallAcc.size
@@ -1120,6 +1190,17 @@ export class VernLLM {
     };
   }
 
+  /**
+   * The token count to reconcile the rate limiter against for a finished
+   * attempt: `totalTokens` when reported, otherwise the sum of prompt and
+   * completion tokens, matching `reportUsageFailure`'s own fallback below
+   * for a hand-rolled client that reports the parts but omits the total.
+   */
+  private actualTokensFor(usage: TokenUsage | undefined): number | undefined {
+    if (!usage) return undefined;
+    return usage.totalTokens || usage.promptTokens + usage.completionTokens;
+  }
+
   /** Reports token usage for a successful call, swallowing and logging any error `onUsage` throws. */
   private reportUsage(usage: TokenUsage | undefined): void {
     if (!usage || !this.onUsage) return;
@@ -1265,6 +1346,12 @@ export class VernLLM {
       return false;
     }
 
+    // The queue wait already happened; retrying immediately would just
+    // requeue behind the same limit with nothing changed.
+    if (error instanceof LLMError && error.code === 'local_rate_limit') {
+      return false;
+    }
+
     // Tool contract failures repeat identically on retry: the wire request
     // is byte-for-byte the same, so nothing about a retry can change
     // whether the model names a real tool or reuses a call id.
@@ -1291,6 +1378,10 @@ export class VernLLM {
       error.type === 'validation' ||
       error.type === 'parse' ||
       error.type === 'aborted' ||
+      // A local queue timeout/full-queue rejection never reached the
+      // provider at all, so it says nothing about the provider's health
+      // and shouldn't push a healthy provider's circuit toward opening.
+      error.code === 'local_rate_limit' ||
       this.isNonRetryableToolContractError(error)
     ) {
       return false;

@@ -6,6 +6,7 @@
     "resume-parsing",
     "caching-methods",
     "provider-fallback",
+    "tuning-rate-limits",
     "multi-turn-conversations",
     "tool-execution-loop",
     "streaming-responses",

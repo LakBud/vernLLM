@@ -1,0 +1,240 @@
+---
+title: Rate Limiting
+description: Stay under a provider's requests/tokens/concurrency limits before they reject you
+---
+
+```ts title="rate-limiting-setup.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: {
+    requestsPerMinute: 500,
+    tokensPerMinute: 200_000,
+    maxConcurrent: 20,
+  },
+});
+```
+
+`rateLimit` queues calls locally to stay under configured limits, instead of dispatching every call
+and letting the provider reject the ones that go over. This is proactive: the existing
+`Retry-After` handling in <a href="/docs/core/retries">Retries</a> is reactive, it only recovers
+after a self-inflicted 429 has already cost a round trip. `rateLimit` avoids tripping the limit in
+the first place.
+
+Every bucket is independent and optional. Omit `rateLimit` entirely, or omit any individual field
+within it, and that dimension is unlimited, exactly matching behavior before this option existed.
+
+## The three buckets
+
+<Cards>
+  <Card title="requestsPerMinute">
+    Caps how many attempts leave per minute. A continuously refilling budget, not a fixed-window
+    counter, so it doesn't reset all at once every 60 seconds.
+  </Card>
+  <Card title="tokensPerMinute">
+    Caps token throughput per minute, checked against a pre-flight estimate before the request goes
+    out, then reconciled against the provider's real reported usage once the call finishes.
+  </Card>
+  <Card title="maxConcurrent">
+    Caps how many requests can be in flight at once, freed the moment each one finishes rather than
+    on a timer.
+  </Card>
+</Cards>
+
+A call only proceeds once every configured bucket has room. If any one of them is short, the call
+queues until all three clear.
+
+## Queueing
+
+Calls that can't get capacity immediately queue in strict FIFO order. A large call is never starved
+by a stream of smaller ones queued behind it, VernLLM never reorders the queue to let a
+smaller request skip ahead.
+
+```ts title="rate-limiting-queue-options.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: {
+    requestsPerMinute: 60,
+    maxQueueMs: 10_000, // default 30000, pass 0 to wait indefinitely
+    maxQueueSize: 50, // default 0, unbounded
+  },
+});
+```
+
+| Option         | Default | Notes                                                                             |
+| -------------- | ------- | --------------------------------------------------------------------------------- |
+| `maxQueueMs`   | `30000` | Max time a call may sit queued before it gives up. Pass `0` to wait indefinitely. |
+| `maxQueueSize` | `0`     | Max number of calls allowed to queue at once. Pass `0` for an unbounded queue.    |
+
+A call that exceeds `maxQueueMs`, or arrives when the queue is already at `maxQueueSize`, fails with
+`LLMError('quota_exceeded')` carrying `code: 'local_rate_limit'`:
+
+```ts title="rate-limiting-local-error.ts"
+import { isLLMError } from 'vern-llm';
+
+try {
+  await llm.call({ userContent: '...' });
+} catch (err) {
+  if (isLLMError(err) && err.code === 'local_rate_limit') {
+    // Never reached the provider. Retrying immediately won't help,
+    // the wait already happened. See "Interaction with retries" below.
+  }
+}
+```
+
+<Callout type="warn">
+  A single call whose estimated token cost exceeds the configured `tokensPerMinute` ceiling can
+  never be satisfied by any amount of waiting. VernLLM rejects it immediately with the same
+  `local_rate_limit` error rather than letting it sit in the queue forever, which would also block
+  every smaller call queued behind it.
+</Callout>
+
+An aborted signal on a queued call removes it from the queue immediately and rejects with
+`LLMError('aborted')`, freeing that queue slot for the next waiter. See <a href="/docs/core/cancellation">Cancellation & Timeouts</a>.
+
+## Estimating tokens
+
+`tokensPerMinute` needs a token count before the request is sent, when the real count isn't known
+yet. The default estimate is a `chars / 4` heuristic over every message's content, plus the
+requested `maxTokens`:
+
+```ts title="rate-limiting-default-estimate.ts"
+Math.ceil(messagesChars / 4) + (request.max_tokens ?? 0);
+```
+
+This is intentionally rough. Once the call completes, the estimate is reconciled against the
+provider's real reported usage, so a systematically over- or under-estimating heuristic
+self-corrects over time rather than compounding.
+
+Provide `estimateTokens` to use a real tokenizer, or any other heuristic your provider or model
+mix calls for:
+
+```ts title="rate-limiting-custom-estimate.ts"
+import { encode } from 'gpt-tokenizer';
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: {
+    tokensPerMinute: 200_000,
+    estimateTokens: (request) => {
+      const promptTokens = request.messages.reduce(
+        (sum, m) => sum + encode(typeof m.content === 'string' ? m.content : '').length,
+        0,
+      );
+      return promptTokens + (request.max_tokens ?? 0);
+    },
+  },
+});
+```
+
+## Per-attempt, not per-call
+
+Capacity is acquired for each attempt, including retries, not once for the whole logical call.
+Every retry is a real request against the same provider limits, so it needs to clear the same
+buckets again:
+
+```ts title="rate-limiting-with-retries.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  maxRetries: 3,
+  rateLimit: { requestsPerMinute: 500 },
+});
+```
+
+If the first attempt fails and a retry is due, that retry queues for capacity exactly like the
+original attempt did.
+
+## `stream: true`
+
+For a streaming call, capacity is held for the connection's entire lifetime and released only once
+the stream completes, either by finishing normally or by a mid-stream failure, not the moment it
+merely opens. A stream holds a real connection to the provider the whole time it's open, so it
+continues to count against `maxConcurrent` for as long as that connection is live.
+
+See <a href="/docs/core/streaming">Streaming</a> for the rest of the `stream: true` contract.
+
+## Interaction with retries
+
+`local_rate_limit` errors are never retried. The wait already happened while the call was queued,
+so retrying immediately would only requeue it behind the same limit with nothing changed:
+
+```ts title="rate-limiting-shouldretry.ts"
+if (error instanceof LLMError && error.code === 'local_rate_limit') return false;
+```
+
+See <a href="/docs/core/retries#what-gets-retried">What gets retried</a> for the full list of
+non-retried error conditions.
+
+## Interaction with the circuit breaker
+
+A `local_rate_limit` error never reached the provider, so it says nothing about the provider's
+health. It does not count toward the circuit breaker's failure threshold, the same treatment tool
+contract errors already get. See <a href="/docs/core/circuit-breaker#what-counts-as-a-failure">What counts as a failure</a>.
+
+## Provider 429s
+
+`rateLimit` is a local, proactive control. It does not change how an actual provider 429 is
+handled, that still flows through the existing retry and `Retry-After` machinery. A provider 429
+does now also carry `code: 'provider_rate_limited'`, so you can tell a rate limit the provider
+itself imposed apart from one VernLLM enforced locally, without inspecting `status` directly:
+
+```ts title="rate-limiting-distinguish-codes.ts"
+if (isLLMError(err) && err.code === 'provider_rate_limited') {
+  // A real provider 429. Already retried per the normal retry/Retry-After flow.
+}
+
+if (isLLMError(err) && err.code === 'local_rate_limit') {
+  // Never left this process. VernLLM's own queue gave up.
+}
+```
+
+## Observing waits
+
+`onEvent` reports a `rate_limited` event whenever an attempt actually had to wait for capacity:
+
+```ts title="rate-limited-event.ts"
+{
+  kind: 'rate_limited',
+  requestId: string,
+  provider: string,
+  model: string,
+  waitedMs: number,
+  reason: 'concurrency' | 'rpm' | 'tpm',
+}
+```
+
+`reason` identifies which bucket was blocking the call just before it cleared. An attempt that
+never had to wait (capacity was immediately available) does not emit this event.
+
+```ts title="rate-limiting-observability.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
+  onEvent: (event) => {
+    if (event.kind === 'rate_limited') {
+      metrics.observe('llm.rate_limit.wait_ms', event.waitedMs, { reason: event.reason });
+    }
+  },
+});
+```
+
+See <a href="/docs/core/observability#event-kinds">Event kinds</a> for the rest of the `onEvent`
+union.
+
+## Options reference
+
+| Option              | Default                | Notes                                                                                                 |
+| ------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------- |
+| `requestsPerMinute` | unlimited              | Max requests dispatched per minute, as a continuously refilling budget.                               |
+| `tokensPerMinute`   | unlimited              | Max estimated + reconciled tokens per minute. See <a href="#estimating-tokens">Estimating tokens</a>. |
+| `maxConcurrent`     | unlimited              | Max requests in flight at once. Freed on completion, not on a timer.                                  |
+| `maxQueueMs`        | `30000`                | Max time a call may sit queued. Pass `0` to wait indefinitely.                                        |
+| `maxQueueSize`      | `0`                    | Max queued calls before new ones fail immediately instead of queueing. Pass `0` for unbounded.        |
+| `estimateTokens`    | chars/4 + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes.   |
+
+See <a href="/docs/API-reference/configuration#rate-limiting">Configuration</a> for how `rateLimit`
+sits alongside every other constructor option.
