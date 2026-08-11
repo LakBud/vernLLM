@@ -322,7 +322,7 @@ export class VernLLM {
 
       // Reconcile against real usage, then hand off so `finally` below
       // can't release a second time.
-      release?.(usage?.totalTokens);
+      release?.(this.actualTokensFor(usage));
       release = undefined;
 
       // Raw and unvalidated on purpose. Extraction (including `.trim()`,
@@ -771,7 +771,7 @@ export class VernLLM {
           this.reportUsageFailure(usage, normalized, attempt, true);
         }
 
-        release?.(usage?.totalTokens);
+        release?.(this.actualTokensFor(usage));
 
         fail(normalized);
         rejectFinal(normalized);
@@ -781,7 +781,7 @@ export class VernLLM {
 
       finish();
       this.breaker?.recordSuccess(model);
-      release?.(usage?.totalTokens);
+      release?.(this.actualTokensFor(usage));
 
       try {
         const wireToolCalls: WireToolCall[] | undefined = toolCallAcc.size
@@ -1190,6 +1190,17 @@ export class VernLLM {
     };
   }
 
+  /**
+   * The token count to reconcile the rate limiter against for a finished
+   * attempt: `totalTokens` when reported, otherwise the sum of prompt and
+   * completion tokens, matching `reportUsageFailure`'s own fallback below
+   * for a hand-rolled client that reports the parts but omits the total.
+   */
+  private actualTokensFor(usage: TokenUsage | undefined): number | undefined {
+    if (!usage) return undefined;
+    return usage.totalTokens || usage.promptTokens + usage.completionTokens;
+  }
+
   /** Reports token usage for a successful call, swallowing and logging any error `onUsage` throws. */
   private reportUsage(usage: TokenUsage | undefined): void {
     if (!usage || !this.onUsage) return;
@@ -1367,6 +1378,10 @@ export class VernLLM {
       error.type === 'validation' ||
       error.type === 'parse' ||
       error.type === 'aborted' ||
+      // A local queue timeout/full-queue rejection never reached the
+      // provider at all, so it says nothing about the provider's health
+      // and shouldn't push a healthy provider's circuit toward opening.
+      error.code === 'local_rate_limit' ||
       this.isNonRetryableToolContractError(error)
     ) {
       return false;

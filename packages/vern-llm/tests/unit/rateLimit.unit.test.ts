@@ -222,4 +222,110 @@ describe('RateLimiter', () => {
       r.release();
     }
   });
+
+  it('rejects a request whose estimate exceeds tokensPerMinute capacity instead of queueing it forever', async () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 100 });
+
+    await expect(limiter.acquire(150)).rejects.toMatchObject({
+      type: 'quota_exceeded',
+      code: 'local_rate_limit',
+    });
+  });
+
+  it('an unsatisfiable request does not block a smaller waiter already queued behind capacity', async () => {
+    vi.useFakeTimers();
+    // 100 tokens/min => 1 token per 600ms.
+    const limiter = new RateLimiter({ tokensPerMinute: 100, maxQueueMs: 0 });
+
+    const held = await limiter.acquire(100); // drains the bucket
+    held.release(100); // matches actual usage: no net change, bucket stays drained
+
+    // Queues behind the drained bucket, not rejected outright (fits within capacity).
+    let smallSettled = false;
+    const small = limiter.acquire(10).then((r) => {
+      smallSettled = true;
+      r.release(10);
+    });
+
+    await Promise.resolve();
+    expect(smallSettled).toBe(false);
+
+    // A separate, unsatisfiable request must fail fast without disturbing the queue.
+    await expect(limiter.acquire(1000)).rejects.toMatchObject({ code: 'local_rate_limit' });
+
+    await vi.advanceTimersByTimeAsync(6_100); // 10 tokens at 1/600ms
+    await small;
+    expect(smallSettled).toBe(true);
+  });
+
+  it('rejects a non-finite or negative estimatedTokens instead of poisoning a bucket', async () => {
+    vi.useFakeTimers();
+    // 100 tokens/min => 1 token per 600ms.
+    const limiter = new RateLimiter({ tokensPerMinute: 100, maxQueueMs: 0 });
+
+    await expect(limiter.acquire(Number.NaN)).rejects.toMatchObject({ type: 'validation' });
+    await expect(limiter.acquire(-1)).rejects.toMatchObject({ type: 'validation' });
+
+    // The bucket must still be enforcing capacity afterward, i.e. not poisoned.
+    const held = await limiter.acquire(100);
+    held.release(100); // no net change: matches actual usage
+    let secondSettled = false;
+    const pending = limiter.acquire(1).then(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(700); // 1 token at 1/600ms
+    await pending;
+    expect(secondSettled).toBe(true);
+  });
+
+  it('ignores a non-finite actualTokens on release instead of poisoning the tokens bucket', async () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 100, maxQueueMs: 0 });
+
+    const held = await limiter.acquire(100);
+    held.release(Number.NaN); // malformed usage report; must not corrupt the bucket
+
+    // The bucket should behave as if nothing was given back (estimated
+    // debit retained, the safe direction), so it's still fully drained.
+    let secondSettled = false;
+    void limiter.acquire(1).then(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+  });
+
+  it('removing a waiter via abort immediately reschedules the wake around the new head, instead of a stale timer sized for the removed one', async () => {
+    vi.useFakeTimers();
+    // 60 tokens/min => 1 token/sec refill.
+    const limiter = new RateLimiter({ tokensPerMinute: 60, maxQueueMs: 0 });
+
+    const held = await limiter.acquire(60); // drains the bucket completely
+
+    const bigController = new AbortController();
+    // Needs 50 tokens: if left ungoverned, the wake this schedules would
+    // be ~50s away.
+    const big = limiter.acquire(50, bigController.signal);
+    const bigAssertion = expect(big).rejects.toMatchObject({ type: 'aborted' });
+
+    // Queues behind `big`. Needs only 2 tokens (~2s away), but before the
+    // fix, removing `big` left the stale ~50s wake in place, so `small`
+    // would stay stuck for tens of seconds it didn't actually need to wait.
+    let smallSettled = false;
+    const small = limiter.acquire(2).then((r) => {
+      smallSettled = true;
+      r.release(2);
+    });
+
+    bigController.abort();
+    await bigAssertion;
+
+    await vi.advanceTimersByTimeAsync(2_100); // just over `small`'s own ~2s need
+    await small;
+    expect(smallSettled).toBe(true);
+
+    held.release(60);
+  });
 });

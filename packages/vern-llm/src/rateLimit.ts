@@ -128,6 +128,11 @@ class TokenBucket {
   give(amount: number): void {
     this.available = Math.min(this.capacity, this.available + amount);
   }
+
+  /** The bucket's ceiling, e.g. so a request that could never fit can fail fast instead of queueing forever. */
+  getCapacity(): number {
+    return this.capacity;
+  }
 }
 
 /** One caller waiting for capacity, queued FIFO. */
@@ -202,6 +207,33 @@ export class RateLimiter {
       throw new LLMError('LLM request aborted', 'aborted');
     }
 
+    // Guards `estimatedTokens` even on this directly-exported entry point
+    // (not just the `VernLLM.executeCall`/`executeStreamCall` call sites):
+    // an unchecked NaN or negative value would poison a bucket's
+    // `available` permanently, since `NaN < amount` is always false and
+    // would make `tryTake` wrongly report success forever after.
+    if (!Number.isFinite(estimatedTokens) || estimatedTokens < 0) {
+      throw new LLMError(
+        `estimatedTokens must be a finite, non-negative number, got ${String(estimatedTokens)}`,
+        'validation',
+      );
+    }
+
+    // A request over the bucket's own ceiling can never be satisfied by
+    // any amount of waiting, refill included, so failing fast here also
+    // avoids permanently stalling every waiter queued behind it in FIFO.
+    if (this.tokens && estimatedTokens > this.tokens.getCapacity()) {
+      throw new LLMError(
+        `estimatedTokens (${estimatedTokens}) exceeds the configured tokensPerMinute capacity (${this.tokens.getCapacity()}); this call could never acquire capacity.`,
+        'quota_exceeded',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'local_rate_limit',
+      );
+    }
+
     // Fast path: nothing already queued, so try to go straight through
     // rather than paying queue bookkeeping for the common, uncontended case.
     if (this.queue.length === 0) {
@@ -253,6 +285,19 @@ export class RateLimiter {
         },
         reject: (error) => {
           cleanup();
+
+          // The removed waiter may have been the head a wakeTimer was
+          // scheduled around (or, for a concurrency block, the head with
+          // no timer scheduled at all). Either way, re-drain immediately
+          // so a successor with different requirements is evaluated now
+          // instead of waiting on a stale timer or an unrelated
+          // acquire/release call to trigger it.
+          if (this.wakeTimer) {
+            clearTimeout(this.wakeTimer);
+            this.wakeTimer = undefined;
+          }
+          this.drain();
+
           rejectPromise(error);
         },
       };
@@ -395,7 +440,14 @@ export class RateLimiter {
 
       this.concurrency?.give(1);
 
-      if (this.tokens && actualTokens !== undefined) {
+      // An invalid `actualTokens` (e.g. NaN from a malformed usage
+      // report) must not reach `give`: `Math.min(capacity, available +
+      // NaN)` is NaN, and a NaN `available` poisons every future
+      // `tryTake` on that bucket (any comparison against NaN is false,
+      // so it would look permanently under capacity and rate limiting
+      // would silently stop happening). Falling back to no reconciliation
+      // at least keeps the estimated debit, the safe direction to err.
+      if (this.tokens && actualTokens !== undefined && Number.isFinite(actualTokens)) {
         this.tokens.give(estimatedTokens - actualTokens);
       }
 

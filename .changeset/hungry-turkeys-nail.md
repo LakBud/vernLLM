@@ -28,4 +28,4 @@ Queued waiters are served strictly FIFO, so a large call can't be starved indefi
 
 New exports: `RateLimiter`, `RateLimitOptions`, `RateLimitReason`, `RateLimitAcquireResult`, `WireRequest`, and `defaultEstimateTokens`.
 
-`LLMErrorCode` gains `'local_rate_limit'` and `'provider_rate_limited'`, both additive to the existing optional, additional-discriminator field, so no exhaustive switch over it breaks.
+`LLMErrorCode` gains `'local_rate_limit'` and `'provider_rate_limited'`, and `VernLLMEvent` gains the `'rate_limited'` kind, both additive to fields that were also newly introduced in this same release cycle, so nothing published to date is affected. Note for anyone consuming this as a standalone follow-on to an already-released `onEvent`/`code`: TypeScript still treats adding a member to a previously-public union as a compile-time break for consumers who exhaustively `switch` over `LLMErrorCode` or `VernLLMEvent['kind']` with a `default: never` guard (the same tradeoff already accepted for `code` itself and for `VernLLMEvent`, deliberately not extended to `LLMErrorType`, which stays closed for this reason).

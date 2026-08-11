@@ -314,7 +314,17 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
     return new LLMError('LLM request aborted', 'aborted');
   }
 
-  if (error instanceof LLMError) return error;
+  if (error instanceof LLMError) {
+    // A caller or adapter can throw an already-built LLMError directly
+    // (bypassing the generic-SDK-error path below), so a 429 reaching us
+    // this way still needs the same `code` a generic 429 gets, without
+    // overwriting a `code` that error already carries.
+    if (error.status === 429 && error.code === undefined) {
+      error.code = 'provider_rate_limited';
+    }
+
+    return error;
+  }
 
   const status = extractStatus(error);
   const retryAfterMs = extractRetryAfterMs(error);
