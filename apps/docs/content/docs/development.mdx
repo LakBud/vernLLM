@@ -28,7 +28,7 @@ Tests live under `tests/unit/` and `tests/integration/`. No real API calls are m
 | File                             | Covers                                                             |
 | -------------------------------- | ------------------------------------------------------------------ |
 | `vernLLM.call`, `vernLLM.schema` | Retry, backoff, timeout, abort, schema, model override, usage      |
-| `circuitBreaker`                 | Breaker as a standalone unit                                       |
+| `circuitBreaker`                 | Breaker as a standalone unit, including `isolateByModel`           |
 | `cachedCall`                     | Caching, usage reservation/refund                                  |
 | `logger`                         | Injectable logger                                                  |
 | `vernLLM.history`                | Multi-turn history validation                                      |
