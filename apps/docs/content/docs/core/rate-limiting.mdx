@@ -91,9 +91,7 @@ try {
 </Callout>
 
 An aborted signal on a queued call removes it from the queue immediately and rejects with
-`LLMError('aborted')`, freeing that queue slot for the next waiter. See{' '}
-
-<a href="/docs/core/cancellation">Cancellation & Timeouts</a>.
+`LLMError('aborted')`, freeing that queue slot for the next waiter. See <a href="/docs/core/cancellation">Cancellation & Timeouts</a>.
 
 ## Estimating tokens
 
@@ -174,9 +172,7 @@ non-retried error conditions.
 
 A `local_rate_limit` error never reached the provider, so it says nothing about the provider's
 health. It does not count toward the circuit breaker's failure threshold, the same treatment tool
-contract errors already get. See{' '}
-
-<a href="/docs/core/circuit-breaker#what-counts-as-a-failure">What counts as a failure</a>.
+contract errors already get. See <a href="/docs/core/circuit-breaker#what-counts-as-a-failure">What counts as a failure</a>.
 
 ## Provider 429s
 

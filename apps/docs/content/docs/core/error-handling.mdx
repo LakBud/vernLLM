@@ -152,9 +152,7 @@ Otherwise the wait falls back to exponential backoff with jitter.
 
 ### Tool contract errors are not retried
 
-`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable. See
-
-<a href="/docs/core/tool-calling">Tool Calling</a> for the canonical contract workflow and handling
+`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable. See <a href="/docs/core/tool-calling">Tool Calling</a> for the canonical contract workflow and handling
 guidance. These errors therefore fail immediately instead of consuming the remaining `maxRetries`.
 
 <Callout type="warn">

@@ -55,9 +55,7 @@ await llm.call({ userContent: '...' }); // still resolves normally
 ## Event kinds
 
 Every event carries `provider`, the `name` configured on the instance (default `'primary'`), so a
-single handler shared across multiple `VernLLM` instances can tell them apart. See{' '}
-
-<a href="/docs/API-reference/configuration#provider-identity">Provider identity</a>.
+single handler shared across multiple `VernLLM` instances can tell them apart. See <a href="/docs/API-reference/configuration#provider-identity">Provider identity</a>.
 
 <Cards>
   <Card title="retry" href="#retry">
@@ -116,9 +114,7 @@ When `isolateByModel` is disabled, which is the default, `model` identifies the 
 this specific transition, while the failure counter it's reporting stays shared across every model
 on the instance, so a threshold crossing can be the sum of several different models' failures even
 though only the triggering call's `model` is reported here. When `isolateByModel` is enabled, the
-transition and its `consecutiveFailures` belong exclusively to that model's own circuit. See{' '}
-
-<a href="/docs/core/circuit-breaker#per-model-isolation">Per model isolation</a>.
+transition and its `consecutiveFailures` belong exclusively to that model's own circuit. See <a href="/docs/core/circuit-breaker#per-model-isolation">Per model isolation</a>.
 
 ```ts title="circuit-state-alerting.ts"
 onEvent: (event) => {
@@ -148,12 +144,9 @@ immediately available, so a well-provisioned `rateLimit` configuration under nor
 ```
 
 `reason` identifies which of the three `rateLimit` buckets was blocking the call just before it
-cleared. See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the buckets themselves, and{' '}
-
-<a href="/docs/guides/rate-limiting#watching-queue-pressure-before-it-becomes-failures">
-  Watching queue pressure before it becomes failures
-</a>
-for using this event as a leading indicator ahead of `local_rate_limit` failures.
+cleared. See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the buckets themselves, and <a href="/docs/guides/rate-limiting#watching-queue-pressure-before-it-becomes-failures">Watching
+queue pressure before it becomes failures</a> for using this event as a leading indicator ahead of
+`local_rate_limit` failures.
 
 ## Narrowing by kind
 
@@ -191,9 +184,7 @@ of other hooks in VernLLM that genuinely do participate in the call:
 </Cards>
 
 `onUsage` and `onUsageFailure` are close cousins of `onEvent`, fire and forget in exactly the same
-way, but scoped to token usage rather than call mechanics. See{' '}
-
-<a href="/docs/core/usage-tracking">Usage Tracking</a>.
+way, but scoped to token usage rather than call mechanics. See <a href="/docs/core/usage-tracking">Usage Tracking</a>.
 
 ## Options reference
 
