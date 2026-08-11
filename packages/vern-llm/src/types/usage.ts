@@ -32,8 +32,13 @@ export interface TokenUsage {
   totalTokens: number;
   requestId: string;
   model: string;
-  /** The provider target that produced this usage. See `VernLLMOptions['name']`, default `'primary'`. */
-  provider: string;
+  /**
+   * The provider target that produced this usage. See `VernLLMOptions['name']`,
+   * default `'primary'`. Optional so consumers constructing a `TokenUsage`
+   * themselves (e.g. in tests) aren't forced to supply it; `VernLLM` always
+   * populates it. Absent means the same as `'primary'` if you need a value.
+   */
+  provider?: string;
 }
 
 export type OnUsage = (usage: TokenUsage) => void;

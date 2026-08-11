@@ -13,7 +13,7 @@ export type VernLLMEvent =
       provider: string;
       /** The model actually resolved for this call (honors a per-call `model` override). */
       model: string;
-      /** The upcoming attempt, 1 based. */
+      /** The 1-based retry ordinal (the 1st retry is `1`, not the overall attempt count). */
       attempt: number;
       maxRetries: number;
       delayMs: number;

@@ -1,5 +1,5 @@
 export { VernLLM } from './vernLLM.js';
-export { CircuitBreaker, type CircuitBreakerOptions } from './circuitBreaker.js';
+export { CircuitBreaker, type CircuitBreakerOptions, type CircuitState } from './circuitBreaker.js';
 export { ConsoleLogger, type Logger } from './logger.js';
 export { parseSseStream, SSE_PING } from './internal/sse.js';
 

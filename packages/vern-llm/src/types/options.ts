@@ -9,8 +9,8 @@ export interface VernLLMOptions {
   client: LLMClient;
   model: string;
   /**
-   * Label for this provider in usage (`TokenUsage.provider`), events, and
-   * log lines. Default `'primary'`.
+   * Label for this provider in usage (`TokenUsage.provider`) and events.
+   * Default `'primary'`.
    */
   name?: string;
   /** Max retries after the first attempt. Default 1 (2 attempts total) */

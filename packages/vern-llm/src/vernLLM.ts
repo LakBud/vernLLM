@@ -110,12 +110,14 @@ export class VernLLM {
     this.providerName = options.name ?? 'primary';
     this.onEvent = options.onEvent;
 
-    const breakerOptions = options.circuitBreaker === true ? undefined : options.circuitBreaker;
+    const breakerOptions =
+      typeof options.circuitBreaker === 'object' ? options.circuitBreaker : undefined;
+    const userOnStateChange = breakerOptions?.onStateChange;
 
     this.breaker = options.circuitBreaker
       ? new CircuitBreaker({
           ...breakerOptions,
-          onStateChange: (from, to, consecutiveFailures, model) =>
+          onStateChange: (from, to, consecutiveFailures, model) => {
             this.reportEvent({
               kind: 'circuit_state',
               provider: this.providerName,
@@ -123,7 +125,23 @@ export class VernLLM {
               from,
               to,
               consecutiveFailures,
-            }),
+            });
+
+            // A caller-supplied onStateChange would otherwise be silently
+            // discarded, since the spread above is overwritten by this
+            // property. Chain it instead, same try/catch treatment as
+            // every other user-supplied callback so it can't break
+            // breaker bookkeeping or the call that triggered it.
+            if (!userOnStateChange) return;
+
+            try {
+              userOnStateChange(from, to, consecutiveFailures, model);
+            } catch (error) {
+              this.logger.error('[VernLLM] circuitBreaker.onStateChange failed', {
+                message: error instanceof Error ? error.message : 'unknown',
+              });
+            }
+          },
         })
       : undefined;
   }
@@ -211,11 +229,7 @@ export class VernLLM {
           } catch (error) {
             const normalized = normalizeError(error, params.signal);
 
-            if (
-              normalized.type !== 'validation' &&
-              normalized.type !== 'parse' &&
-              normalized.type !== 'aborted'
-            ) {
+            if (this.countsTowardBreaker(normalized)) {
               this.breaker?.recordFailure(model);
             }
 
@@ -243,11 +257,7 @@ export class VernLLM {
         } catch (error) {
           const normalized = normalizeError(error, params.signal);
 
-          if (
-            normalized.type !== 'validation' &&
-            normalized.type !== 'parse' &&
-            normalized.type !== 'aborted'
-          ) {
+          if (this.countsTowardBreaker(normalized)) {
             this.breaker?.recordFailure(model);
           }
 
@@ -1264,6 +1274,23 @@ export class VernLLM {
   }
 
   /**
+   * Decides whether a failed attempt should count toward the circuit
+   * breaker's failure threshold. A model hallucinating a tool name or
+   * reusing a call id isn't the provider being unhealthy, it's a model
+   * response defect that will very likely recur regardless of provider
+   * health, so it shouldn't push a healthy provider's circuit toward
+   * opening. Mirrors the same reasoning `shouldRetry` already applies to
+   * `parse`/`validation`/these same tool-contract codes.
+   */
+  private countsTowardBreaker(error: LLMError): boolean {
+    if (error.type === 'validation' || error.type === 'parse' || error.type === 'aborted') {
+      return false;
+    }
+
+    return error.code !== 'unknown_tool' && error.code !== 'duplicate_tool_call_id';
+  }
+
+  /**
    * Removes a cached response by key when the configured cache adapter
    * supports deletion. Cache invalidation is the caller's responsibility;
    * only the application knows when cached data is stale.
@@ -1563,10 +1590,14 @@ export class VernLLM {
   }
 
   /**
+   * @param model With `circuitBreaker.isolateByModel` on, returns that
+   * model's own circuit state instead of the shared one. Ignored
+   * otherwise. Omit for the shared circuit (the default) or, under
+   * isolation, the state of calls that didn't resolve a model.
    * @returns The current circuit breaker state (`'closed' | 'open' |
    * 'half-open'`), or undefined if no circuit breaker was configured.
    */
-  getCircuitState() {
-    return this.breaker?.getState();
+  getCircuitState(model?: string) {
+    return this.breaker?.getState(model);
   }
 }

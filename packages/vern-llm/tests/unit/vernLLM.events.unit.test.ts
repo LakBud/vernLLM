@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { type VernLLMEvent } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
@@ -51,9 +51,11 @@ describe('VernLLM, onEvent: retry', () => {
   it('marks retryAfterHonored true when a Retry-After delay was used', async () => {
     const onEvent = vi.fn();
 
+    // Retry-After: 0 keeps retryAfterMs defined (still "honored") without
+    // making the test actually wait out a real delay.
     class FakeApiError extends Error {
       status = 429;
-      headers = { get: (name: string) => (name.toLowerCase() === 'retry-after' ? '1' : null) };
+      headers = { get: (name: string) => (name.toLowerCase() === 'retry-after' ? '0' : null) };
     }
 
     const { client } = createMockClient([
@@ -68,7 +70,7 @@ describe('VernLLM, onEvent: retry', () => {
       .map((c) => c[0] as VernLLMEvent)
       .filter((e) => e.kind === 'retry');
     expect(retryEvents).toHaveLength(1);
-    expect(retryEvents[0]).toMatchObject({ retryAfterHonored: true, delayMs: 1000 });
+    expect(retryEvents[0]).toMatchObject({ retryAfterHonored: true, delayMs: 0 });
   });
 
   it('carries the configured provider name (from the `name` option) on every event', async () => {
@@ -129,6 +131,12 @@ describe('VernLLM, onEvent: retry', () => {
 });
 
 describe('VernLLM, onEvent: circuit_state', () => {
+  afterEach(() => {
+    // Runs even when a test's assertions throw mid-test, so a fake-timer
+    // test can't leave real timers stubbed out for every test after it.
+    vi.useRealTimers();
+  });
+
   it('fires "circuit_state" when the breaker opens, with from/to and the failure count', async () => {
     const onEvent = vi.fn();
     const { client } = createMockClient([new Error('down')]);
@@ -200,7 +208,6 @@ describe('VernLLM, onEvent: circuit_state', () => {
       .map((e) => (e.kind === 'circuit_state' ? `${e.from}->${e.to}` : ''));
 
     expect(transitions).toEqual(['closed->open', 'open->half-open', 'half-open->closed']);
-    vi.useRealTimers();
   });
 
   it('never fires "circuit_state" for a no-op transition (e.g. failing while already open)', async () => {
