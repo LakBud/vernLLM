@@ -1,0 +1,205 @@
+---
+title: Observability
+description: One event stream for retries, circuit state transitions, and rate limit waits
+---
+
+```ts title="observability-setup.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  onEvent: (event) => {
+    switch (event.kind) {
+      case 'retry':
+        metrics.increment('llm.retry', { provider: event.provider });
+        break;
+      case 'circuit_state':
+        if (event.to === 'open') alerting.page(`circuit opened for ${event.model}`);
+        break;
+      case 'rate_limited':
+        metrics.observe('llm.rate_limit.wait_ms', event.waitedMs, { reason: event.reason });
+        break;
+    }
+  },
+});
+```
+
+`onEvent` reports what happened during a call as it happens: a retry about to wait out its backoff
+delay, a circuit breaker changing state, or an attempt that had to wait for `rateLimit` capacity.
+It's a single event stream instead of a separate option per concern, so handling one kind doesn't
+require leaving the others unset.
+
+## Fire and forget
+
+`onEvent` mirrors `onUsage`: it is synchronous, fire and forget, and wrapped in a try/catch at the
+call site, so a throwing handler can never break a call.
+
+- The handler's return value is never read. Nothing about `onEvent` can influence what the call
+  does, only what gets reported about it.
+- If the handler throws, the error is caught and logged through the configured `logger`, and the
+  call proceeds exactly as if `onEvent` had not been set.
+- Not configuring `onEvent` at all is a no-op: zero behavioral change from every version before this
+  option existed.
+
+```ts title="observability-throwing-handler.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  onEvent: () => {
+    throw new Error('boom'); // caught and logged, never surfaces to the caller
+  },
+});
+
+await llm.call({ userContent: '...' }); // still resolves normally
+```
+
+## Event kinds
+
+Every event carries `provider`, the `name` configured on the instance (default `'primary'`), so a
+single handler shared across multiple `VernLLM` instances can tell them apart. See{' '}
+
+<a href="/docs/API-reference/configuration#provider-identity">Provider identity</a>.
+
+<Cards>
+  <Card title="retry" href="#retry">
+    Fires immediately before VernLLM waits out a retry's backoff delay.
+  </Card>
+  <Card title="circuit_state" href="#circuit_state">
+    Fires after a real circuit breaker state transition.
+  </Card>
+  <Card title="rate_limited" href="#rate_limited">
+    Fires when an attempt had to wait for `rateLimit` capacity.
+  </Card>
+</Cards>
+
+### `retry`
+
+Emitted immediately before VernLLM waits for the retry backoff delay, one event per retry attempt.
+
+```ts title="retry-event.ts"
+{
+  kind: 'retry',
+  requestId: string,
+  provider: string,
+  model: string,
+  attempt: number,
+  maxRetries: number,
+  delayMs: number,
+  retryAfterHonored: boolean,
+  error: LLMError,
+}
+```
+
+`attempt` is the retry ordinal starting at `1`, the first retry is `1`, not the overall attempt
+count including the original try. `model` is the model actually resolved for the call, honoring a
+per call `model` override rather than always the instance default. `retryAfterHonored` is `true`
+when `delayMs` came from a `Retry-After` header on the failed attempt rather than computed
+exponential backoff. See <a href="/docs/core/retries">Retries</a> for the backoff and
+`Retry-After` mechanics this event is reporting on.
+
+### `circuit_state`
+
+Emitted after a real circuit breaker state transition. No event fires for a transition that doesn't
+actually change anything, such as `open` staying `open`.
+
+```ts title="circuit-state-event.ts"
+{
+  kind: 'circuit_state',
+  provider: string,
+  model: string,
+  from: 'closed' | 'open' | 'half-open',
+  to: 'closed' | 'open' | 'half-open',
+  consecutiveFailures: number,
+}
+```
+
+When `isolateByModel` is disabled, which is the default, `model` identifies the call that triggered
+this specific transition, while the failure counter it's reporting stays shared across every model
+on the instance, so a threshold crossing can be the sum of several different models' failures even
+though only the triggering call's `model` is reported here. When `isolateByModel` is enabled, the
+transition and its `consecutiveFailures` belong exclusively to that model's own circuit. See{' '}
+
+<a href="/docs/core/circuit-breaker#per-model-isolation">Per model isolation</a>.
+
+```ts title="circuit-state-alerting.ts"
+onEvent: (event) => {
+  if (event.kind === 'circuit_state' && event.to === 'open') {
+    alerting.page(
+      `circuit opened for ${event.provider}/${event.model} after ${event.consecutiveFailures} failures`,
+    );
+  }
+};
+```
+
+### `rate_limited`
+
+Emitted when an attempt actually had to wait for `rateLimit` capacity. Not emitted when capacity was
+immediately available, so a well-provisioned `rateLimit` configuration under normal load produces no
+`rate_limited` events at all.
+
+```ts title="rate-limited-event.ts"
+{
+  kind: 'rate_limited',
+  requestId: string,
+  provider: string,
+  model: string,
+  waitedMs: number,
+  reason: 'concurrency' | 'rpm' | 'tpm',
+}
+```
+
+`reason` identifies which of the three `rateLimit` buckets was blocking the call just before it
+cleared. See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the buckets themselves, and{' '}
+
+<a href="/docs/guides/rate-limiting#watching-queue-pressure-before-it-becomes-failures">
+  Watching queue pressure before it becomes failures
+</a>
+for using this event as a leading indicator ahead of `local_rate_limit` failures.
+
+## Narrowing by kind
+
+`event.kind` discriminates the union, so a handler that only cares about one kind can narrow with a
+single check instead of leaving the others unhandled or writing an exhaustive `switch`:
+
+```ts title="observability-narrow-one-kind.ts"
+onEvent: (event) => {
+  if (event.kind !== 'circuit_state') return;
+  logger.warn(`circuit ${event.from} -> ${event.to}`, { provider: event.provider });
+};
+```
+
+<Callout type="info">
+  `VernLLMEvent` is expected to grow new `kind` values in future minor releases, the same way
+  `LLMError.code` does. A handler written as a `switch` with a `default` branch that assumes every
+  possible `kind` is already handled should not treat that default as unreachable.
+</Callout>
+
+## What this isn't
+
+`onEvent` reports what happened. It has no way to change what happens next, unlike a small number
+of other hooks in VernLLM that genuinely do participate in the call:
+
+<Cards>
+  <Card title="reserveUsage / refundUsage">
+    Run before and after a call and can stop it from proceeding. See{' '}
+    <a href="/docs/core/usage-metering">Usage Metering</a>.
+  </Card>
+  <Card title="circuitBreaker.onStateChange">
+    The lower level callback on `CircuitBreakerOptions` itself, observational in the same way as
+    `onEvent`'s `circuit_state`, chained rather than replaced when both are set. See{' '}
+    <a href="/docs/core/circuit-breaker#observing-state-changes">Observing state changes</a>.
+  </Card>
+</Cards>
+
+`onUsage` and `onUsageFailure` are close cousins of `onEvent`, fire and forget in exactly the same
+way, but scoped to token usage rather than call mechanics. See{' '}
+
+<a href="/docs/core/usage-tracking">Usage Tracking</a>.
+
+## Options reference
+
+| Option    | Default | Notes                                                                                                                                      |
+| --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, or `rate_limited` occurrence. Fire and forget; cannot change the call's outcome. |
+
+See <a href="/docs/API-reference/configuration#observability">Configuration</a> for how `onEvent`
+sits alongside `onUsage`, `onUsageFailure`, `logger`, and `debug`.

@@ -4,6 +4,7 @@
   "pages": [
     "index",
     "retries",
+    "rate-limiting",
     "structured-output",
     "tool-calling",
     "streaming",
@@ -11,6 +12,7 @@
     "usage-metering",
     "usage-tracking",
     "circuit-breaker",
+    "observability",
     "logging",
     "error-handling",
     "cancellation"

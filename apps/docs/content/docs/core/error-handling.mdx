@@ -89,6 +89,16 @@ The currently defined tool contract codes are:
 | `unknown_tool`           | `api`      | The model requested a tool that was not included in the call's `tools` array. |
 | `duplicate_tool_call_id` | `api`      | The model returned more than one tool call with the same call ID.             |
 
+The currently defined rate-limiting codes are:
+
+| Code                    | Error type       | Meaning                                                                                                                    |
+| ----------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `local_rate_limit`      | `quota_exceeded` | A `rateLimit` queue gave up: `maxQueueMs` elapsed, or the queue was already at `maxQueueSize`. Never reached the provider. |
+| `provider_rate_limited` | `api`            | The provider itself returned an HTTP 429.                                                                                  |
+
+See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the full `rateLimit` option and what
+triggers each of these.
+
 ```ts title="error-code.ts"
 try {
   await llm.call({
@@ -130,6 +140,9 @@ interface ToolIssue {
   failures rather than transient provider faults
 - `error.code` is `'unknown_tool'` or `'duplicate_tool_call_id'` because these are deterministic
   tool contract failures
+- `error.code` is `'local_rate_limit'` because the wait already happened; retrying immediately would
+  only requeue behind the same limit with nothing changed. See{' '}
+  <a href="/docs/core/rate-limiting#interaction-with-retries">Interaction with retries</a>.
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to
