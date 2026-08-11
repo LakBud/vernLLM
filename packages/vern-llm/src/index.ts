@@ -1,5 +1,5 @@
 export { VernLLM } from './vernLLM.js';
-export { CircuitBreaker, type CircuitBreakerOptions } from './circuitBreaker.js';
+export { CircuitBreaker, type CircuitBreakerOptions, type CircuitState } from './circuitBreaker.js';
 export { ConsoleLogger, type Logger } from './logger.js';
 export { parseSseStream, SSE_PING } from './internal/sse.js';
 
@@ -62,6 +62,8 @@ export {
   NormalizedCacheAdapter,
   TieredCacheAdapter,
   type LLMErrorType,
+  type LLMErrorCode,
+  type ToolIssue,
   type CacheAdapter,
   type LLMClient,
   type WireMessage,
@@ -85,6 +87,8 @@ export {
   type ReserveUsage,
   type RefundUsage,
   type OnUsage,
+  type OnEvent,
+  type VernLLMEvent,
   type TokenUsage,
   type SchemaLike,
   type JsonSchemaSpec,

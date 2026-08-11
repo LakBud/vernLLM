@@ -110,6 +110,155 @@ describe('CircuitBreaker (unit)', () => {
 
     vi.useRealTimers();
   });
+
+  it('reports the model passed to the call that triggered a transition, via onStateChange', () => {
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, onStateChange });
+
+    cb.recordFailure('gpt-4o');
+
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, 'gpt-4o');
+  });
+
+  it('reports whichever model most recently touched the breaker, even across different models', () => {
+    // The breaker's failure count stays shared across every model; only
+    // the *label* on the emitted transition reflects the triggering call.
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000, onStateChange });
+
+    cb.recordFailure('gpt-4o'); // 1st failure, no transition yet
+    cb.recordFailure('gpt-4o-mini'); // 2nd failure, crosses threshold
+
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 2, 'gpt-4o-mini');
+  });
+
+  it('omitting `model` on record/assert calls reports undefined, not a stale prior value', () => {
+    vi.useFakeTimers();
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, onStateChange });
+
+    cb.recordFailure();
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, undefined);
+
+    // Also cover assertClosed's own transition (open -> half-open),
+    // the test's title mentions "assert calls" but only recordFailure
+    // was previously exercised.
+    vi.advanceTimersByTime(1001);
+    cb.assertClosed();
+    expect(onStateChange).toHaveBeenCalledWith('open', 'half-open', 1, undefined);
+
+    vi.useRealTimers();
+  });
+});
+
+describe('CircuitBreaker, isolateByModel (unit)', () => {
+  it('defaults to off: a single shared circuit, unchanged from every prior version', () => {
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000 });
+
+    cb.recordFailure('gpt-4o');
+    cb.recordFailure('gpt-4o-mini'); // crosses threshold, mixed across models
+
+    expect(cb.getState('gpt-4o')).toBe('open');
+    expect(cb.getState('gpt-4o-mini')).toBe('open');
+    expect(cb.getState()).toBe('open');
+  });
+
+  it('isolates failure counts per model: one model opening does not affect another', () => {
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000, isolateByModel: true });
+
+    cb.recordFailure('gpt-4o');
+    cb.recordFailure('gpt-4o'); // crosses threshold for gpt-4o only
+
+    expect(cb.getState('gpt-4o')).toBe('open');
+    expect(cb.getState('gpt-4o-mini')).toBe('closed'); // untouched
+  });
+
+  it('a model never seen yet reports "closed", same as a fresh breaker', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+
+    expect(cb.getState('never-called')).toBe('closed');
+  });
+
+  it('does not allocate a bucket for an unseen model when reading state', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+    const buckets = (cb as unknown as { bucketsByModel: Map<string, unknown> }).bucketsByModel;
+
+    expect(cb.getState('never-called')).toBe('closed');
+    expect(buckets.size).toBe(0);
+  });
+
+  it('evicts a model bucket once it returns to a pristine closed state', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+    const buckets = (cb as unknown as { bucketsByModel: Map<string, unknown> }).bucketsByModel;
+
+    cb.recordFailure('gpt-4o');
+    expect(buckets.size).toBe(1);
+
+    cb.recordSuccess('gpt-4o');
+    expect(cb.getState('gpt-4o')).toBe('closed');
+    expect(buckets.size).toBe(0);
+  });
+
+  it('assertClosed throws only for the model whose bucket is open', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 10_000, isolateByModel: true });
+
+    cb.recordFailure('gpt-4o');
+
+    expect(() => cb.assertClosed('gpt-4o')).toThrow(
+      expect.objectContaining({ type: 'circuit_open' }),
+    );
+    expect(() => cb.assertClosed('gpt-4o-mini')).not.toThrow();
+  });
+
+  it('a call omitting `model` falls into one shared bucket, separate from every named model', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+
+    cb.recordFailure(); // no model given
+
+    expect(cb.getState()).toBe('open');
+    expect(cb.getState('gpt-4o')).toBe('closed'); // a real model is unaffected
+  });
+
+  it('onStateChange reports the exact model that triggered each isolated transition', () => {
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      isolateByModel: true,
+      onStateChange,
+    });
+
+    cb.recordFailure('gpt-4o');
+    cb.recordFailure('gpt-4o-mini');
+
+    expect(onStateChange).toHaveBeenCalledTimes(2);
+    expect(onStateChange).toHaveBeenNthCalledWith(1, 'closed', 'open', 1, 'gpt-4o');
+    expect(onStateChange).toHaveBeenNthCalledWith(2, 'closed', 'open', 1, 'gpt-4o-mini');
+  });
+
+  it('half-open/cooldown/trial-in-flight semantics are unchanged, just scoped per model', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+
+    cb.recordFailure('gpt-4o');
+    expect(cb.getState('gpt-4o')).toBe('open');
+
+    vi.advanceTimersByTime(1001);
+    expect(() => cb.assertClosed('gpt-4o')).not.toThrow(); // becomes the trial
+    expect(cb.getState('gpt-4o')).toBe('half-open');
+    expect(() => cb.assertClosed('gpt-4o')).toThrow(
+      expect.objectContaining({ type: 'circuit_open' }),
+    ); // trial in flight
+
+    // A different model was never touched, so it's unaffected by gpt-4o's cooldown/trial state.
+    expect(() => cb.assertClosed('gpt-4o-mini')).not.toThrow();
+
+    cb.recordSuccess('gpt-4o');
+    expect(cb.getState('gpt-4o')).toBe('closed');
+
+    vi.useRealTimers();
+  });
 });
 
 describe('VernLLM, circuit breaker integration', () => {

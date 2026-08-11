@@ -11,6 +11,7 @@ import { InMemoryCacheAdapter } from 'vern-llm';
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
+  name: 'primary',
   maxRetries: 1,
   timeoutMs: 25_000,
   chunkIdleTimeoutMs: 30_000, // stream: true calls only
@@ -31,6 +32,7 @@ const llm = new VernLLM({
   },
   onUsage: (usage) => billing.record(usage), // optional, no default
   onUsageFailure: (usage, error) => billing.record(usage), // optional, no default
+  onEvent: (event) => observability.record(event), // optional, no default
   logger: myLogger, // optional, defaults to console-based logger gated by debug
 });
 ```
@@ -47,6 +49,16 @@ const llm = new VernLLM({
     The default model ID for calls that do not override it via `call({ model: '...' })`.
   </Card>
 </Cards>
+
+## Provider identity
+
+| Option | Default     | Notes                                                                                                                         |
+| ------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `name` | `'primary'` | Optional application level label for this `VernLLM` instance. It is included as `provider` in usage and observability events. |
+
+`name` does not affect request routing or the model sent to the provider. It is an application level
+label that lets you distinguish multiple `VernLLM` instances in shared billing and observability
+pipelines.
 
 ## Retry & timeout
 
@@ -94,16 +106,63 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 
 | Option           | Default                       | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ---------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onUsage`        | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `onUsage`        | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response. The usage object includes `provider`, which is the `name` configured on this instance.                                                                                                                                                                                                                                                                                                                 |
 | `onUsageFailure` | none                          | Called when a provider response arrived, with usage data available, but VernLLM's own post-processing then failed (parsing, validation, or any other post-response error). Fires once per failed attempt with extractable usage. For non-streaming calls, never fires for transport failures or an aborted call. For `stream: true`, this is not guaranteed, a stream can deliver a usage chunk and then fail later (e.g. an idle timeout), in which case it does fire. See <a href="/docs/core/usage-tracking">Usage Tracking</a>. |
+| `onEvent`        | none                          | Receives observability events for retries and circuit state transitions. Events include the configured `provider` label and resolved `model`. The handler is fire and forget and cannot change the call result or retry behavior.                                                                                                                                                                                                                                                                                                   |
 | `logger`         | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                                                                                                                                                                                                                                                                         |
 | `debug`          | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`.                                                                                                                                                                                                                                            |
 
+### Events
+
+`onEvent` receives one event for each retry and each real circuit state transition.
+
+The currently emitted event kinds are:
+
+### `retry`
+
+Emitted immediately before VernLLM waits for the retry backoff delay.
+
+```ts title="retry-event.ts"
+{
+  kind: 'retry',
+  requestId: string,
+  provider: string,
+  model: string,
+  attempt: number,
+  maxRetries: number,
+  delayMs: number,
+  retryAfterHonored: boolean,
+  error: LLMError,
+}
+```
+
+`attempt` is the retry ordinal, starting at `1`. `model` is the model resolved for the call,
+including a per call `model` override.
+
+### `circuit_state`
+
+Emitted after a real circuit state transition. No event is emitted when the state remains unchanged.
+
+```ts title="circuit-state-event.ts"
+{
+  kind: 'circuit_state',
+  provider: string,
+  model: string,
+  from: 'closed' | 'open' | 'half-open',
+  to: 'closed' | 'open' | 'half-open',
+  consecutiveFailures: number,
+}
+```
+
+When `isolateByModel` is disabled, the `model` identifies the call that triggered the transition,
+while the failure counter remains shared across models. When `isolateByModel` is enabled, the
+transition belongs exclusively to that model's circuit.
+
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                                                                                                                                                                       |
-| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. For `stream: true`, a `chunkIdleTimeoutMs` timeout counts as a failure even though it happens mid-stream, unlike other stream failures. |
+| Option           | Default  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, onStateChange }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. For `stream: true`, a `chunkIdleTimeoutMs` timeout counts as a failure even though it happens mid-stream, unlike other stream failures. `unknown_tool` and `duplicate_tool_call_id` tool contract failures never count as a failure. `isolateByModel` (default `false`) tracks a separate circuit per resolved model instead of one shared circuit for the instance; `getCircuitState()` then takes an optional `model` parameter to match. |
 
 ## Per call defaults and overrides
 
@@ -131,7 +190,7 @@ not decide quota rules or billing policy.
 `userContent`, `model`, `maxTokens`, and `reasoningEffort` have no call-level default beyond
 falling back to the corresponding instance-level `VernLLMOptions` field, or being undefined when
 omitted. `schema`, `jsonSchema`, `tools`, `signal`, and `requestId` have no instance-level
-equivalent at all, they're undefined unless set on the call itself.
+equivalent at all, they are undefined unless set on the call itself.
 
 `requestId` is an optional identifier you can provide per call:
 

@@ -22,31 +22,75 @@ interface TokenUsage {
   totalTokens: number;
   requestId: string;
   model: string;
+  provider?: string;
 }
 ```
 
-- **`requestId`** is whatever you passed to `call({ requestId: '...' })`, or an auto-generated UUID if you didn't. It is included in usage callbacks and internal logging, making it useful for correlating a usage record back to the originating request, joining usage data with application logs, tracing a request across services, or implementing your own billing reconciliation/deduplication logic.
-- **`model`** reflects the model that actually served the request, including a per-call `model` override, not just the instance's default. Important if you bill different models at different rates.
+- **`requestId`** is whatever you passed to `call({ requestId: '...' })`, or an auto generated UUID if
+  you didn't. It is included in usage callbacks and internal logging, making it useful for correlating
+  a usage record back to the originating request, joining usage data with application logs, tracing
+  a request across services, or implementing your own billing reconciliation or deduplication logic.
+- **`model`** reflects the model that actually served the request, including a per call `model`
+  override, not just the instance's default. This is important if you bill different models at
+  different rates.
+- **`provider`** is the configured `VernLLMOptions.name` instance label, default `'primary'`,
+  assigned by VernLLM to usage records. It is a label for the instance that produced the usage
+  data, not a signal of request routing or provider selection.
+
+The same instance label is included in usage callbacks for both successful and failed responses:
+
+```ts title="usage-provider-information.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  onUsage: ({ requestId, model, provider, totalTokens }) => {
+    billing.record({
+      requestId,
+      model,
+      provider,
+      totalTokens,
+    });
+  },
+  onUsageFailure: ({ requestId, model, provider, totalTokens }, error) => {
+    billing.recordFailedRequest({
+      requestId,
+      model,
+      provider,
+      totalTokens,
+      error: error.type,
+    });
+  },
+});
+```
+
+<Callout type="info">
+  `provider` is the configured instance label, while `model` describes the model that actually
+  served the request. Do not assume that the instance's default model or provider label is
+  necessarily the one represented by a particular usage record when per call overrides are involved.
+</Callout>
 
 ## When it does and doesn't fire
 
 <Callout>
   `onUsage` fires only after the call fully succeeds, meaning the raw completion, JSON parsing, and
   schema validation all passed. If the `onUsage` callback itself throws, that failure is logged and
-  swallowed rather than propagated, it can't fail or retrigger retries on an otherwise-successful
-  call. If you need to gate a call *before* it's dispatched (e.g. enforcing a quota), see
-  [`reserveUsage`/`refundUsage`](/docs/core/usage-metering).
+  swallowed rather than propagated. It cannot fail or retrigger retries on an otherwise successful
+  call. If you need to gate a call before it is dispatched, such as enforcing a quota, see
+  <a href="/docs/core/usage-metering">Usage Metering</a>.
 </Callout>
 
 <Callout type="warn">
   `onUsage` only fires when the provider's response actually includes usage data. Not every adapter
-  surfaces this identically, check your provider's response shape if usage isn't showing up.
+  surfaces usage identically, so check your provider's response shape if usage isn't showing up.
 </Callout>
 
-- **On success**, once per completed call, after retries have finished (not once per retry attempt).
+- **On success**, once per completed call, after retries have finished. It does not fire once per
+  retry attempt.
 - **On failure**, `onUsage` never fires. If a failed attempt's response included usage data, that
-  spend is reported through [`onUsageFailure`](#reporting-usage-on-failure) instead, not lost.
-- **With caching**, a cache hit in `cachedCall` does not run the underlying LLM call, so `onUsage` does not fire for cached results. It only fires when a provider response is actually received.
+  spend is reported through <a href="#reporting-usage-on-failure">`onUsageFailure`</a> instead, not
+  lost.
+- **With caching**, a cache hit in `cachedCall` does not run the underlying LLM call, so `onUsage`
+  does not fire for cached results. It only fires when a provider response is actually received.
 
 ## Reporting usage on failure
 
@@ -58,43 +102,61 @@ const llm = new VernLLM({
   onUsageFailure: (usage, error) => {
     billing.record(usage);
     const tokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
-    logger.warn(`call failed after spending ${tokens} tokens: ${error.type}`);
+    logger.warn(
+      `[${usage.provider ?? 'unknown'}] ${usage.model} failed after spending ${tokens} tokens: ${error.type}`,
+    );
   },
 });
 ```
 
-`onUsageFailure` fires when a provider response arrives, and usage data was present on it, but VernLLM's own post-processing then fails, parsing, schema validation, or any other error raised after the response landed. It exists because `onUsage` only fires on full success: without it, tokens spent on an attempt that then failed would go unreported, even though the provider already charged for them.
+`onUsageFailure` fires when a provider response arrives, and usage data was present on it, but
+VernLLM's own post processing then fails. This includes parsing, schema validation, or any other
+error raised after the response landed.
+
+It exists because `onUsage` only fires on full success. Without `onUsageFailure`, tokens spent on an
+attempt that then failed would go unreported even though the provider already charged for them.
 
 <Callout>
   `onUsageFailure` fires once per failed attempt with extractable usage, not once per logical
   `call()`. A call that fails once and then succeeds on retry fires `onUsageFailure` for the failed
-  attempt and `onUsage` for the successful one, both carrying their own real usage. For
-  non-streaming calls, it never fires for transport failures (timeout, network error, non-retryable
-  status) or when the call was aborted, since in both cases there's no honest number, or no matching
-  error type, to report. For `stream: true`, this is not guaranteed: a stream can deliver a usage
-  chunk and then fail later (e.g. an idle timeout waiting for the final close), in which case it
-  does fire, see{' '}
-  <a href="/docs/core/streaming#usage-metering-and-tracking-while-streaming">
-    Usage metering and tracking while streaming
-  </a>
-  . If the `onUsageFailure` callback itself throws, that failure is logged and swallowed, same as
-  `onUsage`.
+  attempt and `onUsage` for the successful one, both carrying their own real usage and provider
+  information when available.
 </Callout>
 
-## Example: per-request cost estimation
+<Callout>
+  For non streaming calls, `onUsageFailure` never fires for transport failures such as a timeout,
+  network error, or non retryable status, or when the call was aborted. In those cases there is no
+  reliable usage record associated with the failed response.
+
+For `stream: true`, this is not guaranteed. A stream can deliver a usage chunk and then fail later,
+such as an idle timeout while waiting for the final close. In that case `onUsageFailure` does
+fire. See <a href="/docs/core/streaming#usage-metering-and-tracking-while-streaming">
+Usage metering and tracking while streaming</a>.
+
+</Callout>
+
+<Callout>
+  If the `onUsageFailure` callback itself throws, that failure is logged and swallowed, just like
+  `onUsage`. Usage callback failures do not replace the original call error.
+</Callout>
+
+## Example: per request cost estimation
 
 ```ts title="usage-cost-estimation.ts"
-const PRICE_PER_1K_TOKENS = { prompt: 0.005, completion: 0.015 };
+const PRICE_PER_1K_TOKENS = {
+  prompt: 0.005,
+  completion: 0.015,
+};
 
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
-  onUsage: ({ promptTokens, completionTokens, requestId, model }) => {
+  onUsage: ({ promptTokens, completionTokens, requestId, model, provider }) => {
     const cost =
       (promptTokens / 1000) * PRICE_PER_1K_TOKENS.prompt +
       (completionTokens / 1000) * PRICE_PER_1K_TOKENS.completion;
 
-    logger.info(`[${requestId}] ${model} cost: $${cost.toFixed(4)}`);
+    logger.info(`[${requestId}] ${provider ?? 'unknown'} / ${model} cost: $${cost.toFixed(4)}`);
   },
 });
 ```

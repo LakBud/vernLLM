@@ -53,7 +53,7 @@ const result = await llm.call({
 
 `CallWithToolsResult<T>` is either a content result or a tool call result:
 
-```ts
+```ts title="tool-calling-result-types.ts"
 type CallWithToolsResult<T> = ContentResult<T> | ToolCallResult;
 
 type ContentResult<T> = {
@@ -143,8 +143,79 @@ const weatherTool = {
 <Callout type="warn">
   If validation fails, `call()` throws `LLMError('validation')` before returning a result. If the
   model requests a tool name that was not in the `tools` array, `call()` throws `LLMError('api')`
-  instead, on the reasoning that a hallucinated tool name may not recur on retry.
+  with `code: 'unknown_tool'`.
 </Callout>
+
+## Tool contract errors
+
+VernLLM validates the tool calls returned by the model before returning them to the application.
+Two tool contract errors have specific `LLMError.code` values.
+
+| Code                     | Meaning                                                                |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `unknown_tool`           | The model requested a tool that was not included in the `tools` array. |
+| `duplicate_tool_call_id` | The model returned multiple tool calls with the same call ID.          |
+
+An `unknown_tool` error is raised when the model requests a tool that was not offered in the
+request.
+
+A `duplicate_tool_call_id` error is raised when multiple tool calls in the same response use the
+same call ID. Tool call IDs must be unique so that the application can associate each tool result
+with the corresponding model request.
+
+Both errors are surfaced as `LLMError('api')` with the corresponding `code`:
+
+```ts title="tool-contract-errors.ts"
+try {
+  await llm.call({
+    userContent: 'Use the available tools.',
+    tools: [weatherTool],
+  });
+} catch (error) {
+  if (isLLMError(error)) {
+    if (error.code === 'unknown_tool') {
+      console.log('The model requested a tool that was not offered.');
+    }
+
+    if (error.code === 'duplicate_tool_call_id') {
+      console.log('The model returned a duplicate tool call ID.');
+    }
+  }
+}
+```
+
+A single model response can contain multiple tool contract problems. VernLLM reports the detected
+problems together through `LLMError.toolIssues` so applications can inspect the complete set
+instead of handling only the first problem encountered.
+
+```ts title="tool-contract-issues.ts"
+try {
+  await llm.call({
+    userContent: 'Use the available tools.',
+    tools: [weatherTool],
+  });
+} catch (error) {
+  if (isLLMError(error) && error.toolIssues) {
+    for (const issue of error.toolIssues) {
+      console.log(issue);
+    }
+  }
+}
+```
+
+Tool contract errors are not retried. An `unknown_tool` error cannot be repaired by retrying the
+same request because the available tool definitions have not changed. A
+`duplicate_tool_call_id` error is likewise a defect in the model response and retrying the same
+request does not change the tool contract.
+
+These errors also do not count toward the circuit breaker. They indicate a model response problem,
+not provider or transport health. A provider circuit therefore cannot be opened by
+`unknown_tool` or `duplicate_tool_call_id`.
+
+See <a href="/docs/core/error-handling">Error Handling</a> for the complete retry behavior and
+
+<a href="/docs/core/circuit-breaker">Circuit Breaker</a> for how tool contract errors interact with
+provider health tracking.
 
 ## Continuing after a tool call
 
@@ -183,9 +254,9 @@ if (first.type === 'tool_calls') {
 }
 ```
 
-See <a href="/docs/guides/tool-execution-loop">the tool execution loop guide</a> for a complete, runnable
-example, and <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a> for how
-tool turns fit into `history` more generally.
+See <a href="/docs/guides/tool-execution-loop">the tool execution loop guide</a> for a complete,
+runnable example, and <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a>
+for how tool turns fit into `history` more generally.
 
 ## toolChoice
 
@@ -216,26 +287,26 @@ tool turns fit into `history` more generally.
 ## Combining with jsonSchema
 
 By default, on Anthropic and Bedrock, `tools` and `jsonSchema` cannot be combined. `jsonSchema` is
-implemented internally as a forced single tool call, which collides with real, caller-supplied
+implemented internally as a forced single tool call, which collides with real, caller supplied
 tools occupying the same request field. Setting both throws `LLMError('validation')` before a
-request is sent. Gemini and OpenAI-compatible clients never had this restriction: Gemini builds
-`responseSchema` and `tools` as independent, unconditional fields, and OpenAI-compatible clients
-pass `response_format`/`tools` straight through, so `jsonSchema` and `tools` always compose there,
-no opt-in needed.
+request is sent. Gemini and OpenAI compatible clients never had this restriction: Gemini builds
+`responseSchema` and `tools` as independent, unconditional fields, and OpenAI compatible clients
+pass `response_format` and `tools` straight through, so `jsonSchema` and `tools` always compose
+there, with no opt in needed.
 
-Both providers also support a schema-constrained output mechanism that lives in its own request
+Both providers also support a schema constrained output mechanism that lives in its own request
 field, independent of tool calling, so this restriction doesn't apply on models covered by
-`nativeStructuredOutputModels`, a caller-supplied, opt-in list. See{' '}
+`nativeStructuredOutputModels`, a caller supplied, opt in list. See{' '}
 
 <a href="/docs/core/structured-output#combining-with-tools">
   Structured Output → Combining with tools
 </a>
 for how to enable it.
 
-`tools` and `schema` (client-side validation, not `jsonSchema`) are never mutually exclusive.
+`tools` and `schema` (client side validation, not `jsonSchema`) are never mutually exclusive.
 `schema` only validates parsed JSON text and never touches the request fields tool calling uses.
-Likewise, `jsonMode: true` alongside `tools` (a plain `json_object`-style prompt instruction, no
-schema) always composes: it's a system-prompt nudge on every adapter, not a request field that
+Likewise, `jsonMode: true` alongside `tools` (a plain `json_object` style prompt instruction, no
+schema) always composes: it's a system prompt nudge on every adapter, not a request field that
 could collide with `tools`.
 
 `jsonMode` also defaults to `false` when `tools` is set, since forcing a JSON response format
@@ -268,27 +339,27 @@ const result = await llm.cachedCall({
 
 ## Breaking changes for a small number of callers
 
-Adding tool calling required two type-level changes: `ConversationTurn` became a discriminated
+Adding tool calling required two type level changes: `ConversationTurn` became a discriminated
 union, and `LLMClient.messages` widened to include tool turns. Neither affects a normal `call()`
 user. See <a href="/docs/migration-notes">Migration Notes</a> for exactly what breaks and why,
 verified against the compiler rather than guessed at.
 
 ## Provider support
 
-Every adapter translates VernLLM's OpenAI shaped `tools`/`tool_choice`/`tool_calls` into that
+Every adapter translates VernLLM's OpenAI shaped `tools`, `tool_choice`, and `tool_calls` into that
 provider's native mechanism:
 
 | Provider             | Native mechanism                                                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| OpenAI-compatible    | Passed through as is, VernLLM's wire format already matches                                                                                                       |
+| OpenAI compatible    | Passed through as is, VernLLM's wire format already matches                                                                                                       |
 | Anthropic            | `tool_use` / `tool_result` content blocks                                                                                                                         |
 | Bedrock              | Converse's `toolUse` / `toolResult` content blocks                                                                                                                |
 | Gemini               | `functionCall` / `functionResponse` parts                                                                                                                         |
 | Custom / `fromFetch` | Whatever your provider's own wire format is; `mapRequest`/`mapResponse` translate it, see <a href="/docs/adapters/custom-fetch#tool-calling">Custom Providers</a> |
 
 <Callout>
-  Gemini has no call id concept. VernLLM's Gemini adapter uses the function name as the wire tool
-  call id, which means two calls to the same tool within a single turn cannot be told apart when
+  Gemini has no call ID concept. VernLLM's Gemini adapter uses the function name as the wire tool
+  call ID, which means two calls to the same tool within a single turn cannot be told apart when
   results come back. This is a limitation of Gemini's own function calling API, not something
   VernLLM can work around.
 </Callout>

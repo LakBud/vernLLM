@@ -23,6 +23,8 @@ try {
         console.log(err.status); // HTTP status, if the provider returned one
         console.log(err.cause); // the original error thrown by the provider client
         console.log(err.retryAfterMs); // Retry-After from the last attempt, if the provider sent one
+        console.log(err.code); // more specific machine readable error code, when available
+        console.log(err.toolIssues); // all detected tool contract problems, when available
         break;
       case 'circuit_open':
         // provider is down, back off and do not retry immediately
@@ -41,9 +43,11 @@ try {
   </Card>
   <Card title="api">
     The provider returned an HTTP error with a status code. Retried unless the status is in
-    `nonRetryableStatus` (default `400, 401, 403, 404, 422`). Also raised, and retried, when the
-    model requests a tool name that was not in the `tools` array, on the reasoning that a
-    hallucinated tool name may not recur. See <a href="/docs/core/tool-calling">Tool Calling</a>.
+    `nonRetryableStatus` (default `400, 401, 403, 404, 422`).
+
+    `api` is also used for tool contract failures. These errors have a specific `code`, such as
+    `unknown_tool` or `duplicate_tool_call_id`, and are not retried.
+
   </Card>
   <Card title="parse">
     The response content was not valid JSON. Never retried because a malformed response will not fix
@@ -73,26 +77,89 @@ try {
   </Card>
 </Cards>
 
+## Error codes
+
+`LLMError.code` provides a more specific machine readable error code when `LLMError.type` alone
+does not describe the failure precisely.
+
+The currently defined tool contract codes are:
+
+| Code                     | Error type | Meaning                                                                       |
+| ------------------------ | ---------- | ----------------------------------------------------------------------------- |
+| `unknown_tool`           | `api`      | The model requested a tool that was not included in the call's `tools` array. |
+| `duplicate_tool_call_id` | `api`      | The model returned more than one tool call with the same call ID.             |
+
+```ts title="error-code.ts"
+try {
+  await llm.call({
+    userContent: 'Use the available tools.',
+    tools: [weatherTool],
+  });
+} catch (error) {
+  if (isLLMError(error) && error.code === 'unknown_tool') {
+    console.log('The model requested a tool that was not offered.');
+  }
+}
+```
+
+`code` is optional. Errors without a more specific machine readable code leave `code` undefined.
+
+## Tool contract issues
+
+A single model response can contain multiple tool contract problems. When this happens,
+`LLMError.toolIssues` contains the complete set of detected issues, while the top level `code`
+identifies the primary contract error.
+
+Each issue identifies the affected tool, tool call ID, and machine readable error code:
+
+```ts title="tool-issues.ts"
+interface ToolIssue {
+  name: string;
+  toolCallId: string;
+  code: 'unknown_tool' | 'duplicate_tool_call_id';
+  detail?: unknown;
+}
+```
+
 ## What gets retried
 
 `shouldRetry` skips a retry when any of these are true:
 
 - The signal has already aborted
-- `error.type` is `'parse'` or `'validation'` because these are deterministic response-processing failures rather than transient provider faults, so retrying will not help
+- `error.type` is `'parse'` or `'validation'` because these are deterministic response processing
+  failures rather than transient provider faults
+- `error.code` is `'unknown_tool'` or `'duplicate_tool_call_id'` because these are deterministic
+  tool contract failures
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to
-`maxRetries`. If the failed attempt's error carries a `Retry-After` header (delta-seconds or
-HTTP-date form), that value is honored for the wait, capped at the same max delay as backoff.
+`maxRetries`. If the failed attempt's error carries a `Retry-After` header (delta seconds or
+HTTP date form), that value is honored for the wait, capped at the same maximum delay as backoff.
 Otherwise the wait falls back to exponential backoff with jitter.
+
+### Tool contract errors are not retried
+
+`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable. See
+
+<a href="/docs/core/tool-calling">Tool Calling</a> for the canonical contract workflow and handling
+guidance. These errors therefore fail immediately instead of consuming the remaining `maxRetries`.
+
+<Callout type="warn">
+  Tool contract errors also do not count toward the circuit breaker. They describe a model response
+  problem rather than provider availability or transport health, so `unknown_tool` and
+  `duplicate_tool_call_id` cannot cause a healthy provider's circuit to open.
+</Callout>
 
 <Callout type="warn">
   Exhausting all retries also records a circuit breaker failure if one is configured and throws the
-  final normalized `LLMError`. For raw API or unknown thrown errors, the underlying error is
-  preserved on `err.cause`, so it's still available even though the top-level `message` is a generic
-  `'LLM request failed'`. Existing `LLMError` instances are not wrapped again, so some error types
-  (such as timeout, parse, and validation) may not have a `cause`.
+  final normalized `LLMError`. Tool contract errors are excluded from both retry handling and
+  circuit breaker failure accounting.
 </Callout>
+
+For raw API or unknown thrown errors, the underlying error is preserved on `err.cause`, so it is
+still available even though the top level `message` is a generic `'LLM request failed'`. Existing
+`LLMError` instances are not wrapped again, so some error types such as timeout, parse, and
+validation may not have a `cause`.
 
 ## Debugging a failed call
 

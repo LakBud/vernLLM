@@ -451,16 +451,108 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     ).rejects.toMatchObject({ type: 'validation', message: expect.stringMatching(/duplicate/i) });
   });
 
-  it('throws a clear error when the model requests a tool name that was not offered (and this is retryable, since a hallucination may not recur)', async () => {
-    const { client } = createMockClient([
+  it('throws a clear error when the model requests a tool name that was not offered, and does not retry, since the wire request would repeat identically', async () => {
+    const { client, create } = createMockClient([
       toolCallResponse([{ id: 'call_1', name: 'not_a_real_tool', arguments: {} }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
+
+    await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
+      type: 'api',
+      code: 'unknown_tool',
+      message: expect.stringContaining('not_a_real_tool'),
+      toolIssues: [{ name: 'not_a_real_tool', toolCallId: 'call_1', code: 'unknown_tool' }],
+    });
+
+    // Guards the retry-classification fix: even with retries configured,
+    // this is a defect that repeats byte-for-byte, so only one request
+    // should ever have reached the client.
+    expect(create.mock.calls.length).toBe(1);
+  });
+
+  it('aggregates every unknown tool name across a multi-call response into one error', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([
+        { id: 'call_1', name: 'not_real_1', arguments: {} },
+        { id: 'call_2', name: 'get_weather', arguments: { city: 'NYC' } },
+        { id: 'call_3', name: 'not_real_2', arguments: {} },
+      ]),
     ]);
     const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0 });
 
     await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
       type: 'api',
-      message: expect.stringContaining('not_a_real_tool'),
+      code: 'unknown_tool',
+      toolIssues: [
+        { name: 'not_real_1', toolCallId: 'call_1', code: 'unknown_tool' },
+        { name: 'not_real_2', toolCallId: 'call_3', code: 'unknown_tool' },
+      ],
     });
+  });
+
+  it("rejects a duplicate toolCallId among the model's own tool_calls, and does not retry", async () => {
+    const { client, create } = createMockClient([
+      toolCallResponse([
+        { id: 'call_1', name: 'get_weather', arguments: { city: 'NYC' } },
+        { id: 'call_1', name: 'get_weather', arguments: { city: 'LA' } },
+      ]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
+
+    await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
+      type: 'api',
+      code: 'duplicate_tool_call_id',
+      toolIssues: [{ name: 'get_weather', toolCallId: 'call_1', code: 'duplicate_tool_call_id' }],
+    });
+
+    expect(create.mock.calls.length).toBe(1);
+  });
+
+  it('aggregates unknown-tool and duplicate toolCallId issues from one multi-call response and does not retry', async () => {
+    const { client, create } = createMockClient([
+      toolCallResponse([
+        { id: 'call_1', name: 'not_a_real_tool', arguments: {} },
+        { id: 'call_1', name: 'get_weather', arguments: { city: 'NYC' } },
+      ]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
+
+    await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
+      type: 'api',
+      code: 'unknown_tool',
+      toolIssues: [
+        { name: 'not_a_real_tool', toolCallId: 'call_1', code: 'unknown_tool' },
+        { name: 'get_weather', toolCallId: 'call_1', code: 'duplicate_tool_call_id' },
+      ],
+    });
+
+    expect(create.mock.calls.length).toBe(1);
+  });
+
+  it('still reports a schema-validation failure as type "validation" (unchanged, single-error) when there is no contract failure', async () => {
+    const { client, create } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 42 } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
+
+    const strictWeatherTool = {
+      ...weatherTool,
+      argumentsSchema: {
+        safeParse: (data: unknown) => {
+          const city = (data as { city?: unknown })?.city;
+          return typeof city === 'string'
+            ? { success: true as const, data }
+            : { success: false as const, error: 'city must be a string' };
+        },
+      },
+    };
+
+    await expect(llm.call({ userContent: 'hi', tools: [strictWeatherTool] })).rejects.toMatchObject(
+      { type: 'validation', code: undefined, toolIssues: undefined },
+    );
+
+    // Validation failures were never retryable, before or after this change.
+    expect(create.mock.calls.length).toBe(1);
   });
 
   it('rejects toolChoice set without tools', async () => {

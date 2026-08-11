@@ -68,10 +68,15 @@ This page goes into more depth on when and how to reach for overrides.
 <Callout>
   Retry/timeout/circuit-breaker behavior (`maxRetries`, `timeoutMs`, `baseDelayMs`,
   `nonRetryableStatus`, `circuitBreaker`) is instance-level only and cannot be changed per call. If
-  different calls need different resilience settings, use separate `VernLLM` instances that share
-  the same underlying `client`. `chunkIdleTimeoutMs` is the one exception, it's overridable per call
-  since `stream: true` calls often need a different idle allowance than the instance default, see{' '}
-  <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
+  different calls need different resilience *settings* (a different `threshold` or `cooldownMs`
+  per model), use separate `VernLLM` instances that share the same underlying `client`.
+  `chunkIdleTimeoutMs` is the one exception, it's overridable per call since `stream: true` calls
+  often need a different idle allowance than the instance default, see{' '}
+  <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>. If instead you
+  just want one model's failures not to open the circuit for another model on the same instance,
+  without different threshold/cooldown values, `circuitBreaker: { isolateByModel: true }` does that
+  without a second instance, see{' '}
+  <a href="/docs/core/circuit-breaker#per-model-isolation">Per-model isolation</a>.
 </Callout>
 
 ## Common pattern: cheap default, expensive escalation

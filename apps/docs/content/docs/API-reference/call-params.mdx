@@ -95,6 +95,15 @@ Existing string-based calls remain fully compatible.
   </Card>
 </Cards>
 
+When tool calling is enabled, VernLLM validates the tool calls returned by the model before
+returning them to the application. Contract problems such as `unknown_tool` and
+`duplicate_tool_call_id` are surfaced as `LLMError('api')` values with a machine readable `code`
+and, when relevant, a complete `LLMError.toolIssues` list.
+
+See <a href="/docs/core/tool-calling">Tool Calling</a> for the canonical workflow and handling
+examples, and <a href="/docs/core/error-handling">Error Handling</a> for retry behavior and error
+classification.
+
 ## Streaming
 
 <Cards>
@@ -159,8 +168,9 @@ Existing string-based calls remain fully compatible.
 
 <Cards>
   <Card title="requestId">
-    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage` and
-    `onUsageFailure` so you can correlate a usage record back to the call that produced it. See{' '}
+    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage`,
+    `onUsageFailure`, and relevant `onEvent` values so you can correlate an event or usage record
+    back to the call that produced it. See{' '}
     <a href="/docs/core/usage-tracking">Token Usage Tracking</a>.
   </Card>
   <Card title="signal">

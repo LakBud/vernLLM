@@ -37,6 +37,8 @@ import {
   type StreamEnabledCallParams,
   type TokenUsage,
   type ToolEnabledCallParams,
+  type ToolIssue,
+  type VernLLMEvent,
   type VernLLMOptions,
   type WireMessage,
   type WireStreamChunk,
@@ -76,6 +78,8 @@ export class VernLLM {
 
   private readonly logger: Logger;
   private readonly breaker?: CircuitBreaker;
+  private readonly providerName: string;
+  private readonly onEvent?: VernLLMOptions['onEvent'];
 
   /**
    * @param options Client, model, and tunables. Defaults: `maxRetries` 1,
@@ -103,8 +107,42 @@ export class VernLLM {
     this.onUsageFailure = options.onUsageFailure;
 
     this.logger = options.logger ?? new ConsoleLogger(options.debug ?? false);
+    this.providerName = options.name ?? 'primary';
+    this.onEvent = options.onEvent;
+
+    const breakerOptions =
+      typeof options.circuitBreaker === 'object' ? options.circuitBreaker : undefined;
+    const userOnStateChange = breakerOptions?.onStateChange;
+
     this.breaker = options.circuitBreaker
-      ? new CircuitBreaker(options.circuitBreaker === true ? undefined : options.circuitBreaker)
+      ? new CircuitBreaker({
+          ...breakerOptions,
+          onStateChange: (from, to, consecutiveFailures, model) => {
+            this.reportEvent({
+              kind: 'circuit_state',
+              provider: this.providerName,
+              model: model ?? this.model,
+              from,
+              to,
+              consecutiveFailures,
+            });
+
+            // A caller-supplied onStateChange would otherwise be silently
+            // discarded, since the spread above is overwritten by this
+            // property. Chain it instead, same try/catch treatment as
+            // every other user-supplied callback so it can't break
+            // breaker bookkeeping or the call that triggered it.
+            if (!userOnStateChange) return;
+
+            try {
+              userOnStateChange(from, to, consecutiveFailures, model);
+            } catch (error) {
+              this.logger.error('[VernLLM] circuitBreaker.onStateChange failed', {
+                message: error instanceof Error ? error.message : 'unknown',
+              });
+            }
+          },
+        })
       : undefined;
   }
 
@@ -158,7 +196,13 @@ export class VernLLM {
   async call<T = unknown>(
     params: CallParams<T>,
   ): Promise<T | CallWithToolsResult<T> | StreamCallResult<T | CallWithToolsResult<T>>> {
-    this.breaker?.assertClosed();
+    // Resolved before the breaker check, matching `buildRequestPayload`'s
+    // own `params.model ?? this.model` default, so both the breaker and
+    // retry events for this call report the model actually in play
+    // instead of always this instance's default.
+    const model = params.model ?? this.model;
+
+    this.breaker?.assertClosed(model);
 
     if (params.signal?.aborted) {
       throw new LLMError('LLM request aborted', 'aborted');
@@ -179,17 +223,14 @@ export class VernLLM {
             return await this.retryWithBackoff(
               (attempt) => this.executeStreamCall(params, requestId, attempt),
               requestId,
+              model,
               params.signal,
             );
           } catch (error) {
             const normalized = normalizeError(error, params.signal);
 
-            if (
-              normalized.type !== 'validation' &&
-              normalized.type !== 'parse' &&
-              normalized.type !== 'aborted'
-            ) {
-              this.breaker?.recordFailure();
+            if (this.countsTowardBreaker(normalized)) {
+              this.breaker?.recordFailure(model);
             }
 
             this.logger.debug(`[VernLLM:${requestId}] stream-open error:\n${describeError(error)}`);
@@ -210,17 +251,14 @@ export class VernLLM {
           return await this.retryWithBackoff(
             (attempt) => this.executeCall(params, requestId, attempt),
             requestId,
+            model,
             params.signal,
           );
         } catch (error) {
           const normalized = normalizeError(error, params.signal);
 
-          if (
-            normalized.type !== 'validation' &&
-            normalized.type !== 'parse' &&
-            normalized.type !== 'aborted'
-          ) {
-            this.breaker?.recordFailure();
+          if (this.countsTowardBreaker(normalized)) {
+            this.breaker?.recordFailure(model);
           }
 
           this.logger.debug(`[VernLLM:${requestId}] error:\n${describeError(error)}`);
@@ -269,6 +307,7 @@ export class VernLLM {
       wireToolCalls,
       params,
       useJson,
+      model,
       usage,
       requestId,
       attempt,
@@ -290,6 +329,7 @@ export class VernLLM {
     wireToolCalls: WireToolCall[] | undefined,
     params: CallParams<T>,
     useJson: boolean,
+    model: string,
     usage: TokenUsage | undefined,
     requestId: string,
     attempt: number,
@@ -319,7 +359,7 @@ export class VernLLM {
         const toolCalls = parseWireToolCalls(wireToolCalls);
 
         this.validateToolCallArguments(toolCalls, params.tools);
-        this.breaker?.recordSuccess();
+        this.breaker?.recordSuccess(model);
         this.reportUsage(usage);
 
         return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
@@ -329,14 +369,14 @@ export class VernLLM {
       const textContent = content ?? '';
 
       if (!useJson) {
-        this.breaker?.recordSuccess();
+        this.breaker?.recordSuccess(model);
         this.reportUsage(usage);
 
         return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
       }
 
       const result = this.parseAndValidate<T>(textContent, params.schema);
-      this.breaker?.recordSuccess();
+      this.breaker?.recordSuccess(model);
       this.reportUsage(usage);
 
       return params.tools ? { type: 'content', content: result } : result;
@@ -609,6 +649,7 @@ export class VernLLM {
               totalTokens: wireChunk.usage.total_tokens ?? 0,
               requestId,
               model,
+              provider: this.providerName,
             };
             push({ type: 'usage', usage });
           }
@@ -656,7 +697,7 @@ export class VernLLM {
         // breaker: otherwise a provider that hangs after one chunk would
         // always record a success and never open it.
         if (normalized.type === 'timeout') {
-          this.breaker?.recordFailure();
+          this.breaker?.recordFailure(model);
         }
 
         if (usage && normalized.type !== 'aborted') {
@@ -670,7 +711,7 @@ export class VernLLM {
       }
 
       finish();
-      this.breaker?.recordSuccess();
+      this.breaker?.recordSuccess(model);
 
       try {
         const wireToolCalls: WireToolCall[] | undefined = toolCallAcc.size
@@ -688,6 +729,7 @@ export class VernLLM {
           wireToolCalls,
           params,
           useJson,
+          model,
           usage,
           requestId,
           attempt,
@@ -706,25 +748,66 @@ export class VernLLM {
 
   /**
    * Checks every `ToolCall` against the `tools` that were offered, catching
-   * a hallucinated tool name early instead of letting it reach the
-   * application's dispatch table. Then runs each tool's `argumentsSchema`,
-   * if present, throwing `LLMError('validation')` on failure.
+   * a hallucinated tool name and a duplicate call id before either reaches
+   * the application's dispatch table, then runs each tool's
+   * `argumentsSchema`, if present.
+   *
+   * Contract failures (unknown name, duplicate id) are collected across
+   * every call and thrown together, since retrying a request that already
+   * has these errors cannot help (`shouldRetry` excludes them by `code`)
+   * and a caller fixing them wants to see every one, not just the first.
+   * Schema failures keep the original single-error, `type: 'validation'`
+   * shape: retrying can genuinely help there if the model changes its
+   * arguments, and mixing that type into the aggregate would blur the two.
    */
   private validateToolCallArguments(
-    toolCalls: { name: string; arguments: unknown }[],
+    toolCalls: { id: string; name: string; arguments: unknown }[],
     tools: NonNullable<CallParams<unknown>['tools']>,
   ): void {
-    const knownNames = new Set(tools.map((t) => t.name));
+    const known = new Map(tools.map((t) => [t.name, t]));
+    const seenIds = new Set<string>();
+    const toolIssues: ToolIssue[] = [];
 
     for (const call of toolCalls) {
-      if (!knownNames.has(call.name)) {
-        throw new LLMError(
-          `Model requested tool "${call.name}", which was not in the tools offered ([${[...knownNames].join(', ')}]).`,
-          'api',
-        );
+      if (seenIds.has(call.id)) {
+        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'duplicate_tool_call_id' });
       }
+      seenIds.add(call.id);
 
-      const definition = tools.find((t) => t.name === call.name);
+      if (!known.has(call.name)) {
+        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'unknown_tool' });
+      }
+    }
+
+    if (toolIssues.length > 0) {
+      const unknownTool = toolIssues.find((i) => i.code === 'unknown_tool');
+      const primary = unknownTool
+        ? `Model requested tool "${unknownTool.name}", which was not in the tools offered ([${[...known.keys()].join(', ')}]).`
+        : `Duplicate tool call id "${toolIssues[0]!.toolCallId}" in the model's response.`;
+
+      // Most responses hit exactly one issue. When there's more than one,
+      // say so, since toolCalls[0]'s problem alone would otherwise read as
+      // the whole story.
+      const message =
+        toolIssues.length > 1
+          ? `${primary} (${toolIssues.length} tool call issues total, see toolIssues.)`
+          : primary;
+
+      const error = new LLMError(
+        message,
+        'api',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        unknownTool ? 'unknown_tool' : 'duplicate_tool_call_id',
+      );
+      error.toolIssues = toolIssues;
+      throw error;
+    }
+
+    for (const call of toolCalls) {
+      const definition = known.get(call.name);
 
       if (!definition?.argumentsSchema) continue;
 
@@ -745,6 +828,7 @@ export class VernLLM {
   private async retryWithBackoff<T>(
     fn: (attempt: number) => Promise<T>,
     requestId: string,
+    model: string,
     signal?: AbortSignal,
   ): Promise<T> {
     let lastError: unknown;
@@ -752,7 +836,7 @@ export class VernLLM {
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
         if (attempt > 0) {
-          await this.recoverDelay(requestId, attempt, lastError, signal);
+          await this.recoverDelay(requestId, model, attempt, lastError, signal);
         }
 
         return await fn(attempt);
@@ -1032,6 +1116,7 @@ export class VernLLM {
       totalTokens: response.usage.total_tokens ?? 0,
       requestId,
       model,
+      provider: this.providerName,
     };
   }
 
@@ -1090,6 +1175,19 @@ export class VernLLM {
     }
   }
 
+  /** Reports a `VernLLMEvent`, swallowing and logging any error the handler throws. */
+  private reportEvent(event: VernLLMEvent): void {
+    if (!this.onEvent) return;
+
+    try {
+      this.onEvent(event);
+    } catch (error) {
+      this.logger.error('[VernLLM] onEvent failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
+
   /** Parses response content as JSON and validates it against `schema` when supplied. */
   private parseAndValidate<T>(content: string, schema?: CallParams<T>['schema']): T {
     let parsed: unknown;
@@ -1123,19 +1221,40 @@ export class VernLLM {
    */
   private async recoverDelay(
     requestId: string,
+    model: string,
     attempt: number,
     error: unknown,
     signal?: AbortSignal,
   ) {
     const retryAfterMs = extractRetryAfterMs(error);
     const delay = retryAfterMs ?? getBackoffDelay(this.baseDelayMs, attempt);
+    const retryAfterHonored = retryAfterMs !== undefined;
 
     this.logger.warn(
       `[VernLLM:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${delay}ms` +
-        (retryAfterMs !== undefined ? ' (honoring Retry-After)' : ''),
+        (retryAfterHonored ? ' (honoring Retry-After)' : ''),
     );
 
+    this.reportEvent({
+      kind: 'retry',
+      requestId,
+      provider: this.providerName,
+      model,
+      attempt,
+      maxRetries: this.maxRetries,
+      delayMs: delay,
+      retryAfterHonored,
+      error: normalizeError(error, signal),
+    });
+
     await waitForRetry(delay, signal);
+  }
+
+  private isNonRetryableToolContractError(error: unknown): error is LLMError {
+    return (
+      error instanceof LLMError &&
+      (error.code === 'unknown_tool' || error.code === 'duplicate_tool_call_id')
+    );
   }
 
   /** Decides whether a failed attempt is worth retrying. */
@@ -1146,9 +1265,38 @@ export class VernLLM {
       return false;
     }
 
+    // Tool contract failures repeat identically on retry: the wire request
+    // is byte-for-byte the same, so nothing about a retry can change
+    // whether the model names a real tool or reuses a call id.
+    if (this.isNonRetryableToolContractError(error)) {
+      return false;
+    }
+
     const status = extractStatus(error);
 
     return !(status !== undefined && this.nonRetryableStatus.includes(status));
+  }
+
+  /**
+   * Decides whether a failed attempt should count toward the circuit
+   * breaker's failure threshold. A model hallucinating a tool name or
+   * reusing a call id isn't the provider being unhealthy, it's a model
+   * response defect that will very likely recur regardless of provider
+   * health, so it shouldn't push a healthy provider's circuit toward
+   * opening. Mirrors the same reasoning `shouldRetry` already applies to
+   * `parse`/`validation`/these same tool-contract codes.
+   */
+  private countsTowardBreaker(error: LLMError): boolean {
+    if (
+      error.type === 'validation' ||
+      error.type === 'parse' ||
+      error.type === 'aborted' ||
+      this.isNonRetryableToolContractError(error)
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -1451,10 +1599,14 @@ export class VernLLM {
   }
 
   /**
+   * @param model With `circuitBreaker.isolateByModel` on, returns that
+   * model's own circuit state instead of the shared one. Ignored
+   * otherwise. Omit for the shared circuit (the default) or, under
+   * isolation, the state of calls that didn't resolve a model.
    * @returns The current circuit breaker state (`'closed' | 'open' |
    * 'half-open'`), or undefined if no circuit breaker was configured.
    */
-  getCircuitState() {
-    return this.breaker?.getState();
+  getCircuitState(model?: string) {
+    return this.breaker?.getState(model);
   }
 }
