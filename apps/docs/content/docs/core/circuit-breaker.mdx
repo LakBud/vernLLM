@@ -13,81 +13,132 @@ const llm = new VernLLM({
 llm.getCircuitState(); // 'closed' | 'open' | 'half-open' | undefined
 ```
 
-Once `threshold` consecutive failures occur, further calls fail immediately with `LLMError('circuit_open')` until `cooldownMs` elapses, at which point a trial call is allowed through (half-open). A successful trial closes the circuit; a failed one reopens it.
+Once `threshold` consecutive failures occur, further calls fail immediately with
+`LLMError('circuit_open')` until `cooldownMs` elapses. The next call is then allowed through as a
+trial in the `half-open` state. A successful trial closes the circuit and resets the failure count.
+A failed trial reopens the circuit and restarts the cooldown.
 
 ## What counts as a failure
 
 <Callout type="warn">
-  The circuit breaker only tracks provider and transport-level health, not response correctness.
-  When `jsonMode` is enabled (the default), success is recorded only after JSON parsing and schema
-  validation both succeed. If either step fails, no success or failure is recorded for that call:
-  the provider returned a usable response, so it does not count as a provider failure either.
+  The circuit breaker tracks provider and transport level health rather than response correctness.
+  When `jsonMode` is enabled, which is the default, a successful call must still pass JSON parsing
+  and schema validation. Parsing or validation failures do not count as circuit breaker failures
+  because the provider returned a usable response.
 </Callout>
 
-- **Counts as a failure**: timeouts, non-2xx responses, network errors, an empty response body.
-  Anything that means the provider itself didn't come through.
+Counts as a failure:
 
-- **Does not count as a failure**: `validation` and `parse` type errors, for the same reason as
-  above, the provider returned a usable response even though it didn't pass validation. Caller
-  aborts (`LLMError('aborted')`) also do not count. Nor do `unknown_tool` and
-  `duplicate_tool_call_id` tool-contract failures (`LLMError('api')` with that `code`): the model
-  requesting an unoffered tool name or reusing a call id is a model-response defect, not a sign the
-  provider itself is unhealthy, and it will very likely recur on retry regardless of provider
-  health, so it shouldn't push a healthy provider's circuit toward opening.
+- Timeouts
+- Non 2xx responses
+- Network errors
+- An empty response body
+- Other errors indicating that the provider did not successfully return a usable response
 
-## Half-open behavior
+Does not count as a failure:
 
-When the cooldown elapses, the next call to check the breaker (via `assertClosed`) transitions the state from `open` to `half-open` and is allowed through as a trial. Only one trial call is allowed through per half-open window: any other call that checks the breaker while a trial is outstanding is rejected immediately with `LLMError('circuit_open')`, without waiting for the trial to finish. This holds even when several calls check the breaker at roughly the same moment right after cooldown elapses.
+- `LLMError('validation')`
+- `LLMError('parse')`
+- `LLMError('aborted')`
+- `LLMError('api')` with `code: 'unknown_tool'`
+- `LLMError('api')` with `code: 'duplicate_tool_call_id'`
 
-- A **successful** trial call closes the circuit and resets the failure count to zero.
-- A **failed** trial call reopens the circuit immediately and restarts the cooldown clock from that moment, without needing to hit `threshold` again. One failed trial is enough to reopen.
+The tool contract errors are model response defects rather than provider health failures. An
+`unknown_tool` error means the model requested a tool that was not offered. A
+`duplicate_tool_call_id` error means the model reused a tool call ID. Neither error indicates that
+the provider is unavailable, so neither contributes to the circuit failure count.
+
+These tool contract errors are also not retried. Retrying the same request does not change the
+available tool contract or repair the duplicate ID.
+
+## Half open behavior
+
+When the cooldown elapses, the next call to check the breaker through `assertClosed` transitions the
+state from `open` to `half-open` and is allowed through as a trial.
+
+Only one trial call is allowed through during each half open window. Any other call that checks the
+breaker while a trial is outstanding is rejected immediately with `LLMError('circuit_open')`
+without waiting for the trial to finish. This also applies when several calls check the breaker at
+approximately the same time after the cooldown expires.
+
+A successful trial closes the circuit and resets the failure count to zero.
+
+A failed trial reopens the circuit immediately and restarts the cooldown from that moment. The
+threshold does not need to be reached again because one failed trial is enough to reopen the circuit.
 
 ## Scope
 
-Each `VernLLM` instance owns its own circuit breaker; state is never shared across instances. If you're running multiple providers side by side (see the provider fallback guide), one instance's breaker opening has no effect on any other instance.
+Each `VernLLM` instance owns its own circuit breaker. State is never shared across instances. If
+you are running multiple providers side by side, one instance opening its circuit has no effect on
+another instance.
 
-Within a single instance, the default is one shared circuit for every call regardless of which model was used (via a per-call `model` override, see [per-call overrides](/docs/guides/per-call-overrides)). This matches the common case: the failing dependency is almost always the client/provider itself, which is shared across every model you call through it, so a burst of failures on any model is a fast, accurate signal that the provider is struggling.
+See <a href="/docs/guides/provider-fallback">Provider Fallback</a> for a setup with multiple
+providers.
 
-### Per-model isolation
+Within a single instance, the default is one shared circuit for every call regardless of which
+model was used. This includes calls that provide a per call `model` override. See
+
+<a href="/docs/guides/per-call-overrides">Per Call Overrides</a>.
+
+Sharing the circuit is useful when several models use the same underlying provider because a burst
+of failures on any model can indicate that the provider itself is struggling.
+
+### Per model isolation
 
 <Callout type="info">
-  Off by default. Turning it on changes what the breaker protects against, read the tradeoff below
-  before enabling it.
+  `isolateByModel` is disabled by default. Enable it when models used through the same `VernLLM`
+  instance should have independent circuit state.
 </Callout>
 
-If a single instance is deliberately used for several unrelated models, e.g. a cheap model for one
-task and an expensive one for another, sharing a client but not really sharing a failure mode, set
-`isolateByModel: true` to give each model its own independent circuit:
+If a single instance is deliberately used for several unrelated models, set `isolateByModel: true`
+to give each resolved model its own independent circuit:
 
 ```ts title="circuit-breaker-isolate-by-model.ts"
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
-  circuitBreaker: { threshold: 5, cooldownMs: 30_000, isolateByModel: true },
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+    isolateByModel: true,
+  },
 });
 
-await llm.call({ userContent: '...', model: 'gpt-4o' }); // fails repeatedly, opens gpt-4o's circuit
-await llm.call({ userContent: '...', model: 'gpt-4o-mini' }); // unaffected, still reaches the provider
+await llm.call({
+  userContent: '...',
+  model: 'gpt-4o',
+});
+
+await llm.call({
+  userContent: '...',
+  model: 'gpt-4o-mini',
+});
 
 llm.getCircuitState('gpt-4o'); // 'open'
 llm.getCircuitState('gpt-4o-mini'); // 'closed'
 ```
 
-With `isolateByModel` on, a failure on one model can never open another model's circuit. The
-tradeoff: a real provider-wide outage spread across many distinct models now takes proportionally
-longer to detect, since each model's counter must independently cross `threshold` rather than one
-shared counter catching it after `threshold` failures total. Reach for this only when the models
-sharing an instance are genuinely different dependencies in practice, not when they're the same
-provider called with different model strings for the same purpose.
+With `isolateByModel` enabled, a failure on one model cannot open another model's circuit.
 
-`threshold` and `cooldownMs` still apply the same to every model's circuit; there's no way to tune
-them per model.
+The tradeoff is that a provider wide outage affecting several models takes longer to detect. Each
+model has its own failure counter, so every affected model must independently reach `threshold`.
+With the default shared circuit, failures across models contribute to the same counter and the
+provider can be marked unhealthy sooner.
+
+Use `isolateByModel` when models sharing an instance represent genuinely different failure
+dependencies. If the models are simply different model IDs on the same provider and a provider wide
+outage should stop traffic quickly, the default shared circuit is usually preferable.
+
+`threshold` and `cooldownMs` apply equally to every model circuit. They cannot be configured
+independently for individual models.
 
 ## Observing state changes
 
-`circuitBreaker.onStateChange` fires on every real state transition (never a no-op like open to
-open), reporting `from`, `to`, the failure count, and the `model` of whichever call triggered that
-specific transition:
+`circuitBreaker.onStateChange` fires after every real circuit state transition. It does not fire for
+a state that remains unchanged.
+
+The callback receives the previous state, the new state, the current consecutive failure count, and
+the resolved model that triggered the transition:
 
 ```ts title="circuit-breaker-on-state-change.ts"
 const llm = new VernLLM({
@@ -95,23 +146,46 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   circuitBreaker: {
     threshold: 5,
+    cooldownMs: 30_000,
     onStateChange: (from, to, consecutiveFailures, model) => {
-      if (to === 'open') alerting.page(`circuit opened for ${model}`);
+      if (to === 'open') {
+        alerting.page(`circuit opened for ${model}`);
+      }
     },
   },
 });
 ```
 
-With `isolateByModel` off (the default), `model` is a label only: the breaker still counts
-failures across every model together, so a threshold crossing can be the sum of several different
-models' failures even though only the triggering call's `model` is reported. With `isolateByModel`
-on, it's exact, the transition really was caused solely by that model.
+When `isolateByModel` is disabled, which is the default, `model` identifies the call that triggered
+the transition. The failure counter is still shared across all models, so a circuit can open after
+failures from several different models.
+
+When `isolateByModel` is enabled, the failure counter and state belong exclusively to the resolved
+model reported by the callback.
+
+The `onStateChange` callback is observational. It does not control whether the circuit opens,
+closes, or transitions to half open.
 
 ## Checking state manually
 
-```ts
+```ts title="circuit-breaker-state.ts"
 llm.getCircuitState(); // 'closed' | 'open' | 'half-open' | undefined
-llm.getCircuitState('gpt-4o'); // with isolateByModel: true, that model's own state
+
+llm.getCircuitState('gpt-4o');
+// With isolateByModel: true, returns gpt-4o's circuit state.
 ```
 
-Returns `undefined` if `circuitBreaker` wasn't configured on this instance at all, rather than defaulting to `'closed'`. Useful for distinguishing "the breaker is closed" from "there is no breaker." The `model` param is ignored (and can be omitted) unless `isolateByModel` is on.
+`getCircuitState()` returns `undefined` when `circuitBreaker` was not configured on the instance.
+This distinguishes an unconfigured circuit breaker from a configured breaker whose current state is
+`closed`.
+
+The optional `model` parameter is used when `isolateByModel` is enabled. When model isolation is
+disabled, the circuit is shared and the model parameter is ignored.
+
+```ts title="checking-isolated-state.ts"
+const state = llm.getCircuitState('gpt-4o');
+
+if (state === 'open') {
+  console.log('gpt-4o is currently blocked by the circuit breaker');
+}
+```

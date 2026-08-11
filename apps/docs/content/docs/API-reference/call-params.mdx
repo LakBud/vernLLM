@@ -95,6 +95,62 @@ Existing string-based calls remain fully compatible.
   </Card>
 </Cards>
 
+When tool calling is enabled, VernLLM validates the tool calls returned by the model before
+returning them to the application.
+
+An `unknown_tool` error is raised when the model requests a tool that was not included in `tools`.
+A `duplicate_tool_call_id` error is raised when multiple tool calls in the same response use the
+same call ID.
+
+Both errors are represented as `LLMError('api')` with a machine readable `code`:
+
+```ts title="tool-contract-error-codes.ts"
+try {
+  await llm.call({
+    userContent: 'Use the available tools.',
+    tools: [weatherTool],
+  });
+} catch (error) {
+  if (isLLMError(error)) {
+    if (error.code === 'unknown_tool') {
+      console.log('The model requested a tool that was not offered.');
+    }
+
+    if (error.code === 'duplicate_tool_call_id') {
+      console.log('The model returned the same tool call ID more than once.');
+    }
+  }
+}
+```
+
+A single response can contain multiple tool contract problems. When that happens,
+`LLMError.toolIssues` contains the complete set of detected issues so the application can handle
+them together.
+
+```ts title="tool-contract-issues.ts"
+try {
+  await llm.call({
+    userContent: 'Use the available tools.',
+    tools: [weatherTool],
+  });
+} catch (error) {
+  if (isLLMError(error) && error.toolIssues) {
+    for (const issue of error.toolIssues) {
+      console.log(issue.code, issue.name, issue.toolCallId);
+    }
+  }
+}
+```
+
+Tool contract errors are not retried because retrying the same request cannot make an unavailable
+tool available or repair a duplicate tool call ID. They also do not count toward the circuit
+breaker because they indicate a model response problem rather than a provider availability
+failure.
+
+See <a href="/docs/core/tool-calling">Tool Calling</a> for the complete tool contract behavior and
+
+<a href="/docs/core/error-handling">Error Handling</a> for error codes and retry behavior.
+
 ## Streaming
 
 <Cards>
@@ -159,8 +215,9 @@ Existing string-based calls remain fully compatible.
 
 <Cards>
   <Card title="requestId">
-    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage` and
-    `onUsageFailure` so you can correlate a usage record back to the call that produced it. See{' '}
+    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage`,
+    `onUsageFailure`, and relevant `onEvent` values so you can correlate an event or usage record
+    back to the call that produced it. See{' '}
     <a href="/docs/core/usage-tracking">Token Usage Tracking</a>.
   </Card>
   <Card title="signal">
