@@ -91,7 +91,9 @@ of failures on any model can indicate that the provider itself is struggling.
 </Callout>
 
 If a single instance is deliberately used for several unrelated models, set `isolateByModel: true`
-to give each resolved model its own independent circuit:
+to give each resolved model its own independent circuit. The sequence below makes the precondition
+explicit: it drives `gpt-4o` to the configured threshold with repeated failures while the later
+`gpt-4o-mini` call remains successful.
 
 ```ts title="circuit-breaker-isolate-by-model.ts"
 const llm = new VernLLM({
@@ -104,10 +106,9 @@ const llm = new VernLLM({
   },
 });
 
-await llm.call({
-  userContent: '...',
-  model: 'gpt-4o',
-});
+for (let i = 0; i < 5; i++) {
+  await llm.call({ userContent: '...', model: 'gpt-4o' }).catch(() => {});
+}
 
 await llm.call({
   userContent: '...',

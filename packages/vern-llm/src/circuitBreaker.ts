@@ -86,8 +86,16 @@ export class CircuitBreaker {
     this.isolateByModel = options.isolateByModel ?? false;
   }
 
-  /** Resolves (creating if needed) the bucket a call with this `model` touches. */
-  private bucketFor(model: string | undefined): CircuitBucket {
+  /** Returns the bucket for a model if one already exists, without allocating. */
+  private lookupBucket(model: string | undefined): CircuitBucket | undefined {
+    if (!this.isolateByModel) return this.sharedBucket;
+
+    const key = model ?? UNLABELED_MODEL;
+    return this.bucketsByModel.get(key);
+  }
+
+  /** Creates and stores a bucket for a model when the first mutation needs one. */
+  private ensureBucketFor(model: string | undefined): CircuitBucket {
     if (!this.isolateByModel) return this.sharedBucket;
 
     const key = model ?? UNLABELED_MODEL;
@@ -118,7 +126,7 @@ export class CircuitBreaker {
    * becomes that trial
    */
   assertClosed(model?: string): void {
-    const bucket = this.bucketFor(model);
+    const bucket = this.ensureBucketFor(model);
 
     if (bucket.state === 'closed') return;
 
@@ -151,15 +159,23 @@ export class CircuitBreaker {
   }
 
   recordSuccess(model?: string): void {
-    const bucket = this.bucketFor(model);
+    const bucket = this.lookupBucket(model);
+
+    if (!bucket) {
+      return;
+    }
 
     bucket.consecutiveFailures = 0;
     bucket.trialInFlight = false;
     this.transition(bucket, 'closed', model);
+
+    if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
+      this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
+    }
   }
 
   recordFailure(model?: string): void {
-    const bucket = this.bucketFor(model);
+    const bucket = this.ensureBucketFor(model);
 
     bucket.consecutiveFailures += 1;
     bucket.trialInFlight = false;
@@ -188,6 +204,6 @@ export class CircuitBreaker {
    * fresh breaker.
    */
   getState(model?: string): CircuitState {
-    return this.bucketFor(model).state;
+    return this.lookupBucket(model)?.state ?? 'closed';
   }
 }

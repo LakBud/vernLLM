@@ -33,12 +33,11 @@ interface TokenUsage {
 - **`model`** reflects the model that actually served the request, including a per call `model`
   override, not just the instance's default. This is important if you bill different models at
   different rates.
-- **`provider`** identifies the provider associated with the response when the adapter supplies
-  provider information. This is useful when the same application routes requests through multiple
-  providers and usage needs to be attributed to the provider that actually served the request.
+- **`provider`** is the configured `VernLLMOptions.name` instance label, default `'primary'`,
+  assigned by VernLLM to usage records. It is a label for the instance that produced the usage
+  data, not a signal of request routing or provider selection.
 
-Provider information is included in usage callbacks for both successful and failed responses when
-the provider information is available:
+The same instance label is included in usage callbacks for both successful and failed responses:
 
 ```ts title="usage-provider-information.ts"
 const llm = new VernLLM({
@@ -65,10 +64,9 @@ const llm = new VernLLM({
 ```
 
 <Callout type="info">
-  `provider` describes the provider associated with the response, while `model` describes the model
-  that actually served the request. Do not assume that the instance's default model or provider is
-  necessarily the one represented by a particular usage record when per call overrides or provider
-  adapters are involved.
+  `provider` is the configured instance label, while `model` describes the model that actually
+  served the request. Do not assume that the instance's default model or provider label is
+  necessarily the one represented by a particular usage record when per call overrides are involved.
 </Callout>
 
 ## When it does and doesn't fire

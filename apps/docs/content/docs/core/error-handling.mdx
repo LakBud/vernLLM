@@ -107,7 +107,8 @@ try {
 ## Tool contract issues
 
 A single model response can contain multiple tool contract problems. When this happens,
-`LLMError.toolIssues` contains the complete set of detected issues.
+`LLMError.toolIssues` contains the complete set of detected issues, while the top level `code`
+identifies the primary contract error.
 
 Each issue identifies the affected tool, tool call ID, and machine readable error code:
 
@@ -119,26 +120,6 @@ interface ToolIssue {
   detail?: unknown;
 }
 ```
-
-For example:
-
-```ts title="handling-tool-issues.ts"
-try {
-  await llm.call({
-    userContent: 'Use the available tools.',
-    tools: [weatherTool],
-  });
-} catch (error) {
-  if (isLLMError(error) && error.toolIssues) {
-    for (const issue of error.toolIssues) {
-      console.log(issue.code, issue.name, issue.toolCallId);
-    }
-  }
-}
-```
-
-The top level `code` identifies the primary contract error. `toolIssues` contains the complete set
-of detected contract problems so the application can diagnose them together.
 
 ## What gets retried
 
@@ -158,15 +139,10 @@ Otherwise the wait falls back to exponential backoff with jitter.
 
 ### Tool contract errors are not retried
 
-`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable.
+`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable. See
 
-An `unknown_tool` error means the model requested a tool that was not offered in the request.
-Retrying the same request does not change the available tool contract.
-
-A `duplicate_tool_call_id` error means the model returned multiple tool calls with the same ID.
-Retrying is not useful for repairing the invalid response contract.
-
-These errors therefore fail immediately instead of consuming the remaining `maxRetries`.
+<a href="/docs/core/tool-calling">Tool Calling</a> for the canonical contract workflow and handling
+guidance. These errors therefore fail immediately instead of consuming the remaining `maxRetries`.
 
 <Callout type="warn">
   Tool contract errors also do not count toward the circuit breaker. They describe a model response

@@ -5,7 +5,7 @@ import { createMockClient, jsonResponse, toolCallResponse } from '../helpers.js'
 
 describe('VernLLM workflow, circuit breaker isolateByModel', () => {
   it('a failing model does not block calls to a different, healthy model on the same instance', async () => {
-    const { client } = createMockClient([
+    const { client, create } = createMockClient([
       new Error('down'), // gpt-4o fails and opens its own circuit
       jsonResponse({ ok: true }), // gpt-4o-mini succeeds right after
     ]);
@@ -28,6 +28,7 @@ describe('VernLLM workflow, circuit breaker isolateByModel', () => {
 
     // The failing model is still blocked without hitting the client again.
     await expect(llm.call({ userContent: 'u' })).rejects.toMatchObject({ type: 'circuit_open' });
+    expect(create.mock.calls.length).toBe(2);
   });
 });
 

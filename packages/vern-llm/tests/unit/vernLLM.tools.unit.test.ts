@@ -508,6 +508,27 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     expect(create.mock.calls.length).toBe(1);
   });
 
+  it('aggregates unknown-tool and duplicate toolCallId issues from one multi-call response and does not retry', async () => {
+    const { client, create } = createMockClient([
+      toolCallResponse([
+        { id: 'call_1', name: 'not_a_real_tool', arguments: {} },
+        { id: 'call_1', name: 'get_weather', arguments: { city: 'NYC' } },
+      ]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
+
+    await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
+      type: 'api',
+      code: 'unknown_tool',
+      toolIssues: [
+        { name: 'not_a_real_tool', toolCallId: 'call_1', code: 'unknown_tool' },
+        { name: 'get_weather', toolCallId: 'call_1', code: 'duplicate_tool_call_id' },
+      ],
+    });
+
+    expect(create.mock.calls.length).toBe(1);
+  });
+
   it('still reports a schema-validation failure as type "validation" (unchanged, single-error) when there is no contract failure', async () => {
     const { client, create } = createMockClient([
       toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 42 } }]),

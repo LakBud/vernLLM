@@ -1250,6 +1250,13 @@ export class VernLLM {
     await waitForRetry(delay, signal);
   }
 
+  private isNonRetryableToolContractError(error: unknown): error is LLMError {
+    return (
+      error instanceof LLMError &&
+      (error.code === 'unknown_tool' || error.code === 'duplicate_tool_call_id')
+    );
+  }
+
   /** Decides whether a failed attempt is worth retrying. */
   private shouldRetry(error: unknown, signal?: AbortSignal): boolean {
     if (signal?.aborted) return false;
@@ -1261,10 +1268,7 @@ export class VernLLM {
     // Tool contract failures repeat identically on retry: the wire request
     // is byte-for-byte the same, so nothing about a retry can change
     // whether the model names a real tool or reuses a call id.
-    if (
-      error instanceof LLMError &&
-      (error.code === 'unknown_tool' || error.code === 'duplicate_tool_call_id')
-    ) {
+    if (this.isNonRetryableToolContractError(error)) {
       return false;
     }
 
@@ -1283,11 +1287,16 @@ export class VernLLM {
    * `parse`/`validation`/these same tool-contract codes.
    */
   private countsTowardBreaker(error: LLMError): boolean {
-    if (error.type === 'validation' || error.type === 'parse' || error.type === 'aborted') {
+    if (
+      error.type === 'validation' ||
+      error.type === 'parse' ||
+      error.type === 'aborted' ||
+      this.isNonRetryableToolContractError(error)
+    ) {
       return false;
     }
 
-    return error.code !== 'unknown_tool' && error.code !== 'duplicate_tool_call_id';
+    return true;
   }
 
   /**

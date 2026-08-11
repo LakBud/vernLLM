@@ -180,6 +180,26 @@ describe('CircuitBreaker, isolateByModel (unit)', () => {
     expect(cb.getState('never-called')).toBe('closed');
   });
 
+  it('does not allocate a bucket for an unseen model when reading state', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+    const buckets = (cb as unknown as { bucketsByModel: Map<string, unknown> }).bucketsByModel;
+
+    expect(cb.getState('never-called')).toBe('closed');
+    expect(buckets.size).toBe(0);
+  });
+
+  it('evicts a model bucket once it returns to a pristine closed state', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+    const buckets = (cb as unknown as { bucketsByModel: Map<string, unknown> }).bucketsByModel;
+
+    cb.recordFailure('gpt-4o');
+    expect(buckets.size).toBe(1);
+
+    cb.recordSuccess('gpt-4o');
+    expect(cb.getState('gpt-4o')).toBe('closed');
+    expect(buckets.size).toBe(0);
+  });
+
   it('assertClosed throws only for the model whose bucket is open', () => {
     const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 10_000, isolateByModel: true });
 
