@@ -7,3 +7,4 @@ export * from './options.js';
 export * from './tools.js';
 export * from './call.js';
 export * from './stream.js';
+export * from './events.js';

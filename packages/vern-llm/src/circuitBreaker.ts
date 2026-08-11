@@ -5,9 +5,25 @@ export interface CircuitBreakerOptions {
   threshold?: number;
   /** How long the circuit stays open before allowing a trial request, in ms. Default 30000 */
   cooldownMs?: number;
+  /**
+   * Called after every real state change, never for a no-op transition
+   * (e.g. open to open). `model` is the resolved model of whichever call
+   * triggered this specific transition (the `model` passed to whichever
+   * of `assertClosed`/`recordSuccess`/`recordFailure` caused it), not a
+   * property of the circuit itself: the breaker still counts failures
+   * across every model together, so a threshold crossing can be the sum
+   * of several different models' failures even though only the last
+   * one's `model` is reported here.
+   */
+  onStateChange?: (
+    from: CircuitState,
+    to: CircuitState,
+    consecutiveFailures: number,
+    model?: string,
+  ) => void;
 }
 
-type CircuitState = 'closed' | 'open' | 'half-open';
+export type CircuitState = 'closed' | 'open' | 'half-open';
 
 /**
  * Per retry VernLLM-instance circuit breaker. Tracks consecutive failures across
@@ -27,10 +43,23 @@ export class CircuitBreaker {
    * the cooldown elapses
    */
   private trialInFlight = false;
+  private readonly onStateChange?: CircuitBreakerOptions['onStateChange'];
+  /** Model of the call that most recently touched the breaker, reported alongside the next state change. */
+  private lastModel: string | undefined;
 
   constructor(options: CircuitBreakerOptions = {}) {
     this.threshold = options.threshold ?? 5;
     this.cooldownMs = options.cooldownMs ?? 30_000;
+    this.onStateChange = options.onStateChange;
+  }
+
+  /** Every state mutation routes through here, so `onStateChange` fires exactly once per real change. */
+  private transition(to: CircuitState): void {
+    if (to === this.state) return;
+
+    const from = this.state;
+    this.state = to;
+    this.onStateChange?.(from, to, this.consecutiveFailures, this.lastModel);
   }
 
   /**
@@ -40,7 +69,9 @@ export class CircuitBreaker {
    * elapsed, or half-open with no trial currently running), this call
    * becomes that trial
    */
-  assertClosed(): void {
+  assertClosed(model?: string): void {
+    this.lastModel = model;
+
     if (this.state === 'closed') return;
 
     if (this.state === 'open') {
@@ -52,7 +83,7 @@ export class CircuitBreaker {
         );
       }
 
-      this.state = 'half-open';
+      this.transition('half-open');
       this.trialInFlight = true;
       return;
     }
@@ -68,25 +99,27 @@ export class CircuitBreaker {
     this.trialInFlight = true;
   }
 
-  recordSuccess(): void {
+  recordSuccess(model?: string): void {
+    this.lastModel = model;
     this.consecutiveFailures = 0;
-    this.state = 'closed';
+    this.transition('closed');
     this.trialInFlight = false;
   }
 
-  recordFailure(): void {
+  recordFailure(model?: string): void {
+    this.lastModel = model;
     this.consecutiveFailures += 1;
     this.trialInFlight = false;
 
     if (this.state === 'half-open') {
       // Trial call failed: reopen and reset the cooldown window.
-      this.state = 'open';
+      this.transition('open');
       this.openedAt = Date.now();
       return;
     }
 
     if (this.consecutiveFailures >= this.threshold) {
-      this.state = 'open';
+      this.transition('open');
       this.openedAt = Date.now();
     }
   }

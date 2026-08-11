@@ -110,6 +110,37 @@ describe('CircuitBreaker (unit)', () => {
 
     vi.useRealTimers();
   });
+
+  it('reports the model passed to the call that triggered a transition, via onStateChange', () => {
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, onStateChange });
+
+    cb.recordFailure('gpt-4o');
+
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, 'gpt-4o');
+  });
+
+  it('reports whichever model most recently touched the breaker, even across different models', () => {
+    // The breaker's failure count stays shared across every model; only
+    // the *label* on the emitted transition reflects the triggering call.
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000, onStateChange });
+
+    cb.recordFailure('gpt-4o'); // 1st failure, no transition yet
+    cb.recordFailure('gpt-4o-mini'); // 2nd failure, crosses threshold
+
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 2, 'gpt-4o-mini');
+  });
+
+  it('omitting `model` on record/assert calls reports undefined, not a stale prior value', () => {
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, onStateChange });
+
+    cb.recordFailure();
+
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, undefined);
+  });
 });
 
 describe('VernLLM, circuit breaker integration', () => {

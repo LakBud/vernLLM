@@ -2,11 +2,17 @@ import type { CircuitBreakerOptions } from '../circuitBreaker.js';
 import type { Logger } from '../logger.js';
 import type { CacheAdapter } from './cache.js';
 import type { LLMClient } from './client.js';
+import type { OnEvent } from './events.js';
 import type { OnUsage, OnUsageFailure } from './usage.js';
 
 export interface VernLLMOptions {
   client: LLMClient;
   model: string;
+  /**
+   * Label for this provider in usage (`TokenUsage.provider`), events, and
+   * log lines. Default `'primary'`.
+   */
+  name?: string;
   /** Max retries after the first attempt. Default 1 (2 attempts total) */
   maxRetries?: number;
   /** Per-attempt timeout in ms. Default 25000 */
@@ -62,4 +68,10 @@ export interface VernLLMOptions {
    * Pass `true` for defaults, or an options object to tune threshold/cooldown
    */
   circuitBreaker?: boolean | CircuitBreakerOptions;
+  /**
+   * Reports retries and circuit-breaker state transitions as they happen.
+   * Fire and forget: a throwing handler is caught and logged, and its
+   * return value is never read, so it cannot influence the call.
+   */
+  onEvent?: OnEvent;
 }

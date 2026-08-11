@@ -145,6 +145,7 @@ describe('VernLLM.call(stream: true) through fromAnthropic, end to end', () => {
           totalTokens: 18,
           requestId: expect.any(String),
           model: 'claude-x',
+          provider: 'primary',
         },
       },
     ]);

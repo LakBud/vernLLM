@@ -32,6 +32,8 @@ export interface TokenUsage {
   totalTokens: number;
   requestId: string;
   model: string;
+  /** The provider target that produced this usage. See `VernLLMOptions['name']`, default `'primary'`. */
+  provider: string;
 }
 
 export type OnUsage = (usage: TokenUsage) => void;
