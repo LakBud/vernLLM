@@ -7,13 +7,13 @@ description: Sizing rateLimit against a real provider plan, and telling a local 
 buckets, queueing, and the events it emits. This guide walks through putting it to use: sizing it
 against numbers a provider actually gives you, sharing one budget across several routes, and
 deciding what to do when a call gives up waiting.
- 
+
 ## Start from your plan's real numbers, not a guess
- 
+
 Every major provider dashboard publishes requests-per-minute and tokens-per-minute limits per
 model per tier. Set `rateLimit` a little under those, not at them exactly, so VernLLM's own request
 overhead and estimation slack still land you under the real ceiling:
- 
+
 ```ts title="rate-limiting-plan-numbers.ts"
 // Provider dashboard says: gpt-4o, tier 2 → 5,000 RPM / 800,000 TPM
 const llm = new VernLLM({
@@ -26,24 +26,25 @@ const llm = new VernLLM({
   },
 });
 ```
- 
+
 `maxConcurrent` isn't published anywhere, it's not a rate the provider enforces, it's a knob for
 your own outbound connection pool and downstream memory. Size it against how many concurrent
 requests your process (or the connection pool underneath your HTTP client) can actually sustain,
 not the provider's RPM number.
- 
+
 <Callout type="info">
   Headroom matters more for `tokensPerMinute` than `requestsPerMinute`. The default token estimate
   is a rough `chars / 4` heuristic (see{' '}
   <a href="/docs/core/rate-limiting#estimating-tokens">Estimating tokens</a>), so a limit set right
   at the provider's real ceiling leaves no room for the estimate running high on a given call.
 </Callout>
+
 ## One instance, one budget, many callers
- 
+
 `rateLimit` is per `VernLLM` instance, not global. If several routes or background jobs in your
 app share one provider API key, route them all through the same instance so they share one budget,
 instead of creating a new `VernLLM` (and therefore a fresh, unaware set of buckets) per call site:
- 
+
 ```ts title="rate-limiting-shared-instance.ts"
 // shared.ts, imported everywhere that talks to this provider
 export const llm = new VernLLM({
@@ -52,28 +53,28 @@ export const llm = new VernLLM({
   rateLimit: { requestsPerMinute: 4_500, tokensPerMinute: 720_000, maxConcurrent: 100 },
 });
 ```
- 
+
 ```ts title="rate-limiting-route-usage.ts"
 import { llm } from './shared.js';
- 
+
 export async function summarizeHandler(req: Request) {
   return llm.call({ userContent: req.body.text });
 }
 ```
- 
+
 Two separate `VernLLM` instances pointed at the same provider account have two separate, unaware
 buckets between them, and can together exceed the account's real limit even though each instance
 individually stays under its own configured number.
- 
+
 If you run multiple providers behind one logical service, each gets its own instance and its own
 `rateLimit`, sized against that provider's own numbers. See <a href="/docs/guides/provider-fallback">Provider Fallback</a> for wiring several instances
 together.
- 
+
 ## Choosing maxQueueMs for your call site
- 
+
 `maxQueueMs` is the most important knob to actually think about, because its right value depends on
 what's waiting on the other end of the call:
- 
+
 ```ts title="rate-limiting-queue-ms-by-context.ts"
 // An interactive chat request: a user is staring at a spinner. Fail fast
 // and show them something rather than let them wait out a long queue.
@@ -82,7 +83,7 @@ const chatLlm = new VernLLM({
   model: 'gpt-4o',
   rateLimit: { requestsPerMinute: 500, maxQueueMs: 3_000 },
 });
- 
+
 // A background batch job processing a queue of documents overnight.
 // Nobody's watching a spinner; let it wait out the rate limit instead
 // of failing and needing its own retry-with-backoff logic bolted on.
@@ -92,13 +93,13 @@ const batchLlm = new VernLLM({
   rateLimit: { requestsPerMinute: 500, maxQueueMs: 0 }, // wait indefinitely
 });
 ```
- 
+
 For the interactive case, catch the `local_rate_limit` failure and degrade gracefully instead of
 surfacing a raw error:
- 
+
 ```ts title="rate-limiting-graceful-degrade.ts"
 import { isLLMError } from 'vern-llm';
- 
+
 try {
   return await chatLlm.call({ userContent: message });
 } catch (err) {
@@ -108,7 +109,7 @@ try {
   throw err;
 }
 ```
- 
+
 <Callout type="warn">
   Don't retry a `local_rate_limit` error yourself in a tight loop. The call already waited up to
   `maxQueueMs` for capacity that never came; retrying it immediately just requeues it behind the
@@ -192,7 +193,7 @@ const llm = new VernLLM({
         (sum, m) => sum + encode(typeof m.content === 'string' ? m.content : '').length,
         0,
       );
-      return promptTokens + request.max_tokens;
+      return promptTokens + (request.max_tokens ?? 0);
     },
   },
 });

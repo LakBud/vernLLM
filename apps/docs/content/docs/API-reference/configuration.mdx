@@ -95,9 +95,7 @@ in memory. When the limit is reached, the oldest entries are removed first.
 
 Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
 (normalizes keys before matching, case, whitespace, punctuation) and `TieredCacheAdapter`
-(checks a fast local adapter first, falling back to a shared one). See
-
-<a href="/docs/core/caching">Caching</a> for usage.
+(checks a fast local adapter first, falling back to a shared one). See <a href="/docs/core/caching">Caching</a> for usage.
 
 | Option  | Default                      | Notes                                                                                                                                                                                                                                 |
 | ------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -128,9 +126,11 @@ See <a href="/docs/core/observability">Observability</a> for the full `onEvent` 
 | ----------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rateLimit` | unlimited | `{ requestsPerMinute, tokensPerMinute, maxConcurrent, maxQueueMs, maxQueueSize, estimateTokens }`. Queues calls locally to stay under configured limits instead of letting the provider reject them. Every field is independent and optional; omitting one leaves that dimension unlimited. See <a href="/docs/core/rate-limiting">Rate Limiting</a>. |
 
-A call that gives up waiting for capacity (queue timeout, or the queue already full) fails with
-`LLMError('quota_exceeded')` and `code: 'local_rate_limit'`, and is never retried, the wait already
-happened. A real provider 429 is unaffected in shape but now also carries
+A call fails immediately with `LLMError('quota_exceeded')` and `code: 'local_rate_limit'`, and is
+never retried, in three cases: the queue wait exceeded `maxQueueMs`, the queue was already at
+`maxQueueSize`, or the call's estimated token cost exceeds the configured `tokensPerMinute` ceiling
+outright (no amount of waiting could ever satisfy it, so it's rejected on arrival rather than
+queued). A real provider 429 is unaffected in shape but now also carries
 `code: 'provider_rate_limited'`. See <a href="/docs/core/error-handling#error-codes">Error codes</a>.
 
 ## Per call defaults and overrides

@@ -282,6 +282,8 @@ describe('RateLimiter', () => {
   });
 
   it('ignores a non-finite actualTokens on release instead of poisoning the tokens bucket', async () => {
+    vi.useFakeTimers();
+    // 100 tokens/min => 1 token per 600ms.
     const limiter = new RateLimiter({ tokensPerMinute: 100, maxQueueMs: 0 });
 
     const held = await limiter.acquire(100);
@@ -290,11 +292,18 @@ describe('RateLimiter', () => {
     // The bucket should behave as if nothing was given back (estimated
     // debit retained, the safe direction), so it's still fully drained.
     let secondSettled = false;
-    void limiter.acquire(1).then(() => {
+    const pending = limiter.acquire(1).then(() => {
       secondSettled = true;
     });
     await Promise.resolve();
     expect(secondSettled).toBe(false);
+
+    // And critically, the bucket must still be capable of correctly
+    // recovering via its normal refill, not permanently stuck (either
+    // wedged shut or, worse, silently open) from the NaN it was given.
+    await vi.advanceTimersByTimeAsync(700); // 1 token at 1/600ms
+    await pending;
+    expect(secondSettled).toBe(true);
   });
 
   it('removing a waiter via abort immediately reschedules the wake around the new head, instead of a stale timer sized for the removed one', async () => {

@@ -135,6 +135,15 @@ class TokenBucket {
   }
 }
 
+/**
+ * `setTimeout` silently clamps any delay above this (~24.8 days) instead
+ * of erroring, so an uncapped delay derived from a very small
+ * `requestsPerMinute`/`tokensPerMinute` could wrap around to firing
+ * almost immediately instead of waiting. Mirrors the same guard in
+ * `withTimeout`/`withChunkIdleTimeout`.
+ */
+const MAX_WAKE_DELAY_MS = 2_147_483_647;
+
 /** One caller waiting for capacity, queued FIFO. */
 interface Waiter {
   estimatedTokens: number;
@@ -415,13 +424,18 @@ export class RateLimiter {
 
     if (ms === undefined || !Number.isFinite(ms)) return;
 
-    this.wakeTimer = setTimeout(
-      () => {
-        this.wakeTimer = undefined;
-        this.drain();
-      },
-      Math.max(1, Math.ceil(ms)),
-    );
+    // Capped, not just clamped-by-omission: `drain()` re-derives the
+    // real remaining wait from live bucket state on every firing (it
+    // doesn't trust the delay that got it there), so a wake that fires
+    // early because the true wait exceeded the cap just re-schedules
+    // correctly from where the bucket actually is, rather than looping
+    // on a delay that never shrinks.
+    const delay = Math.min(Math.max(1, Math.ceil(ms)), MAX_WAKE_DELAY_MS);
+
+    this.wakeTimer = setTimeout(() => {
+      this.wakeTimer = undefined;
+      this.drain();
+    }, delay);
   }
 
   /**

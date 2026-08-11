@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, createMockStreamingClient, jsonResponse } from './../helpers.js';
@@ -102,7 +102,7 @@ describe('VernLLM, rateLimit option', () => {
       yield { type: 'usage', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
     };
 
-    const { client } = createMockStreamingClient([
+    const { client, calls } = createMockStreamingClient([
       () => gatedStream(),
       [
         { type: 'text-delta', delta: 'two' },
@@ -118,9 +118,11 @@ describe('VernLLM, rateLimit option', () => {
 
     const first = llm.call({ userContent: 'one', jsonMode: false, stream: true });
 
-    // Give the first call a moment to actually open its stream (and
-    // thereby hold the only concurrency slot) before firing the second.
-    await new Promise((r) => setTimeout(r, 10));
+    // `createStream` is only invoked after the concurrency slot is
+    // successfully acquired (see `executeStreamCall`), so this is a
+    // deterministic signal that the first call now holds the only slot,
+    // unlike a fixed sleep that just hopes enough time has passed.
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(1));
 
     let secondSettled = false;
     const second = llm.call({ userContent: 'two', jsonMode: false, stream: true }).then((r) => {
@@ -128,7 +130,7 @@ describe('VernLLM, rateLimit option', () => {
       return r;
     });
 
-    await new Promise((r) => setTimeout(r, 10));
+    await Promise.resolve();
     expect(secondSettled).toBe(false); // still queued: the first stream hasn't completed
 
     releaseFirstChunk();
@@ -179,15 +181,18 @@ describe('VernLLM, rateLimit option', () => {
       }
     })();
 
-    await new Promise((r) => setTimeout(r, 10));
-
+    // No sleep needed here: `first` only resolved once its concurrency
+    // slot was acquired (see `executeStreamCall`), and that slot isn't
+    // released until the whole stream settles (`finish()`/`fail()` in
+    // `buildStreamResult`), well after this point, so the slot is
+    // already known to be held.
     let secondSettled = false;
     const second = llm.call({ userContent: 'two', jsonMode: false, stream: true }).then((r) => {
       secondSettled = true;
       return r;
     });
 
-    await new Promise((r) => setTimeout(r, 10));
+    await Promise.resolve();
     expect(secondSettled).toBe(false); // still queued: the first stream hasn't failed yet
 
     releaseFirstChunk();

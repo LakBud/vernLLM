@@ -123,7 +123,7 @@ const llm = new VernLLM({
         (sum, m) => sum + encode(typeof m.content === 'string' ? m.content : '').length,
         0,
       );
-      return promptTokens + request.max_tokens;
+      return promptTokens + (request.max_tokens ?? 0);
     },
   },
 });

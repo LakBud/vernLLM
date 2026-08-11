@@ -42,8 +42,9 @@ Does not count as a failure:
 - `LLMError('aborted')`
 - `LLMError('api')` with `code: 'unknown_tool'`
 - `LLMError('api')` with `code: 'duplicate_tool_call_id'`
-- `LLMError('quota_exceeded')` with `code: 'local_rate_limit'`, a local `rateLimit` queue giving up
-  before the request ever reached the provider. See{' '}
+- `LLMError('quota_exceeded')` with `code: 'local_rate_limit'`, a local `rateLimit` rejection that
+  never reached the provider, whether from a queue giving up or from a call rejected outright before
+  it ever queued. See{' '}
   <a href="/docs/core/rate-limiting#interaction-with-the-circuit-breaker">
     Interaction with the circuit breaker
   </a>
