@@ -1,5 +1,5 @@
-import type { StreamChunk } from '../types/stream.js';
-import type { UsageHooks } from '../types/usage.js';
+import type { StreamChunk } from '../../types/stream.js';
+import type { UsageHooks } from '../../types/usage.js';
 
 /**
  * Parameters for the private `fn`-based cache primitive backing the public

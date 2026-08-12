@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { parseSseStream, SSE_PING } from '../../src/internal/sse.js';
+import { parseSseStream, SSE_PING } from '../../../../src/adapters/internal/sse.js';
 
 /** A source of string chunks, arriving one at a time, as an async iterable. */
 function chunksOf(...parts: string[]): AsyncIterable<string> {

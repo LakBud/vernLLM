@@ -1,0 +1,784 @@
+import { CircuitBreaker } from '../../circuitBreaker.js';
+import { LLMError } from '../../types/errors.js';
+import { describeError, extractStatus, normalizeError } from './errors.utils.js';
+import { defaultParseJson } from './parse.utils.js';
+import { RequestBuilder } from './requestBuilder.js';
+import { extractRetryAfterMs, getBackoffDelay, waitForRetry, withTimeout } from './retry.utils.js';
+import { buildStreamResult } from './streamAccumulator.js';
+import { parseWireToolCalls } from './wire.utils.js';
+
+import type { Logger } from '../../logger.js';
+import type { RateLimiter } from '../../rateLimit.js';
+import type {
+  CallParams,
+  CallWithToolsResult,
+  LLMClient,
+  StreamChunk,
+  TokenUsage,
+  ToolIssue,
+  VernLLMEvent,
+  WireToolCall,
+} from '../../types/index.js';
+
+/** Everything one `CallExecutor` needs beyond the client and model. */
+export interface CallExecutorOptions {
+  maxRetries: number;
+  timeoutMs: number;
+  chunkIdleTimeoutMs: number;
+  baseDelayMs: number;
+  defaultMaxTokens: number;
+  defaultTemperature: number | null;
+  nonRetryableStatus: number[];
+  parseJson?: (content: string) => unknown;
+  logger: Logger;
+  onUsage?: (usage: TokenUsage) => void;
+  onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
+  onEvent?: (event: VernLLMEvent) => void;
+  breaker?: CircuitBreaker;
+  limiter?: RateLimiter;
+}
+
+/**
+ * Everything one provider target needs to attempt a call: request
+ * building, retry with backoff, the per-target breaker, the per-target
+ * limiter. Never exported publicly. `VernLLM` holds one per target and
+ * owns the fallback loop and caching on top.
+ */
+export class CallExecutor {
+  private readonly maxRetries: number;
+  private readonly timeoutMs: number;
+  private readonly chunkIdleTimeoutMs: number;
+  private readonly baseDelayMs: number;
+  private readonly defaultMaxTokens: number;
+  private readonly defaultTemperature: number | null;
+  private readonly nonRetryableStatus: number[];
+  private readonly parseJson: (content: string) => unknown;
+  private readonly logger: Logger;
+  private readonly onUsage?: (usage: TokenUsage) => void;
+  private readonly onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
+  private readonly onEvent?: (event: VernLLMEvent) => void;
+  private readonly breaker?: CircuitBreaker;
+  private readonly limiter?: RateLimiter;
+  private readonly requestBuilder: RequestBuilder;
+
+  constructor(
+    readonly providerName: string,
+    private readonly client: LLMClient,
+    readonly model: string,
+    options: CallExecutorOptions,
+  ) {
+    this.maxRetries = options.maxRetries;
+    this.timeoutMs = options.timeoutMs;
+    this.chunkIdleTimeoutMs = options.chunkIdleTimeoutMs;
+    this.baseDelayMs = options.baseDelayMs;
+    this.defaultMaxTokens = options.defaultMaxTokens;
+    this.defaultTemperature = options.defaultTemperature;
+    this.nonRetryableStatus = options.nonRetryableStatus;
+    this.parseJson = options.parseJson ?? defaultParseJson;
+    this.logger = options.logger;
+    this.onUsage = options.onUsage;
+    this.onUsageFailure = options.onUsageFailure;
+    this.onEvent = options.onEvent;
+    this.breaker = options.breaker;
+    this.limiter = options.limiter;
+    this.requestBuilder = new RequestBuilder({
+      model,
+      defaultMaxTokens: options.defaultMaxTokens,
+      defaultTemperature: options.defaultTemperature,
+    });
+  }
+
+  getCircuitState(model?: string) {
+    return this.breaker?.getState(model);
+  }
+
+  /**
+   * Runs a single logical call against this target: breaker check, retry
+   * with backoff, normalized error on exhaustion. Mirrors the old
+   * `VernLLM.call`'s non-streaming branch, minus cache/usage-reservation,
+   * which stay one layer up since they aren't per-target concerns.
+   */
+  async run<T>(params: CallParams<T>, requestId: string): Promise<T | CallWithToolsResult<T>> {
+    const model = params.model ?? this.model;
+
+    this.breaker?.assertClosed(model);
+
+    try {
+      return await this.retryWithBackoff(
+        (attempt) => this.executeCall(params, requestId, attempt),
+        requestId,
+        model,
+        params.signal,
+      );
+    } catch (error) {
+      const normalized = normalizeError(error, params.signal);
+
+      if (this.countsTowardBreaker(normalized)) {
+        this.breaker?.recordFailure(model);
+      }
+
+      this.logger.debug(`[VernLLM:${requestId}] error:\n${describeError(error)}`);
+
+      throw normalized;
+    }
+  }
+
+  /** Streaming counterpart to `run`. Mirrors the old streaming branch of `VernLLM.call`. */
+  async runStream<T>(
+    params: CallParams<T>,
+    requestId: string,
+  ): Promise<{
+    chunks: AsyncIterable<StreamChunk>;
+    finalResult: Promise<T | CallWithToolsResult<T>>;
+  }> {
+    const model = params.model ?? this.model;
+
+    this.breaker?.assertClosed(model);
+
+    try {
+      return await this.retryWithBackoff(
+        (attempt) => this.executeStreamCall(params, requestId, attempt),
+        requestId,
+        model,
+        params.signal,
+      );
+    } catch (error) {
+      const normalized = normalizeError(error, params.signal);
+
+      if (this.countsTowardBreaker(normalized)) {
+        this.breaker?.recordFailure(model);
+      }
+
+      this.logger.debug(`[VernLLM:${requestId}] stream-open error:\n${describeError(error)}`);
+
+      throw normalized;
+    }
+  }
+
+  /**
+   * Performs a single attempt: builds the request (translating `tools` to
+   * wire shape when present), dispatches it with a timeout, and shapes the
+   * response into `T` or a `CallWithToolsResult<T>` when `params.tools` was
+   * set. Throws on an empty response (no text and no tool_calls) so the
+   * retry loop treats it like any other transient failure.
+   */
+  private async executeCall<T>(
+    params: CallParams<T>,
+    requestId: string,
+    attempt: number,
+  ): Promise<T | CallWithToolsResult<T>> {
+    const { useJson, model, request } = this.requestBuilder.build(params);
+
+    // A retry is a real request, so capacity is acquired per attempt
+    // (inside the retry loop, via `executeCall` being re-invoked), not
+    // once for the whole call.
+    let release: ((actualTokens?: number) => void) | undefined;
+
+    if (this.limiter) {
+      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
+      release = acquired.release;
+
+      if (acquired.waitedMs > 0) {
+        this.reportEvent({
+          kind: 'rate_limited',
+          requestId,
+          provider: this.providerName,
+          model,
+          waitedMs: acquired.waitedMs,
+          reason: acquired.reason ?? 'rpm',
+        });
+      }
+    }
+
+    try {
+      const response = await withTimeout(
+        (attemptSignal) => this.client.chat.completions.create(request, { signal: attemptSignal }),
+        this.timeoutMs,
+        params.signal,
+      );
+
+      // Extracted right after the response arrives, before anything else
+      // touches it, so a post-response failure still gets its usage reported.
+      const usage = this.extractUsage(response, requestId, model);
+
+      // Reconcile against real usage, then hand off so `finally` below
+      // can't release a second time.
+      release?.(this.actualTokensFor(usage));
+      release = undefined;
+
+      // Raw and unvalidated on purpose. Extraction (including `.trim()`,
+      // which throws on a non-string `content`) happens inside
+      // `finalizeResponse`'s try/catch, so a malformed response still gets
+      // normalized and its usage failure reported.
+      const rawContent = response.choices?.[0]?.message?.content;
+      const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+
+      return this.finalizeResponse(
+        rawContent,
+        wireToolCalls,
+        params,
+        useJson,
+        model,
+        usage,
+        requestId,
+        attempt,
+      );
+    } finally {
+      release?.();
+    }
+  }
+
+  /**
+   * Shapes a fully-arrived response (content and/or tool_calls, already
+   * extracted from the provider's payload) into `T` or a
+   * `CallWithToolsResult<T>`. Reused by the streaming path once it has
+   * buffered the full text/tool-call deltas, so there's no separate
+   * parsing/validation logic for streaming.
+   *
+   * Normalizes and reports usage failure on error itself, so every caller
+   * gets identical error handling without duplicating it.
+   */
+  private finalizeResponse<T>(
+    rawContent: string | null | undefined,
+    wireToolCalls: WireToolCall[] | undefined,
+    params: CallParams<T>,
+    useJson: boolean,
+    model: string,
+    usage: TokenUsage | undefined,
+    requestId: string,
+    attempt: number,
+  ): T | CallWithToolsResult<T> {
+    try {
+      // `.trim()` runs inside this try: a malformed response shape
+      // (e.g. a non-string `content`) throws here and is normalized and
+      // reported like any other post-response failure.
+      const content = rawContent?.trim();
+
+      if (!content && !wireToolCalls?.length) {
+        throw new LLMError('Empty LLM response', 'api');
+      }
+
+      this.logger.debug(
+        `[VernLLM:${requestId}] output:\n${(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`).slice(0, 800)}`,
+      );
+
+      if (wireToolCalls?.length) {
+        if (!params.tools) {
+          throw new LLMError(
+            'Provider returned tool_calls but no `tools` were sent with this call.',
+            'api',
+          );
+        }
+
+        const toolCalls = parseWireToolCalls(wireToolCalls);
+
+        this.validateToolCallArguments(toolCalls, params.tools);
+        this.breaker?.recordSuccess(model);
+        this.reportUsage(usage);
+
+        return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
+      }
+
+      // No tool_calls here, so content must be present.
+      const textContent = content ?? '';
+
+      if (!useJson) {
+        this.breaker?.recordSuccess(model);
+        this.reportUsage(usage);
+
+        return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
+      }
+
+      const result = this.parseAndValidate<T>(textContent, params.schema);
+      this.breaker?.recordSuccess(model);
+      this.reportUsage(usage);
+
+      return params.tools ? { type: 'content', content: result } : result;
+    } catch (error) {
+      // Normalized first so onUsageFailure always gets a real LLMError.
+      // Also covers aborted signals: normalizeError returns type
+      // 'aborted' in that case.
+      const normalized = normalizeError(error, params.signal);
+
+      if (usage && normalized.type !== 'aborted') {
+        this.reportUsageFailure(usage, normalized, attempt);
+      }
+
+      throw normalized;
+    }
+  }
+
+  /**
+   * Opens a stream for a single attempt: builds the request exactly like
+   * `executeCall`, then requires `createStream` on the client (a clear
+   * `validation` error if the adapter doesn't support it). The timeout
+   * wraps stream construction and the first `.next()` together, not just
+   * construction: calling an `async function*` returns an iterator
+   * synchronously without running its body until `.next()` is first
+   * invoked, so timing only construction would time an operation that's
+   * always instant, not the actual connection. Both are folded into a
+   * single `withTimeout` so the same abort signal reaches whatever the
+   * adapter's `createStream` uses internally for its first network
+   * round-trip.
+   *
+   * Circuit-breaker success is recorded once the stream fully completes,
+   * not on the first chunk arriving, so a connection that opens but then
+   * dies mid-stream isn't masked as a success (see `buildStreamResult`).
+   */
+  private async executeStreamCall<T>(
+    params: CallParams<T>,
+    requestId: string,
+    attempt: number,
+  ): Promise<{
+    chunks: AsyncIterable<StreamChunk>;
+    finalResult: Promise<T | CallWithToolsResult<T>>;
+  }> {
+    const { useJson, model, request } = this.requestBuilder.build(params);
+
+    const createStream = this.client.chat.completions.createStream;
+
+    if (!createStream) {
+      throw new LLMError('stream: true requires a client/adapter with createStream', 'validation');
+    }
+
+    // A stream holds a real connection for its whole life, so its
+    // capacity is released on completion (in `buildStreamResult`), not
+    // once opening succeeds.
+    let release: ((actualTokens?: number) => void) | undefined;
+
+    if (this.limiter) {
+      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
+      release = acquired.release;
+
+      if (acquired.waitedMs > 0) {
+        this.reportEvent({
+          kind: 'rate_limited',
+          requestId,
+          provider: this.providerName,
+          model,
+          waitedMs: acquired.waitedMs,
+          reason: acquired.reason ?? 'rpm',
+        });
+      }
+    }
+
+    // One controller for the entire stream, not just opening it. Adapters
+    // already thread this signal into their transport for the life of the
+    // request (that's how user-initiated cancellation works today), so
+    // reusing it for the idle timeout means the same abort() call that
+    // fires when the stream goes idle mid-way also tears down the
+    // underlying connection, instead of only rejecting VernLLM's own
+    // promise while the transport stays open.
+    const streamController = new AbortController();
+    const combinedExternal = params.signal
+      ? AbortSignal.any([params.signal, streamController.signal])
+      : streamController.signal;
+
+    try {
+      const { iterator, first } = await withTimeout(
+        async (attemptSignal) => {
+          const streamIterator = createStream(request, { signal: attemptSignal })[
+            Symbol.asyncIterator
+          ]();
+          const firstResult = await streamIterator.next();
+
+          return { iterator: streamIterator, first: firstResult };
+        },
+        this.timeoutMs,
+        combinedExternal,
+      );
+
+      // An immediately-exhausted stream (no chunks at all) is the streaming
+      // equivalent of `executeCall`'s empty-response check: surface the same
+      // `LLMError('Empty LLM response', 'api')` so retry behaves identically
+      // whether the empty result came from a non-streaming or streaming
+      // attempt.
+      if (first.done) {
+        throw new LLMError('Empty LLM response', 'api');
+      }
+
+      // Snapshotted before the closures below are created, since `release`
+      // (the outer variable) is reassigned to undefined right after this
+      // call to hand ownership off. The callbacks only run later, once the
+      // stream completes, so closing over the mutable variable itself
+      // would see that later `undefined` instead of the value being
+      // handed off.
+      const releaseAtOpen = release;
+
+      const result = buildStreamResult(iterator, first, {
+        requestId,
+        model,
+        providerName: this.providerName,
+        chunkIdleTimeoutMs: params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs,
+        streamController,
+        logger: this.logger,
+        signal: params.signal,
+        onStreamSuccess: (usage) => {
+          this.breaker?.recordSuccess(model);
+          releaseAtOpen?.(this.actualTokensFor(usage));
+        },
+        onStreamFailure: (normalized, usage) => {
+          // Idle timeout is the one mid-stream failure that trips the
+          // breaker: otherwise a provider that hangs after one chunk
+          // would always record a success and never open it.
+          if (normalized.type === 'timeout') {
+            this.breaker?.recordFailure(model);
+          }
+
+          if (usage && normalized.type !== 'aborted') {
+            this.reportUsageFailure(usage, normalized, attempt, true);
+          }
+
+          releaseAtOpen?.(this.actualTokensFor(usage));
+        },
+        finalize: (textAcc, wireToolCalls, usage) =>
+          this.finalizeResponse(
+            textAcc,
+            wireToolCalls,
+            params,
+            useJson,
+            model,
+            usage,
+            requestId,
+            attempt,
+          ),
+      });
+
+      // Ownership of `release` passes to `buildStreamResult` from here.
+      release = undefined;
+
+      return result;
+    } finally {
+      // Only reached if opening the stream itself threw; a successful
+      // open hands `release` off above and leaves this a no-op.
+      release?.();
+    }
+  }
+
+  /**
+   * Checks every `ToolCall` against the `tools` that were offered, catching
+   * a hallucinated tool name and a duplicate call id before either reaches
+   * the application's dispatch table, then runs each tool's
+   * `argumentsSchema`, if present.
+   *
+   * Contract failures (unknown name, duplicate id) are collected across
+   * every call and thrown together, since retrying a request that already
+   * has these errors cannot help (`shouldRetry` excludes them by `code`)
+   * and a caller fixing them wants to see every one, not just the first.
+   * Schema failures keep the original single-error, `type: 'validation'`
+   * shape: retrying can genuinely help there if the model changes its
+   * arguments, and mixing that type into the aggregate would blur the two.
+   */
+  private validateToolCallArguments(
+    toolCalls: { id: string; name: string; arguments: unknown }[],
+    tools: NonNullable<CallParams<unknown>['tools']>,
+  ): void {
+    const known = new Map(tools.map((t) => [t.name, t]));
+    const seenIds = new Set<string>();
+    const toolIssues: ToolIssue[] = [];
+
+    for (const call of toolCalls) {
+      if (seenIds.has(call.id)) {
+        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'duplicate_tool_call_id' });
+      }
+      seenIds.add(call.id);
+
+      if (!known.has(call.name)) {
+        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'unknown_tool' });
+      }
+    }
+
+    if (toolIssues.length > 0) {
+      const unknownTool = toolIssues.find((i) => i.code === 'unknown_tool');
+      const primary = unknownTool
+        ? `Model requested tool "${unknownTool.name}", which was not in the tools offered ([${[...known.keys()].join(', ')}]).`
+        : `Duplicate tool call id "${toolIssues[0]!.toolCallId}" in the model's response.`;
+
+      // Most responses hit exactly one issue. When there's more than one,
+      // say so, since toolCalls[0]'s problem alone would otherwise read as
+      // the whole story.
+      const message =
+        toolIssues.length > 1
+          ? `${primary} (${toolIssues.length} tool call issues total, see toolIssues.)`
+          : primary;
+
+      const error = new LLMError(
+        message,
+        'api',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        unknownTool ? 'unknown_tool' : 'duplicate_tool_call_id',
+      );
+      error.toolIssues = toolIssues;
+      throw error;
+    }
+
+    for (const call of toolCalls) {
+      const definition = known.get(call.name);
+
+      if (!definition?.argumentsSchema) continue;
+
+      const result = definition.argumentsSchema.safeParse(call.arguments);
+
+      if (!result.success) {
+        throw new LLMError(
+          `Arguments for tool call "${call.name}" failed validation`,
+          'validation',
+          undefined,
+          result.error,
+        );
+      }
+    }
+  }
+
+  /** Runs `fn`, retrying with backoff according to `shouldRetry`. */
+  private async retryWithBackoff<T>(
+    fn: (attempt: number) => Promise<T>,
+    requestId: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          await this.recoverDelay(requestId, model, attempt, lastError, signal);
+        }
+
+        return await fn(attempt);
+      } catch (error) {
+        lastError = error;
+
+        if (!this.shouldRetry(error, signal)) break;
+      }
+    }
+
+    throw lastError;
+  }
+
+  /**
+   * Pulls `TokenUsage` out of a raw response, if the provider reported it.
+   * Extraction doesn't depend on what happens to the response afterward, so
+   * a malformed body can still yield usage if the provider's usage block
+   * itself came through intact.
+   */
+  private extractUsage(
+    response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
+    requestId: string,
+    model: string,
+  ): TokenUsage | undefined {
+    if (!response.usage) return undefined;
+
+    return {
+      promptTokens: response.usage.prompt_tokens ?? 0,
+      completionTokens: response.usage.completion_tokens ?? 0,
+      totalTokens: response.usage.total_tokens ?? 0,
+      requestId,
+      model,
+      provider: this.providerName,
+    };
+  }
+
+  /**
+   * The token count to reconcile the rate limiter against for a finished
+   * attempt: `totalTokens` when reported, otherwise the sum of prompt and
+   * completion tokens, matching `reportUsageFailure`'s own fallback below
+   * for a hand-rolled client that reports the parts but omits the total.
+   */
+  private actualTokensFor(usage: TokenUsage | undefined): number | undefined {
+    if (!usage) return undefined;
+    return usage.totalTokens || usage.promptTokens + usage.completionTokens;
+  }
+
+  /** Reports token usage for a successful call, swallowing and logging any error `onUsage` throws. */
+  private reportUsage(usage: TokenUsage | undefined): void {
+    if (!usage || !this.onUsage) return;
+
+    try {
+      this.onUsage(usage);
+    } catch (error) {
+      this.logger.error('[VernLLM] onUsage failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
+
+  /**
+   * Reports token usage spent on an attempt that then failed, so it isn't
+   * dropped alongside the error. Covers any error thrown after usage
+   * extraction, since all of them happen only after a response (real
+   * spend) already arrived. Swallows and logs any error `onUsageFailure`
+   * itself throws.
+   */
+  private reportUsageFailure(
+    usage: TokenUsage,
+    error: LLMError,
+    attempt: number,
+    terminal = false,
+  ): void {
+    // Falls back to promptTokens + completionTokens if totalTokens is 0
+    // (e.g. a hand-rolled client that omits the total), so the log
+    // doesn't understate real spend.
+    const displayTokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
+
+    // A mid-stream failure is terminal for that call (no further attempts
+    // for this stream), unlike a stream-open failure where attempt N+1 may
+    // still follow. Label them differently so the log doesn't imply a
+    // retry that isn't coming.
+    const attemptText = terminal
+      ? 'mid-stream failure (terminal, no further attempts)'
+      : `attempt ${attempt + 1}/${this.maxRetries + 1}`;
+
+    this.logger.warn(
+      `[VernLLM:${usage.requestId}] usage failure, ${attemptText}: ` +
+        `type=${error.type} tokens=${displayTokens}`,
+    );
+
+    if (!this.onUsageFailure) return;
+
+    try {
+      this.onUsageFailure(usage, error);
+    } catch (hookError) {
+      this.logger.error('[VernLLM] onUsageFailure failed', {
+        message: hookError instanceof Error ? hookError.message : 'unknown',
+      });
+    }
+  }
+
+  /** Reports a `VernLLMEvent`, swallowing and logging any error the handler throws. */
+  private reportEvent(event: VernLLMEvent): void {
+    if (!this.onEvent) return;
+
+    try {
+      this.onEvent(event);
+    } catch (error) {
+      this.logger.error('[VernLLM] onEvent failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
+
+  /** Parses response content as JSON and validates it against `schema` when supplied. */
+  private parseAndValidate<T>(content: string, schema?: CallParams<T>['schema']): T {
+    let parsed: unknown;
+
+    try {
+      parsed = this.parseJson(content);
+    } catch {
+      throw new LLMError('Invalid JSON response', 'parse');
+    }
+
+    if (parsed === null || parsed === undefined) {
+      throw new LLMError('Invalid JSON response', 'parse');
+    }
+
+    if (!schema) return parsed as T;
+
+    const result = schema.safeParse(parsed);
+
+    if (!result.success) {
+      throw new LLMError('Schema validation failed', 'validation', undefined, result.error);
+    }
+
+    return result.data;
+  }
+
+  /**
+   * Waits out the backoff delay for a retry attempt, honoring a
+   * Retry-After header on the failed attempt's error when present.
+   * Both Retry-After and plain exponential backoff are capped at the same
+   * max delay (see `DEFAULT_MAX_DELAY_MS` in `vernLLM.utils.ts`).
+   */
+  private async recoverDelay(
+    requestId: string,
+    model: string,
+    attempt: number,
+    error: unknown,
+    signal?: AbortSignal,
+  ) {
+    const retryAfterMs = extractRetryAfterMs(error);
+    const delay = retryAfterMs ?? getBackoffDelay(this.baseDelayMs, attempt);
+    const retryAfterHonored = retryAfterMs !== undefined;
+
+    this.logger.warn(
+      `[VernLLM:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${delay}ms` +
+        (retryAfterHonored ? ' (honoring Retry-After)' : ''),
+    );
+
+    this.reportEvent({
+      kind: 'retry',
+      requestId,
+      provider: this.providerName,
+      model,
+      attempt,
+      maxRetries: this.maxRetries,
+      delayMs: delay,
+      retryAfterHonored,
+      error: normalizeError(error, signal),
+    });
+
+    await waitForRetry(delay, signal);
+  }
+
+  private isNonRetryableToolContractError(error: unknown): error is LLMError {
+    return (
+      error instanceof LLMError &&
+      (error.code === 'unknown_tool' || error.code === 'duplicate_tool_call_id')
+    );
+  }
+
+  /** Decides whether a failed attempt is worth retrying. */
+  private shouldRetry(error: unknown, signal?: AbortSignal): boolean {
+    if (signal?.aborted) return false;
+
+    if (error instanceof LLMError && (error.type === 'parse' || error.type === 'validation')) {
+      return false;
+    }
+
+    // The queue wait already happened; retrying immediately would just
+    // requeue behind the same limit with nothing changed.
+    if (error instanceof LLMError && error.code === 'local_rate_limit') {
+      return false;
+    }
+
+    // Tool contract failures repeat identically on retry: the wire request
+    // is byte-for-byte the same, so nothing about a retry can change
+    // whether the model names a real tool or reuses a call id.
+    if (this.isNonRetryableToolContractError(error)) {
+      return false;
+    }
+
+    const status = extractStatus(error);
+
+    return !(status !== undefined && this.nonRetryableStatus.includes(status));
+  }
+
+  /**
+   * Decides whether a failed attempt should count toward the circuit
+   * breaker's failure threshold. A model hallucinating a tool name or
+   * reusing a call id isn't the provider being unhealthy, it's a model
+   * response defect that will very likely recur regardless of provider
+   * health, so it shouldn't push a healthy provider's circuit toward
+   * opening. Mirrors the same reasoning `shouldRetry` already applies to
+   * `parse`/`validation`/these same tool-contract codes.
+   */
+  private countsTowardBreaker(error: LLMError): boolean {
+    if (
+      error.type === 'validation' ||
+      error.type === 'parse' ||
+      error.type === 'aborted' ||
+      // A local queue timeout/full-queue rejection never reached the
+      // provider at all, so it says nothing about the provider's health
+      // and shouldn't push a healthy provider's circuit toward opening.
+      error.code === 'local_rate_limit' ||
+      this.isNonRetryableToolContractError(error)
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+}

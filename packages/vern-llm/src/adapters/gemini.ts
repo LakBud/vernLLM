@@ -1,4 +1,3 @@
-import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
 import {
   LLMError,
   type ContentBlock,
@@ -6,6 +5,7 @@ import {
   type WireStreamChunk,
   type WireToolCall,
 } from '../types/index.js';
+import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 
 /** Gemini's native per-part content shape for a `contents` entry. */
 type GeminiPart =

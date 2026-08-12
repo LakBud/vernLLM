@@ -6,9 +6,9 @@ import {
   NormalizedCacheAdapter,
   TieredCacheAdapter,
   LLMError,
-} from '../../src/types/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { asTestable, createMockClient, jsonResponse } from './../helpers.js';
+} from '../../../../src/types/index.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
+import { asTestable, createMockClient, jsonResponse } from '../../../helpers.js';
 
 describe('InMemoryCacheAdapter', () => {
   afterEach(() => {
