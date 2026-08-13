@@ -1,9 +1,13 @@
 ---
 title: Adapters Overview
-description: VernLLM expects an OpenAI-shaped client, adapters translate other providers into that shape
+description: VernLLM's LLMClient interface is modeled on OpenAI's chat.completions.create, adapters translate other providers into that shape
 ---
 
-`VernLLM` expects a client shaped like OpenAI's `chat.completions.create`. Some providers already match that shape and need no adapter; others need one that translates their native API into it.
+`VernLLM` expects a client shaped roughly like OpenAI's `chat.completions.create`, its own
+`LLMClient` interface, not a copy of OpenAI's actual SDK types. Some providers already match
+closely enough to need no adapter; others need one that translates their native API into it. A
+few fields (`ContentBlock[]` multimodal input, `is_error` on tool messages) are VernLLM's own
+additions with no OpenAI equivalent, adapters translate those as needed per provider too.
 
 <Cards>
   <Card title="OpenAI-Compatible" href="/docs/adapters/openai-compatible">

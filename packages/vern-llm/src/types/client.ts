@@ -26,7 +26,7 @@ export type WireMessage =
       role: 'tool';
       tool_call_id: string;
       content: string;
-      /** Only honored by `fromAnthropic` today (maps to `tool_result.is_error`); other adapters ignore it. */
+      /** Honored by `fromAnthropic` (maps to `tool_result.is_error`) and `fromBedrock` (maps to `toolResult.status`); other adapters ignore it. */
       is_error?: boolean;
     };
 

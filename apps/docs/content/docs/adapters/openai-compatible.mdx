@@ -86,8 +86,9 @@ const llm = new VernLLM({
 
 `tools`, `tool_choice`, and `tool_calls` already match the OpenAI Chat Completions shape, so this
 adapter passes them through unchanged. The one normalization it applies is stripping
-`is_error` from outgoing `tool` messages, since that field is an Anthropic-only concept with no
-OpenAI-compatible equivalent. See [Tool Calling](/docs/core/tool-calling) for the full
+`is_error` from outgoing `tool` messages, since that field has no OpenAI-compatible equivalent
+(`fromAnthropic` and `fromBedrock` honor it natively, mapping it to each provider's own
+error-result field). See [Tool Calling](/docs/core/tool-calling) for the full
 reference.
 
 ## Streaming
