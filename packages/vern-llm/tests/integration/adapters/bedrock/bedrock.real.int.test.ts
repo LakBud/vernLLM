@@ -298,7 +298,7 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
 
     // A real Bedrock 429 (ThrottlingException) exposes its HTTP status only
     // as `error.$metadata.httpStatusCode`, not `error.status` or
-    // `error.statusCode`. `extractStatus` (src/internal/vernLLM.utils.ts)
+    // `error.statusCode`. `extractStatus` (src/internal/execution/errors.utils.ts)
     // checks all three, so this classifies as a status-429 "api" error,
     // letting status-based retry/non-retry decisions (`nonRetryableStatus`)
     // act on it the same as any other provider's error.

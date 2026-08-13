@@ -1,4 +1,4 @@
-import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
+import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 
 import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/index.js';
 

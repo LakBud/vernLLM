@@ -1,4 +1,4 @@
-import { LLMError } from '../types/index.js';
+import { LLMError } from '../../types/index.js';
 
 /**
  * MIME types accepted for `ImageBlock.mimeType` across all adapters. This is

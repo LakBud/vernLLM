@@ -1,4 +1,4 @@
-import { LLMError } from '../types/errors.js';
+import { LLMError } from '../../types/errors.js';
 
 /**
  * Parses a Server-Sent-Events byte/text stream into the JSON payload of

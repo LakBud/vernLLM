@@ -1,8 +1,3 @@
-import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
-import {
-  supportsNativeStructuredOutput,
-  type ModelCapabilityOverride,
-} from '../internal/nativeStructuredOutput.js';
 import {
   LLMError,
   type ContentBlock,
@@ -10,6 +5,11 @@ import {
   type WireStreamChunk,
   type WireToolCall,
 } from '../types/index.js';
+import { assertSupportedImageMimeType } from './internal/imageFormat.js';
+import {
+  supportsNativeStructuredOutput,
+  type ModelCapabilityOverride,
+} from './internal/nativeStructuredOutput.js';
 
 /** Bedrock Converse's supported inline image formats. */
 type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';

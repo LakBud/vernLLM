@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient } from './../helpers.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
+import { createMockClient } from '../../../helpers.js';
 
 describe('VernLLM.cachedCall, reserveUsage/refundUsage dedup', () => {
   it('reserves and refunds exactly once when only the top-level hooks are provided', async () => {

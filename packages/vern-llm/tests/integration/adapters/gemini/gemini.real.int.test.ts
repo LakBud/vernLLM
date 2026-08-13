@@ -2,16 +2,9 @@ import { GoogleGenAI } from '@google/genai';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { fromGemini, type GeminiClient } from '../../../../src/adapters/gemini.js';
-import { type StreamChunk } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-import { at } from '../../../helpers.js';
+import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
-
-async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
-  const out: StreamChunk[] = [];
-  for await (const chunk of chunks) out.push(chunk);
-  return out;
-}
 
 /**
  * `GeminiClient` now matches the real `@google/genai` SDK's `ai.models`

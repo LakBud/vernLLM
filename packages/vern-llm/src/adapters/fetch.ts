@@ -1,10 +1,10 @@
-import { parseSseStream, SSE_PING } from '../internal/sse.js';
 import {
   LLMError,
   type LLMClient,
   type WireStreamChunk,
   type WireToolCall,
 } from '../types/index.js';
+import { parseSseStream, SSE_PING } from './internal/sse.js';
 
 /** The chat-completion-shaped request VernLLM builds internally */
 type ChatRequest = Parameters<LLMClient['chat']['completions']['create']>[0];

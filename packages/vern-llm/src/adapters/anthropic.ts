@@ -1,18 +1,18 @@
 import {
-  assertSupportedImageMimeType,
-  type SupportedImageMimeType,
-} from '../internal/imageFormat.js';
-import {
-  supportsNativeStructuredOutput,
-  type ModelCapabilityOverride,
-} from '../internal/nativeStructuredOutput.js';
-import {
   LLMError,
   type ContentBlock,
   type LLMClient,
   type WireStreamChunk,
   type WireToolCall,
 } from '../types/index.js';
+import {
+  assertSupportedImageMimeType,
+  type SupportedImageMimeType,
+} from './internal/imageFormat.js';
+import {
+  supportsNativeStructuredOutput,
+  type ModelCapabilityOverride,
+} from './internal/nativeStructuredOutput.js';
 
 /** Anthropic's native per-block content shape for a message. */
 type AnthropicContentBlock =

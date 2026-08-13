@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { LLMError, type StreamChunk } from '../../src/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockStreamingClient } from '../helpers.js';
+import { LLMError, type StreamChunk } from '../../../../src/index.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
+import { createMockStreamingClient } from '../../../helpers.js';
 
 const weatherTool = {
   name: 'get_weather',
