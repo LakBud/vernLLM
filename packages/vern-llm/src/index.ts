@@ -21,6 +21,7 @@ export {
   fromFetch,
   type FetchAdapterConfig,
   fromOpenAICompatible,
+  fromOpenAI,
   fromGroq,
   fromMistral,
   fromDeepSeek,
