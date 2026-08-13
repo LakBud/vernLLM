@@ -8,6 +8,138 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 2.1.0
+
+### Minor Changes
+
+- 8014818: Added observability events, provider labeling, and fixed a tool-contract retry defect.
+
+  `VernLLMOptions.onEvent` reports `'retry'` and `'circuit_state'` events as they happen. Fire-and-forget, mirroring the existing `onUsage` pattern exactly: a throwing handler is caught and logged, its return value is never read, and it can only ever change what gets reported, never what the call does.
+
+  `VernLLMOptions.name` (default `'primary'`) labels a `VernLLM` instance. It's threaded into `TokenUsage.provider` and every emitted event, so a shared `onEvent`/`onUsage` handler can tell multiple instances apart. This also lays the groundwork for multi-target fallback in a future release.
+
+  `CircuitBreaker` was refactored so every state mutation routes through a single `transition()` method, guaranteeing `onStateChange` (and now `onEvent`'s `'circuit_state'`) fires exactly once per real transition, never on a no-op like open to open. `assertClosed`/`recordSuccess`/`recordFailure` now accept an optional `model` param, reported on the transition it triggers; the breaker's failure counting is unchanged, still shared-fate across models by default, so this only affects what's reported, not when the circuit opens or closes.
+
+  Both the `'retry'`/`'circuit_state'` events and the breaker's `assertClosed` gate now use the model actually resolved for that call (honoring a per-call `model` override) instead of always the instance default.
+
+  Fixed `validateToolCallArguments`: an unknown tool name or a duplicate tool-call id was previously classified `type: 'api'` with no distinguishing code, which meant `shouldRetry` treated it as retryable, burning the whole retry budget on a request that was guaranteed to fail identically every time (the wire request doesn't change between attempts). These failures now carry `code: 'unknown_tool'` or `code: 'duplicate_tool_call_id'` (still `type: 'api'`, so no existing type check breaks) and are excluded from retry. Every such issue in a response is now aggregated into one error's `toolIssues: ToolIssue[]`, instead of throwing on the first and hiding the rest. Schema-validation failures are unchanged: still a separate pass, still `type: 'validation'`, still first-failure-only.
+
+  `LLMError` gains two new optional, additive fields: `code: LLMErrorCode` and `toolIssues?: ToolIssue[]`. Both are appended as the last positional constructor params, so every existing `new LLMError(...)` call site keeps compiling unchanged.
+
+- 11c83db: Added `VernLLMOptions.redact`, applied to model output before it reaches the debug logger.
+
+  `debug: true` logs up to 800 characters of raw model output on success, and the provider's original error on failure, including a stream-open failure. Until now there was no way to scrub that output before it hit the logger, an accidental spot for prompt content or PII to end up in logs. `redact` closes that gap:
+
+  ```ts
+  const llm = new VernLLM({
+    client: openai,
+    model: "gpt-4o",
+    debug: true,
+    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED]"),
+  });
+  ```
+
+  Applied to every internal debug log line, the success output, a failed `call()`, and a failed stream open, the one place an app has no other way to intercept, since these are direct `logger.debug` calls rather than something routed through a callback. `onEvent` payloads, `LLMError.cause`, and `onUsageFailure` already hand raw content straight to app-owned callbacks, so redacting those needs no help from `VernLLM`; only the debug log required a new option.
+
+  `redact` runs before every internal `logger.debug()` call regardless of whether that call ends up emitting anything. With the default console logger, `debug: false` (the default) means nothing is logged, so `redact` has no visible effect. With a custom `logger`, `VernLLM` doesn't check `debug` at all before calling into it, that logger's own `debug()` decides whether to emit, so `redact` runs and can have a visible effect even without `debug: true`.
+
+  Additive and optional. Omitting `redact` is a no-op, identical to today's behavior.
+
+- 8014818: Added client-side rate limiting.
+
+  `VernLLMOptions.rateLimit` queues calls locally to stay under configured `requestsPerMinute`, `tokensPerMinute`, and/or `maxConcurrent` caps, instead of dispatching and letting the provider reject with a 429. This is proactive, unlike the existing `Retry-After` handling in the retry loop, which only reacts after a self-inflicted rate limit has already cost a round trip. Omit `rateLimit` for unlimited, exactly matching pre-existing behavior.
+
+  ```ts
+  new VernLLM({
+    client,
+    model: "gpt-4o",
+    rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
+  });
+  ```
+
+  Capacity is acquired per retry attempt, not once per call, since every retry is a real request against the same limits. For `stream: true`, capacity is held for the connection's full lifetime and released only once the stream completes (success or a mid-stream failure), not when it merely opens, since a stream holds a real connection the whole time it's open.
+
+  `tokensPerMinute` is enforced against a pre-flight estimate (a chars/4 heuristic over message content plus `max_tokens` by default, overridable via `estimateTokens`), then reconciled against real reported usage once the call completes, so a systematically over- or under-estimating heuristic self-corrects rather than compounding.
+
+  A call that can't get capacity within `maxQueueMs` (default 30000, pass `0` to wait indefinitely) or finds the queue already at `maxQueueSize` (default `0`, unbounded) throws `LLMError` with `type: 'quota_exceeded'` and the new `code: 'local_rate_limit'`, reusing the existing type since a locally-stopped call before anything was sent is exactly what `quota_exceeded` already means. `shouldRetry` now excludes this code: the wait already happened, so retrying immediately would only requeue behind the same limit with nothing changed.
+
+  Provider 429s are unaffected in shape, still `type: 'api'`, `status: 429`, but now also carry the new `code: 'provider_rate_limited'` for callers that want to distinguish a real provider rate limit from a local one without checking `status` directly.
+
+  Queued waiters are served strictly FIFO, so a large call can't be starved indefinitely by a stream of smaller ones queued behind it, and a waiter whose `signal` aborts while queued is removed and rejects with `type: 'aborted'` immediately rather than continuing to hold a queue slot.
+
+  `onEvent` gains a `'rate_limited'` event, reported whenever an attempt actually had to wait for capacity, carrying `waitedMs` and which bucket (`'concurrency' | 'rpm' | 'tpm'`) was blocking it.
+
+  New exports: `RateLimiter`, `RateLimitOptions`, `RateLimitReason`, `RateLimitAcquireResult`, `WireRequest`, and `defaultEstimateTokens`.
+
+  `LLMErrorCode` gains `'local_rate_limit'` and `'provider_rate_limited'`, and `VernLLMEvent` gains the `'rate_limited'` kind, both additive to fields that were also newly introduced in this same release cycle, so nothing published to date is affected. Note for anyone consuming this as a standalone follow-on to an already-released `onEvent`/`code`: TypeScript still treats adding a member to a previously-public union as a compile-time break for consumers who exhaustively `switch` over `LLMErrorCode` or `VernLLMEvent['kind']` with a `default: never` guard (the same tradeoff already accepted for `code` itself and for `VernLLMEvent`, deliberately not extended to `LLMErrorType`, which stays closed for this reason).
+
+- 62541be: Added cross-provider fallback, declared inline on the constructor.
+
+  `VernLLMOptions.fallback` takes an ordered `FallbackTarget | FallbackTarget[]`, each with its own `client`/`model` and, optionally, its own `maxRetries`, `timeoutMs`, `chunkIdleTimeoutMs`, `baseDelayMs`, `defaultMaxTokens`, `defaultTemperature`, `nonRetryableStatus`, `circuitBreaker`, and `rateLimit` (per-target overrides fall back to the parent instance's own option when omitted; `circuitBreaker`/`rateLimit` are never inherited, each target's is independent of every other target's). Order is the policy: `VernLLM` never reorders, scores, or health-checks targets, it only walks the list as given, after the primary and after each earlier fallback target is exhausted or abandoned.
+
+  ```ts
+  const llm = new VernLLM({
+    client: openai,
+    model: "gpt-4o",
+    fallback: [
+      { client: anthropic, model: "claude-sonnet-5", name: "anthropic" },
+      { client: gemini, model: "gemini-2.5-flash", name: "gemini" },
+    ],
+  });
+  ```
+
+  `VernLLMOptions.fallbackOn` decides what happens once a target's own retries are exhausted or abandoned early: `'next'` moves on to the following target, `'stop'` gives up immediately. `'retry'` isn't a valid return here, retrying already happened inside the target. Defaults to the new exported `defaultFallbackOn`, which stops on `parse`/`validation`/`aborted`/`quota_exceeded` errors and on tool-contract failures (`code: 'unknown_tool'`/`'duplicate_tool_call_id'`, the model ignoring the request rather than the provider being unhealthy) since none of those are fixed by trying a different provider, and moves on for everything else, including a rate-limited or open-circuit target. Exported so a caller can wrap rather than replace it.
+
+  Every target keeps its own retry state, circuit breaker, and rate limiter, so tripping one target's breaker never affects another's. A `circuitBreaker`-open primary now falls over to the next target instead of hard-failing the call, since an open breaker is just another target failure as far as `fallbackOn` is concerned.
+
+  `CallParams.meta`, an optional `{ current?: CallMeta }` out-parameter, is written with `{ provider, model, fallbackIndex, usedFallback, attempts }` once `call()` resolves, so a caller who wants provider identity on the same line as the result doesn't need to read it back out of `onUsage`. Ignored for `stream: true`, since `call()` returns before the outcome (and so the target that answered) is known; `TokenUsage.provider`/`usedFallback` from `onUsage` cover that case instead. `TokenUsage` gains `usedFallback?: boolean` alongside the existing `provider?: string`.
+
+  `onEvent` gains a `'fallback'` event, reported when the chain moves to the next target, carrying `from`/`to` provider names, `fromIndex`/`toIndex` (`-1` for the primary), the normalized error that caused the move, and `elapsedMs` spent on the abandoned target.
+
+  When every target fails, `call()` throws the new `FallbackExhaustedError` (extends `LLMError`, so `isLLMError`/`instanceof LLMError` still passes, inheriting the last failure's `type`), carrying `attempts: FallbackAttempt[]`, every target's own normalized error in order, so a cross-provider outage stays debuggable without reproducing it. A lone target (no `fallback` configured) throws exactly what it throws today, unchanged: the single-iteration path is identical to pre-fallback behavior.
+
+  Fallback applies to stream-open failures only. Once a chunk has been emitted, `VernLLM` does not fall over mid-stream, since splicing a second model's output into a response the consumer has already partially rendered would corrupt it; a stream-open failure (before the first chunk) falls over exactly like a non-streaming failure does.
+
+  `cachedCall` composes with fallback automatically, since fallback lives inside `call()`: the whole chain caches under one key and the successful result, however far down the chain it came from, is what gets stored, with in-flight coalescing covering the full chain too.
+
+  As a small additive circuit-breaker improvement, `VernLLM.getCircuitStates(model?)` now exposes the current circuit state for the primary and all fallback targets in declaration order. The existing `VernLLM.getCircuitState(model?)` continues to expose the primary circuit state. `circuitBreaker.onStateChange` and the `circuit_state` `onEvent` event can be used to observe transitions, including those belonging to fallback targets.
+
+  `LLMErrorCode` gains `'fallback_exhausted'`, additive.
+
+  New exports: `FallbackTarget`, `FallbackOn`, `FallbackAttempt`, `CallMeta`, `FallbackExhaustedError`, `defaultFallbackOn`.
+
+  Tests added covering: primary success leaving every fallback target untouched, falling over on primary exhaustion with a byte-identical wire request (including `tools`) reaching the next target, `parse`/`validation`/`quota_exceeded`/tool-contract errors stopping the chain instead of falling over, a rate-limited or circuit-open target falling over, per-target breaker independence, `FallbackExhaustedError.attempts` carrying every failure in order, the no-fallback-configured case throwing identically to pre-fallback behavior, the stream-open-only limitation, `cachedCall` storing the fallback-produced result, `TokenUsage` identity matching whichever target answered, the default and a custom `fallbackOn` policy, the `'fallback'` event, and the additive circuit state API. Also added real-SDK integration tests driving actual `openai`, `@anthropic-ai/sdk`, `@google/genai`, and `@aws-sdk/client-bedrock-runtime` clients, each as a distinct fallback target against its own local mock server, exercising a full four-provider fallback chain, a real streaming open-failure fallover, and `FallbackExhaustedError` collecting every real provider's parsed error.
+
+- 6924a7f: Added opt-in support for combining `tools` with `jsonSchema` on Anthropic and Bedrock, on models that support native, schema-constrained output.
+
+  Previously, `VernLLM` unconditionally rejected `tools` combined with `jsonSchema` or `schema` at the orchestration layer for every provider. The underlying provider-level collision that motivated that generic guard was specific to Anthropic/Bedrock, where `jsonSchema` was implemented internally as a forced single tool call sharing the same `tools`/`toolConfig` field as caller-supplied tools. Both providers have since added a schema-constrained output mechanism that lives in its own request field, independent of tool calling, Anthropic's `output_config.format` and Bedrock Converse's `outputConfig.textFormat`, so the combination is no longer categorically invalid there, only invalid on models that lack that mechanism. The removed guard therefore covered both `jsonSchema` and `schema`; `schema` itself remains client-side validation, but it was included in the old blanket mutual-exclusion check.
+
+  `fromAnthropic` and `fromBedrock` now accept `nativeStructuredOutputModels` as part of their second `options` argument, either a static list of model IDs or a predicate function. On a covered model, `jsonSchema` composes with real `tools` in the same request. There is no built-in default list: which models support this is each provider's call to make, not this package's, and it changes over time, so hardcoding a guess would risk silently routing a request onto a field a given model doesn't actually support, trading a clear validation error for a confusing one from the provider. Left unset (the default), every model keeps using the forced-single-tool-call emulation, and `tools` + `jsonSchema` together is still rejected on Anthropic/Bedrock, exactly the pre-existing behavior. On Gemini and OpenAI-compatible clients, the underlying provider APIs can represent structured output and tools independently, but before this PR the shared `VernLLM` guard prevented the combination from reaching those adapters; this PR removes that unnecessary orchestration-level restriction. `schema` remains client-side validation and is no longer part of the generic `tools` exclusion.
+
+  Each provider's native mechanism has a narrower field set than the legacy forced-tool-call path, matched exactly to what each provider's real API accepts, verified against the real `@anthropic-ai/sdk` and `@aws-sdk/client-bedrock-runtime` clients rather than just asserted internally. Anthropic's `output_config.format` sends only `type` and `schema`, no `name`/`description`/`strict`. Bedrock's `outputConfig.textFormat` nests the schema one level deeper than every other schema shape these adapters build, under `structure.jsonSchema`, and requires `schema` there as a JSON-encoded _string_, not the parsed object used everywhere else in the adapter; `name`/`description` are accepted there, but not `strict`.
+
+  The generic `VernLLM.call()`-level guard that used to reject `tools` + `jsonSchema`/`schema` unconditionally has been removed; the check is now left to each adapter, which has the model-specific capability information the orchestration layer doesn't. As a side effect, this also fixes Gemini: its `responseSchema` and `tools` are independent fields, so the adapter can now send both, and OpenAI-compatible clients already pass both fields through independently. The actual compatibility change is therefore that the shared orchestration layer no longer blocks combinations that individual adapters/providers can support, while Anthropic/Bedrock retain validation on models without native structured-output support.
+
+  Also fixed a bug, on Anthropic and Bedrock, where `tools` was silently dropped from the request whenever `response_format: 'json_object'` was also set, reachable via `jsonMode: true` or `schema` (without `jsonSchema`) alongside `tools`. The JSON-instruction branch and the tool-building branch were structured as a single `if`/`else if` chain, so setting both meant only the JSON instruction was applied and `tools` never reached the wire request, even though nothing about a `json_object` prompt instruction actually conflicts with `tools`/`toolConfig`. The two are now built independently.
+
+  `AnthropicAdapterOptions`, `BedrockAdapterOptions`, and `ModelCapabilityOverride` are now exported from the package root (previously `BedrockAdapterOptions` was never exported either, a pre-existing gap this also closes), so `nativeStructuredOutputModels` and `toolUseSupportedModels` can be typed and referenced directly instead of relying on structural inference at the `fromAnthropic`/`fromBedrock` call site.
+
+  Docs updated: `core/tool-calling.mdx` and `core/structured-output.mdx` no longer describe `tools`/`jsonSchema` as unconditionally mutually exclusive, and gained a "Combining with tools" section covering `nativeStructuredOutputModels` and each provider's exact native wire shape; `adapters/anthropic.mdx` and `adapters/bedrock.mdx` gained matching per-provider sections with usage examples and shape callouts; `API-reference/call-params.mdx` and `API-reference/notes.mdx` corrected to describe the new conditional (model-dependent) behavior instead of an absolute rule.
+
+  Tests added covering: `jsonSchema` + `tools` together on a covered model (with and without real tools present), the exact native wire shape for both providers, the validation error naming the model on an uncovered model, the predicate form of `nativeStructuredOutputModels`, the legacy forced-tool-call path on an uncovered model (regression), `tools` alone on a covered model (regression), the `toolUseSupportedModels` preflight also firing on the native path when real `tools` are sent alongside `outputConfig` on Bedrock, and the `json_object` + `tools` bug fix on both adapters (regression). Also added real-SDK integration tests, driving an actual `@anthropic-ai/sdk` client and an actual `@aws-sdk/client-bedrock-runtime` client against a local mock server and asserting on the real wire body, for both providers' native path with real tools alongside it: these caught the wire-shape mismatches described above before release, which unit tests against hand-rolled fakes could not have caught on their own.
+
+### Patch Changes
+
+- 68c620f: Reorganized the package's internal file structure. No public API changes.
+
+  `VernLLM` previously held request building, retry, the circuit breaker, the rate limiter, and cache orchestration all inline in one class. It now delegates to `CallExecutor` (request building, retry, breaker, limiter) and `CacheOrchestrator` (cache reads/writes and in-flight coalescing), leaving `VernLLM` itself as constructor wiring plus the public `call`/`cachedCall`/`deleteCache`/`getCircuitState` surface.
+
+  `src/internal/` is now grouped by the subsystem that owns each file: `internal/execution/` for everything `CallExecutor` needs (`callExecutor.ts`, `requestBuilder.ts`, `streamAccumulator.ts`, `retry.utils.ts`, `errors.utils.ts`, `wire.utils.ts`, `parse.utils.ts`), `internal/cache/` for everything `CacheOrchestrator` needs (`cacheOrchestrator.ts`, `cache.utils.ts`, `replay.utils.ts`), and `internal/circuitBreaker.utils.ts`/`internal/usage.utils.ts` staying loose since `VernLLM` uses them directly. `sse.ts`, `imageFormat.ts`, and `nativeStructuredOutput.ts` moved under `src/adapters/internal/`, since the provider adapters are their primary consumers. `sse.ts` keeps its package-root exports, `parseSseStream` and `SSE_PING`, re-exported from `src/index.ts`.
+
+  The streaming accumulator (chunk buffering, backlog eviction, live delivery to a waiting consumer) is now its own module, `streamAccumulator.ts`, taking `onStreamSuccess`/`onStreamFailure`/`finalize` callbacks instead of reaching back into `CallExecutor`'s breaker and usage reporting directly.
+
+  Tests moved to mirror the new source layout, one test file's path following its source file's path. `tests/unit/vernLLM.utils.unit.test.ts` was split into `retry.utils.unit.test.ts`, `errors.utils.unit.test.ts`, and `usage.utils.unit.test.ts`, matching the source split. A new `streamAccumulator.unit.test.ts` exercises the accumulator directly against a hand-built chunk iterator, instead of only reaching it through a full `VernLLM` instance and a mock client.
+
 ## 2.0.0
 
 ### Major Changes
@@ -431,3 +563,4 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 ### Minor Changes
 
 - dbce6e2: created a `tsconfig.base.json` which the `tsconfig.json` extends from
+
