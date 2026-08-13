@@ -41,10 +41,13 @@ describe('VernLLM: injectable logger', () => {
     expect(logger.debug).toHaveBeenCalled(); // raw output debug line
   });
 
-  it('applies redact to the debug output line, not to the returned result', async () => {
+  it('applies redact to the debug output line even without debug: true, since a custom logger is not gated by that option', async () => {
     const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const redact = vi.fn((text: string) => text.replace('secret-token', '[REDACTED]'));
     const { client } = createMockClient([jsonResponse({ token: 'secret-token' })]);
+    // No `debug: true` here on purpose: with a custom `logger` supplied,
+    // VernLLM calls `logger.debug()` regardless of `debug`, it's the
+    // logger's own implementation that decides whether to emit.
     const llm = new VernLLM({ client, model: 'm', logger, redact });
 
     const result = await llm.call({ userContent: 'u', jsonMode: false });
@@ -123,5 +126,14 @@ describe('VernLLM: default logger resolution', () => {
     const llm = new VernLLM({ client, model: 'm', debug: true }); // no custom logger
     await llm.call({ userContent: 'u' });
     expect(spy).toHaveBeenCalled();
+  });
+
+  it('produces no visible output from redact with the default logger and debug left off, since nothing is logged for it to redact', async () => {
+    const spy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const redact = vi.fn((text: string) => text.replace('secret-token', '[REDACTED]'));
+    const { client } = createMockClient([jsonResponse({ token: 'secret-token' })]);
+    const llm = new VernLLM({ client, model: 'm', redact }); // no logger, no debug
+    await llm.call({ userContent: 'u' });
+    expect(spy).not.toHaveBeenCalled();
   });
 });

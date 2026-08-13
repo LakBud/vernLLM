@@ -26,9 +26,8 @@ const llm = new VernLLM({
 
 ## Default logger behavior
 
-If no logger is provided, `VernLLM` uses a console-based logger.
-
-`debug` messages are controlled by the `debug` option:
+If no logger is provided, `VernLLM` uses a console-based logger, and `debug` messages from it are
+controlled by the `debug` option:
 
 - `debug: true` enables debug logging.
 - `debug: false` disables debug logging.
@@ -41,6 +40,12 @@ If no logger is provided, `VernLLM` uses a console-based logger.
   original provider error on failure. It defaults to off so response content isn't unintentionally
   written to logs, enable it explicitly with `debug: true` when you need it.
 </Callout>
+
+`debug` only controls the default console logger. If you supply a custom `logger` (see above),
+`VernLLM` calls its `debug()` method on every debug event regardless of the `debug` option, your
+logger's own implementation decides whether that call actually emits anything. A logger wrapping
+something like pino, which is typically gated by its own log level rather than a boolean passed in
+at construction, will see every debug call whether or not `debug` was ever set.
 
 ## Redacting debug output
 
@@ -64,6 +69,9 @@ callback. Everything else that could carry the same content, `onEvent` payloads,
 there needs no help from VernLLM.
 
 <Callout type="info">
-  `redact` only has an effect when `debug: true`. With debug logging off, there's nothing for it to
-  run against.
+  `redact` runs before every internal `logger.debug()` call, regardless of whether that call ends up
+  emitting anything. With the default console logger, that means `redact` only has a visible effect
+  once `debug: true` is set, since nothing is logged otherwise. With a custom `logger`, `redact`
+  still runs even without `debug: true`: it's your logger's own `debug()` implementation, not the
+  `debug` option, that decides whether the (already redacted) message is emitted.
 </Callout>

@@ -39,17 +39,26 @@ export interface VernLLMOptions {
    * request entirely, so the provider applies its own default instead.
    */
   defaultTemperature?: number | null;
-  /** Enables debug logging of raw model output (logs up to 800 chars of each
-   * response). Off by default */
+  /**
+   * Enables debug logging of raw model output (logs up to 800 chars of each
+   * response) and provider errors. Off by default. Only controls the
+   * default `ConsoleLogger`: when a custom `logger` is supplied instead,
+   * that logger's own `debug()` implementation decides whether messages
+   * are emitted, and this option has no effect on it.
+   */
   debug?: boolean;
   /**
-   * Applied to model output before `finalizeResponse` writes it to the
-   * debug logger. This is the one piece of logging an app can't
-   * intercept itself, since it's an internal `logger.debug` call rather
-   * than something routed through `onEvent`/`onUsage`; anything caught
-   * elsewhere (events, `LLMError.cause`) already passes through the
-   * app's own callback and can be redacted there instead. Only relevant
-   * when `debug: true`. Default: identity (no redaction).
+   * Applied before every internal `logger.debug()` call: the raw output
+   * logged on success, and the provider error logged on a failed call or
+   * a failed stream open. This is the one piece of logging an app can't
+   * intercept itself, since it's a direct call into `logger.debug`
+   * rather than something routed through `onEvent`/`onUsage`; anything
+   * caught elsewhere (events, `LLMError.cause`) already passes through
+   * the app's own callback and can be redacted there instead. Runs
+   * before `logger.debug()` regardless of whether that call ends up
+   * emitting anything, so with a custom `logger`, `redact` still applies
+   * even without `debug: true`; see `debug` for why. Default: identity
+   * (no redaction).
    */
   redact?: (text: string) => string;
   /** Cache adapter for cachedCall. Defaults to an in-memory adapter */
