@@ -28,6 +28,8 @@ jobs:
               - '.changeset/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
+            docs:
+              - 'apps/docs/**'
 
       - if: steps.filter.outputs.code == 'true'
         uses: pnpm/action-setup@v4
@@ -76,7 +78,9 @@ jobs:
           git commit -m "docs: update changelog" || exit 0
           git push
 
-      - if: steps.changesets.outputs.published == 'true'
+      # Fires on: a completed package publish (which itself edits/commits the
+      # changelog doc page above), OR any push that touched apps/docs directly.
+      - if: steps.changesets.outputs.published == 'true' || steps.filter.outputs.docs == 'true'
         name: Trigger docs deploy
         run: curl -f -X POST "$VERNLLM_RELEASE"
         env:
