@@ -12,6 +12,7 @@ import {
   fromMoonshot,
   fromNovita,
   fromOllama,
+  fromOpenAI,
   fromOpenAICompatible,
   fromOpenRouter,
   fromPerplexity,
@@ -187,6 +188,7 @@ describe('fromOpenAICompatible and its aliases', () => {
   });
 
   it.each([
+    ['fromOpenAI', fromOpenAI],
     ['fromGroq', fromGroq],
     ['fromMistral', fromMistral],
     ['fromDeepSeek', fromDeepSeek],

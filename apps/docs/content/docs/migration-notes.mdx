@@ -7,6 +7,44 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 2.0.1: `fromOpenAI`: wrap raw OpenAI clients
+
+Passing `client: new OpenAI(...)` straight into `VernLLM` isn't a hard requirement, `LLMClient` is
+shaped to structurally match `chat.completions.create`, so a bare SDK instance satisfies it for
+basic non-streaming, text-only calls. But it silently skips two things that only live inside the
+adapter layer:
+
+- **Multimodal translation.** `ContentBlock[]` `userContent` (VernLLM's provider-agnostic image
+  format) is only converted to OpenAI's native `image_url` shape inside `fromOpenAICompatible`. A
+  raw client gets VernLLM's internal shape passed straight through, not OpenAI's.
+- **Streaming.** The OpenAI SDK's `create` returns an async iterable when called with
+  `stream: true` rather than exposing a separate `createStream` method, so a bare client has no
+  `createStream` at all. `stream: true` against an unwrapped client throws `LLMError('validation')`.
+
+Separately, newer `openai` SDK majors (v7+) widened `ChatCompletionContentPart` to include a `file`
+variant, which can make `new OpenAI(...)` fail to typecheck against `LLMClient` even for plain
+non-multimodal calls, depending on the exact `openai` version installed, independent of any VernLLM
+version. Since `openai` is not a peer dependency, this can surface after bumping `openai` alone with
+no corresponding VernLLM changelog entry to explain it.
+
+`fromOpenAI` is a new named alias for `fromOpenAICompatible`, listed alongside the other named
+providers:
+
+```ts
+// Before
+const llm = new VernLLM({ client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) });
+
+// After
+import { fromOpenAI } from 'vern-llm';
+
+const llm = new VernLLM({ client: fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY })) });
+```
+
+This is additive, not breaking: existing code passing a raw client keeps working for the subset of
+cases it already worked for (whatever `openai` version you have installed permits). `fromOpenAI` is
+the recommended path going forward, matching every other named provider in
+[OpenAI-Compatible](/docs/adapters/openai-compatible).
+
 <Callout type="info">
   `2.0.0` bundles three unrelated breaking changes. Skip to what applies to you: renamed the caching
   method ([`cachedCall`/`cachedLLMCall`](#200-collapsing-cachedcallcachedllmcall)), use tool calling

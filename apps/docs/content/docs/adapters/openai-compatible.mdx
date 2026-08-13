@@ -5,54 +5,63 @@ description: Zero-transform passthrough for OpenAI-compatible providers
 
 Many hosted inference providers expose the same wire format as OpenAI's Chat Completions API. `VernLLM` includes a named adapter for each supported provider, but they're all thin aliases around the same OpenAI-compatible adapter: `fromOpenAICompatible()`.
 
+<Callout title="Use fromOpenAI for OpenAI itself">
+  For OpenAI, use the `fromOpenAI` alias rather than passing an `OpenAI` SDK instance straight to
+  `client`. A raw client covers the basic non-streaming, text-only path structurally, but skips the
+  multimodal `ContentBlock[]` translation and `createStream` wiring this adapter provides, and newer
+  `openai` SDK majors have widened their content-part types in ways that no longer typecheck against
+  `LLMClient` unwrapped. See [Migration Notes](/docs/migration-notes) for details.
+</Callout>
+
 The adapter preserves the OpenAI-compatible request shape and only normalizes fields VernLLM adds on top of the standard Chat Completions format. In particular, multimodal `ContentBlock[]` input is translated into OpenAI's native content array format, while plain string messages pass through unchanged.
 
 The named adapters exist purely for readability and discoverability. They also leave room to introduce provider-specific behavior in the future without requiring a breaking API change.
 
 ## Named providers
 
-| Adapter                   | Provider                                                 |
-| ------------------------- | -------------------------------------------------------- |
-| `fromOpenAICompatible`    | OpenAI (and the generic fallback for any provider below) |
-| `fromGroq`                | Groq                                                     |
-| `fromMistral`             | Mistral                                                  |
-| `fromDeepSeek`            | DeepSeek                                                 |
-| `fromCerebras`            | Cerebras                                                 |
-| `fromTogether`            | Together AI                                              |
-| `fromFireworks`           | Fireworks AI                                             |
-| `fromOllama`              | Ollama (via its `/v1/chat/completions` endpoint)         |
-| `fromOpenRouter`          | OpenRouter                                               |
-| `fromPerplexity`          | Perplexity                                               |
-| `fromDeepInfra`           | DeepInfra                                                |
-| `fromNovita`              | Novita                                                   |
-| `fromHyperbolic`          | Hyperbolic                                               |
-| `fromMoonshot`            | Moonshot (Kimi)                                          |
-| `fromZhipu`               | Zhipu (GLM)                                              |
-| `fromLMStudio`            | LM Studio                                                |
-| `fromVLLM`                | vLLM                                                     |
-| `fromXAI`                 | xAI (Grok)                                               |
-| `fromNvidiaNIM`           | NVIDIA NIM                                               |
-| `fromVercelAIGateway`     | Vercel AI Gateway                                        |
-| `fromCloudflareWorkersAI` | Cloudflare Workers AI                                    |
-| `fromGitHubModels`        | GitHub Models                                            |
-| `fromNebius`              | Nebius AI Studio                                         |
-| `fromSambaNova`           | SambaNova Cloud                                          |
-| `fromBaseten`             | Baseten                                                  |
-| `fromFeatherless`         | Featherless AI                                           |
-| `fromFriendli`            | Friendli AI                                              |
-| `fromSiliconFlow`         | SiliconFlow                                              |
-| `fromParasail`            | Parasail                                                 |
-| `fromStepFun`             | StepFun                                                  |
-| `fromMiniMax`             | MiniMax                                                  |
-| `fromLambdaLabs`          | Lambda Labs Inference API                                |
-| `fromSnowflakeCortex`     | Snowflake Cortex                                         |
-| `fromAnyscale`            | Anyscale Endpoints                                       |
-| `fromLepton`              | Lepton AI                                                |
-| `fromKlusterAI`           | kluster.ai                                               |
-| `fromInferenceNet`        | Inference.net                                            |
-| `fromInfermatic`          | Infermatic                                               |
-| `fromAtlasCloud`          | AtlasCloud                                               |
-| `from01AI`                | 01.AI (Yi models)                                        |
+| Adapter                   | Provider                                                         |
+| ------------------------- | ---------------------------------------------------------------- |
+| `fromOpenAI`              | OpenAI                                                           |
+| `fromOpenAICompatible`    | Generic fallback: any OpenAI-wire-compatible provider not listed |
+| `fromGroq`                | Groq                                                             |
+| `fromMistral`             | Mistral                                                          |
+| `fromDeepSeek`            | DeepSeek                                                         |
+| `fromCerebras`            | Cerebras                                                         |
+| `fromTogether`            | Together AI                                                      |
+| `fromFireworks`           | Fireworks AI                                                     |
+| `fromOllama`              | Ollama (via its `/v1/chat/completions` endpoint)                 |
+| `fromOpenRouter`          | OpenRouter                                                       |
+| `fromPerplexity`          | Perplexity                                                       |
+| `fromDeepInfra`           | DeepInfra                                                        |
+| `fromNovita`              | Novita                                                           |
+| `fromHyperbolic`          | Hyperbolic                                                       |
+| `fromMoonshot`            | Moonshot (Kimi)                                                  |
+| `fromZhipu`               | Zhipu (GLM)                                                      |
+| `fromLMStudio`            | LM Studio                                                        |
+| `fromVLLM`                | vLLM                                                             |
+| `fromXAI`                 | xAI (Grok)                                                       |
+| `fromNvidiaNIM`           | NVIDIA NIM                                                       |
+| `fromVercelAIGateway`     | Vercel AI Gateway                                                |
+| `fromCloudflareWorkersAI` | Cloudflare Workers AI                                            |
+| `fromGitHubModels`        | GitHub Models                                                    |
+| `fromNebius`              | Nebius AI Studio                                                 |
+| `fromSambaNova`           | SambaNova Cloud                                                  |
+| `fromBaseten`             | Baseten                                                          |
+| `fromFeatherless`         | Featherless AI                                                   |
+| `fromFriendli`            | Friendli AI                                                      |
+| `fromSiliconFlow`         | SiliconFlow                                                      |
+| `fromParasail`            | Parasail                                                         |
+| `fromStepFun`             | StepFun                                                          |
+| `fromMiniMax`             | MiniMax                                                          |
+| `fromLambdaLabs`          | Lambda Labs Inference API                                        |
+| `fromSnowflakeCortex`     | Snowflake Cortex                                                 |
+| `fromAnyscale`            | Anyscale Endpoints                                               |
+| `fromLepton`              | Lepton AI                                                        |
+| `fromKlusterAI`           | kluster.ai                                                       |
+| `fromInferenceNet`        | Inference.net                                                    |
+| `fromInfermatic`          | Infermatic                                                       |
+| `fromAtlasCloud`          | AtlasCloud                                                       |
+| `from01AI`                | 01.AI (Yi models)                                                |
 
 Don't see your provider? If it advertises itself as **OpenAI-compatible** or a **drop-in replacement for the OpenAI API**, it will typically work with `fromOpenAICompatible()` without any additional integration.
 

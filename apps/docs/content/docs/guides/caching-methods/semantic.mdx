@@ -138,7 +138,7 @@ Pass an embedding function, any provider works, this example uses OpenAI's:
 
 ```ts title="use-semantic-cache.ts"
 import OpenAI from 'openai';
-import { VernLLM } from 'vern-llm';
+import { VernLLM, fromOpenAI } from 'vern-llm';
 import { SemanticCacheAdapter } from './semantic-cache-adapter.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -153,7 +153,7 @@ async function embed(text: string): Promise<number[]> {
 }
 
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   cache: new SemanticCacheAdapter(embed, 0.92),
 });

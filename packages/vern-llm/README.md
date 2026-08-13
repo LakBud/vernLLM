@@ -36,10 +36,10 @@ pnpm add vern-llm
 ```ts
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { fromAnthropic, VernLLM } from 'vern-llm';
+import { fromAnthropic, fromOpenAI, VernLLM } from 'vern-llm';
 
 const llm = new VernLLM({
-  client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+  client: fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY })),
   model: 'gpt-4o',
   maxRetries: 3,
   timeoutMs: 10_000,

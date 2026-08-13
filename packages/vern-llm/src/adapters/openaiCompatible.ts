@@ -203,6 +203,21 @@ export function fromOpenAICompatible(
 
 // LLM aliases
 
+/**
+ * Named alias for the OpenAI SDK itself. A raw `new OpenAI(...)` instance
+ * structurally matches most of `LLMClient`, but newer `openai` SDK major
+ * versions have widened `ChatCompletionContentPart` (e.g. adding a `file`
+ * variant) in ways that no longer structurally satisfy VernLLM's
+ * provider-agnostic `ContentBlock[]` on `userContent`, so passing the SDK
+ * instance directly can fail to typecheck depending on the installed
+ * `openai` version. Wrapping with `fromOpenAI()` (a plain alias of
+ * `fromOpenAICompatible()`) sidesteps that by translating through
+ * `unknown` at the boundary, and also picks up multimodal image
+ * translation and `createStream` wiring that a raw client doesn't have.
+ * See Migration Notes for details.
+ */
+export const fromOpenAI = fromOpenAICompatible;
+
 /** Groqs SDK matches the OpenAI wire format */
 export const fromGroq = fromOpenAICompatible;
 

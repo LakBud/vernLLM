@@ -8,13 +8,13 @@ re-processing the same input does not cost another API call.
 
 ```ts title="schemas-and-caching.ts"
 import OpenAI from 'openai';
-import { VernLLM, InMemoryCacheAdapter } from 'vern-llm';
+import { VernLLM, InMemoryCacheAdapter, fromOpenAI } from 'vern-llm';
 import { z } from 'zod';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   cache: new InMemoryCacheAdapter(),
 });

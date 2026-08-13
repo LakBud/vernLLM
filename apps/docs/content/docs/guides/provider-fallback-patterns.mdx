@@ -14,7 +14,7 @@ wrapped for `fallback`.
 ```ts title="provider-fallback-patterns-setup.ts"
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { VernLLM, fromAnthropic, fromOpenAICompatible } from 'vern-llm';
+import { VernLLM, fromAnthropic, fromOpenAI, fromOpenAICompatible } from 'vern-llm';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -38,7 +38,7 @@ ranked wishlist:
 
 ```ts title="provider-fallback-order-by-tradeoff.ts"
 const llm = new VernLLM({
-  client: openai, // fastest, cheapest, what you'd pick if nothing were down
+  client: fromOpenAI(openai), // fastest, cheapest, what you'd pick if nothing were down
   model: 'gpt-4o',
   name: 'openai',
   circuitBreaker: true,
@@ -98,7 +98,7 @@ how much time you're willing to spend on a target before moving on:
 
 ```ts title="provider-fallback-per-target-retries.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   maxRetries: 2, // give the primary a real chance: this is who you actually want answering
   timeoutMs: 20_000,
@@ -138,7 +138,7 @@ last-resort target you rarely expect to reach:
 
 ```ts title="provider-fallback-breakers-per-target.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   circuitBreaker: { threshold: 5, cooldownMs: 30_000 },
 
@@ -175,7 +175,7 @@ your users notice it as degraded quality rather than an outage:
 
 ```ts title="provider-fallback-alerting.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   name: 'openai',
   fallback: [
@@ -255,7 +255,7 @@ failing target as `'next'`), gives you key rotation for free:
 
 ```ts title="provider-fallback-key-rotation.ts"
 const llm = new VernLLM({
-  client: new OpenAI({ apiKey: process.env.OPENAI_KEY_PRIMARY, maxRetries: 0 }),
+  client: fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_KEY_PRIMARY, maxRetries: 0 })),
   model: 'gpt-4o',
   name: 'openai-key-a',
   // 429 is retryable by default, which would burn a full backoff cycle
@@ -264,7 +264,7 @@ const llm = new VernLLM({
   nonRetryableStatus: [429],
 
   fallback: {
-    client: new OpenAI({ apiKey: process.env.OPENAI_KEY_SECONDARY, maxRetries: 0 }),
+    client: fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_KEY_SECONDARY, maxRetries: 0 })),
     model: 'gpt-4o',
     name: 'openai-key-b',
   },
@@ -284,11 +284,13 @@ an invalid endpoint or an intentionally wrong API key and confirm the call still
 
 ```ts title="provider-fallback-smoke-test.ts"
 const llm = new VernLLM({
-  client: new OpenAI({
-    apiKey: 'intentionally-invalid',
-    baseURL: 'https://invalid.test',
-    maxRetries: 0,
-  }),
+  client: fromOpenAI(
+    new OpenAI({
+      apiKey: 'intentionally-invalid',
+      baseURL: 'https://invalid.test',
+      maxRetries: 0,
+    }),
+  ),
   model: 'gpt-4o',
   maxRetries: 0, // fail fast for the test, don't wait out real backoff
   timeoutMs: 3_000,

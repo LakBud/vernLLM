@@ -94,16 +94,19 @@ export const providers = [
 ];
 
 export const codeExample = `import OpenAI from 'openai';
-import { VernLLM } from 'vern-llm';
+import { fromOpenAI, VernLLM } from 'vern-llm';
 import { getWeatherTool } from './tools';
 
+const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+const backup = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_KEY_2 }));
+
 export const llm = new VernLLM({
-  client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+  client: openai,
   model: 'gpt-4o',
   maxRetries: 3,
   timeoutMs: 10_000,
   circuitBreaker: true,
-  fallback: { client: new OpenAI({ apiKey: process.env.OPENAI_KEY_2 }), model: 'gpt-4o' },
+  fallback: { client: backup, model: 'claude-sonnet-5' },
   rateLimit: { requestsPerMinute: 500 }
 });
 

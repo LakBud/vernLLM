@@ -4,6 +4,7 @@ export { fromBedrock, type BedrockConverseClient } from './bedrock.js';
 export { fromFetch, type FetchAdapterConfig } from './fetch.js';
 export {
   fromOpenAICompatible,
+  fromOpenAI,
   fromGroq,
   fromMistral,
   fromDeepSeek,
