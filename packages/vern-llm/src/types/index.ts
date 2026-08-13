@@ -8,3 +8,4 @@ export * from './tools.js';
 export * from './call.js';
 export * from './stream.js';
 export * from './events.js';
+export * from './fallback.js';

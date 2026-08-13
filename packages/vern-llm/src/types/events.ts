@@ -38,6 +38,21 @@ export type VernLLMEvent =
       consecutiveFailures: number;
     }
   | {
+      kind: 'fallback';
+      requestId: string;
+      /** Provider name of the target that just failed. */
+      from: string;
+      /** Provider name of the target about to be tried next. */
+      to: string;
+      /** `-1` for the primary target, otherwise the index into `fallback`. */
+      fromIndex: number;
+      toIndex: number;
+      /** The normalized error that caused `from` to be abandoned. */
+      error: LLMError;
+      /** Time spent on `from`, including its own retries, before giving up. */
+      elapsedMs: number;
+    }
+  | {
       kind: 'rate_limited';
       requestId: string;
       provider: string;

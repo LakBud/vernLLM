@@ -17,7 +17,8 @@ export type LLMErrorCode =
   | 'unknown_tool'
   | 'duplicate_tool_call_id'
   | 'local_rate_limit'
-  | 'provider_rate_limited';
+  | 'provider_rate_limited'
+  | 'fallback_exhausted';
 
 /** One tool call's contract failure, used to report every bad call in a response at once. */
 export interface ToolIssue {

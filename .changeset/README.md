@@ -35,5 +35,4 @@ Add one for:
 Do not add changesets for:
 
 - Documentation-only changes
-- Internal refactors
 - Formatting changes

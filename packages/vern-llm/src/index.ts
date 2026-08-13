@@ -64,6 +64,8 @@ export {
 
 export {
   LLMError,
+  FallbackExhaustedError,
+  defaultFallbackOn,
   isLLMError,
   isToolCallResult,
   InMemoryCacheAdapter,
@@ -98,6 +100,10 @@ export {
   type OnEvent,
   type VernLLMEvent,
   type TokenUsage,
+  type FallbackTarget,
+  type FallbackOn,
+  type FallbackAttempt,
+  type CallMeta,
   type SchemaLike,
   type JsonSchemaSpec,
   type ToolDefinition,

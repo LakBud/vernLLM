@@ -39,6 +39,13 @@ export interface TokenUsage {
    * populates it. Absent means the same as `'primary'` if you need a value.
    */
   provider?: string;
+  /**
+   * Whether this usage came from a fallback target rather than the
+   * primary. Optional for the same reason `provider` is: `VernLLM`
+   * always populates it, a hand-constructed `TokenUsage` (e.g. in tests)
+   * isn't forced to.
+   */
+  usedFallback?: boolean;
 }
 
 export type OnUsage = (usage: TokenUsage) => void;
