@@ -98,7 +98,7 @@ import { fromOpenAI, VernLLM } from 'vern-llm';
 import { getWeatherTool } from './tools';
 
 const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
-const backup = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_KEY_2 }));
+const backup = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_KEY_2 }));
 
 export const llm = new VernLLM({
   client: openai,
@@ -106,7 +106,7 @@ export const llm = new VernLLM({
   maxRetries: 3,
   timeoutMs: 10_000,
   circuitBreaker: true,
-  fallback: { client: backup, model: 'claude-sonnet-5' },
+  fallback: { client: backup, model: 'gpt-4o' },
   rateLimit: { requestsPerMinute: 500 }
 });
 
@@ -114,7 +114,6 @@ export const { chunks, finalResult } = await llm.cachedCall({
   cacheKey: 'weather:new-york',
   ttl: 3600,
   call: {
-    requestId: 'weather-demo-123',
     userContent: "What's the weather in New York?",
     tools: [getWeatherTool],
     stream: true

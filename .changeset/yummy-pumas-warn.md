@@ -2,8 +2,8 @@
 'vern-llm': patch
 ---
 
-Added `fromOpenAI`, a named adapter alias for OpenAI itself, alongside the existing
-`fromOpenAICompatible` aliases for Groq, Mistral, and the rest.
+Added `fromOpenAI`, an alias of `fromOpenAICompatible` for OpenAI clients. The
+existing `fromOpenAICompatible` adapter supports providers such as Groq and Mistral.
 
 Passing a raw `new OpenAI(...)` instance directly as `client` structurally satisfies `LLMClient`
 for basic non-streaming, text-only calls, but silently misses two things that only live in the
