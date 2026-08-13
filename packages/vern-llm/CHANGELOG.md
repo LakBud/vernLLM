@@ -44,9 +44,9 @@
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: "gpt-4o",
+    model: 'gpt-4o',
     debug: true,
-    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED]"),
+    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED]'),
   });
   ```
 
@@ -63,7 +63,7 @@
   ```ts
   new VernLLM({
     client,
-    model: "gpt-4o",
+    model: 'gpt-4o',
     rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
   });
   ```
@@ -91,10 +91,10 @@
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: "gpt-4o",
+    model: 'gpt-4o',
     fallback: [
-      { client: anthropic, model: "claude-sonnet-5", name: "anthropic" },
-      { client: gemini, model: "gemini-2.5-flash", name: "gemini" },
+      { client: anthropic, model: 'claude-sonnet-5', name: 'anthropic' },
+      { client: gemini, model: 'gemini-2.5-flash', name: 'gemini' },
     ],
   });
   ```

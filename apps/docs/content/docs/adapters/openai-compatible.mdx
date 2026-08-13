@@ -19,53 +19,166 @@ The named adapters exist purely for readability and discoverability. They also l
 
 ## Named providers
 
-| Adapter                   | Provider                                                         |
-| ------------------------- | ---------------------------------------------------------------- |
-| `fromOpenAI`              | OpenAI                                                           |
-| `fromOpenAICompatible`    | Generic fallback: any OpenAI-wire-compatible provider not listed |
-| `fromGroq`                | Groq                                                             |
-| `fromMistral`             | Mistral                                                          |
-| `fromDeepSeek`            | DeepSeek                                                         |
-| `fromCerebras`            | Cerebras                                                         |
-| `fromTogether`            | Together AI                                                      |
-| `fromFireworks`           | Fireworks AI                                                     |
-| `fromOllama`              | Ollama (via its `/v1/chat/completions` endpoint)                 |
-| `fromOpenRouter`          | OpenRouter                                                       |
-| `fromPerplexity`          | Perplexity                                                       |
-| `fromDeepInfra`           | DeepInfra                                                        |
-| `fromNovita`              | Novita                                                           |
-| `fromHyperbolic`          | Hyperbolic                                                       |
-| `fromMoonshot`            | Moonshot (Kimi)                                                  |
-| `fromZhipu`               | Zhipu (GLM)                                                      |
-| `fromLMStudio`            | LM Studio                                                        |
-| `fromVLLM`                | vLLM                                                             |
-| `fromXAI`                 | xAI (Grok)                                                       |
-| `fromNvidiaNIM`           | NVIDIA NIM                                                       |
-| `fromVercelAIGateway`     | Vercel AI Gateway                                                |
-| `fromCloudflareWorkersAI` | Cloudflare Workers AI                                            |
-| `fromGitHubModels`        | GitHub Models                                                    |
-| `fromNebius`              | Nebius AI Studio                                                 |
-| `fromSambaNova`           | SambaNova Cloud                                                  |
-| `fromBaseten`             | Baseten                                                          |
-| `fromFeatherless`         | Featherless AI                                                   |
-| `fromFriendli`            | Friendli AI                                                      |
-| `fromSiliconFlow`         | SiliconFlow                                                      |
-| `fromParasail`            | Parasail                                                         |
-| `fromStepFun`             | StepFun                                                          |
-| `fromMiniMax`             | MiniMax                                                          |
-| `fromLambdaLabs`          | Lambda Labs Inference API                                        |
-| `fromSnowflakeCortex`     | Snowflake Cortex                                                 |
-| `fromAnyscale`            | Anyscale Endpoints                                               |
-| `fromLepton`              | Lepton AI                                                        |
-| `fromKlusterAI`           | kluster.ai                                                       |
-| `fromInferenceNet`        | Inference.net                                                    |
-| `fromInfermatic`          | Infermatic                                                       |
-| `fromAtlasCloud`          | AtlasCloud                                                       |
-| `from01AI`                | 01.AI (Yi models)                                                |
+<Callout title="These do not set baseURL for you">
+  Mutating `client.baseURL` after construction does not work with the official OpenAI SDK. It
+  reads `baseURL` once at construction time and never rereads a value assigned to it afterward. 
+  Because of that, every named adapter below validates the client's `baseURL` instead of injecting one. 
+  The check compares origins (protocol + host) only, not the full path, since a path like `/v1` 
+  is an API-version or routing detail a provider can change independently of its identity. 
+  If `baseURL` is missing or resolves to a different origin than the provider's known one, 
+  the adapter throws an `LLMError` with `type: 'validation'` and 
+  `issues: { expectedBaseURL, actualBaseURL }`, so callers using `isLLMError` can catch this the
+  same way as vern-llm's other errors. Always set `baseURL` yourself, at construction time, when
+  creating the client, using that provider's full documented path (the origin below plus its
+  conventional path, e.g. `/v1`):
+</Callout>
+
+```ts title="correct-setup.ts"
+import OpenAI from 'openai';
+import { fromGroq } from 'vern-llm';
+
+// Correct: baseURL passed at construction
+const client = fromGroq(
+  new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: 'https://api.groq.com/openai/v1',
+  }),
+);
+```
+
+```ts title="incorrect-setup.ts"
+import OpenAI from 'openai';
+import { fromGroq, isLLMError } from 'vern-llm';
+
+// Incorrect: this throws. The SDK ignores baseURL assigned after construction,
+// so vern-llm cannot safely inject it for you.
+try {
+  const rawClient = new OpenAI({ apiKey: process.env.GROQ_API_KEY });
+  const client = fromGroq(rawClient);
+} catch (err) {
+  if (isLLMError(err) && err.type === 'validation') {
+    console.error(err.message);
+    console.error(err.issues); // { expectedBaseURL, actualBaseURL }
+  }
+}
+```
+
+The table below lists each provider's conventional full path, the same value the error message
+suggests. Only the origin (everything up through the host) is actually checked, so a different or
+missing path on an otherwise-correct origin will not throw.
+
+| Adapter                   | Provider                                                         | Required baseURL origin       | Conventional full path           |
+| ------------------------- | ---------------------------------------------------------------- | ----------------------------- | -------------------------------- |
+| `fromOpenAI`              | OpenAI                                                           | none, uses the SDK default    | none, uses the SDK default       |
+| `fromOpenAICompatible`    | Generic fallback: any OpenAI wire compatible provider not listed | none, you set it              | none, you set it                 |
+| `fromGroq`                | Groq                                                             | `api.groq.com`                | `api.groq.com/openai/v1`         |
+| `fromMistral`             | Mistral                                                          | `api.mistral.ai`              | `api.mistral.ai/v1`              |
+| `fromDeepSeek`            | DeepSeek                                                         | `api.deepseek.com`            | `api.deepseek.com/v1`            |
+| `fromCerebras`            | Cerebras                                                         | `api.cerebras.ai`             | `api.cerebras.ai/v1`             |
+| `fromTogether`            | Together AI                                                      | `api.together.ai`             | `api.together.ai/v1`             |
+| `fromFireworks`           | Fireworks AI                                                     | `api.fireworks.ai`            | `api.fireworks.ai/inference/v1`  |
+| `fromOllama`              | Ollama                                                           | none, self hosted, required   | none, self hosted, required      |
+| `fromOpenRouter`          | OpenRouter                                                       | `openrouter.ai`               | `openrouter.ai/api/v1`           |
+| `fromPerplexity`          | Perplexity                                                       | `api.perplexity.ai`           | `api.perplexity.ai`              |
+| `fromDeepInfra`           | DeepInfra                                                        | `api.deepinfra.com`           | `api.deepinfra.com/v1/openai`    |
+| `fromNovita`              | Novita                                                           | `api.novita.ai`               | `api.novita.ai/openai`           |
+| `fromHyperbolic`          | Hyperbolic                                                       | `api.hyperbolic.xyz`          | `api.hyperbolic.xyz/v1`          |
+| `fromMoonshot`            | Moonshot (Kimi)                                                  | `api.moonshot.ai`             | `api.moonshot.ai/v1`             |
+| `fromZhipu`               | Zhipu (GLM)                                                      | `open.bigmodel.cn`            | `open.bigmodel.cn/api/paas/v4`   |
+| `fromLMStudio`            | LM Studio                                                        | none, self hosted, required   | none, self hosted, required      |
+| `fromVLLM`                | vLLM                                                             | none, self hosted, required   | none, self hosted, required      |
+| `fromXAI`                 | xAI (Grok)                                                       | `api.x.ai`                    | `api.x.ai/v1`                    |
+| `fromNvidiaNIM`           | NVIDIA NIM                                                       | `integrate.api.nvidia.com`    | `integrate.api.nvidia.com/v1`    |
+| `fromVercelAIGateway`     | Vercel AI Gateway                                                | `ai-gateway.vercel.sh`        | `ai-gateway.vercel.sh/v1`        |
+| `fromCloudflareWorkersAI` | Cloudflare Workers AI                                            | none, required                | none, required                   |
+| `fromNebius`              | Nebius (Token Factory)                                           | `api.tokenfactory.nebius.com` | `api.tokenfactory.nebius.com/v1` |
+| `fromSambaNova`           | SambaNova Cloud                                                  | `api.sambanova.ai`            | `api.sambanova.ai/v1`            |
+| `fromBaseten`             | Baseten                                                          | `inference.baseten.co`        | `inference.baseten.co/v1`        |
+| `fromFeatherless`         | Featherless AI                                                   | `api.featherless.ai`          | `api.featherless.ai/v1`          |
+| `fromFriendli`            | Friendli AI                                                      | `api.friendli.ai`             | `api.friendli.ai/serverless/v1`  |
+| `fromSiliconFlow`         | SiliconFlow                                                      | `api.siliconflow.cn`          | `api.siliconflow.cn/v1`          |
+| `fromParasail`            | Parasail                                                         | `api.parasail.io`             | `api.parasail.io/v1`             |
+| `fromStepFun`             | StepFun                                                          | `api.stepfun.ai`              | `api.stepfun.ai/v1`              |
+| `fromMiniMax`             | MiniMax                                                          | `api.minimax.io`              | `api.minimax.io/v1`              |
+| `fromLambdaLabs`          | Lambda AI                                                        | `api.lambda.ai`               | `api.lambda.ai/v1`               |
+| `fromSnowflakeCortex`     | Snowflake Cortex                                                 | none, required                | none, required                   |
+| `fromAnyscale`            | Anyscale                                                         | none, required                | none, required                   |
+| `fromLepton`              | Lepton AI                                                        | none, required                | none, required                   |
+| `fromInferenceNet`        | Inference.net                                                    | `api.inference.net`           | `api.inference.net/v1`           |
+| `fromInfermatic`          | Infermatic                                                       | `api.totalgpt.ai`             | `api.totalgpt.ai/v1`             |
+| `fromAtlasCloud`          | AtlasCloud                                                       | `api.atlascloud.ai`           | `api.atlascloud.ai/v1`           |
+| `from01AI`                | 01.AI (Yi models)                                                | `api.lingyiwanwu.com`         | `api.lingyiwanwu.com/v1`         |
+
+## Migrating from an older version
+
+If you were already passing `baseURL` at construction time for every provider you use, nothing changes for you.
+
+If you were relying on a named adapter to inject `baseURL` for you, that behavior never actually worked. An earlier version of this file tried to set `client.baseURL` after construction, but the official OpenAI SDK ignores that assignment, it only reads `baseURL` once, at construction time. So calls using an adapter like `fromGroq` without passing `baseURL` yourself were silently going to OpenAI's own endpoint using the provider's API key, which OpenAI rejects. Every named adapter now validates `baseURL` instead and throws immediately with the exact value to pass if it looks missing, so this failure mode is caught right away instead of producing a confusing 401.
+
+Fix: pass `baseURL` directly inside the `new OpenAI({ ... })` call for every provider, using the value from the table above, not after the client is built.
+
+Also note: the validation itself now only checks the origin (protocol + host), not the full path, so a path typo or an outdated `/v1` -> `/v2` style change on an otherwise-correct host will no longer throw. The corrected values below are still worth using since they're each provider's actual documented path, even though only the host portion is enforced.
+
+A few endpoint values were also wrong or outdated and are now corrected:
+
+| Adapter           | Old value                  | Correct value                             |
+| ----------------- | -------------------------- | ----------------------------------------- |
+| `fromNovita`      | `api.novita.ai/v3/openai`  | `api.novita.ai/openai`                    |
+| `fromSiliconFlow` | `api.siliconflow.com/v1`   | `api.siliconflow.cn/v1`                   |
+| `fromLambdaLabs`  | `api.lambdalabs.com/v1`    | `api.lambda.ai/v1`                        |
+| `fromStepFun`     | `api.stepfun.com/v1`       | `api.stepfun.ai/v1`                       |
+| `from01AI`        | `api.01.ai/v1`             | `api.lingyiwanwu.com/v1`                  |
+| `fromNebius`      | `api.studio.nebius.com/v1` | `api.tokenfactory.nebius.com/v1`          |
+| `fromTogether`    | `api.together.xyz/v1`      | `api.together.ai/v1` (`.xyz` still works) |
+
+If you already had a `fromKlusterAI` client in code, kluster.ai is gone. Switch to another provider from the table above and update your API key.
+
+If you already had a `fromGitHubModels` client in code, GitHub Models was fully retired on July 30, 2026 for every customer, including the playground, model catalog, inference API, and bring your own key. There is no replacement inside GitHub. Switch to another provider from the table above and update your API key.
+
+If you use `fromAnyscale`, its self serve API was shut down in 2024. There is no fixed endpoint anymore, and this adapter throws if `baseURL` is missing. Pass `baseURL` for your own Anyscale Platform deployment.
+
+Adapters with no fixed endpoint (Ollama, LM Studio, vLLM, Snowflake Cortex, Cloudflare Workers AI, Anyscale, Lepton) always required `baseURL` and still do. Nothing changes for these except that `fromBaseten`, `fromNvidiaNIM`, and `fromVercelAIGateway` were wrongly grouped with them in an earlier version of this file. Those three do have one fixed shared endpoint, listed in the table above, and now validate against it correctly instead of throwing unconditionally.
+
+<Callout title="Adapters requiring baseURL">
+  Some adapters have no fixed endpoint (self hosted like Ollama, LM Studio, vLLM, or
+  account/deployment scoped like Snowflake Cortex, Cloudflare Workers AI, Anyscale). These throw an
+  error immediately if the client has no `baseURL` set, rather than silently sending requests to
+  OpenAI's own endpoint with the wrong key. Always set `baseURL` yourself when constructing the
+  client for these.
+</Callout>
+
+<Callout title="Ollama Cloud">
+  `fromOllama` has no default because most usage is a local server. Ollama also runs a hosted
+  option, Ollama Cloud, with a fixed endpoint at `https://ollama.com/v1`. Pass that as `baseURL`
+  yourself if you want the cloud option, it is never chosen automatically.
+</Callout>
+
+<Callout title="Lepton AI acquired by NVIDIA">
+  Lepton AI was acquired by NVIDIA in 2025 and is now branded NVIDIA DGX Cloud Lepton. `fromLepton`
+  has no confident default anymore, since the old per model endpoint pattern may no longer work. Set
+  `baseURL` yourself and check current NVIDIA DGX Cloud Lepton docs for the right endpoint.
+</Callout>
+
+<Callout title="01.AI confidence">
+  `from01AI`'s expected URL has only been confirmed via third party sources, not 01.AI's own docs
+  directly. If a call fails, double check the current endpoint on 01.AI's site before assuming
+  something else is wrong.
+</Callout>
+
+<Callout title="Regional accounts">
+  A few providers split traffic by region with separate keys. StepFun's China accounts use
+  `api.stepfun.com/v1` instead of the global default. MiniMax's China accounts use
+  `api.minimaxi.com` instead of `api.minimax.io`. Pass `baseURL` explicitly for these.
+</Callout>
+
+<Callout title="kluster.ai removed">
+  kluster.ai was acquired by MITO and its service was sunset in June 2026. `fromKlusterAI` has been
+  removed. Migrate to another provider from the table above.
+</Callout>
 
 Don't see your provider? If it advertises itself as **OpenAI-compatible** or a **drop-in replacement for the OpenAI API**, it will typically work with `fromOpenAICompatible()` without any additional integration.
 
-Adding a named adapter is just a convenience alias around the same implementation. If your provider isn't listed, feel free to open a PR, it's usually a one-line addition.
+Adding a named adapter is just a convenience alias around the same implementation. If your provider isn't listed, feel free to open a PR, it's usually a one line addition.
 
 ```ts title="openai-compatible-setup.ts"
 import OpenAI from 'openai';
@@ -147,11 +260,6 @@ const result = await llm.call({
 Image data must be raw base64-encoded bytes without a `data:` URL prefix. The OpenAI-compatible
 adapter converts image blocks into the provider's expected `image_url` data URL format internally.
 
-Supported image types are:
-
-- `image/png`
-- `image/jpeg`
-- `image/gif`
-- `image/webp`
+Supported image types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
 
 Plain string `userContent` remains unchanged for text-only requests.

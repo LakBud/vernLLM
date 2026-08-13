@@ -184,7 +184,10 @@ describe('VernLLM.call(stream: true) through fromOpenAICompatible, end to end', 
     });
 
     const llm = new VernLLM({
-      client: fromMistral({ chat: { completions: { create } } }),
+      client: fromMistral({
+        baseURL: 'https://api.mistral.ai/v1',
+        chat: { completions: { create } },
+      }),
       model: 'test-model',
     });
 

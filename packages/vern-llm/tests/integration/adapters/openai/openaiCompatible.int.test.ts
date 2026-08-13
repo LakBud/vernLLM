@@ -8,7 +8,8 @@ import {
 
 describe('OpenAI compatible adapters', () => {
   it('passes through compatible clients', async () => {
-    const original = {
+    const makeOriginal = (baseURL?: string) => ({
+      baseURL,
       chat: {
         completions: {
           create: async () => ({
@@ -22,9 +23,15 @@ describe('OpenAI compatible adapters', () => {
           }),
         },
       },
-    };
+    });
 
-    for (const adapter of [fromOpenAICompatible, fromGroq, fromMistral]) {
+    const cases: Array<[typeof fromOpenAICompatible, ReturnType<typeof makeOriginal>]> = [
+      [fromOpenAICompatible, makeOriginal(undefined)],
+      [fromGroq, makeOriginal('https://api.groq.com/openai/v1')],
+      [fromMistral, makeOriginal('https://api.mistral.ai/v1')],
+    ];
+
+    for (const [adapter, original] of cases) {
       const client = adapter(original);
 
       const result = await client.chat.completions.create(

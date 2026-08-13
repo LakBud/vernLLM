@@ -2,15 +2,20 @@ import Groq from 'groq-sdk';
 import OpenAI from 'openai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fromGroq, fromOpenAICompatible } from '../../../../src/adapters/openaiCompatible.js';
+import { fromOpenAICompatible } from '../../../../src/adapters/openaiCompatible.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
 /**
- * Exercises `fromOpenAICompatible` against a real `openai` SDK client and
- * `fromGroq` against a real `groq-sdk` client, both pointed at a local mock
- * server instead of their real provider APIs.
+ * Exercises `fromOpenAICompatible` against real `openai` and `groq-sdk`
+ * client instances, both pointed at a local mock server instead of their
+ * real provider APIs.
+ *
+ * The Groq case goes through `fromOpenAICompatible` directly rather than
+ * the `fromGroq` alias, since `fromGroq` validates that `baseURL`'s origin
+ * matches Groq's real endpoint and a local mock server intentionally isn't
+ * that origin.
  *
  * Unlike `openaiCompatible.int.test.ts` (a hand-rolled fake
  * `{ chat: { completions: { create } } }`), these tests prove the real SDK's
@@ -89,7 +94,7 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
     });
   });
 
-  it('sends real tool_calls round-trip through the fromGroq alias using the real Groq SDK', async () => {
+  it('sends real tool_calls round-trip through fromOpenAICompatible using the real Groq SDK', async () => {
     server = await startRealSdkServer([
       {
         body: {
@@ -130,8 +135,11 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
       baseURL: server.url,
     });
 
-    // Exercise the provider-specific alias with the actual Groq SDK client.
-    const client = fromGroq(groq);
+    // fromGroq validates that baseURL's origin matches Groq's real endpoint,
+    // which a local mock server intentionally isn't, so this exercises the
+    // real Groq SDK's request/response shape via the underlying
+    // fromOpenAICompatible directly instead of the origin-guarded alias.
+    const client = fromOpenAICompatible(groq);
 
     const result = await client.chat.completions.create(
       {

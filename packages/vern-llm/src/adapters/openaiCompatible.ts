@@ -1,20 +1,25 @@
+/**
+ * IMPORTANT: named adapters here do not set baseURL for you. They validate
+ * it and throw a clear error naming the correct value if it looks missing
+ * or unset. Mutating client.baseURL after construction does not work with
+ * the official OpenAI SDK, so every provider's expected URL is documented
+ * on its own function and checked at call time instead of silently injected.
+ *
+ * All URLs below are checked against each provider's own docs as of
+ * August 2026.
+ */
+
+import { LLMError } from '../types/index.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 
-import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/index.js';
+import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/../index.js';
 
-/** OpenAI's native per-part content shape for a user message. */
+/** OpenAI's native per part content shape for a user message. */
 type OpenAIContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
 
-/**
- * Translates a VernLLM `ContentBlock[]` into OpenAI's wire-level content
- * array. Text blocks become `{ type: 'text', text }`; image blocks become
- * `{ type: 'image_url', image_url: { url } }` with the base64 payload
- * inlined as a `data:` URL, since our `ContentBlock` shape (`{ type:
- * 'image', data, mimeType }`) is provider-agnostic and doesn't itself match
- * OpenAI's wire format.
- */
+/** Converts ContentBlock[] into OpenAI's content array shape. */
 function toOpenAIContent(blocks: ContentBlock[]): OpenAIContentPart[] {
   return blocks.map((block) =>
     block.type === 'image'
@@ -28,7 +33,7 @@ function toOpenAIContent(blocks: ContentBlock[]): OpenAIContentPart[] {
   );
 }
 
-/** One chunk of an OpenAI-shaped `chat.completions.create({ stream: true })` SSE stream. */
+/** One chunk of an OpenAI style streamed chat completion. */
 interface OpenAIStreamChunk {
   choices?: Array<{
     delta?: {
@@ -43,12 +48,7 @@ interface OpenAIStreamChunk {
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }
 
-/**
- * Translates VernLLM's provider-agnostic `messages` (the one part of a
- * request that isn't a pure passthrough for OpenAI-compatible clients) into
- * OpenAI's native wire shape. Shared between `create` and `createStream` so
- * both go through identical message translation.
- */
+/** Converts VernLLM messages into OpenAI's wire shape. Shared by create and createStream. */
 function toOpenAIMessages(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
 ): unknown[] {
@@ -66,15 +66,7 @@ function toOpenAIMessages(
   });
 }
 
-/**
- * Translates one OpenAI-shaped SSE chunk into zero or more `WireStreamChunk`s.
- * A single chunk can carry a text delta, one or more tool-call argument
- * deltas (each keyed by `index`, OpenAI's own convention for streaming
- * parallel tool calls, mirrored directly by VernLLM's `tool_call_delta`
- * shape so accumulation composes without translation), and/or a final
- * usage block (present only when `stream_options.include_usage` is set,
- * which this adapter always sets).
- */
+/** Converts one OpenAI stream chunk into zero or more WireStreamChunks. */
 function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStreamChunk> {
   const delta = chunk.choices?.[0]?.delta;
 
@@ -100,51 +92,30 @@ function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStreamChun
 }
 
 /**
- * Adapter for any SDK/client whose `chat.completions.create` already
- * matches the OpenAI wire format: this covers most hosted inference
- * providers, since "OpenAI-compatible" is a de facto standard for chat
- * completion APIs. Almost everything passes straight through untouched,
- * this exists purely so call sites read clearly (`fromMistral(client)` vs
- * handing a Mistral client to something typed for OpenAI) and so a real
- * transformation could be added later, per-provider, without a breaking
- * change.
+ * Adapter for any client whose chat.completions.create already matches
+ * OpenAI's wire format. Named aliases below all use this so call sites
+ * read clearly, and so a real per provider transform can be added later
+ * without a breaking change.
  *
- * The one thing that isn't a pure passthrough: a `ContentBlock[]`
- * `userContent` is translated into OpenAI's native `image_url` content-part
- * shape, since VernLLM's `ContentBlock` is intentionally provider-agnostic
- * rather than a copy of any one provider's wire format.
+ * The one real transform: ContentBlock[] userContent is converted to
+ * OpenAI's image_url content part shape.
  *
- * Not every SDKs own TypeScript types line up exactly with `LLMClient`
- * (extra fields, stricter unions, etc.), so this takes `unknown` and casts:
- * the actual compatibility contract is the JSON each provider sends and
- * receives over the wire, not the SDKs TS types.
+ * Client is typed unknown since SDK TS types vary by provider and version;
+ * the real compatibility contract is the JSON on the wire, not the types.
  *
- * `createStream` is implemented by calling the same underlying
- * `chat.completions.create` with `stream: true` (and, for providers that
- * support it, `stream_options: { include_usage: true }`, so a final usage
- * block arrives), the OpenAI SDK, and every OpenAI-compatible client
- * modeled on it, returns an `AsyncIterable` of SSE chunks instead of a
- * single completion object when `stream: true` is set. Each chunk is
- * translated into `WireStreamChunk`(s) via `toWireStreamChunks`.
+ * createStream calls the same create with stream: true, plus
+ * stream_options.include_usage when supported, and translates each SSE
+ * chunk via toWireStreamChunks.
  *
- * Note on long-running reasoning models: this adapter consumes the
- * underlying SDK's already-parsed stream rather than raw SSE bytes, so
- * unlike `fromFetch`/`fromAnthropic` it cannot see comment-only keep-alive
- * ping frames. Combined with `chunkIdleTimeoutMs`'s 30 second default and
- * `reasoningEffort` (documented to have long silent gaps for o-series and
- * similar models), a long-running reasoning call on this adapter can trip
- * the idle timeout even though the provider is still working. Raise or
- * disable `chunkIdleTimeoutMs` per call for those routes, see `CallParams`.
+ * Long running reasoning models: this adapter reads the SDK's parsed
+ * stream, not raw SSE, so it can't see keep alive pings. A long silent gap
+ * (common with reasoning models) can trip chunkIdleTimeoutMs. Raise or
+ * disable it per call if needed.
  */
 export interface OpenAICompatibleAdapterOptions {
   /**
-   * Whether the provider supports `stream_options.include_usage`. Not
-   * every "OpenAI-compatible" provider is guaranteed to, so this defaults
-   * to `true` (matching OpenAI, Groq, Mistral, and most others observed)
-   * and should be set to `false` for a provider verified not to support
-   * it. When `false`, `stream_options` is omitted entirely and no usage
-   * block will arrive on the stream; callers relying on streamed `usage`
-   * with such a provider won't get one.
+   * Whether the provider supports stream_options.include_usage. Defaults
+   * true. Set false if a provider errors on that field.
    */
   supportsStreamUsage?: boolean;
 }
@@ -156,12 +127,6 @@ export function fromOpenAICompatible(
   const raw = client as LLMClient;
   const { supportsStreamUsage = true } = options;
 
-  // The underlying client's `create`, called with `stream: true`, returns
-  // an AsyncIterable of `OpenAIStreamChunk` rather than
-  // `LLMClient['create']`'s normal single-completion return type, hence
-  // `unknown` here and a cast at the call site, same rationale as casting
-  // the whole client above: the wire contract, not the SDK's own TS types,
-  // is what's actually being relied on.
   const rawCreate = raw.chat.completions.create.bind(raw.chat.completions) as unknown as (
     params: unknown,
     options: { signal: AbortSignal },
@@ -201,153 +166,319 @@ export function fromOpenAICompatible(
   };
 }
 
-// LLM aliases
+// Named provider aliases
 
 /**
- * Named alias for the OpenAI SDK itself. A raw `new OpenAI(...)` instance
- * structurally matches most of `LLMClient`, but newer `openai` SDK major
- * versions have widened `ChatCompletionContentPart` (e.g. adding a `file`
- * variant) in ways that no longer structurally satisfy VernLLM's
- * provider-agnostic `ContentBlock[]` on `userContent`, so passing the SDK
- * instance directly can fail to typecheck depending on the installed
- * `openai` version. Wrapping with `fromOpenAI()` (a plain alias of
- * `fromOpenAICompatible()`) sidesteps that by translating through
- * `unknown` at the boundary, and also picks up multimodal image
- * translation and `createStream` wiring that a raw client doesn't have.
- * See Migration Notes for details.
+ * Checks the client's baseURL against the provider's known origin and
+ * throws LLMError('validation') if it's missing or points somewhere else,
+ * with the exact value to pass and a `.issues` payload of
+ * { expectedBaseURL, actualBaseURL }. Callers using isLLMError can branch
+ * on err.type === 'validation' to catch this alongside vern-llm's other
+ * deterministic, non-retryable errors.
+ *
+ * The check compares origins (protocol + host) only, not the full path.
+ * Path segments like `/v1` are API-version/routing details a provider can
+ * change independently of its identity (Together has already moved
+ * `.xyz` -> `.ai`; a future `/v1` -> `/v2` shouldn't start failing this
+ * guard). `expectedOrigin` should therefore be passed as an origin with no
+ * path, e.g. 'https://api.groq.com', not '.../openai/v1'. Any documented
+ * conventional path belongs in the calling function's JSDoc and error
+ * text, not in what's actually compared.
+ *
+ * A client baseURL that fails to parse as a URL, is unset, or resolves to
+ * an origin that doesn't match is treated as unset/wrong and throws.
  */
+function validateBaseURL(
+  client: unknown,
+  expectedOrigin: string,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  const c = client as { baseURL?: string };
+
+  let actualOrigin: string | undefined;
+  try {
+    actualOrigin = c.baseURL ? new URL(c.baseURL).origin : undefined;
+  } catch {
+    actualOrigin = undefined;
+  }
+
+  const mismatched = !actualOrigin || actualOrigin !== new URL(expectedOrigin).origin;
+
+  if (mismatched) {
+    throw new LLMError(
+      `This client's baseURL is ${c.baseURL ? `'${c.baseURL}'` : 'unset'}, but this adapter ` +
+        `expects an origin of '${expectedOrigin}'. Pass baseURL: '${expectedOrigin}' (plus that ` +
+        `provider's documented path) when constructing the client, e.g. ` +
+        `new OpenAI({ apiKey, baseURL: '${expectedOrigin}/...' }). Setting client.baseURL after ` +
+        `construction does not work with the official OpenAI SDK.`,
+      'validation',
+      undefined,
+      { expectedBaseURL: expectedOrigin, actualBaseURL: c.baseURL },
+    );
+  }
+  return fromOpenAICompatible(client, options);
+}
+
+/**
+ * Throws LLMError('validation') if the client has no baseURL set. Used
+ * for providers with no fixed endpoint (self hosted, or account/
+ * deployment scoped), so a forgotten baseURL fails loudly instead of
+ * silently hitting OpenAI's own endpoint with the wrong key.
+ */
+function requireBaseURL(
+  client: unknown,
+  providerName: string,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  const c = client as { baseURL?: string };
+  if (!c.baseURL) {
+    throw new LLMError(
+      `${providerName} has no fixed base URL. Pass baseURL when constructing the client.`,
+      'validation',
+    );
+  }
+  return fromOpenAICompatible(client, options);
+}
+
+/** Named alias for the OpenAI SDK itself. Also handles multimodal translation and streaming. */
 export const fromOpenAI = fromOpenAICompatible;
 
-/** Groqs SDK matches the OpenAI wire format */
-export const fromGroq = fromOpenAICompatible;
+/** Groq. Requires baseURL to be https://api.groq.com/openai/v1 */
+export function fromGroq(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.groq.com', options);
+}
+
+/** Mistral. Requires baseURL to be https://api.mistral.ai/v1 */
+export function fromMistral(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.mistral.ai', options);
+}
+
+/** DeepSeek. Requires baseURL to be https://api.deepseek.com/v1 */
+export function fromDeepSeek(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.deepseek.com', options);
+}
+
+/** Cerebras. Requires baseURL to be https://api.cerebras.ai/v1 */
+export function fromCerebras(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.cerebras.ai', options);
+}
+
+/** Together AI. Requires baseURL to be https://api.together.ai/v1, the current primary documented endpoint (api.together.xyz/v1 also still works) */
+export function fromTogether(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.together.ai', options);
+}
+
+/** Fireworks AI. Requires baseURL to be https://api.fireworks.ai/inference/v1 */
+export function fromFireworks(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.fireworks.ai', options);
+}
+
+/** Ollama. Self hosted by default, no fixed URL. Set baseURL yourself, e.g. http://localhost:11434/v1. Ollama Cloud is a separate hosted option at https://ollama.com/v1, opt in only, since defaulting to it would silently route local calls to a paid cloud service. */
+export function fromOllama(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return requireBaseURL(client, 'Ollama', options);
+}
+
+/** OpenRouter. Requires baseURL to be https://openrouter.ai/api/v1 */
+export function fromOpenRouter(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://openrouter.ai', options);
+}
+
+/** Perplexity. Requires baseURL to be https://api.perplexity.ai. Sonar Chat Completions at this URL still works but is now labeled legacy in favor of Perplexity's newer Agent API, which uses the Responses shape instead of chat.completions.create */
+export function fromPerplexity(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.perplexity.ai', options);
+}
+
+/** DeepInfra. Requires baseURL to be https://api.deepinfra.com/v1/openai */
+export function fromDeepInfra(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.deepinfra.com', options);
+}
+
+/** Novita. Requires baseURL to be https://api.novita.ai/openai */
+export function fromNovita(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.novita.ai', options);
+}
+
+/** Hyperbolic. Requires baseURL to be https://api.hyperbolic.xyz/v1 */
+export function fromHyperbolic(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.hyperbolic.xyz', options);
+}
+
+/** Moonshot (Kimi). Requires baseURL to be https://api.moonshot.ai/v1 */
+export function fromMoonshot(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.moonshot.ai', options);
+}
+
+/** Zhipu (GLM). Requires baseURL to be https://open.bigmodel.cn/api/paas/v4 */
+export function fromZhipu(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://open.bigmodel.cn', options);
+}
+
+/** LM Studio. Self hosted, no fixed URL. Set baseURL yourself, e.g. http://localhost:1234/v1 */
+export function fromLMStudio(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return requireBaseURL(client, 'LM Studio', options);
+}
+
+/** vLLM. Self hosted, no fixed URL. Set baseURL yourself. */
+export function fromVLLM(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return requireBaseURL(client, 'vLLM', options);
+}
+
+/** xAI Grok. Requires baseURL to be https://api.x.ai/v1 */
+export function fromXAI(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.x.ai', options);
+}
+
+/** NVIDIA NIM. Requires baseURL to be the hosted catalog https://integrate.api.nvidia.com/v1 (self hosted NIM containers should pass baseURL themselves) */
+export function fromNvidiaNIM(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://integrate.api.nvidia.com', options);
+}
+
+/** Vercel AI Gateway. Requires baseURL to be https://ai-gateway.vercel.sh/v1 (same URL for every account, identity comes from the API key) */
+export function fromVercelAIGateway(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://ai-gateway.vercel.sh', options);
+}
+
+/** Cloudflare Workers AI. No default, URL is account scoped. Set baseURL yourself. */
+export function fromCloudflareWorkersAI(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return requireBaseURL(client, 'Cloudflare Workers AI', options);
+}
+
+/** Nebius, rebranded Nebius Token Factory in 2026. Requires baseURL to be https://api.tokenfactory.nebius.com/v1 */
+export function fromNebius(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.tokenfactory.nebius.com', options);
+}
+
+/** SambaNova Cloud. Requires baseURL to be https://api.sambanova.ai/v1 */
+export function fromSambaNova(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.sambanova.ai', options);
+}
+
+/** Baseten. Requires baseURL to be the shared Model APIs catalog https://inference.baseten.co/v1 (dedicated custom deployments use their own URL, pass baseURL yourself for those) */
+export function fromBaseten(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://inference.baseten.co', options);
+}
+
+/** Featherless AI. Requires baseURL to be https://api.featherless.ai/v1 */
+export function fromFeatherless(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.featherless.ai', options);
+}
+
+/** Friendli AI. Requires baseURL to be https://api.friendli.ai/serverless/v1 */
+export function fromFriendli(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.friendli.ai', options);
+}
+
+/** SiliconFlow. Requires baseURL to be https://api.siliconflow.cn/v1 */
+export function fromSiliconFlow(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.siliconflow.cn', options);
+}
+
+/** Parasail. Requires baseURL to be https://api.parasail.io/v1 */
+export function fromParasail(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.parasail.io', options);
+}
 
 /**
- * Mistrals `chat.completions`-shaped client (or their OpenAI-compat
- * endpoint). Mistral supports `stream_options.include_usage` (added after
- * an earlier period where it returned a 422 for unrecognized fields, per
- * Mistral's changelog and streaming docs), so this is a plain alias like
- * the others, `supportsStreamUsage` defaults to `true`.
+ * StepFun. Requires baseURL to be the global endpoint
+ * https://api.stepfun.ai/v1. China accounts use https://api.stepfun.com/v1
+ * with a separate key; pass baseURL explicitly for that case.
  */
-export const fromMistral = fromOpenAICompatible;
+export function fromStepFun(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.stepfun.ai', options);
+}
 
-/** DeepSeeks API is OpenAI-compatible */
-export const fromDeepSeek = fromOpenAICompatible;
+/** MiniMax. Requires baseURL to be https://api.minimax.io/v1 (China accounts use api.minimaxi.com) */
+export function fromMiniMax(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.minimax.io', options);
+}
 
-/** Cerebras inference API is OpenAI-compatible */
-export const fromCerebras = fromOpenAICompatible;
+/** Lambda AI. Requires baseURL to be https://api.lambda.ai/v1 */
+export function fromLambdaLabs(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.lambda.ai', options);
+}
 
-/** Together AIs API is OpenAI-compatible */
-export const fromTogether = fromOpenAICompatible;
-
-/** Fireworks AIs API is OpenAI-compatible */
-export const fromFireworks = fromOpenAICompatible;
+/** Snowflake Cortex. No default, URL is account/region scoped. Set baseURL yourself. */
+export function fromSnowflakeCortex(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return requireBaseURL(client, 'Snowflake Cortex', options);
+}
 
 /**
- * Ollama exposes an OpenAI-compatible endpoint at `/v1/chat/completions`
- * (as opposed to its native `/api/chat` format, which differs). Point an
- * OpenAI SDK instances `baseURL` at your Ollama server and pass it here:
- * this does not talk to Ollamas native API directly.
+ * Anyscale's self serve Endpoints API shut down August 1, 2024. No fixed
+ * URL exists anymore; set baseURL to your own Anyscale Platform endpoint.
  */
-export const fromOllama = fromOpenAICompatible;
+export function fromAnyscale(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return requireBaseURL(client, 'Anyscale', options);
+}
 
-/** OpenRouter's API is OpenAI-compatible */
-export const fromOpenRouter = fromOpenAICompatible;
+/** Lepton AI was acquired by NVIDIA in 2025 and is now NVIDIA DGX Cloud Lepton. The old per model URL pattern may no longer work. No default is applied, set baseURL yourself and check current NVIDIA DGX Cloud Lepton docs. */
+export function fromLepton(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return requireBaseURL(client, 'Lepton AI', options);
+}
 
-/** Perplexity's API is OpenAI-compatible */
-export const fromPerplexity = fromOpenAICompatible;
+/** Inference.net. Requires baseURL to be https://api.inference.net/v1 */
+export function fromInferenceNet(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.inference.net', options);
+}
 
-/** DeepInfra's API is OpenAI-compatible */
-export const fromDeepInfra = fromOpenAICompatible;
+/** Infermatic. Requires baseURL to be https://api.totalgpt.ai/v1 */
+export function fromInfermatic(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.totalgpt.ai', options);
+}
 
-/** Novita's API is OpenAI-compatible */
-export const fromNovita = fromOpenAICompatible;
+/** AtlasCloud. Requires baseURL to be https://api.atlascloud.ai/v1, confirmed directly from their own live docs */
+export function fromAtlasCloud(
+  client: unknown,
+  options?: OpenAICompatibleAdapterOptions,
+): LLMClient {
+  return validateBaseURL(client, 'https://api.atlascloud.ai', options);
+}
 
-/** Hyperbolic's API is OpenAI-compatible */
-export const fromHyperbolic = fromOpenAICompatible;
-
-/** Moonshot's (Kimi) API is OpenAI-compatible */
-export const fromMoonshot = fromOpenAICompatible;
-
-/** Zhipu's (GLM) API is OpenAI-compatible */
-export const fromZhipu = fromOpenAICompatible;
-
-/**
- * LM Studio exposes an OpenAI-compatible endpoint at `/v1/chat/completions`.
- * Point an OpenAI SDK instance's `baseURL` at your local LM Studio server.
- */
-export const fromLMStudio = fromOpenAICompatible;
-
-/**
- * vLLM's OpenAI-compatible server mode exposes `/v1/chat/completions`.
- * Point an OpenAI SDK instance's `baseURL` at your vLLM server.
- */
-export const fromVLLM = fromOpenAICompatible;
-
-/** xAI's Grok API is OpenAI-compatible */
-export const fromXAI = fromOpenAICompatible;
-
-/** NVIDIA NIM's hosted and self-hosted endpoints are OpenAI-compatible */
-export const fromNvidiaNIM = fromOpenAICompatible;
-
-/** Vercel AI Gateway is OpenAI-compatible */
-export const fromVercelAIGateway = fromOpenAICompatible;
-
-/** Cloudflare Workers AI exposes an OpenAI-compatible endpoint */
-export const fromCloudflareWorkersAI = fromOpenAICompatible;
-
-/** GitHub Models is OpenAI-compatible */
-export const fromGitHubModels = fromOpenAICompatible;
-
-/** Nebius AI Studio is OpenAI-compatible */
-export const fromNebius = fromOpenAICompatible;
-
-/** SambaNova Cloud's API is OpenAI-compatible */
-export const fromSambaNova = fromOpenAICompatible;
-
-/** Baseten's model hosting exposes an OpenAI-compatible endpoint */
-export const fromBaseten = fromOpenAICompatible;
-
-/** Featherless AI's API is OpenAI-compatible */
-export const fromFeatherless = fromOpenAICompatible;
-
-/** Friendli AI's serving endpoint is OpenAI-compatible */
-export const fromFriendli = fromOpenAICompatible;
-
-/** SiliconFlow's API is OpenAI-compatible */
-export const fromSiliconFlow = fromOpenAICompatible;
-
-/** Parasail's inference API is OpenAI-compatible */
-export const fromParasail = fromOpenAICompatible;
-
-/** StepFun's API is OpenAI-compatible */
-export const fromStepFun = fromOpenAICompatible;
-
-/** MiniMax's API is OpenAI-compatible */
-export const fromMiniMax = fromOpenAICompatible;
-
-/** Lambda Labs' Inference API is OpenAI-compatible */
-export const fromLambdaLabs = fromOpenAICompatible;
-
-/** Snowflake Cortex's LLM endpoint is OpenAI-compatible */
-export const fromSnowflakeCortex = fromOpenAICompatible;
-
-/** Anyscale Endpoints' API is OpenAI-compatible */
-export const fromAnyscale = fromOpenAICompatible;
-
-/** Lepton AI's inference API is OpenAI-compatible */
-export const fromLepton = fromOpenAICompatible;
-
-/** kluster.ai's inference API is OpenAI-compatible */
-export const fromKlusterAI = fromOpenAICompatible;
-
-/** Inference.net's API is OpenAI-compatible */
-export const fromInferenceNet = fromOpenAICompatible;
-
-/** Infermatic's API is OpenAI-compatible */
-export const fromInfermatic = fromOpenAICompatible;
-
-/** AtlasCloud's inference API is OpenAI-compatible */
-export const fromAtlasCloud = fromOpenAICompatible;
-
-/** 01.AI's (Yi models) API is OpenAI-compatible */
-export const from01AI = fromOpenAICompatible;
+/** 01.AI (Yi models). Requires baseURL to be https://api.lingyiwanwu.com/v1. Only confirmed via third party sources, not 01.AI's own docs directly, so double check this one against 01.AI's current site before relying on it */
+export function from01AI(client: unknown, options?: OpenAICompatibleAdapterOptions): LLMClient {
+  return validateBaseURL(client, 'https://api.lingyiwanwu.com', options);
+}

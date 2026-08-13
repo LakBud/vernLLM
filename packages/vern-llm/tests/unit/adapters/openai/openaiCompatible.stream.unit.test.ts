@@ -167,7 +167,10 @@ describe('fromOpenAICompatible().chat.completions.createStream', () => {
       receivedParams = params;
       return fakeOpenAIStream([{ choices: [{ delta: { content: 'hi' } }] }]);
     });
-    const adapted = fromMistral({ chat: { completions: { create } } });
+    const adapted = fromMistral({
+      baseURL: 'https://api.mistral.ai/v1',
+      chat: { completions: { create } },
+    });
 
     await collect(
       adapted.chat.completions.createStream!(
