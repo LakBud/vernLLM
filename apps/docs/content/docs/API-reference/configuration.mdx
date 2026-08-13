@@ -14,27 +14,26 @@ const llm = new VernLLM({
   name: 'primary',
   maxRetries: 1,
   timeoutMs: 25_000,
-  chunkIdleTimeoutMs: 30_000, // stream: true calls only
+  chunkIdleTimeoutMs: 30_000,
   baseDelayMs: 500,
   defaultMaxTokens: 1000,
   nonRetryableStatus: [400, 401, 403, 404, 422],
   circuitBreaker: true,
   rateLimit: { requestsPerMinute: 500, tokensPerMinute: 200_000, maxConcurrent: 20 },
+  fallback: { client: anthropicClient, model: 'claude-sonnet-5', circuitBreaker: true },
   debug: false,
-  cache: new InMemoryCacheAdapter(), // optional; in-memory, not shared across processes
+  cache: new InMemoryCacheAdapter(),
   parseJson: (content) => {
-    // must return undefined on failure, not throw, this is what
-    // the built-in defaultParseJson does internally
     try {
       return JSON.parse(content);
     } catch {
       return undefined;
     }
   },
-  onUsage: (usage) => billing.record(usage), // optional, no default
-  onUsageFailure: (usage, error) => billing.record(usage), // optional, no default
-  onEvent: (event) => observability.record(event), // optional, no default
-  logger: myLogger, // optional, defaults to console-based logger gated by debug
+  onUsage: (usage) => billing.record(usage),
+  onUsageFailure: (usage, error) => billing.record(usage),
+  onEvent: (event) => observability.record(event),
+  logger: myLogger,
 });
 ```
 
@@ -43,8 +42,7 @@ const llm = new VernLLM({
 <Cards>
   <Card title="client">
     An `LLMClient`, an OpenAI SDK instance, or the result of wrapping another provider with an
-    adapter (`fromAnthropic`, `fromGemini`, `fromBedrock`, `fromFetch`, etc). See{' '}
-    <a href="/docs/adapters">Adapters</a>.
+    adapter (`fromAnthropic`, `fromGemini`, `fromBedrock`, `fromFetch`, etc). See [Adapters](/docs/adapters).
   </Card>
   <Card title="model">
     The default model ID for calls that do not override it via `call({ model: '...' })`.
@@ -55,29 +53,29 @@ const llm = new VernLLM({
 
 | Option | Default     | Notes                                                                                                                         |
 | ------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `name` | `'primary'` | Optional application level label for this `VernLLM` instance. It is included as `provider` in usage and observability events. |
+| `name` | `'primary'` | Optional application-level label for this `VernLLM` instance. It is included as `provider` in usage and observability events. |
 
-`name` does not affect request routing or the model sent to the provider. It is an application level
+`name` does not affect request routing or the model sent to the provider. It is an application-level
 label that lets you distinguish multiple `VernLLM` instances in shared billing and observability
 pipelines.
 
 ## Retry & timeout
 
-| Option               | Default                     | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                                                                                                                                                                                                                                                                                |
-| `timeoutMs`          | `25000`                     | Per attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, only bounds opening the stream and its first chunk, see `chunkIdleTimeoutMs`.                                                                                                                                                                                                                                                                                      |
-| `chunkIdleTimeoutMs` | `30000`                     | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. Pass `0` or `Infinity` to disable; a value larger than `setTimeout` can represent (~24.8 days) is capped at that ceiling instead of firing almost immediately. Overridable per call, see <a href="/docs/API-reference/call-params#streaming">Call Params</a>. See <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>. |
-| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. Overridden by a `Retry-After` header on the failed attempt's error when present (capped at the same max delay).                                                                                                                                                                                                                                                                               |
-| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying. Bad request, unauthorized, and forbidden errors are treated as non-transient.                                                                                                                                                                                                                                                                                                                                              |
+| Option               | Default                     | Notes                                                                                                                                                                                                          |
+| -------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                       |
+| `timeoutMs`          | `25000`                     | Per-attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, this bounds opening the stream and its first chunk; see `chunkIdleTimeoutMs`.             |
+| `chunkIdleTimeoutMs` | `30000`                     | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout). |
+| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. A `Retry-After` header overrides the computed delay when present.                                                    |
+| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying.                                                                                                                                                   |
 
 ## Request defaults
 
-| Option               | Default            | Notes                                                                                                                                                            |
-| -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                                          |
-| `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` from every call by default, so the provider applies its own default. |
-| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure, not throw, which signals a parse error to VernLLM.                            |
+| Option               | Default            | Notes                                                                                                   |
+| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                 |
+| `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` by default. |
+| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure, not throw.           |
 
 ## Caching
 
@@ -85,81 +83,113 @@ The `cache` option controls the adapter used by `cachedCall`.
 
 By default, VernLLM creates an `InMemoryCacheAdapter`. This stores cached responses in the current
 process memory using a bounded in-memory map. It is useful for local development and single-process
-deployments, but entries are not shared between multiple application instances.
+deployments, but entries are not shared between application instances.
 
 For distributed deployments, provide your own adapter backed by shared storage such as Redis or
 Upstash.
 
-`InMemoryCacheAdapter` accepts an optional `maxSize` argument to limit the number of entries kept
-in memory. When the limit is reached, the oldest entries are removed first.
+`InMemoryCacheAdapter` accepts an optional `maxSize` argument to limit the number of entries kept in
+memory. When the limit is reached, the oldest entries are removed first.
 
 Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
-(normalizes keys before matching, case, whitespace, punctuation) and `TieredCacheAdapter`
-(checks a fast local adapter first, falling back to a shared one). See <a href="/docs/core/caching">Caching</a> for usage.
+(normalizes keys before matching, including case, whitespace, and punctuation) and
+`TieredCacheAdapter` (checks a fast local adapter first, falling back to a shared one). See [Caching](/docs/core/caching) for usage.
 
-| Option  | Default                      | Notes                                                                                                                                                                                                                                 |
-| ------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall`, not plain `call()`. The default in-memory cache is not shared across processes. Use a shared adapter such as Redis or Upstash for multi-process deployments. See <a href="/docs/core/caching">Caching</a>. |
+| Option  | Default                      | Notes                                                                                                                                                          |
+| ------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall`, not plain `call()`. The default in-memory cache is not shared across processes. Use a shared adapter for multi-process deployments. |
 
 ## Observability
 
-| Option           | Default                       | Notes                                                                                                                                                                                                                                                                                        |
-| ---------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onUsage`        | none                          | Called after every successful call with token counts, but only if the provider actually returned usage data on the response. The usage object includes `provider`, which is the `name` configured on this instance.                                                                          |
-| `onUsageFailure` | none                          | Called when a provider response arrived, with usage data available, but VernLLM's own post-processing then failed (parsing, validation, or any other post-response error). Fires once per failed attempt with extractable usage. See <a href="/docs/core/usage-tracking">Usage Tracking</a>. |
-| `onEvent`        | none                          | Receives one event per retry, circuit state transition, or rate limit wait. Fire and forget; cannot change the call result or retry behavior. See <a href="/docs/core/observability">Observability</a>.                                                                                      |
-| `logger`         | console based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere, such as pino or winston. See <a href="/docs/core/logging">Pluggable Logger</a>.                                                                                                                                                  |
-| `debug`          | `false`                       | Controls `logger.debug` diagnostic calls such as raw model output on success and provider error details on failure. Retry-attempt warnings from `recoverDelay()` use `logger.warn` and are always logged regardless of this flag. `warn` and `error` logs are not controlled by `debug`.     |
+| Option           | Default                       | Notes                                                                                                                                                                                                                |
+| ---------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onUsage`        | none                          | Called after every successful call with token counts when the provider returned usage data. The usage object includes `provider`, which is the `name` configured on the target.                                      |
+| `onUsageFailure` | none                          | Called when a provider response arrived with usage data but VernLLM's post-processing then failed. Fires once per failed attempt with extractable usage. See [Usage Tracking](/docs/core/usage-tracking).            |
+| `onEvent`        | none                          | Receives events for retries, circuit state transitions, rate-limit waits, and fallback transitions. Fire and forget; cannot change the call result or retry behavior. See [Observability](/docs/core/observability). |
+| `logger`         | console-based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere. See [Pluggable Logger](/docs/core/logging).                                                                                                              |
+| `debug`          | `false`                       | Controls diagnostic `logger.debug` calls. `warn` and `error` logs are not controlled by `debug`.                                                                                                                     |
 
-See <a href="/docs/core/observability">Observability</a> for the full `onEvent` union, including the
-`retry`, `circuit_state`, and `rate_limited` event shapes.
+See [Observability](/docs/core/observability) for the full `onEvent` union and event
+shapes.
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `circuitBreaker` | disabled | Pass `true` for default settings (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, onStateChange }` to tune them. See <a href="/docs/core/circuit-breaker">Circuit Breaker</a>. For `stream: true`, a `chunkIdleTimeoutMs` timeout counts as a failure even though it happens mid-stream, unlike other stream failures. `unknown_tool` and `duplicate_tool_call_id` tool contract failures never count as a failure. `isolateByModel` (default `false`) tracks a separate circuit per resolved model instead of one shared circuit for the instance; `getCircuitState()` then takes an optional `model` parameter to match. |
+| Option           | Default  | Notes                                                                                                                                                                              |
+| ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for defaults (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, onStateChange }`. See [Circuit Breaker](/docs/core/circuit-breaker). |
+
+The circuit breaker tracks provider and transport-level health. Response parsing and validation
+errors do not count as provider failures. `unknown_tool` and `duplicate_tool_call_id` tool-contract
+errors also do not count.
+
+With `isolateByModel: false` (the default), one circuit is shared across models used by the same
+target. With `isolateByModel: true`, each resolved model gets its own circuit and
+`getCircuitState(model)` can be used to inspect that model's state.
+
+See [Circuit Breaker](/docs/core/circuit-breaker) for failure conditions, half-open
+behavior, per-model isolation, and state inspection.
 
 ## Rate limiting
 
-| Option      | Default   | Notes                                                                                                                                                                                                                                                                                                                                                 |
-| ----------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rateLimit` | unlimited | `{ requestsPerMinute, tokensPerMinute, maxConcurrent, maxQueueMs, maxQueueSize, estimateTokens }`. Queues calls locally to stay under configured limits instead of letting the provider reject them. Every field is independent and optional; omitting one leaves that dimension unlimited. See <a href="/docs/core/rate-limiting">Rate Limiting</a>. |
+| Option      | Default   | Notes                                                                                                                                                                                                                                            |
+| ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rateLimit` | unlimited | `{ requestsPerMinute, tokensPerMinute, maxConcurrent, maxQueueMs, maxQueueSize, estimateTokens }`. Queues calls locally to stay under configured limits. Every field is independent and optional. See [Rate Limiting](/docs/core/rate-limiting). |
 
-A call fails immediately with `LLMError('quota_exceeded')` and `code: 'local_rate_limit'`, and is
-never retried, in three cases: the queue wait exceeded `maxQueueMs`, the queue was already at
-`maxQueueSize`, or the call's estimated token cost exceeds the configured `tokensPerMinute` ceiling
-outright (no amount of waiting could ever satisfy it, so it's rejected on arrival rather than
-queued). A real provider 429 is unaffected in shape but now also carries
-`code: 'provider_rate_limited'`. See <a href="/docs/core/error-handling#error-codes">Error codes</a>.
+A local rate-limit rejection fails immediately with `LLMError('quota_exceeded')` and
+`code: 'local_rate_limit'`. It is never retried and does not count as a circuit-breaker failure.
+
+A provider 429 carries `code: 'provider_rate_limited'` and is handled separately from local
+rate-limit rejections. See [Error codes](/docs/core/error-handling#error-codes).
+
+## Fallback
+
+| Option       | Default             | Notes                                                                                                                                                                                                             |
+| ------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fallback`   | none                | A `FallbackTarget` or `FallbackTarget[]`, tried in declaration order after the primary and after each earlier target's retries are exhausted or abandoned. See [Provider Fallback](/docs/core/provider-fallback). |
+| `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget }) => 'next' \| 'stop'`. Decides whether a failed target is followed by the next one.                                                                                                     |
+
+Each `FallbackTarget` needs its own `client` and `model`. `name`, `maxRetries`, `timeoutMs`,
+`chunkIdleTimeoutMs`, `baseDelayMs`, `defaultMaxTokens`, `defaultTemperature`, and
+`nonRetryableStatus` inherit the parent instance's resolved value when omitted.
+
+`circuitBreaker` and `rateLimit` are never inherited. Each target has its own independent breaker
+and rate limiter when configured.
+
+An open target breaker is treated as a target failure and can cause the chain to move to the next
+target according to `fallbackOn`.
+
+When every target fails, `call()` throws `FallbackExhaustedError` containing the normalized error
+from each attempted target in declaration order. See [FallbackExhaustedError](/docs/core/error-handling#fallbackexhaustederror).
 
 ## Per call defaults and overrides
 
-A handful of options are set per `call()` rather than on the instance. The following options have their own defaults worth knowing:
+A handful of options are set per `call()` rather than on the instance. The following options have
+their own defaults worth knowing:
 
-| Option         | Default                                       | Notes                                                                                                                                                                                                                                             |
-| -------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `temperature`  | `0.2`, or the instance's `defaultTemperature` | Low by design. This library targets structured and deterministic extraction more than open-ended generation. Override freely per call. Pass `null` to omit `temperature` from this call and use the provider's own default.                       |
-| `jsonMode`     | `true`, except `false` if `tools` is set      | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back with no parsing. Forcing JSON output alongside tool calling is unreliable across providers, so the default flips off automatically once `tools` is set. |
-| `systemPrompt` | none                                          | Optional. Omitting it skips the system message entirely rather than sending an empty one.                                                                                                                                                         |
-| `toolChoice`   | `'auto'` when `tools` is set                  | Controls whether and which tool the model must call. See <a href="/docs/core/tool-calling">Tool Calling</a>.                                                                                                                                      |
+| Option         | Default                                       | Notes                                                                                                             |
+| -------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `temperature`  | `0.2`, or the instance's `defaultTemperature` | Low by design. Override per call as needed. Pass `null` to omit `temperature` and use the provider's own default. |
+| `jsonMode`     | `true`, except `false` if `tools` is set      | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back.                        |
+| `systemPrompt` | none                                          | Optional. Omitting it skips the system message entirely.                                                          |
+| `toolChoice`   | `'auto'` when `tools` is set                  | Controls whether and which tool the model must call. See [Tool Calling](/docs/core/tool-calling).                 |
 
 ## Usage metering
 
 `reserveUsage` and `refundUsage` are provided per call, not on the `VernLLM` instance.
 
-| Option         | Default | Notes                                                                                                                                                                                                                                                                                                                    |
-| -------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `reserveUsage` | none    | Runs before the provider request. Receives `{ coalesced, signal }`, where `coalesced` indicates whether the caller joined an existing cached in-flight operation and `signal` is the caller-supplied `AbortSignal` when provided. If it throws, the call fails with `LLMError('quota_exceeded')` and no request is sent. |
-| `refundUsage`  | none    | Runs after a successful reservation if the call ultimately fails. Receives `{ coalesced, signal }` with the same meaning. A successful reservation is also refunded if the request is aborted before the wrapped operation starts. It is not called when `reserveUsage` fails because nothing was reserved.              |
+| Option         | Default | Notes                                                                                                                                                                |
+| -------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reserveUsage` | none    | Runs before the provider request. If it throws, the call fails with `LLMError('quota_exceeded')` and no request is sent.                                             |
+| `refundUsage`  | none    | Runs after a successful reservation if the call ultimately fails. It is also called when an already-reserved request is aborted before the wrapped operation starts. |
 
 These hooks are application controlled. VernLLM only manages the reservation lifecycle; it does
 not decide quota rules or billing policy.
 
 `userContent`, `model`, `maxTokens`, and `reasoningEffort` have no call-level default beyond
-falling back to the corresponding instance-level `VernLLMOptions` field, or being undefined when
-omitted. `schema`, `jsonSchema`, `tools`, `signal`, and `requestId` have no instance-level
-equivalent at all, they are undefined unless set on the call itself.
+falling back to the corresponding instance-level field, or being undefined when omitted.
+
+`schema`, `jsonSchema`, `tools`, `signal`, and `requestId` have no instance-level equivalent; they
+are undefined unless set on the call itself.
 
 `requestId` is an optional identifier you can provide per call:
 

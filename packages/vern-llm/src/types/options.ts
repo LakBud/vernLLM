@@ -4,6 +4,7 @@ import type { RateLimitOptions } from '../rateLimit.js';
 import type { CacheAdapter } from './cache.js';
 import type { LLMClient } from './client.js';
 import type { OnEvent } from './events.js';
+import type { FallbackOn, FallbackTarget } from './fallback.js';
 import type { OnUsage, OnUsageFailure } from './usage.js';
 
 export interface VernLLMOptions {
@@ -83,4 +84,25 @@ export interface VernLLMOptions {
    * limit in the first place. Omit for unlimited (the default).
    */
   rateLimit?: RateLimitOptions;
+  /**
+   * Ordered targets tried after the primary, in order, once it (and its
+   * own retries) is exhausted or abandoned. Order is the policy: VernLLM
+   * never reorders, scores, or selects between targets. Each target keeps
+   * its own retry state, circuit breaker, and rate limiter, independent
+   * of every other target's. A single `FallbackTarget` is equivalent to
+   * `[target]`.
+   */
+  fallback?: FallbackTarget | FallbackTarget[];
+  /**
+   * Decides what happens after a target fails: `'next'` to move on to
+   * the following target (or throw, if it was the last one), `'stop'` to
+   * give up immediately without trying any remaining targets. Called
+   * once per failed target, after that target's own retries are
+   * exhausted or abandoned early, so `'retry'` is never a valid return
+   * here. Defaults to `defaultFallbackOn`, which stops on
+   * parse/validation/aborted/quota errors and on tool-contract failures
+   * (the model ignoring the request, not the provider being unhealthy),
+   * and moves on for everything else.
+   */
+  fallbackOn?: FallbackOn;
 }

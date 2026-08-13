@@ -17,7 +17,7 @@ const llm = new VernLLM({
 
 `rateLimit` queues calls locally to stay under configured limits, instead of dispatching every call
 and letting the provider reject the ones that go over. This is proactive: the existing
-`Retry-After` handling in <a href="/docs/core/retries">Retries</a> is reactive, it only recovers
+`Retry-After` handling in [Retries](/docs/core/retries) is reactive, it only recovers
 after a self-inflicted 429 has already cost a round trip. `rateLimit` avoids tripping the limit in
 the first place.
 
@@ -91,7 +91,7 @@ try {
 </Callout>
 
 An aborted signal on a queued call removes it from the queue immediately and rejects with
-`LLMError('aborted')`, freeing that queue slot for the next waiter. See <a href="/docs/core/cancellation">Cancellation & Timeouts</a>.
+`LLMError('aborted')`, freeing that queue slot for the next waiter. See [Cancellation & Timeouts](/docs/core/cancellation).
 
 ## Estimating tokens
 
@@ -154,7 +154,7 @@ the stream completes, either by finishing normally or by a mid-stream failure, n
 merely opens. A stream holds a real connection to the provider the whole time it's open, so it
 continues to count against `maxConcurrent` for as long as that connection is live.
 
-See <a href="/docs/core/streaming">Streaming</a> for the rest of the `stream: true` contract.
+See [Streaming](/docs/core/streaming) for the rest of the `stream: true` contract.
 
 ## Interaction with retries
 
@@ -165,14 +165,14 @@ so retrying immediately would only requeue it behind the same limit with nothing
 if (error instanceof LLMError && error.code === 'local_rate_limit') return false;
 ```
 
-See <a href="/docs/core/retries#what-gets-retried">What gets retried</a> for the full list of
+See [What gets retried](/docs/core/retries#what-gets-retried) for the full list of
 non-retried error conditions.
 
 ## Interaction with the circuit breaker
 
 A `local_rate_limit` error never reached the provider, so it says nothing about the provider's
 health. It does not count toward the circuit breaker's failure threshold, the same treatment tool
-contract errors already get. See <a href="/docs/core/circuit-breaker#what-counts-as-a-failure">What counts as a failure</a>.
+contract errors already get. See [What counts as a failure](/docs/core/circuit-breaker#what-counts-as-a-failure).
 
 ## Provider 429s
 
@@ -222,19 +222,19 @@ const llm = new VernLLM({
 });
 ```
 
-See <a href="/docs/core/observability#event-kinds">Event kinds</a> for the rest of the `onEvent`
+See [Event kinds](/docs/core/observability#event-kinds) for the rest of the `onEvent`
 union.
 
 ## Options reference
 
-| Option              | Default                | Notes                                                                                                 |
-| ------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| `requestsPerMinute` | unlimited              | Max requests dispatched per minute, as a continuously refilling budget.                               |
-| `tokensPerMinute`   | unlimited              | Max estimated + reconciled tokens per minute. See <a href="#estimating-tokens">Estimating tokens</a>. |
-| `maxConcurrent`     | unlimited              | Max requests in flight at once. Freed on completion, not on a timer.                                  |
-| `maxQueueMs`        | `30000`                | Max time a call may sit queued. Pass `0` to wait indefinitely.                                        |
-| `maxQueueSize`      | `0`                    | Max queued calls before new ones fail immediately instead of queueing. Pass `0` for unbounded.        |
-| `estimateTokens`    | chars/4 + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes.   |
+| Option              | Default                | Notes                                                                                               |
+| ------------------- | ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `requestsPerMinute` | unlimited              | Max requests dispatched per minute, as a continuously refilling budget.                             |
+| `tokensPerMinute`   | unlimited              | Max estimated + reconciled tokens per minute. See [Estimating tokens](#estimating-tokens).          |
+| `maxConcurrent`     | unlimited              | Max requests in flight at once. Freed on completion, not on a timer.                                |
+| `maxQueueMs`        | `30000`                | Max time a call may sit queued. Pass `0` to wait indefinitely.                                      |
+| `maxQueueSize`      | `0`                    | Max queued calls before new ones fail immediately instead of queueing. Pass `0` for unbounded.      |
+| `estimateTokens`    | chars/4 + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes. |
 
-See <a href="/docs/API-reference/configuration#rate-limiting">Configuration</a> for how `rateLimit`
+See [Configuration](/docs/API-reference/configuration#rate-limiting) for how `rateLimit`
 sits alongside every other constructor option.

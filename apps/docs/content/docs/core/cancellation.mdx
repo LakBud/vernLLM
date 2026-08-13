@@ -44,9 +44,7 @@ If the signal fires while waiting out a backoff delay between retries, the pendi
 `signal` works the same way for a `stream: true` call. If it fires before the stream opens, `call()`
 throws `LLMError('aborted')` before any request is dispatched, same as a non-streaming call. If it
 fires after the stream has opened, the in-flight request is cancelled and `finalResult` rejects
-with `LLMError('aborted')`; any chunks already delivered through `chunks` are not retracted. See{' '}
-
-<a href="/docs/core/streaming">Streaming</a> for the full contract.
+with `LLMError('aborted')`; any chunks already delivered through `chunks` are not retracted. See [Streaming](/docs/core/streaming) for the full contract.
 
 ## Cached calls and cancellation
 

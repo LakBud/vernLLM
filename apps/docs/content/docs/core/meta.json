@@ -3,18 +3,19 @@
   "icon": "Layers",
   "pages": [
     "index",
+    "provider-fallback",
+    "circuit-breaker",
     "retries",
     "rate-limiting",
+    "usage-metering",
+    "caching",
+    "observability",
+    "usage-tracking",
+    "error-handling",
+    "cancellation",
     "structured-output",
     "tool-calling",
     "streaming",
-    "caching",
-    "usage-metering",
-    "usage-tracking",
-    "circuit-breaker",
-    "observability",
-    "logging",
-    "error-handling",
-    "cancellation"
+    "logging"
   ]
 }

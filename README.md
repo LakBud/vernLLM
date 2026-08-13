@@ -15,11 +15,12 @@
   <img src="https://img.shields.io/badge/pnpm-monorepo-F69220?logo=pnpm&logoColor=white" alt="pnpm monorepo" />
 </p>
 
-<p align="center">A lightweight resilience layer for LLM chat completions; retries, timeouts, circuit breaking, caching, structured output, usage metering, usage tracking and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
+<p align="center">A lightweight resilience layer for LLM calls; retries, timeouts, circuit breaking, provider fallback, rate limiting, caching, structured output, usage metering, usage tracking, observability events and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
 
 ```ts
+import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { VernLLM } from 'vern-llm';
+import { fromAnthropic, VernLLM } from 'vern-llm';
 
 const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
@@ -33,8 +34,20 @@ const llm = new VernLLM({
     threshold: 5,
     cooldownMs: 30_000,
   },
+  rateLimit: {
+    requestsPerMinute: 500,
+    maxConcurrent: 20,
+  },
+  fallback: {
+    client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })),
+    model: 'claude-sonnet-5',
+    circuitBreaker: true,
+  },
   onUsage: (u) => {
     console.log(`${u.requestId}: ${u.totalTokens} tokens used`);
+  },
+  onEvent: (event) => {
+    if (event.kind === 'fallback') console.warn(`falling over ${event.from} -> ${event.to}`);
   },
   debug: false,
 });

@@ -21,9 +21,9 @@
 
 <p align="center">Production-ready resilience for LLM calls</p>
 
-Retries, timeouts, caching, and circuit breaking behind one typed interface, with adapters for OpenAI-compatible APIs (OpenAI, Groq, and more), Anthropic, Gemini, and Bedrock.
+Retries, timeouts, caching, circuit breaking, provider fallback, and client-side rate limiting behind one typed interface, with adapters for OpenAI-compatible APIs (OpenAI, Groq, and more), Anthropic, Gemini, and Bedrock.
 
-**Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** — installation, structured output, caching, circuit breaker, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
+**Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** — installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
 
 ## Install
 
@@ -34,8 +34,9 @@ pnpm add vern-llm
 ## Quick start
 
 ```ts
+import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { VernLLM } from 'vern-llm';
+import { fromAnthropic, VernLLM } from 'vern-llm';
 
 const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
@@ -43,6 +44,15 @@ const llm = new VernLLM({
   maxRetries: 3,
   timeoutMs: 10_000,
   circuitBreaker: true,
+  rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
+  fallback: {
+    client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })),
+    model: 'claude-sonnet-5',
+    circuitBreaker: true,
+  },
+  onEvent: (event) => {
+    if (event.kind === 'fallback') console.warn(`falling over ${event.from} -> ${event.to}`);
+  },
 });
 
 const getWeather = {
@@ -71,17 +81,20 @@ const result = await finalResult; // cached, retried, and streamed, tool calls i
 ## Why vern-llm?
 
 - **Retries with backoff**: transient failures retry automatically; validation errors and non-retryable status codes fail fast instead
+- **Provider fallback**: declare an ordered list of backup targets, tried in order after the primary, with no scoring or health-checking, `fallback` on the same constructor
+- **Client-side rate limiting**: queue locally against requests-per-minute, tokens-per-minute, and concurrency ceilings instead of letting the provider reject the call
 - **Structured output**: pass a Zod schema, get a typed, validated result back
 - **Tool calling**: pass `tools`, vern-llm handles retries and validation around them the same as any other call; you run the tools and continue the conversation
 - **Streaming**: set `stream: true` on any call and get live chunks alongside the same validated result the call would otherwise resolve to
 - **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
 - **Caching**: wrap any LLM call with `cachedCall`, bring your own cache adapter
-- **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back
+- **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back, independent per fallback target too
+- **Observability**: one `onEvent` stream reports retries, fallovers, circuit transitions, and rate-limit waits
 - **Usage tracking**: `onUsage` and `onUsageFailure` report token spend on success and on failure, so nothing goes unaccounted for when a call fails after the provider already responded
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
 - **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; vern-llm relies on compatible interfaces rather than specific implementations.
 
-See the [docs](https://vernllm.vercel.app) for adapter setup, caching, the circuit breaker, and structured output in depth.
+See the [docs](https://vernllm.vercel.app) for adapter setup, caching, the circuit breaker, provider fallback, rate limiting, and structured output in depth.
 
 ## License
 

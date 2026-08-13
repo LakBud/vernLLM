@@ -3,7 +3,7 @@ title: Tuning Rate Limits
 description: Sizing rateLimit against a real provider plan, and telling a local wait apart from a provider 429
 ---
 
-<a href="/docs/core/rate-limiting">Rate Limiting</a> covers the `rateLimit` option itself, the three
+[Rate Limiting](/docs/core/rate-limiting) covers the `rateLimit` option itself, the three
 buckets, queueing, and the events it emits. This guide walks through putting it to use: sizing it
 against numbers a provider actually gives you, sharing one budget across several routes, and
 deciding what to do when a call gives up waiting.
@@ -34,9 +34,9 @@ not the provider's RPM number.
 
 <Callout type="info">
   Headroom matters more for `tokensPerMinute` than `requestsPerMinute`. The default token estimate
-  is a rough `chars / 4` heuristic (see{' '}
-  <a href="/docs/core/rate-limiting#estimating-tokens">Estimating tokens</a>), so a limit set right
-  at the provider's real ceiling leaves no room for the estimate running high on a given call.
+  is a rough `chars / 4` heuristic (see [Estimating
+  tokens](/docs/core/rate-limiting#estimating-tokens)), so a limit set right at the provider's real
+  ceiling leaves no room for the estimate running high on a given call.
 </Callout>
 
 ## One instance, one budget, many callers
@@ -66,9 +66,11 @@ Two separate `VernLLM` instances pointed at the same provider account have two s
 buckets between them, and can together exceed the account's real limit even though each instance
 individually stays under its own configured number.
 
-If you run multiple providers behind one logical service, each gets its own instance and its own
-`rateLimit`, sized against that provider's own numbers. See <a href="/docs/guides/provider-fallback">Provider Fallback</a> for wiring several instances
-together.
+If you run multiple providers behind one logical service, `fallback` targets each get their own
+`rateLimit`, sized against that provider's own numbers; it's never inherited from the primary. See
+
+[Provider Fallback](/docs/core/provider-fallback) for declaring several targets on one
+instance.
 
 ## Choosing maxQueueMs for your call site
 
@@ -130,9 +132,9 @@ try {
   await llm.call({ userContent: message });
 } catch (err) {
   if (isLLMError(err) && err.code === 'local_rate_limit') {
-    logger.warn('rateLimit queue gave up, consider raising the configured limits');
+    console.warn('rateLimit queue gave up, consider raising the configured limits');
   } else if (isLLMError(err) && err.code === 'provider_rate_limited') {
-    logger.warn('provider itself rate limited this request');
+    console.warn('provider itself rate limited this request');
   }
   throw err;
 }
@@ -169,7 +171,7 @@ const llm = new VernLLM({
 
 A `reason` that's consistently `'tpm'` points at raising `tokensPerMinute` or tightening
 `estimateTokens`. A `reason` that's consistently `'concurrency'` points at your own connection
-pool, not the provider, being the actual bottleneck. See <a href="/docs/core/rate-limiting#observing-waits">Observing waits</a> for the full event shape.
+pool, not the provider, being the actual bottleneck. See [Observing waits](/docs/core/rate-limiting#observing-waits) for the full event shape.
 
 ## Sizing tokensPerMinute for a mixed workload
 
@@ -199,5 +201,5 @@ const llm = new VernLLM({
 });
 ```
 
-See <a href="/docs/core/rate-limiting#estimating-tokens">Estimating tokens</a> for exactly how the
+See [Estimating tokens](/docs/core/rate-limiting#estimating-tokens) for exactly how the
 estimate and the post-call reconciliation interact.

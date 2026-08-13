@@ -25,7 +25,7 @@ export default function HomePage() {
         data={generateSoftwareApplication({
           name: 'VernLLM',
           description:
-            'A lightweight resilience layer for LLM chat completion calls. Retries, timeouts, circuit breaking, caching, structured output, and usage tracking, with one interface across providers.',
+            'A lightweight resilience layer for LLM chat completion calls. Retries, timeouts, circuit breaking, provider fallback, rate limiting, caching, structured output, observability events, and usage tracking, with one interface across providers.',
           url: 'https://vernllm.vercel.app',
         })}
       />
@@ -43,8 +43,8 @@ export default function HomePage() {
             </h1>
 
             <p className="mt-6 max-w-xl text-base text-fd-muted-foreground lg:text-lg">
-              A lightweight resilience layer for LLM chat completions. Retries, timeouts, caching,
-              and circuit breaking, dependency-light and typed from the start.
+              A lightweight resilience layer for LLM calls. Retries, timeouts, provider fallback,
+              rate limiting, and circuit breaking, dependency-light and typed from the start.
             </p>
           </div>
 

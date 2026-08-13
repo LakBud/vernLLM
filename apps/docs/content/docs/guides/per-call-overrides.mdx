@@ -28,13 +28,13 @@ const analysis = await llm.call({
 
 ## What can be overridden per call
 
-| Field                | Falls back to                                                                                                                                                          |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`              | The instance's `model` option                                                                                                                                          |
-| `maxTokens`          | The instance's `defaultMaxTokens` (`1000`)                                                                                                                             |
-| `temperature`        | `0.2`, used only when both the per-call value and `defaultTemperature` are `undefined`. Either one set to `null` omits `temperature` instead.                          |
-| `reasoningEffort`    | Omitted from the request entirely; the provider's own default applies                                                                                                  |
-| `chunkIdleTimeoutMs` | The instance's `chunkIdleTimeoutMs` (`30000`). Only applies when `stream: true`. See <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>. |
+| Field                | Falls back to                                                                                                                                               |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`              | The instance's `model` option                                                                                                                               |
+| `maxTokens`          | The instance's `defaultMaxTokens` (`1000`)                                                                                                                  |
+| `temperature`        | `0.2`, used only when both the per-call value and `defaultTemperature` are `undefined`. Either one set to `null` omits `temperature` instead.               |
+| `reasoningEffort`    | Omitted from the request entirely; the provider's own default applies                                                                                       |
+| `chunkIdleTimeoutMs` | The instance's `chunkIdleTimeoutMs` (`30000`). Only applies when `stream: true`. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout). |
 
 <Callout type="warn">
   `temperature` isn't left unset when you don't pass it &mdash; VernLLM defaults it to `0.2` itself.
@@ -47,7 +47,7 @@ options at all &mdash; they only ever exist per call, so there's nothing to "ove
 instance level, you just set them on the calls that need them.
 
 <Callout>
-  <a href="/docs/getting-started#per-call-overrides">Getting Started</a> has a quick-start version of
+  [Getting Started](/docs/getting-started#per-call-overrides) has a quick-start version of
   this same pattern, including switching to a reasoning model for a single call:
 
 ```ts title="reasoning-effort-override.ts"
@@ -71,12 +71,10 @@ This page goes into more depth on when and how to reach for overrides.
   different calls need different resilience *settings* (a different `threshold` or `cooldownMs`
   per model), use separate `VernLLM` instances that share the same underlying `client`.
   `chunkIdleTimeoutMs` is the one exception, it's overridable per call since `stream: true` calls
-  often need a different idle allowance than the instance default, see{' '}
-  <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>. If instead you
+  often need a different idle allowance than the instance default, see [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout). If instead you
   just want one model's failures not to open the circuit for another model on the same instance,
   without different threshold/cooldown values, `circuitBreaker: { isolateByModel: true }` does that
-  without a second instance, see{' '}
-  <a href="/docs/core/circuit-breaker#per-model-isolation">Per-model isolation</a>.
+  without a second instance, see [Per-model isolation](/docs/core/circuit-breaker#per-model-isolation).
 </Callout>
 
 ## Common pattern: cheap default, expensive escalation
@@ -134,7 +132,7 @@ const llm = new VernLLM({
 });
 ```
 
-See <a href="/docs/core/usage-tracking">Usage Tracking</a> for the full `onUsage` shape.
+See [Usage Tracking](/docs/core/usage-tracking) for the full `onUsage` shape.
 
 ## Interaction with caching
 
@@ -150,4 +148,4 @@ const cacheKey = `analysis:${docId}:${documentHash}:${model}:${temperature}:sche
 Include a stable document revision/content hash and any generation settings that affect the output,
 such as model, temperature, and schema version.
 
-See <a href="/docs/core/caching">Caching</a> for more on choosing cache keys.
+See [Caching](/docs/core/caching) for more on choosing cache keys.

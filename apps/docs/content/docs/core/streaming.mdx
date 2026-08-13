@@ -11,11 +11,11 @@ instead of as a single resolved value.
 <Callout type="info">
   VernLLM's streaming preserves the same guarantees as non-streaming `call()`. Retries cover
   connection failures before the first chunk arrives; a stream that fails partway through does not
-  retry, since replaying it would duplicate output the caller may have already rendered. See{' '}
-  <a href="#what-gets-retried">What gets retried</a> below. Unlike non-streaming `call()`, where
-  `timeoutMs` bounds the whole response, streaming only uses it to bound opening the stream and its
-  first chunk; every gap after that is bounded separately by `chunkIdleTimeoutMs`, see{' '}
-  <a href="#per-chunk-idle-timeout">Per-chunk idle timeout</a> below.
+  retry, since replaying it would duplicate output the caller may have already rendered. See [What
+  gets retried](#what-gets-retried) below. Unlike non-streaming `call()`, where `timeoutMs` bounds
+  the whole response, streaming only uses it to bound opening the stream and its first chunk; every
+  gap after that is bounded separately by `chunkIdleTimeoutMs`, see [Per-chunk idle
+  timeout](#per-chunk-idle-timeout) below.
 </Callout>
 
 ## Enabling streaming
@@ -94,9 +94,8 @@ for await (const chunk of chunks) {
 <Callout>
   A `usage` chunk, when the provider reports one, always arrives last, after every `text-delta` or
   `tool_call_delta` chunk for that response. Not every provider sends usage data mid-stream; some
-  only report it in the same place non-streaming responses do. See the{' '}
-  <a href="#usage-metering-and-tracking-while-streaming">usage metering and tracking</a> section
-  below.
+  only report it in the same place non-streaming responses do. See the [usage metering and
+  tracking](#usage-metering-and-tracking-while-streaming) section below.
 </Callout>
 
 ## `finalResult` mirrors non-streaming `call()`
@@ -183,7 +182,7 @@ JSON. VernLLM assembles and parses the full arguments for you once the stream co
 non-streaming tool call. Treat `argsDelta` as display-only unless you have a specific reason to
 parse it incrementally yourself.
 
-See <a href="/docs/core/tool-calling">Tool Calling</a> for everything else about the tool calling
+See [Tool Calling](/docs/core/tool-calling) for everything else about the tool calling
 contract, none of which changes when `stream` is also set.
 
 ## Usage metering and tracking while streaming
@@ -194,9 +193,8 @@ back `{ chunks, finalResult }` before the real outcome of the stream is known, t
 step is deferred onto `finalResult` instead of happening inline. `onUsage` fires once `finalResult`
 resolves successfully; `onUsageFailure` fires if the stream fails after usage was already reserved.
 
-See <a href="/docs/core/usage-metering">Usage Metering</a> and{' '}
-
-<a href="/docs/core/usage-tracking">Usage Tracking</a> for the full reference, both apply unchanged.
+See [Usage Metering](/docs/core/usage-metering) and
+[Usage Tracking](/docs/core/usage-tracking) for the full reference, both apply unchanged.
 
 ## What gets retried
 
@@ -227,10 +225,8 @@ once the stream fully completes, not when the first chunk arrives, so a connecti
 then hangs isn't masked as a success. An idle-timeout failure (see below) is the one exception on
 the failure side: it still counts even though it happens after the first chunk, since a provider
 that reliably streams one chunk and then hangs is exactly the kind of unhealthy behavior the
-breaker exists to catch. See{' '}
-
-<a href="/docs/core/circuit-breaker">Circuit Breaker</a> and
-<a href="/docs/core/retries">Retries</a> for the underlying policy this reuses.
+breaker exists to catch. See [Circuit Breaker](/docs/core/circuit-breaker) and
+[Retries](/docs/core/retries) for the underlying policy this reuses.
 
 ## Per-chunk idle timeout
 
@@ -328,14 +324,14 @@ const result = await finalResult;
   arguments in one shot), followed by an optional trailing text chunk.
 </Callout>
 
-See <a href="/docs/core/caching">Caching</a> for everything else about `cachedCall`, coalescing,
+See [Caching](/docs/core/caching) for everything else about `cachedCall`, coalescing,
 and cache adapters, all of which apply the same way to streaming calls.
 
 ## A note on the call() overload
 
 TypeScript only resolves `call()` to the streaming overload, returning `StreamCallResult<T>`, when
 `stream: true` is visible as a literal at the call site. This is the same caveat that already
-applies to `tools`, see <a href="/docs/core/tool-calling#a-note-on-the-call-overload">the Tool Calling docs</a> for the full explanation.
+applies to `tools`, see [the Tool Calling docs](/docs/core/tool-calling#a-note-on-the-call-overload) for the full explanation.
 
 If you build `params` as a plain `CallParams<T>` and conditionally set `stream` on it, TypeScript
 picks the non-streaming `Promise<T>` overload regardless of what `stream` turns out to be at
@@ -368,9 +364,7 @@ Every adapter implements `createStream` on top of the same client passed to `fro
 | Bedrock           | `ConverseStreamCommand`                                                         |
 | `fromFetch`       | Server-Sent Events by default, or a custom frame format via `parseStreamFrames` |
 
-See each adapter's own page for anything streaming-specific to that provider, and{' '}
-
-<a href="/docs/adapters/custom-fetch#streaming">Custom Providers - fromFetch</a> for wiring up
+See each adapter's own page for anything streaming-specific to that provider, and [Custom Providers - fromFetch](/docs/adapters/custom-fetch#streaming) for wiring up
 streaming through the raw HTTP escape hatch.
 
 <Callout>

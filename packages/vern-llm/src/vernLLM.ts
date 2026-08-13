@@ -1,23 +1,31 @@
 import { randomUUID } from 'crypto';
 
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
-import { buildCircuitBreaker } from './internal/circuitBreaker.utils.js';
+import { buildCircuitBreaker, makeEventReporter } from './internal/circuitBreaker.utils.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
+import { normalizeError } from './internal/execution/errors.utils.js';
 import { withReservedUsage, withReservedUsageForStream } from './internal/execution/usage.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import { RateLimiter } from './rateLimit.js';
 import {
   InMemoryCacheAdapter,
   LLMError,
+  FallbackExhaustedError,
+  defaultFallbackOn,
   type CachedCallParams,
   type CachedStreamCallParams,
   type CachedStreamToolCallParams,
   type CachedToolCallParams,
   type CallParams,
   type CallWithToolsResult,
+  type FallbackAttempt,
+  type FallbackOn,
+  type FallbackTarget,
   type StreamCallResult,
+  type TargetCircuitState,
   type StreamEnabledCallParams,
   type ToolEnabledCallParams,
+  type VernLLMEvent,
   type VernLLMOptions,
 } from './types/index.js';
 
@@ -35,11 +43,19 @@ export class VernLLM {
   private readonly logger: Logger;
 
   /**
-   * Owns request building, retry/timeout, the circuit breaker, and the
-   * rate limiter for the (currently single) provider target. `call()`
-   * delegates every per-target concern here.
+   * One `CallExecutor` per provider target: index 0 is the primary,
+   * everything after it is a `fallback` target, in the order declared.
+   * Each owns its own request building, retry/timeout, circuit breaker,
+   * and rate limiter. `call()` walks this array in `runFallbackChain`,
+   * moving to the next entry only when `fallbackOn` says to.
    */
-  private readonly executor: CallExecutor;
+  private readonly executors: CallExecutor[];
+
+  /** Decides whether a failed target is followed by the next one or the chain stops. See `VernLLMOptions['fallbackOn']`. */
+  private readonly fallbackOn: FallbackOn;
+
+  /** Reports a `'fallback'` event when the chain moves to the next target. Shared `onEvent` plumbing, same as every executor's. */
+  private readonly reportEvent: (event: VernLLMEvent) => void;
 
   /**
    * Owns cache key resolution, cache reads/writes, and in-flight
@@ -64,26 +80,81 @@ export class VernLLM {
       this.logger,
     );
 
-    // Built before the executor: onStateChange fires from inside the
-    // breaker itself, which the executor is merely handed a reference to.
-    const breaker = buildCircuitBreaker(options, providerName, this.logger);
+    this.fallbackOn = options.fallbackOn ?? defaultFallbackOn;
+    this.reportEvent = makeEventReporter(options.onEvent, this.logger);
 
-    this.executor = new CallExecutor(providerName, options.client, options.model, {
-      maxRetries: options.maxRetries ?? 1,
-      timeoutMs: options.timeoutMs ?? 25_000,
-      chunkIdleTimeoutMs: options.chunkIdleTimeoutMs ?? 30_000,
-      baseDelayMs: options.baseDelayMs ?? 500,
-      defaultMaxTokens: options.defaultMaxTokens ?? 1000,
-      defaultTemperature:
-        options.defaultTemperature === undefined ? 0.2 : options.defaultTemperature,
-      nonRetryableStatus: options.nonRetryableStatus ?? [400, 401, 403, 404, 422],
-      parseJson: options.parseJson,
-      logger: this.logger,
-      onUsage: options.onUsage,
-      onUsageFailure: options.onUsageFailure,
-      onEvent: options.onEvent,
-      breaker,
-      limiter: options.rateLimit ? new RateLimiter(options.rateLimit) : undefined,
+    // The primary target's shared knobs, resolved once here rather than
+    // inline in the retry-tunable default below, since fallback targets
+    // that omit a field inherit this resolved value, not the raw
+    // (possibly-undefined) option.
+    const primaryDefaultTemperature =
+      options.defaultTemperature === undefined ? 0.2 : options.defaultTemperature;
+
+    // The primary, shaped like a `FallbackTarget` so it walks the same
+    // build loop as every declared fallback target below. Its own
+    // `circuitBreaker`/`rateLimit` are read directly off `options`
+    // instead of this list, since only the primary carries them at the
+    // top level (a `FallbackTarget`'s copies are genuinely independent,
+    // never inherited, see `FallbackTarget`'s docs).
+    const primaryTarget: FallbackTarget = {
+      client: options.client,
+      model: options.model,
+      name: providerName,
+      maxRetries: options.maxRetries,
+      timeoutMs: options.timeoutMs,
+      chunkIdleTimeoutMs: options.chunkIdleTimeoutMs,
+      baseDelayMs: options.baseDelayMs,
+      defaultMaxTokens: options.defaultMaxTokens,
+      defaultTemperature: primaryDefaultTemperature,
+      nonRetryableStatus: options.nonRetryableStatus,
+      circuitBreaker: options.circuitBreaker,
+      rateLimit: options.rateLimit,
+    };
+
+    const declaredFallbacks: FallbackTarget[] = Array.isArray(options.fallback)
+      ? options.fallback
+      : options.fallback
+        ? [options.fallback]
+        : [];
+
+    const targets = [primaryTarget, ...declaredFallbacks];
+
+    this.executors = targets.map((target, i) => {
+      const isFallback = i > 0;
+      // `-1` for the primary, matching `FallbackAttempt.index`.
+      const name = target.name ?? (isFallback ? `fallback[${i - 1}]` : providerName);
+
+      // Built before the executor: onStateChange fires from inside the
+      // breaker itself, which the executor is merely handed a reference to.
+      const breaker = buildCircuitBreaker(
+        target.circuitBreaker,
+        name,
+        target.model,
+        options.onEvent,
+        this.logger,
+      );
+
+      return new CallExecutor(name, target.client, target.model, {
+        maxRetries: target.maxRetries ?? options.maxRetries ?? 1,
+        timeoutMs: target.timeoutMs ?? options.timeoutMs ?? 25_000,
+        chunkIdleTimeoutMs: target.chunkIdleTimeoutMs ?? options.chunkIdleTimeoutMs ?? 30_000,
+        baseDelayMs: target.baseDelayMs ?? options.baseDelayMs ?? 500,
+        defaultMaxTokens: target.defaultMaxTokens ?? options.defaultMaxTokens ?? 1000,
+        defaultTemperature:
+          target.defaultTemperature === undefined
+            ? primaryDefaultTemperature
+            : target.defaultTemperature,
+        nonRetryableStatus: target.nonRetryableStatus ??
+          options.nonRetryableStatus ?? [400, 401, 403, 404, 422],
+        parseJson: options.parseJson,
+        logger: this.logger,
+        onUsage: options.onUsage,
+        onUsageFailure: options.onUsageFailure,
+        onEvent: options.onEvent,
+        breaker,
+        limiter: target.rateLimit ? new RateLimiter(target.rateLimit) : undefined,
+        isFallback,
+      });
     });
   }
 
@@ -92,6 +163,95 @@ export class VernLLM {
     this.logger.error(logMessage, {
       message: error instanceof Error ? error.message : 'unknown',
     });
+  }
+
+  /**
+   * Walks `this.executors` in order, running `attempt` against each until
+   * one succeeds or every target has failed. `run` on a lone target
+   * (no `fallback` configured) throws exactly what it throws today: the
+   * loop's single iteration path is unchanged from pre-fallback behavior.
+   *
+   * For streaming, `attempt` is `executor.runStream`, whose own retries
+   * only cover *opening* the stream (see `CallExecutor.runStream`). A
+   * mid-stream failure surfaces through `finalResult` after this function
+   * has already returned, so it's never seen here and never falls over,
+   * per the streaming limitation: splicing a second model's output into a
+   * response the consumer has already partially rendered would corrupt
+   * it.
+   */
+  private async runFallbackChain<R>(
+    params: Pick<CallParams<unknown>, 'model' | 'signal'>,
+    requestId: string,
+    attempt: (executor: CallExecutor, onAttempt: () => void) => Promise<R>,
+    skipBreakerCheckForFirst = false,
+  ): Promise<{ result: R; executor: CallExecutor; index: number; attemptCount: number }> {
+    const attempts: FallbackAttempt[] = [];
+
+    for (let i = 0; i < this.executors.length; i++) {
+      const executor = this.executors[i]!;
+      const startedAt = Date.now();
+      let attemptCount = 0;
+
+      try {
+        // Already checked once, before usage was reserved, when this is
+        // the sole target (see `call()`). `assertClosed` claims a
+        // half-open trial slot as a side effect on a non-throwing call,
+        // so it must run exactly once per logical call: checking it
+        // again here for the same executor could either falsely see
+        // "trial already in flight" (from the check that just claimed
+        // it) or double-claim a slot no concurrent caller actually has.
+        if (!(i === 0 && skipBreakerCheckForFirst)) {
+          executor.assertBreakerClosed(params.model);
+        }
+
+        const result = await attempt(executor, () => {
+          attemptCount += 1;
+        });
+        return { result, executor, index: i, attemptCount };
+      } catch (error) {
+        const normalized = normalizeError(error, params.signal);
+
+        attempts.push({
+          index: i - 1,
+          provider: executor.providerName,
+          model: params.model ?? executor.model,
+          error: normalized,
+        });
+
+        const isLast = i === this.executors.length - 1;
+        // Always consult fallbackOn, including on the last target, so it
+        // sees every failure and callers who log or count from inside it
+        // get a complete picture. The chain still stops once the last
+        // target fails regardless of what fallbackOn returns: there is no
+        // next executor to fall over to.
+        const policyDecision = this.fallbackOn(normalized, { isLastTarget: isLast });
+        const decision = isLast ? 'stop' : policyDecision;
+
+        if (decision === 'stop') {
+          // A lone target (or a chain that stopped on its first failure)
+          // throws its own error, unchanged from pre-fallback behavior.
+          throw attempts.length > 1 ? new FallbackExhaustedError(attempts) : normalized;
+        }
+
+        const next = this.executors[i + 1]!;
+
+        this.reportEvent({
+          kind: 'fallback',
+          requestId,
+          from: executor.providerName,
+          to: next.providerName,
+          fromIndex: i - 1,
+          toIndex: i,
+          error: normalized,
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
+    }
+
+    // Unreachable: the loop above always either returns or throws before
+    // running out of targets (the last iteration's `isLast` forces a
+    // throw). Kept only to satisfy the return type.
+    throw new LLMError('No provider targets configured', 'unknown');
   }
 
   /**
@@ -145,17 +305,40 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
-    this.executor.assertBreakerClosed(params.model);
+    // A lone target (no `fallback` configured) keeps the exact pre-fallback
+    // contract: the breaker is checked once, up front, before usage is
+    // reserved, so a call that's definitely blocked never pays a
+    // reserve-then-refund round trip. This can only be hoisted out of the
+    // chain for the sole-target case: `assertBreakerClosed` claims a
+    // half-open trial slot as a side effect, which must happen exactly
+    // once per logical call, so with more than one target the check has
+    // to stay inside `runFallbackChain`, where an open primary is just
+    // another target failure that `fallbackOn` can fall over from.
+    const soleTarget = this.executors.length === 1;
+
+    if (soleTarget) {
+      this.executors[0]!.assertBreakerClosed(params.model);
+    }
 
     if (params.stream) {
       // Same breaker/logging treatment as non-streaming, applied around
       // opening the stream; mid-stream failures are handled separately
-      // inside the executor. Usage refund/report is deferred onto
-      // finalResult, since call() must return { chunks, finalResult }
-      // before the real outcome is known.
+      // inside the executor and never fall over (see `runFallbackChain`).
+      // Usage refund/report is deferred onto finalResult, since call()
+      // must return { chunks, finalResult } before the real outcome is
+      // known, which is also why `params.meta` isn't populated for
+      // streaming calls.
       return withReservedUsageForStream(
         params,
-        () => this.executor.runStream(params, requestId),
+        async () => {
+          const { result } = await this.runFallbackChain(
+            params,
+            requestId,
+            (executor, onAttempt) => executor.runStream(params, requestId, onAttempt),
+            soleTarget,
+          );
+          return result;
+        },
         params.signal,
         (logMessage, error) => this.logRefundError(logMessage, error),
       );
@@ -164,7 +347,26 @@ export class VernLLM {
     return withReservedUsage(
       params,
       false,
-      () => this.executor.run(params, requestId),
+      async () => {
+        const { result, executor, index, attemptCount } = await this.runFallbackChain(
+          params,
+          requestId,
+          (target, onAttempt) => target.run(params, requestId, onAttempt),
+          soleTarget,
+        );
+
+        if (params.meta) {
+          params.meta.current = {
+            provider: executor.providerName,
+            model: params.model ?? executor.model,
+            fallbackIndex: index - 1,
+            usedFallback: index > 0,
+            attempts: attemptCount,
+          };
+        }
+
+        return result;
+      },
       params.signal,
       (logMessage, error) => this.logRefundError(logMessage, error),
     );
@@ -274,6 +476,26 @@ export class VernLLM {
    * 'half-open'`), or undefined if no circuit breaker was configured.
    */
   getCircuitState(model?: string) {
-    return this.executor.getCircuitState(model);
+    return this.executors[0]!.getCircuitState(model);
+  }
+
+  /**
+   * @param model With `circuitBreaker.isolateByModel` on, returns each
+   * target's circuit state for that model instead of its shared state.
+   * Ignored otherwise. Omit for the shared circuit (the default) or, under
+   * isolation, the state of calls that didn't resolve a model.
+   * @returns The current circuit state for every target in declaration
+   * order, including the primary and all fallback targets. Each entry
+   * includes the target's provider name, chain index, whether it is a
+   * fallback, and its circuit state, or undefined if that target has no
+   * circuit breaker configured.
+   */
+  getCircuitStates(model?: string): TargetCircuitState[] {
+    return this.executors.map((executor, index) => ({
+      provider: executor.providerName,
+      index,
+      isFallback: index > 0,
+      state: executor.getCircuitState(model),
+    }));
   }
 }

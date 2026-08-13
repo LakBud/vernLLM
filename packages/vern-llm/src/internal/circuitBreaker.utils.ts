@@ -1,8 +1,7 @@
-import { CircuitBreaker } from '../circuitBreaker.js';
+import { CircuitBreaker, type CircuitBreakerOptions } from '../circuitBreaker.js';
 
 import type { Logger } from '../logger.js';
 import type { VernLLMEvent } from '../types/events.js';
-import type { VernLLMOptions } from '../types/options.js';
 
 /**
  * Builds a `(event) => void` reporter that no-ops when `onEvent` is unset,
@@ -33,26 +32,33 @@ export function makeEventReporter(
  * Builds the optional circuit breaker for one provider target, wiring its
  * `onStateChange` to emit a `circuit_state` event and chain any
  * caller-supplied `onStateChange`. Returns `undefined` when
- * `options.circuitBreaker` is falsy, matching the option's own semantics.
+ * `circuitBreakerOption` is falsy, matching the option's own semantics.
  *
  * Lives outside `CallExecutor` (and outside `VernLLM`, once this were
  * inlined) because the breaker has to exist *before* the executor it's
  * passed into, so its construction can't be an executor concern.
  * `onEvent` is called directly rather than through the executor for the
  * same reason: nothing executor-shaped exists yet at this point.
+ *
+ * Takes the specific fields it needs (rather than a full `VernLLMOptions`)
+ * so it works identically for the primary target and for each fallback
+ * target, which carry their own `circuitBreaker` override alongside the
+ * shared `onEvent`.
  */
 export function buildCircuitBreaker(
-  options: VernLLMOptions,
+  circuitBreakerOption: boolean | CircuitBreakerOptions | undefined,
   providerName: string,
+  defaultModel: string,
+  onEvent: ((event: VernLLMEvent) => void) | undefined,
   logger: Logger,
 ): CircuitBreaker | undefined {
-  if (!options.circuitBreaker) return undefined;
+  if (!circuitBreakerOption) return undefined;
 
   const breakerOptions =
-    typeof options.circuitBreaker === 'object' ? options.circuitBreaker : undefined;
+    typeof circuitBreakerOption === 'object' ? circuitBreakerOption : undefined;
   const userOnStateChange = breakerOptions?.onStateChange;
 
-  const reportEvent = makeEventReporter(options.onEvent, logger);
+  const reportEvent = makeEventReporter(onEvent, logger);
 
   return new CircuitBreaker({
     ...breakerOptions,
@@ -60,7 +66,7 @@ export function buildCircuitBreaker(
       reportEvent({
         kind: 'circuit_state',
         provider: providerName,
-        model: model ?? options.model,
+        model: model ?? defaultModel,
         from,
         to,
         consecutiveFailures,

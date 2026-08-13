@@ -1,3 +1,4 @@
+import type { CallMeta } from './fallback.js';
 import type { JsonSchemaSpec, SchemaLike } from './schema.js';
 import type { ToolCall, ToolChoice, ToolDefinition, ToolResult } from './tools.js';
 import type { UsageHooks } from './usage.js';
@@ -137,6 +138,17 @@ export interface CallParams<T = unknown> extends UsageHooks {
    * `StreamCallResult`.
    */
   stream?: boolean;
+
+  /**
+   * Optional out-parameter for provider identity. Pass `{}` (or any object
+   * with a mutable `current` property) and `call()` writes a `CallMeta`
+   * into `meta.current` before returning, alongside whatever `onUsage`
+   * already reports. Ignored for `stream: true`, since `call()` returns
+   * before the outcome (and so the target that answered) is known; read
+   * `TokenUsage.provider`/`usedFallback` from `onUsage` for streaming
+   * calls instead.
+   */
+  meta?: { current?: CallMeta };
 }
 
 /**

@@ -44,11 +44,8 @@ Does not count as a failure:
 - `LLMError('api')` with `code: 'duplicate_tool_call_id'`
 - `LLMError('quota_exceeded')` with `code: 'local_rate_limit'`, a local `rateLimit` rejection that
   never reached the provider, whether from a queue giving up or from a call rejected outright before
-  it ever queued. See{' '}
-  <a href="/docs/core/rate-limiting#interaction-with-the-circuit-breaker">
-    Interaction with the circuit breaker
-  </a>
-  .
+  it ever queued. See
+  [Interaction with the circuit breaker](/docs/core/rate-limiting#interaction-with-the-circuit-breaker).
 
 The tool contract errors are model response defects rather than provider health failures. An
 `unknown_tool` error means the model requested a tool that was not offered. A
@@ -76,14 +73,51 @@ threshold does not need to be reached again because one failed trial is enough t
 ## Scope
 
 Each `VernLLM` instance owns its own circuit breaker. State is never shared across instances. If
-you are running multiple providers side by side, one instance opening its circuit has no effect on
-another instance.
+you are running multiple providers side by side as separate instances, one instance opening its
+circuit has no effect on another.
 
-See <a href="/docs/guides/provider-fallback">Provider Fallback</a> for a setup with multiple
-providers.
+The same independence holds _within_ a single instance configured with `fallback`: each declared
+target, primary and every fallback target, gets its own breaker if `circuitBreaker` is set on it.
+Tripping one target's breaker never affects another target's. An open primary breaker's error is
+passed to `fallbackOn` like any other failure, and the chain advances to the next target only when
+`fallbackOn` returns `'next'`; it does not fall over automatically. See [Provider Fallback](/docs/core/provider-fallback) for a setup with multiple targets on one instance.
+
+The circuit state APIs expose the state of each target independently. `getCircuitState()` continues
+to return the primary target's state, while the fallback-aware state API returns the state for every
+target in declaration order.
+
+```ts title="circuit-breaker-fallback-state.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+  },
+  fallback: {
+    client: anthropic,
+    model: 'claude-sonnet-4',
+    circuitBreaker: {
+      threshold: 5,
+      cooldownMs: 30_000,
+    },
+  },
+});
+
+llm.getCircuitState(); // primary target's state
+
+llm.getCircuitStates();
+// [
+//   { provider: 'primary', state: 'closed' },
+//   { provider: 'fallback[0]', state: 'closed' },
+// ]
+```
+
+Each target's state is independent. Opening the primary breaker does not open the fallback breaker,
+and opening a fallback breaker does not affect the primary.
 
 Within a single instance, the default is one shared circuit for every call regardless of which
-model was used. This includes calls that provide a per call `model` override. See <a href="/docs/guides/per-call-overrides">Per Call Overrides</a>.
+model was used. This includes calls that provide a per call `model` override. See [Per Call Overrides](/docs/guides/per-call-overrides).
 
 Sharing the circuit is useful when several models use the same underlying provider because a burst
 of failures on any model can indicate that the provider itself is struggling.
@@ -175,23 +209,45 @@ closes, or transitions to half open.
 ## Checking state manually
 
 ```ts title="circuit-breaker-state.ts"
-llm.getCircuitState(); // 'closed' | 'open' | 'half-open' | undefined
+llm.getCircuitState(); // primary target: 'closed' | 'open' | 'half-open' | undefined
 
-llm.getCircuitState('gpt-4o');
-// With isolateByModel: true, returns gpt-4o's circuit state.
+llm.getCircuitStates('gpt-4o');
+// [
+//   { provider: 'primary', index: 0, isFallback: false, state: 'closed' },
+//   { provider: 'fallback[0]', index: 1, isFallback: true, state: 'open' },
+//   { provider: 'fallback[1]', index: 2, isFallback: true, state: 'half-open' },
+// ]
 ```
 
-`getCircuitState()` returns `undefined` when `circuitBreaker` was not configured on the instance.
-This distinguishes an unconfigured circuit breaker from a configured breaker whose current state is
-`closed`.
+`getCircuitState()` returns the state of the primary target. It returns `undefined` when the primary
+target does not have a configured circuit breaker.
 
-The optional `model` parameter is used when `isolateByModel` is enabled. When model isolation is
-disabled, the circuit is shared and the model parameter is ignored.
+`getCircuitStates()` returns the circuit state of every target in the fallback chain, in declaration
+order. A target without a configured circuit breaker reports `undefined` rather than inheriting the
+state of another target. Its optional `model` parameter behaves the same way it does on
+`getCircuitState()`: it is used to look up each target's isolated state when that target has
+`circuitBreaker.isolateByModel` enabled, and is ignored for a target that doesn't.
+
+The optional `model` parameter on `getCircuitState()` is used when `isolateByModel` is enabled. When
+model isolation is disabled, the circuit is shared and the model parameter is ignored.
 
 ```ts title="checking-isolated-state.ts"
 const state = llm.getCircuitState('gpt-4o');
 
 if (state === 'open') {
   console.log('gpt-4o is currently blocked by the circuit breaker');
+}
+```
+
+For fallback chains, use `getCircuitStates()` when you need to inspect all configured targets rather
+than only the primary:
+
+```ts title="checking-fallback-state.ts"
+const states = llm.getCircuitStates();
+
+for (const target of states) {
+  if (target.state === 'open') {
+    console.log(`${target.provider} is currently blocked by the circuit breaker`);
+  }
 }
 ```

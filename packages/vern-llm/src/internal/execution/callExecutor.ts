@@ -37,6 +37,8 @@ export interface CallExecutorOptions {
   onEvent?: (event: VernLLMEvent) => void;
   breaker?: CircuitBreaker;
   limiter?: RateLimiter;
+  /** True for every target after the primary. Stamped onto reported `TokenUsage`. */
+  isFallback?: boolean;
 }
 
 /**
@@ -58,6 +60,7 @@ export class CallExecutor {
   private readonly reportEvent: (event: VernLLMEvent) => void;
   private readonly breaker?: CircuitBreaker;
   private readonly limiter?: RateLimiter;
+  private readonly isFallback: boolean;
   private readonly requestBuilder: RequestBuilder;
 
   constructor(
@@ -78,6 +81,7 @@ export class CallExecutor {
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
     this.breaker = options.breaker;
     this.limiter = options.limiter;
+    this.isFallback = options.isFallback ?? false;
     this.requestBuilder = new RequestBuilder({
       model,
       defaultMaxTokens: options.defaultMaxTokens,
@@ -109,7 +113,11 @@ export class CallExecutor {
    * check, which stay one layer up since they aren't per-target concerns
    * (see `assertBreakerClosed`).
    */
-  async run<T>(params: CallParams<T>, requestId: string): Promise<T | CallWithToolsResult<T>> {
+  async run<T>(
+    params: CallParams<T>,
+    requestId: string,
+    onAttempt?: () => void,
+  ): Promise<T | CallWithToolsResult<T>> {
     const model = params.model ?? this.model;
 
     try {
@@ -118,6 +126,7 @@ export class CallExecutor {
         requestId,
         model,
         params.signal,
+        onAttempt,
       );
     } catch (error) {
       const normalized = normalizeError(error, params.signal);
@@ -136,6 +145,7 @@ export class CallExecutor {
   async runStream<T>(
     params: CallParams<T>,
     requestId: string,
+    onAttempt?: () => void,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
@@ -148,6 +158,7 @@ export class CallExecutor {
         requestId,
         model,
         params.signal,
+        onAttempt,
       );
     } catch (error) {
       const normalized = normalizeError(error, params.signal);
@@ -418,6 +429,7 @@ export class CallExecutor {
         requestId,
         model,
         providerName: this.providerName,
+        isFallback: this.isFallback,
         chunkIdleTimeoutMs: params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs,
         streamController,
         logger: this.logger,
@@ -549,6 +561,7 @@ export class CallExecutor {
     requestId: string,
     model: string,
     signal?: AbortSignal,
+    onAttempt?: () => void,
   ): Promise<T> {
     let lastError: unknown;
 
@@ -558,6 +571,7 @@ export class CallExecutor {
           await this.recoverDelay(requestId, model, attempt, lastError, signal);
         }
 
+        onAttempt?.();
         return await fn(attempt);
       } catch (error) {
         lastError = error;
@@ -589,6 +603,7 @@ export class CallExecutor {
       requestId,
       model,
       provider: this.providerName,
+      usedFallback: this.isFallback,
     };
   }
 

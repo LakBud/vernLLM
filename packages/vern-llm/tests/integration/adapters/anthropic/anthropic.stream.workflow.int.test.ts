@@ -146,6 +146,7 @@ describe('VernLLM.call(stream: true) through fromAnthropic, end to end', () => {
           requestId: expect.any(String),
           model: 'claude-x',
           provider: 'primary',
+          usedFallback: false,
         },
       },
     ]);

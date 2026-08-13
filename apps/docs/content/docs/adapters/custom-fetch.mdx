@@ -33,8 +33,8 @@ For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-T
 <Callout type="info">
   `fromFetch` supports tool calling. `mapRequest` receives `params.tools`/`params.tool_choice` like
   any other adapter, and `mapResponse` can return a `toolCalls` array alongside (or instead of)
-  `content` to surface the model's tool requests through `CallWithToolsResult`. See{' '}
-  <a href="#tool-calling">Tool calling</a> below.
+  `content` to surface the model's tool requests through `CallWithToolsResult`. See [Tool
+  calling](#tool-calling) below.
 </Callout>
 
 ## Tool calling
@@ -92,9 +92,7 @@ const llm = new VernLLM({
   special case it either way.
 </Callout>
 
-For `stream: true`, tool-call deltas go through the existing `mapStreamEvent` seam, see{' '}
-
-<a href="#streaming">Streaming</a> below, there's no separate config for streaming vs non-streaming
+For `stream: true`, tool-call deltas go through the existing `mapStreamEvent` seam, see [Streaming](#streaming) below, there's no separate config for streaming vs non-streaming
 tool calls.
 
 ## Streaming
@@ -150,8 +148,8 @@ const llm = new VernLLM({
 <Callout>
   A `:`-prefixed comment line, the mechanism providers use for SSE keep-alive pings, is recognized
   automatically under the default SSE framing and resets VernLLM's `chunkIdleTimeoutMs` clock. It
-  never reaches `mapStreamEvent`, there's nothing to configure for this to work. See{' '}
-  <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
+  never reaches `mapStreamEvent`, there's nothing to configure for this to work. See [Per-chunk idle
+  timeout](/docs/core/streaming#per-chunk-idle-timeout).
 </Callout>
 
 <Callout type="info">
@@ -250,7 +248,7 @@ const llm = new VernLLM({
 });
 ```
 
-See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract that applies
+See [Streaming](/docs/core/streaming) for the full `stream: true` contract that applies
 once chunks reach VernLLM, independent of how `fromFetch` itself is configured.
 
 <Callout>

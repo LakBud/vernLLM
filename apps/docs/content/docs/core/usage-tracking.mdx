@@ -75,8 +75,8 @@ const llm = new VernLLM({
   `onUsage` fires only after the call fully succeeds, meaning the raw completion, JSON parsing, and
   schema validation all passed. If the `onUsage` callback itself throws, that failure is logged and
   swallowed rather than propagated. It cannot fail or retrigger retries on an otherwise successful
-  call. If you need to gate a call before it is dispatched, such as enforcing a quota, see
-  <a href="/docs/core/usage-metering">Usage Metering</a>.
+  call. If you need to gate a call before it is dispatched, such as enforcing a quota, see [Usage
+  Metering](/docs/core/usage-metering).
 </Callout>
 
 <Callout type="warn">
@@ -87,7 +87,7 @@ const llm = new VernLLM({
 - **On success**, once per completed call, after retries have finished. It does not fire once per
   retry attempt.
 - **On failure**, `onUsage` never fires. If a failed attempt's response included usage data, that
-  spend is reported through <a href="#reporting-usage-on-failure">`onUsageFailure`</a> instead, not
+  spend is reported through [`onUsageFailure`](#reporting-usage-on-failure) instead, not
   lost.
 - **With caching**, a cache hit in `cachedCall` does not run the underlying LLM call, so `onUsage`
   does not fire for cached results. It only fires when a provider response is actually received.
@@ -102,7 +102,7 @@ const llm = new VernLLM({
   onUsageFailure: (usage, error) => {
     billing.record(usage);
     const tokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
-    logger.warn(
+    console.warn(
       `[${usage.provider ?? 'unknown'}] ${usage.model} failed after spending ${tokens} tokens: ${error.type}`,
     );
   },
@@ -130,8 +130,8 @@ attempt that then failed would go unreported even though the provider already ch
 
 For `stream: true`, this is not guaranteed. A stream can deliver a usage chunk and then fail later,
 such as an idle timeout while waiting for the final close. In that case `onUsageFailure` does
-fire. See <a href="/docs/core/streaming#usage-metering-and-tracking-while-streaming">
-Usage metering and tracking while streaming</a>.
+fire. See
+[Usage metering and tracking while streaming](/docs/core/streaming#usage-metering-and-tracking-while-streaming).
 
 </Callout>
 
@@ -156,7 +156,7 @@ const llm = new VernLLM({
       (promptTokens / 1000) * PRICE_PER_1K_TOKENS.prompt +
       (completionTokens / 1000) * PRICE_PER_1K_TOKENS.completion;
 
-    logger.info(`[${requestId}] ${provider ?? 'unknown'} / ${model} cost: $${cost.toFixed(4)}`);
+    console.info(`[${requestId}] ${provider ?? 'unknown'} / ${model} cost: $${cost.toFixed(4)}`);
   },
 });
 ```

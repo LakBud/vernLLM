@@ -54,13 +54,22 @@ Everything else, including timeouts, 5xx errors, network failures, and unknown e
 
 <Callout type="warn">
   Exhausting all retries also records a circuit breaker failure if one is configured, and throws the
-  final normalized `LLMError`. See <a href="/docs/core/error-handling">Error Handling</a> for the
-  full list of error types and how each one is normalized.
+  final normalized `LLMError`. See [Error Handling](/docs/core/error-handling) for the full list of
+  error types and how each one is normalized.
+</Callout>
+
+<Callout type="info">
+  Everything on this page describes retries against a single provider target. With `fallback`
+  configured, each declared target, primary and every fallback target, gets its own independent
+  `maxRetries`/`baseDelayMs`/`nonRetryableStatus`, resolved from that target's own overrides or
+  inherited from the instance when omitted. Exhausting one target's retries doesn't fail the call
+  outright, it hands off to `fallbackOn` to decide whether to try the next target. See [Provider
+  Fallback](/docs/core/provider-fallback).
 </Callout>
 
 ## Cancelling mid retry
 
-If a `signal` fires while a retry is waiting out its backoff delay, the pending wait is cancelled immediately rather than sitting idle until the delay finishes. An abort during backoff is never retried, it is treated as a deliberate cancellation. See <a href="/docs/core/cancellation">Cancellation & Timeouts</a> for the full abort lifecycle.
+If a `signal` fires while a retry is waiting out its backoff delay, the pending wait is cancelled immediately rather than sitting idle until the delay finishes. An abort during backoff is never retried, it is treated as a deliberate cancellation. See [Cancellation & Timeouts](/docs/core/cancellation) for the full abort lifecycle.
 
 ## Options reference
 
@@ -70,4 +79,4 @@ If a `signal` fires while a retry is waiting out its backoff delay, the pending 
 | `baseDelayMs`        | `500`                       | Base for exponential backoff. Actual delay grows per attempt with jitter, and is overridden by an honored `Retry-After`. |
 | `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | Status codes that fail immediately instead of retrying.                                                                  |
 
-See <a href="/docs/API-reference/configuration">Configuration</a> for every option alongside timeout and circuit breaker settings.
+See [Configuration](/docs/API-reference/configuration) for every option alongside timeout and circuit breaker settings.

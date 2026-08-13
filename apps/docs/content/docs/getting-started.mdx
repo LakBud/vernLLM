@@ -101,7 +101,7 @@ await llm.call({
 });
 ```
 
-See <a href="/docs/guides/per-call-overrides">Per-call Overrides</a> for the full guide, including
+See [Per-call Overrides](/docs/guides/per-call-overrides) for the full guide, including
 which fields fall back to instance defaults, cheap-default/expensive-escalation patterns, and how
 overrides interact with usage tracking and caching.
 
@@ -123,5 +123,17 @@ for await (const chunk of chunks) {
 const result = await finalResult;
 ```
 
-See <a href="/docs/core/streaming">Streaming</a> for the full contract, including tool calling,
+See [Streaming](/docs/core/streaming) for the full contract, including tool calling,
 caching, and retry behavior while streaming.
+
+## Next steps
+
+A single call above already gets retries, timeouts, and JSON parsing for free. Beyond that,
+VernLLM ships a few more resilience primitives worth knowing about early:
+
+- [Provider Fallback](/docs/core/provider-fallback): declare backup targets tried in order when the primary fails
+- [Rate Limiting](/docs/core/rate-limiting): queue locally to stay under a provider's requests/tokens-per-minute ceiling
+- [Circuit Breaker](/docs/core/circuit-breaker): stop hammering a provider that's already down
+- [Observability](/docs/core/observability): one `onEvent` stream for retries, fallovers, circuit transitions, and rate-limit waits
+
+See [Features Overview](/docs/core) for everything opt-in beyond the defaults above.

@@ -6,11 +6,12 @@ icon: CircleQuestionMark
 
 ## Get production-grade LLM calls, without any bloat
 
-**VernLLM** is a resilience layer for LLM applications. A lightweight wrapper that adds retries, timeouts, circuit breakers, caching, streaming, structured outputs, schema validation, usage tracking, and observability with sensible defaults and minimal dependencies.
+**VernLLM** is a resilience layer for LLM applications. A lightweight wrapper that adds retries, timeouts, circuit breakers, provider fallback, rate limiting, caching, streaming, structured outputs, schema validation, usage tracking, and observability events with sensible defaults and minimal dependencies.
 
 ```ts title="example.ts"
+import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { VernLLM } from 'vern-llm';
+import { fromAnthropic, VernLLM } from 'vern-llm';
 
 const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
@@ -20,10 +21,21 @@ const llm = new VernLLM({
   maxRetries: 3,
   timeoutMs: 10_000,
   circuitBreaker: true,
+  rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
+
+  // Falls over to a declared backup target when the primary fails
+  fallback: {
+    client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })),
+    model: 'claude-sonnet-5',
+    circuitBreaker: true,
+  },
 
   // Observability
   onUsage: ({ totalTokens }) => {
     console.log(`Used ${totalTokens} tokens`);
+  },
+  onEvent: (event) => {
+    if (event.kind === 'fallback') console.warn(`falling over ${event.from} -> ${event.to}`);
   },
 });
 
@@ -62,22 +74,34 @@ const result = await finalResult; // cached, retried, and streamed, tool calls i
   <Card title="Retries" href="/docs/core/retries">
     Exponential backoff with jitter and Retry-After awareness
   </Card>
+  <Card title="Provider Fallback" href="/docs/core/provider-fallback">
+    Run declared backup targets only when the fallback policy allows the transition
+  </Card>
+  <Card title="Rate Limiting" href="/docs/core/rate-limiting">
+    Queue locally to stay under a provider's requests/tokens-per-minute ceiling
+  </Card>
   <Card title="Streaming" href="/docs/core/streaming">
     Incremental chunks as the model generates, with the same retry and caching guarantees
   </Card>
   <Card title="Caching" href="/docs/core/caching">
     Wrap calls with cachedCall, stampede-safe by default
   </Card>
+  <Card title="Observability" href="/docs/core/observability">
+    One event stream for retries, fallovers, circuit transitions, and rate-limit waits
+  </Card>
 </Cards>
 
 ## Why VernLLM?
 
 - **Retries with backoff**: transient failures get retried automatically. Parse errors, validation errors, and non retryable status codes fail fast instead
+- **Provider fallback**: declare an ordered list of backup targets, tried in order after the primary, with no scoring or health-checking involved
+- **Client-side rate limiting**: queue locally against requests-per-minute, tokens-per-minute, and concurrency ceilings instead of letting the provider reject the call
 - **Structured output**: pass a Zod schema and get a typed, validated result back
 - **Provider native JSON Schema mode**: constrain generation itself, not just validate after the fact
 - **Streaming**: set `stream: true` on any call and get live chunks alongside the same validated result `call()` would have returned
 - **Caching**: wrap any LLM call with `cachedCall`, and bring your own adapter such as Redis or Upstash
 - **Circuit breaker**: trips after repeated failures and recovers automatically once the provider is healthy again
+- **Observability**: one `onEvent` stream reports retries, fallovers, circuit transitions, and rate-limit waits, so nothing about a call's reliability path is a black box
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP through `fromFetch`
 - **Zero runtime dependencies**: VernLLM is provider- and validator-agnostic. It works with compatible LLM clients and any schema validator exposing a safeParse interface, such as Zod.
 

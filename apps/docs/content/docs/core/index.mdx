@@ -6,11 +6,35 @@ description: The resilience and observability primitives VernLLM wraps around ev
 Everything below is opt-in beyond sensible defaults, mix and match whichever of these your app needs.
 
 <Cards>
+  <Card title="Provider Fallback" href="/docs/core/provider-fallback">
+    Run declared backup targets only when the fallback policy allows the transition
+  </Card>
+  <Card title="Circuit Breaker" href="/docs/core/circuit-breaker">
+    Stop hammering a provider that's down
+  </Card>
   <Card title="Retries" href="/docs/core/retries">
     Exponential backoff with jitter, and Retry-After awareness
   </Card>
   <Card title="Rate Limiting" href="/docs/core/rate-limiting">
     Stay under a provider's requests/tokens/concurrency limits before they reject you
+  </Card>
+  <Card title="Usage Metering" href="/docs/core/usage-metering">
+    Reserve usage before LLM calls and refund failed calls
+  </Card>
+  <Card title="Caching" href="/docs/core/caching">
+    Wrap calls with cachedCall to avoid duplicate work and reduce provider usage
+  </Card>
+  <Card title="Observability" href="/docs/core/observability">
+    One event stream for retries, circuit state transitions, rate limit waits, and fallback
+  </Card>
+  <Card title="Usage Tracking" href="/docs/core/usage-tracking">
+    Track token usage from provider responses
+  </Card>
+  <Card title="Error Handling" href="/docs/core/error-handling">
+    LLMError types, what triggers each, and what gets retried
+  </Card>
+  <Card title="Cancellation & Timeouts" href="/docs/core/cancellation">
+    How AbortSignal, per-attempt timeouts, and retries interact
   </Card>
   <Card title="Structured Output" href="/docs/core/structured-output">
     Client-side validation with Zod and provider-native JSON Schema mode
@@ -21,28 +45,7 @@ Everything below is opt-in beyond sensible defaults, mix and match whichever of 
   <Card title="Streaming" href="/docs/core/streaming">
     Incremental chunks as the model generates, with the same retry and caching guarantees
   </Card>
-  <Card title="Caching" href="/docs/core/caching">
-    Wrap calls with cachedCall
-  </Card>
-  <Card title="Usage Metering" href="/docs/core/usage-metering">
-    Reserve usage before LLM calls and refund failed calls
-  </Card>
-  <Card title="Usage Tracking" href="/docs/core/usage-tracking">
-    Track token usage from provider responses
-  </Card>
-  <Card title="Circuit Breaker" href="/docs/core/circuit-breaker">
-    Stop hammering a provider that's down
-  </Card>
-  <Card title="Observability" href="/docs/core/observability">
-    One event stream for retries, circuit state transitions, and rate limit waits
-  </Card>
   <Card title="Pluggable Logger" href="/docs/core/logging">
     Swap in your own logger implementation
-  </Card>
-  <Card title="Error Handling" href="/docs/core/error-handling">
-    LLMError types, what triggers each, and what gets retried
-  </Card>
-  <Card title="Cancellation & Timeouts" href="/docs/core/cancellation">
-    How AbortSignal, per-attempt timeouts, and retries interact
   </Card>
 </Cards>

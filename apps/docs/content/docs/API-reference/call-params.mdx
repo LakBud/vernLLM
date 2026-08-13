@@ -4,7 +4,7 @@ description: Every field accepted by call(), cachedCall(), and their defaults
 ---
 
 `call()` takes a single `CallParams<T>` object. `userContent` is the only required field; everything
-else has a default or is simply optional.
+else is optional or inherits a default.
 
 ```ts title="call-params-basic-usage.ts"
 const result = await llm.call({
@@ -16,22 +16,27 @@ const result = await llm.call({
 ```
 
 <Callout>
-  `cachedCall`'s `call` field accepts this exact same shape, with one exception: `reserveUsage` and
-  `refundUsage` are not supported inside the nested `call` object. If provided there, they are
-  ignored and a warning is logged. Pass `reserveUsage`/`refundUsage` at the `cachedCall` top level
-  instead. `cachedCall` also accepts a top-level `signal` for the caller's cancellation lifecycle,
-  separate from any `signal` set inside `call`.
+  `cachedCall` uses the same `call` shape, except `reserveUsage` and `refundUsage` belong at the
+  `cachedCall` top level. Its top-level `signal` controls that caller's cancellation lifecycle.
 </Callout>
 
 ## Content
 
-### `userContent`
+<Cards>
+  <Card title="userContent">
+    `string | ContentBlock[]`, **required**. The current user message. Supports text and image
+    blocks. See [Multimodal Input](/docs/core/multimodal).
+  </Card>
+  <Card title="systemPrompt">
+    `string`, optional. The system message. Omit to use the provider's default behavior.
+  </Card>
+  <Card title="history">
+    `ConversationTurn[]`, optional. Prior conversation turns, excluding `userContent`. See
+    [Multi-turn Conversations](/docs/guides/multi-turn-conversations).
+  </Card>
+</Cards>
 
-**Required.** `string | ContentBlock[]`. The current user message. Always sent as the final
-user turn, after `history` if provided.
-
-A plain `string` is used for text-only prompts (the common case). For multimodal input, pass an
-array of text and image blocks:
+For multimodal input, pass an array of text and image blocks:
 
 ```ts title="multimodal-user-content.ts"
 const result = await llm.call({
@@ -49,170 +54,126 @@ const result = await llm.call({
 });
 ```
 
-Image blocks use base64-encoded image bytes without a `data:` URL prefix. VernLLM translates
-them into each provider's native multimodal format automatically.
+Supported image MIME types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. Image data
+is base64-encoded without a `data:` URL prefix.
 
-Supported image MIME types:
-
-- `image/png`
-- `image/jpeg`
-- `image/gif`
-- `image/webp`
-
-Existing string-based calls remain fully compatible.
-
-<Cards>
-  <Card title="systemPrompt">
-    `string`, optional. Sent as the system message. Omit it and the provider's own default system
-    behavior applies.
-  </Card>
-  <Card title="history">
-    `ConversationTurn[]`, optional. Prior turns, oldest first, not including `userContent`. Turns
-    must alternate role, following `user → assistant → user → assistant`, or, once tool calls are
-    involved, `user → assistant(toolCalls) → tool → assistant`. A `tool` turn must immediately
-    follow an `assistant` turn that set `toolCalls`. History must end on either an `assistant` turn
-    without pending tool calls, or a completed `tool` turn, or `call()` throws
-    `LLMError('validation')` before any request is made. See{' '}
-    <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a>.
-  </Card>
-</Cards>
+`history` must follow VernLLM's conversation ordering rules. Invalid history fails with
+`LLMError('validation')` before a provider request is made. See [Multi-turn Conversations](/docs/guides/multi-turn-conversations).
 
 ## Tool calling
 
 <Cards>
   <Card title="tools">
-    `ToolDefinition[]`, optional. Tools the model may call. Setting `tools` changes what `call()`
-    returns, from `T` directly to a `CallWithToolsResult<T>` discriminated union. By default,
-    mutually exclusive with `jsonSchema` on Anthropic and Bedrock only, except on models opted
-    into `nativeStructuredOutputModels`; Gemini and OpenAI-compatible clients never restrict the
-    combination at all. Never mutually exclusive with `schema`, on any provider. Must not be an
-    empty array. See <a href="/docs/core/tool-calling">Tool Calling</a>.
+    `ToolDefinition[]`, optional. Tools the model may call. Changes the return type to
+    `CallWithToolsResult<T>`. See [Tool Calling](/docs/core/tool-calling).
   </Card>
   <Card title="toolChoice">
-    `'auto' | 'none' | 'required' | { name: string }`, optional. Defaults to `'auto'` when `tools`
-    is set. Throws `LLMError('validation')` if set without `tools`, or if `{ name }` names a tool
-    that is not present in `tools`.
+    `'auto' | 'none' | 'required' | { name: string }`, optional. Defaults to `'auto'` when
+    `tools` is set.
   </Card>
 </Cards>
 
-When tool calling is enabled, VernLLM validates the tool calls returned by the model before
-returning them to the application. Contract problems such as `unknown_tool` and
-`duplicate_tool_call_id` are surfaced as `LLMError('api')` values with a machine readable `code`
-and, when relevant, a complete `LLMError.toolIssues` list.
+`tools` must not be an empty array. `toolChoice` requires `tools`, and `{ name }` must reference a
+declared tool.
 
-See <a href="/docs/core/tool-calling">Tool Calling</a> for the canonical workflow and handling
-examples, and <a href="/docs/core/error-handling">Error Handling</a> for retry behavior and error
-classification.
+VernLLM validates returned tool calls. Contract failures such as `unknown_tool` and
+`duplicate_tool_call_id` are surfaced as `LLMError('api')` values with a machine-readable `code`.
+
+See [Tool Calling](/docs/core/tool-calling) for the complete workflow and [Error Handling](/docs/core/error-handling) for failure behavior.
 
 ## Streaming
 
 <Cards>
   <Card title="stream">
-    `boolean`, optional, default `false`. When `true`, `call()` returns a `StreamCallResult<T>`
-    (`{ chunks, finalResult }`) instead of resolving directly to `T`. Requires TypeScript to see
-    `stream: true` as a literal at the call site to select the streaming overload, see{' '}
-    <a href="/docs/core/streaming#a-note-on-the-call-overload">the streaming overload note</a>.
-    Combines freely with `tools`, and with `schema`. `jsonSchema` remains mutually exclusive with
-    `tools` by default (opt-in exception on Anthropic/Bedrock, see{' '}
-    <a href="/docs/core/structured-output#combining-with-tools">Structured Output</a>). See{' '}
-    <a href="/docs/core/streaming">Streaming</a>.
+    `boolean`, default `false`. Returns `{ chunks, finalResult }` when `true`. See [Streaming](/docs/core/streaming).
   </Card>
   <Card title="chunkIdleTimeoutMs">
-    `number`, optional. Only applies when `stream: true`. Overrides the instance's
-    `chunkIdleTimeoutMs` for this call, pass `0` or `Infinity` to disable the idle timeout for just
-    this call. Useful for routes that need a longer allowance than the instance default, reasoning
-    models with long silent gaps, for example. See{' '}
-    <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
+    `number`, optional. Overrides the instance value for `stream: true`. Pass `0` or `Infinity` to
+    disable the idle timeout for this call. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).
   </Card>
 </Cards>
 
+`stream: true` combines with tools and schemas. See [the streaming overload note](/docs/core/streaming#a-note-on-the-call-overload) for the TypeScript overload requirement.
+
 ## Model & generation
 
-| Field             | Type                                       | Default                                       | Notes                                                                                                                                                                                                                                  |
-| ----------------- | ------------------------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`           | `string`                                   | The instance's `model` option                 | Overrides the model for this call only. See <a href="/docs/guides/per-call-overrides">Per-call overrides</a>.                                                                                                                          |
-| `temperature`     | `number \| null`                           | `0.2`, or the instance's `defaultTemperature` | Not the provider's own default &mdash; VernLLM always sends a `temperature` unless told otherwise. Pass `null` to omit `temperature` from this call entirely, so the provider applies its own default.                                 |
-| `maxTokens`       | `number`                                   | The instance's `defaultMaxTokens` (`1000`)    | Caps the length of the response.                                                                                                                                                                                                       |
-| `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Not sent                                      | OpenAI-style reasoning effort for reasoning models (o-series, gpt-5, etc.). Omitted from the request entirely if unset, so the provider's own default applies. Passed through as-is; providers/models that don't support it ignore it. |
+| Field             | Type                                       | Default                                        | Notes                                                             |
+| ----------------- | ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------- |
+| `model`           | `string`                                   | Instance `model`                               | Overrides the model for this call.                                |
+| `temperature`     | `number \| null`                           | Instance `defaultTemperature`, otherwise `0.2` | Pass `null` to omit `temperature` and use the provider's default. |
+| `maxTokens`       | `number`                                   | Instance `defaultMaxTokens`, otherwise `1000`  | Maximum response length.                                          |
+| `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Not sent                                       | Passed through when set.                                          |
+
+See [Per-call Overrides](/docs/guides/per-call-overrides) for model and generation
+overrides.
 
 ## JSON & validation
 
 <Cards>
   <Card title="jsonMode">
-    `boolean`, default `true`, except default `false` when `tools` is set. When `true`, the
-    response is parsed as JSON. Set to `false` to get the raw string content back untouched.
-    Forced back to `true` if `jsonSchema` is set, even if you pass `jsonMode: false` explicitly.
+    `boolean`, default `true` (`false` when `tools` is set). Parses the response as JSON when
+    enabled. `jsonSchema` forces it back to `true`.
   </Card>
   <Card title="jsonSchema">
-    `JsonSchemaSpec`, optional. Provider-native JSON Schema structured-output mode
-    (`{ name, schema, strict?, description? }`). Constrains generation itself rather than just
-    validating after the fact. Implies `jsonMode: true`. See{' '}
-    <a href="/docs/core/structured-output">Structured Output</a>.
+    `JsonSchemaSpec`, optional. Enables provider-native JSON Schema structured output and implies
+    `jsonMode: true`. See [Structured Output](/docs/core/structured-output).
   </Card>
   <Card title="schema">
-    A Zod (or Zod-compatible, anything exposing `safeParse`) schema, optional. Validates the parsed
-    JSON client-side. On failure, throws `LLMError('validation')` with `.issues` set to the
-    validator's error object. If the provider response included usage data, that failure is
-    reported to `onUsageFailure`, not `onUsage`. See <a href="/docs/core/usage-tracking">Usage
-    Tracking</a>.
+    Zod or Zod-compatible schema, optional. Validates parsed JSON client-side and infers `T`. See
+    [Structured Output](/docs/core/structured-output).
   </Card>
 </Cards>
 
-<Callout type="info">
-  `schema` only runs if the call actually parses JSON. If you pass `jsonMode: false` without also
-  setting `jsonSchema`, `call` throws `LLMError('validation')` before sending the request, rather
-  than silently skipping validation and returning an unvalidated string cast to your schema's type.
-</Callout>
+`schema` only runs after JSON parsing. Setting `jsonMode: false` with `schema` fails validation
+before the provider request instead of returning an unvalidated string.
+
+Provider-specific `jsonSchema` and `tools` compatibility is documented in [Combining with Tools](/docs/core/structured-output#combining-with-tools).
 
 ## Request lifecycle
 
 <Cards>
   <Card title="requestId">
-    `string`, optional. Defaults to an auto-generated UUID. Passed through to `onUsage`,
-    `onUsageFailure`, and relevant `onEvent` values so you can correlate an event or usage record
-    back to the call that produced it. See{' '}
-    <a href="/docs/core/usage-tracking">Token Usage Tracking</a>.
+    `string`, optional. Defaults to an auto-generated UUID and is included in usage and relevant
+    observability events.
   </Card>
   <Card title="signal">
-    `AbortSignal`, optional. If already aborted when `call()` is invoked, it throws
-    `LLMError('aborted')` immediately without making a request. If it aborts mid-flight, the
-    in-flight attempt and any pending retry delay are cancelled. For `cachedCall`, each caller has
-    its own signal. Aborting one coalesced caller does not cancel the shared in-flight operation for
-    other callers. See <a href="/docs/core/cancellation">Cancellation</a>.
+    `AbortSignal`, optional. Cancels the current call, including an in-flight attempt or pending
+    retry delay. See [Cancellation](/docs/core/cancellation).
+  </Card>
+  <Card title="meta">
+    `{ current?: CallMeta }`, optional. With `fallback`, reports which target answered after
+    `call()` resolves. Ignored for streaming calls. See
+    [Knowing which target answered](/docs/core/provider-fallback#knowing-which-target-answered).
   </Card>
 </Cards>
+
+For `cachedCall`, each caller has its own cancellation signal. Aborting one coalesced caller does
+not cancel the shared operation for other callers.
 
 ## Usage metering
 
 <Cards>
   <Card title="reserveUsage">
-    Optional. Runs before any provider request is dispatched. Receives
-    `{ coalesced, signal }`, where `coalesced` indicates whether the caller joined an existing
-    cached in-flight operation and `signal` is the caller-supplied `AbortSignal` when provided.
-    If it throws, the call stops and surfaces `LLMError('quota_exceeded')`. Retries do not call it
-    again because it wraps the logical request, not individual attempts.
+    Optional. Runs before the logical request. Throwing stops the call with
+    `LLMError('quota_exceeded')`. Retries do not invoke it again.
   </Card>
   <Card title="refundUsage">
-    Optional. Runs when `reserveUsage` succeeded but the call ultimately fails. It receives the
-    same `{ coalesced, signal }` shape. If a reservation succeeds and the request is aborted before
-    the wrapped operation starts, the reservation is refunded. It is not called when
-    `reserveUsage` itself fails because there was no reservation to refund.
+    Optional. Runs when a successful reservation must be returned because the call ultimately fails.
   </Card>
 </Cards>
 
-<Callout>
-  `reserveUsage` and `refundUsage` are application supplied hooks. VernLLM does not decide quota
-  rules or billing policy; it only guarantees the reservation lifecycle around the request.
-</Callout>
+These hooks are application supplied. VernLLM manages their lifecycle but does not define quota or
+billing policy.
+
+For `cachedCall`, `reserveUsage` and `refundUsage` belong at the top level rather than inside the
+nested `call` object.
 
 ## Type parameter
 
-`call<T>()` is generic over `T`, the shape of the parsed result:
+`call<T>()` is generic over the parsed result:
 
-- With `schema`, `T` is inferred from the schema (e.g. `z.infer<typeof MySchema>`) and the return
-  value is a validated, typed `T`.
-- Without `schema`, `T` defaults to `unknown` and you're responsible for narrowing the result
-  yourself.
+- With `schema`, `T` is inferred from the schema.
+- Without `schema`, `T` defaults to `unknown`.
 
 ```ts title="generic-type-parameter.ts"
 // result: { name: string; skills: string[] }
@@ -222,5 +183,7 @@ const result = await llm.call({
 });
 
 // result: unknown
-const raw = await llm.call({ userContent: 'Hello' });
+const raw = await llm.call({
+  userContent: 'Hello',
+});
 ```

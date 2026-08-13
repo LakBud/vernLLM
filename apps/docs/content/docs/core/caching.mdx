@@ -205,17 +205,16 @@ underlying request itself should also be cancellable.
 
 <Callout>
   When `call.tools` is set, `cachedCall` caches the whole `CallWithToolsResult`, including
-  `tool_calls` results, not only final answers. See{' '}
-  <a href="/docs/core/tool-calling#caching-tool-calls">Caching tool calls</a> for when that is, and
-  isn't, appropriate.
+  `tool_calls` results, not only final answers. See [Caching tool
+  calls](/docs/core/tool-calling#caching-tool-calls) for when that is, and isn't, appropriate.
 </Callout>
 
 <Callout>
   `cachedCall` also supports `stream: true`, in any combination with `tools`. A cache hit or a
   coalesced joiner replays the cached value as a single flat chunk rather than a re-simulated
-  token-by-token stream. See{' '}
-  <a href="/docs/core/streaming#caching-a-streaming-call">Caching a streaming call</a> for the full
-  behavior across misses, hits, and coalesced callers.
+  token-by-token stream. See [Caching a streaming
+  call](/docs/core/streaming#caching-a-streaming-call) for the full behavior across misses, hits,
+  and coalesced callers.
 </Callout>
 
 ```ts title="cached-call.ts"

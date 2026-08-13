@@ -5,7 +5,7 @@
     "index",
     "resume-parsing",
     "caching-methods",
-    "provider-fallback",
+    "provider-fallback-patterns",
     "tuning-rate-limits",
     "multi-turn-conversations",
     "tool-execution-loop",

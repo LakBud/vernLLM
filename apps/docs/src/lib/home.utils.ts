@@ -94,7 +94,7 @@ export const providers = [
 ];
 
 export const codeExample = `import OpenAI from 'openai';
-import { InMemoryCacheAdapter, VernLLM } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
 import { getWeatherTool } from './tools';
 
 export const llm = new VernLLM({
@@ -103,8 +103,8 @@ export const llm = new VernLLM({
   maxRetries: 3,
   timeoutMs: 10_000,
   circuitBreaker: true,
-  cache: new InMemoryCacheAdapter(),
-  onUsage: u => console.log(\`\${u.requestId}: \${u.totalTokens} tokens\`)
+  fallback: { client: new OpenAI({ apiKey: process.env.OPENAI_KEY_2 }), model: 'gpt-4o' },
+  rateLimit: { requestsPerMinute: 500 }
 });
 
 export const { chunks, finalResult } = await llm.cachedCall({
@@ -136,12 +136,12 @@ export const annotations = [
     note: 'Stops repeated failures from cascading',
   },
   {
-    line: 'cache: new InMemoryCacheAdapter()',
-    note: 'Adds caching with a swappable adapter',
+    line: 'fallback:',
+    note: 'Falls over to a backup target on failure',
   },
   {
-    line: 'onUsage',
-    note: 'Tracks tokens and request metadata',
+    line: 'rateLimit:',
+    note: 'Queues locally under a per-minute ceiling',
   },
   {
     line: 'cachedCall',
