@@ -65,6 +65,45 @@ describe('VernLLM: injectable logger', () => {
     const debugCall = logger.debug.mock.calls.find((c) => String(c[0]).includes('output:'));
     expect(debugCall?.[0]).toContain('secret-token');
   });
+
+  it('applies redact to the error debug line on a failed call(), not just the success path', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const redact = vi.fn((text: string) => text.replace('secret-token', '[REDACTED]'));
+    const { client } = createMockClient([new Error('provider rejected request: secret-token')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, logger, redact });
+
+    await expect(llm.call({ userContent: 'u' })).rejects.toThrow();
+
+    const debugCall = logger.debug.mock.calls.find((c) => String(c[0]).includes('error:'));
+    expect(debugCall?.[0]).toContain('[REDACTED]');
+    expect(debugCall?.[0]).not.toContain('secret-token');
+  });
+
+  it('applies redact to the stream-open error debug line', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const redact = vi.fn((text: string) => text.replace('secret-token', '[REDACTED]'));
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async () => {
+            throw new Error('not scripted');
+          }),
+          createStream: vi.fn(() => {
+            throw new Error('stream open failed: secret-token');
+          }),
+        },
+      },
+    };
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, logger, redact });
+
+    await expect(llm.call({ userContent: 'u', stream: true })).rejects.toThrow();
+
+    const debugCall = logger.debug.mock.calls.find((c) =>
+      String(c[0]).includes('stream-open error:'),
+    );
+    expect(debugCall?.[0]).toContain('[REDACTED]');
+    expect(debugCall?.[0]).not.toContain('secret-token');
+  });
 });
 
 describe('VernLLM: default logger resolution', () => {

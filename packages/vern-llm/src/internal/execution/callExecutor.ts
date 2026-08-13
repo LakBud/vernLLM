@@ -139,7 +139,7 @@ export class CallExecutor {
         this.breaker?.recordFailure(model);
       }
 
-      this.logger.debug(`[VernLLM:${requestId}] error:\n${describeError(error)}`);
+      this.logger.debug(`[VernLLM:${requestId}] error:\n${this.redactText(describeError(error))}`);
 
       throw normalized;
     }
@@ -171,7 +171,9 @@ export class CallExecutor {
         this.breaker?.recordFailure(model);
       }
 
-      this.logger.debug(`[VernLLM:${requestId}] stream-open error:\n${describeError(error)}`);
+      this.logger.debug(
+        `[VernLLM:${requestId}] stream-open error:\n${this.redactText(describeError(error))}`,
+      );
 
       throw normalized;
     }
@@ -250,6 +252,11 @@ export class CallExecutor {
     }
   }
 
+  /** Applies `redact` (if configured); otherwise returns `text` unchanged. */
+  private redactText(text: string): string {
+    return this.redact ? this.redact(text) : text;
+  }
+
   /**
    * Applies `redact` (if configured) to whatever the debug log is about
    * to show: real content when there is any, otherwise the tool-call
@@ -262,8 +269,7 @@ export class CallExecutor {
     content: string | undefined,
     wireToolCalls: WireToolCall[] | undefined,
   ): string {
-    const output = content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`;
-    return this.redact ? this.redact(output) : output;
+    return this.redactText(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`);
   }
 
   /**

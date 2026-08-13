@@ -56,9 +56,10 @@ const llm = new VernLLM({
 });
 ```
 
-`redact` only applies to the internal debug log line, the one place an app has no other way to
-intercept: it's a direct `logger.debug` call, not something routed through a callback.
-Everything else that could carry the same content, `onEvent` payloads, `LLMError.cause`,
+`redact` applies to every internal debug log line, both the raw output logged on success and the
+provider error logged on failure (including a stream-open failure), the one place an app has no
+other way to intercept: they're direct `logger.debug` calls, not something routed through a
+callback. Everything else that could carry the same content, `onEvent` payloads, `LLMError.cause`,
 `onUsageFailure`, already goes straight to a callback your own code controls, so redacting it
 there needs no help from VernLLM.
 
