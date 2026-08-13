@@ -99,6 +99,15 @@ The currently defined rate-limiting codes are:
 See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the full `rateLimit` option and what
 triggers each of these.
 
+The currently defined fallback code is:
+
+| Code                 | Error type                          | Meaning                                                                               |
+| -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
+| `fallback_exhausted` | the last failed target's own `type` | Every `fallback` target failed. Only ever set on `FallbackExhaustedError`, see below. |
+
+See <a href="/docs/core/provider-fallback">Provider Fallback</a> for the full `fallback` option
+and what makes `fallbackOn` move to the next target versus stop.
+
 ```ts title="error-code.ts"
 try {
   await llm.call({
@@ -130,6 +139,31 @@ interface ToolIssue {
   detail?: unknown;
 }
 ```
+
+## FallbackExhaustedError
+
+When `fallback` is configured and every target fails, `call()` throws `FallbackExhaustedError`
+instead of the last target's raw error. It extends `LLMError`, so `isLLMError` and any
+`instanceof LLMError` check still passes, and it carries `attempts`, every target's own normalized
+error, in the order they were tried:
+
+```ts title="fallback-exhausted-error.ts"
+class FallbackExhaustedError extends LLMError {
+  readonly attempts: FallbackAttempt[];
+}
+
+interface FallbackAttempt {
+  index: number; // -1 for the primary
+  provider: string;
+  model: string;
+  error: LLMError;
+}
+```
+
+A lone target with no `fallback` configured, or a chain where `fallbackOn` returns `'stop'` on the
+very first failure, throws the plain, unwrapped `LLMError` instead, exactly as it did before
+`fallback` existed. `FallbackExhaustedError` only appears once more than one target was actually
+tried. See <a href="/docs/core/provider-fallback#when-every-target-fails">When every target fails</a>.
 
 ## What gets retried
 

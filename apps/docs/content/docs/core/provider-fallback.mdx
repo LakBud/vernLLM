@@ -1,0 +1,303 @@
+---
+title: Provider Fallback
+description: Try a declared list of backup providers, in order, when the primary fails
+---
+
+```ts title="provider-fallback-setup.ts"
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+import { VernLLM, fromAnthropic } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+  model: 'gpt-4o',
+  name: 'openai',
+  circuitBreaker: true,
+
+  fallback: [
+    {
+      client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })),
+      model: 'claude-sonnet-5',
+      name: 'anthropic',
+      circuitBreaker: true,
+    },
+  ],
+
+  onEvent: (event) => {
+    if (event.kind === 'fallback') {
+      logger.warn(`falling over ${event.from} -> ${event.to}`, { error: event.error });
+    }
+  },
+});
+
+const result = await llm.call({ userContent: 'Summarize the earnings call.' });
+```
+
+`fallback` declares an ordered list of backup targets, tried after the primary and after each
+earlier target, once its own retries are exhausted or abandoned. Order is the whole policy: VernLLM
+never reorders, scores, or health checks targets to decide which one goes first. If the primary is
+listed first, it is tried first, every time, regardless of latency, cost, or recent history.
+
+<Callout type="info">
+  A single `VernLLM` call is still one logical operation. `fallback` extends that operation across a
+  list of providers the same way `maxRetries` extends it across attempts against one provider; it
+  does not turn VernLLM into a router that picks providers on your behalf. See [Why fallback never
+  picks a provider for
+  you](/docs/guides/provider-fallback-patterns#why-fallback-never-picks-a-provider-for-you).
+</Callout>
+
+## Declaring targets
+
+```ts title="provider-fallback-target-shape.ts"
+interface FallbackTarget {
+  client: LLMClient;
+  model: string;
+  name?: string; // default `fallback[${index}]`
+
+  // Every field below falls back to the parent instance's own option
+  // when omitted. circuitBreaker and rateLimit are never inherited.
+  maxRetries?: number;
+  timeoutMs?: number;
+  chunkIdleTimeoutMs?: number;
+  baseDelayMs?: number;
+  defaultMaxTokens?: number;
+  defaultTemperature?: number | null;
+  nonRetryableStatus?: number[];
+  circuitBreaker?: boolean | CircuitBreakerOptions;
+  rateLimit?: RateLimitOptions;
+}
+```
+
+`fallback` accepts either a single `FallbackTarget` or an array. Each target needs its own `client`
+and `model`, everything else is optional. Retry and timeout knobs left unset inherit the parent
+instance's own resolved value, so a target only needs to specify what's actually different about it:
+
+```ts title="provider-fallback-partial-override.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  maxRetries: 2,
+  timeoutMs: 15_000,
+
+  fallback: {
+    client: fromGemini(gemini),
+    model: 'gemini-2.5-flash',
+    // maxRetries and timeoutMs inherit the primary's: 2 and 15000.
+    // Only what's different needs stating.
+    timeoutMs: 30_000,
+  },
+});
+```
+
+`circuitBreaker` and `rateLimit` are the exception: they are never inherited from the parent
+instance. Each target's breaker and limiter, if any, are entirely its own. See
+
+<a href="/docs/core/circuit-breaker#scope">Circuit Breaker</a> and
+<a href="/docs/core/rate-limiting">Rate Limiting</a> for their individual behavior.
+
+## Every target is independent
+
+Each target, primary and every fallback, gets its own `CallExecutor` under the hood: its own retry
+loop, its own per-attempt timeout, its own circuit breaker if configured, and its own rate limiter
+if configured. Tripping one target's breaker has no effect on any other target's.
+
+```ts title="provider-fallback-independent-breakers.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000 },
+
+  fallback: {
+    client: fromAnthropic(anthropic),
+    model: 'claude-sonnet-5',
+    circuitBreaker: { threshold: 3, cooldownMs: 15_000 },
+  },
+});
+```
+
+An open target breaker is treated as a target failure for fallback purposes. If `fallbackOn` returns
+`'next'`, the chain moves to the next target without waiting for that target's cooldown.
+
+For the full circuit-breaker lifecycle, including cooldowns, half-open trials, per-model isolation,
+and state inspection, see <a href="/docs/core/circuit-breaker">Circuit Breaker</a>.
+
+## Deciding whether to move on
+
+`fallbackOn` runs once per failed target, after that target's own retries are exhausted or
+abandoned early, and returns `'next'` or `'stop'`. `'retry'` is never a valid return here, retrying
+already happened inside the target.
+
+```ts title="provider-fallback-on-signature.ts"
+type FallbackOn = (error: LLMError, context: { isLastTarget: boolean }) => 'next' | 'stop';
+```
+
+The default, `defaultFallbackOn`, is exported so a custom policy can wrap rather than replace it:
+
+```ts title="provider-fallback-on-default.ts"
+import { defaultFallbackOn } from 'vern-llm';
+
+const fallbackOn: FallbackOn = (error, context) => {
+  if (error.type === 'circuit_open' && context.isLastTarget) {
+    alerting.page('every configured provider is currently unavailable');
+  }
+  return defaultFallbackOn(error, context);
+};
+```
+
+| `error` matches                                             | Decision | Why                                                                                                        |
+| ----------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `type: 'parse'`                                             | `'stop'` | The response wasn't valid JSON. A different provider given the same prompt is likely to fail the same way. |
+| `type: 'validation'`                                        | `'stop'` | The response failed schema validation. Same reasoning as `parse`.                                          |
+| `type: 'aborted'`                                           | `'stop'` | The caller cancelled the call. Trying another provider ignores that intent.                                |
+| `type: 'quota_exceeded'`                                    | `'stop'` | `reserveUsage` rejected before any provider was contacted. No provider can fix an application-level quota. |
+| `code: 'unknown_tool'` or `code: 'duplicate_tool_call_id'`  | `'stop'` | The model ignored the tool contract. This is a model response defect, not a sick provider.                 |
+| Anything else (`api`, `timeout`, `circuit_open`, `unknown`) | `'next'` | Transient or provider-specific failures are exactly what fallback exists for.                              |
+
+A `circuit_open` error therefore normally moves the call to the next configured target. This is
+particularly useful when each target has its own breaker: a provider that is already known to be
+unhealthy can be skipped immediately rather than consuming another provider attempt.
+
+See <a href="/docs/core/error-handling">Error Handling</a> for the full `LLMError` type and code
+reference this table draws from.
+
+## Streaming: open failures only
+
+Fallback only applies to a stream failing to _open_. Once at least one chunk has been delivered to
+the caller, a mid-stream failure is terminal for that call, VernLLM does not fall over to a
+different provider partway through:
+
+```ts title="provider-fallback-streaming.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: '...',
+  stream: true,
+});
+```
+
+If `openai`'s stream never opens (a 5xx, a timeout before the first chunk), the chain falls over to
+the next target exactly like a non-streaming failure would. If it opens and delivers a few chunks
+before dying, `finalResult` rejects directly and no other target is tried.
+
+<Callout type="warn">
+  Falling over mid-stream would splice a second model's output into a response the consumer has
+  already started rendering. There's no way to do that safely, so VernLLM doesn't attempt it. See{' '}
+  <a href="/docs/core/streaming">Streaming</a> for the rest of the `stream: true` contract.
+</Callout>
+
+## Knowing which target answered
+
+`onUsage` reports `provider` and `usedFallback` on every successful `TokenUsage`:
+
+```ts title="provider-fallback-usage.ts"
+onUsage: (usage) => {
+  metrics.increment('llm.call', { provider: usage.provider });
+  if (usage.usedFallback) {
+    metrics.increment('llm.fallback_used', { provider: usage.provider });
+  }
+};
+```
+
+For a non-streaming call, `meta` is an optional out-parameter that's populated synchronously once
+`call()` resolves, so provider identity is available on the same line as the result without
+reaching back into `onUsage`:
+
+```ts title="provider-fallback-meta.ts"
+import type { CallMeta } from 'vern-llm';
+
+const meta: { current?: CallMeta } = {};
+const result = await llm.call({ userContent: '...', meta });
+
+meta.current;
+// {
+//   provider: 'anthropic',
+//   model: 'claude-sonnet-5',
+//   fallbackIndex: 0,      // -1 if the primary answered
+//   usedFallback: true,
+//   attempts: 1,           // attempts against the target that answered, including the successful one
+// }
+```
+
+`meta` is ignored for `stream: true`. `call()` must return `{ chunks, finalResult }` before the
+real outcome, and so the answering target, is known. Use `onUsage` for streaming calls instead.
+
+## Observing the chain
+
+`onEvent` reports a `fallback` event whenever the chain moves to the next target:
+
+```ts title="provider-fallback-event.ts"
+{
+  kind: 'fallback',
+  requestId: string,
+  from: string,
+  to: string,
+  fromIndex: number,
+  toIndex: number,
+  error: LLMError,
+  elapsedMs: number,
+}
+```
+
+```ts title="provider-fallback-event-metrics.ts"
+onEvent: (event) => {
+  if (event.kind === 'fallback') {
+    metrics.increment('llm.fallback', { from: event.from, to: event.to });
+  }
+};
+```
+
+The `error` is the normalized error that caused the chain to move on. This can be a normal provider
+failure such as a timeout, or `circuit_open` when the target was already blocked by its circuit
+breaker.
+
+See <a href="/docs/core/observability#event-kinds">Event kinds</a> for the rest of the `onEvent`
+union this composes with.
+
+## When every target fails
+
+`call()` throws `FallbackExhaustedError`, which extends `LLMError`, so `isLLMError` and any
+`instanceof LLMError` check still passes. It carries `attempts`, every target's own normalized
+error, in order:
+
+```ts title="provider-fallback-exhausted.ts"
+import { FallbackExhaustedError, isLLMError } from 'vern-llm';
+
+try {
+  await llm.call({ userContent: '...' });
+} catch (err) {
+  if (err instanceof FallbackExhaustedError) {
+    for (const attempt of err.attempts) {
+      logger.error(`${attempt.provider} failed`, {
+        type: attempt.error.type,
+        code: attempt.error.code,
+      });
+    }
+  } else if (isLLMError(err)) {
+    // A single target (or fallbackOn stopped early) threw its own error
+    // directly.
+  }
+}
+```
+
+A lone target with no `fallback` configured throws exactly what it threw before this option existed,
+its own normalized `LLMError`, never wrapped in `FallbackExhaustedError`. The same is true whenever
+`fallbackOn` returns `'stop'` on the very first failure: only one target was ever tried, so there's
+nothing to aggregate.
+
+## `cachedCall`
+
+`cachedCall` composes with `fallback` automatically, no extra wiring needed. Fallback lives inside
+`call()`, which `cachedCall` already wraps, so the whole chain caches under one key and the
+successful result, however far down the chain it came from, is what gets stored. In-flight
+coalescing for concurrent misses on the same `cacheKey` covers the full chain too. See <a href="/docs/core/caching">Caching</a>.
+
+## Options reference
+
+| Option       | Default             | Notes                                                                                                                                                                                                                 |
+| ------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fallback`   | none                | A `FallbackTarget` or `FallbackTarget[]`, tried in order after the primary. Each target's `circuitBreaker`/`rateLimit` are independent; every other field inherits the parent instance's resolved value when omitted. |
+| `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget }) => 'next' \| 'stop'`, called once per failed target. See the decision table above.                                                                                                         |
+
+See <a href="/docs/API-reference/configuration#fallback">Configuration</a> for how `fallback` sits
+alongside every other constructor option, and
+
+<a href="/docs/guides/provider-fallback-patterns">Provider Fallback Patterns</a> in Guides for
+putting this to use effectively.

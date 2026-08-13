@@ -58,6 +58,15 @@ Everything else, including timeouts, 5xx errors, network failures, and unknown e
   full list of error types and how each one is normalized.
 </Callout>
 
+<Callout type="info">
+  Everything on this page describes retries against a single provider target. With `fallback`
+  configured, each declared target, primary and every fallback target, gets its own independent
+  `maxRetries`/`baseDelayMs`/`nonRetryableStatus`, resolved from that target's own overrides or
+  inherited from the instance when omitted. Exhausting one target's retries doesn't fail the call
+  outright, it hands off to `fallbackOn` to decide whether to try the next target. See{' '}
+  <a href="/docs/core/provider-fallback">Provider Fallback</a>.
+</Callout>
+
 ## Cancelling mid retry
 
 If a `signal` fires while a retry is waiting out its backoff delay, the pending wait is cancelled immediately rather than sitting idle until the delay finishes. An abort during backoff is never retried, it is treated as a deliberate cancellation. See <a href="/docs/core/cancellation">Cancellation & Timeouts</a> for the full abort lifecycle.

@@ -182,6 +182,7 @@ export class VernLLM {
     params: Pick<CallParams<unknown>, 'model' | 'signal'>,
     requestId: string,
     attempt: (executor: CallExecutor, onAttempt: () => void) => Promise<R>,
+    skipBreakerCheckForFirst = false,
   ): Promise<{ result: R; executor: CallExecutor; index: number; attemptCount: number }> {
     const attempts: FallbackAttempt[] = [];
 
@@ -191,7 +192,16 @@ export class VernLLM {
       let attemptCount = 0;
 
       try {
-        executor.assertBreakerClosed(params.model);
+        // Already checked once, before usage was reserved, when this is
+        // the sole target (see `call()`). `assertClosed` claims a
+        // half-open trial slot as a side effect on a non-throwing call,
+        // so it must run exactly once per logical call: checking it
+        // again here for the same executor could either falsely see
+        // "trial already in flight" (from the check that just claimed
+        // it) or double-claim a slot no concurrent caller actually has.
+        if (!(i === 0 && skipBreakerCheckForFirst)) {
+          executor.assertBreakerClosed(params.model);
+        }
 
         const result = await attempt(executor, () => {
           attemptCount += 1;
@@ -288,6 +298,21 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
+    // A lone target (no `fallback` configured) keeps the exact pre-fallback
+    // contract: the breaker is checked once, up front, before usage is
+    // reserved, so a call that's definitely blocked never pays a
+    // reserve-then-refund round trip. This can only be hoisted out of the
+    // chain for the sole-target case: `assertBreakerClosed` claims a
+    // half-open trial slot as a side effect, which must happen exactly
+    // once per logical call, so with more than one target the check has
+    // to stay inside `runFallbackChain`, where an open primary is just
+    // another target failure that `fallbackOn` can fall over from.
+    const soleTarget = this.executors.length === 1;
+
+    if (soleTarget) {
+      this.executors[0]!.assertBreakerClosed(params.model);
+    }
+
     if (params.stream) {
       // Same breaker/logging treatment as non-streaming, applied around
       // opening the stream; mid-stream failures are handled separately
@@ -299,8 +324,11 @@ export class VernLLM {
       return withReservedUsageForStream(
         params,
         async () => {
-          const { result } = await this.runFallbackChain(params, requestId, (executor, onAttempt) =>
-            executor.runStream(params, requestId, onAttempt),
+          const { result } = await this.runFallbackChain(
+            params,
+            requestId,
+            (executor, onAttempt) => executor.runStream(params, requestId, onAttempt),
+            soleTarget,
           );
           return result;
         },
@@ -317,6 +345,7 @@ export class VernLLM {
           params,
           requestId,
           (target, onAttempt) => target.run(params, requestId, onAttempt),
+          soleTarget,
         );
 
         if (params.meta) {
@@ -441,5 +470,25 @@ export class VernLLM {
    */
   getCircuitState(model?: string) {
     return this.executors[0]!.getCircuitState(model);
+  }
+
+  /**
+   * @param model With `circuitBreaker.isolateByModel` on, returns each
+   * target's circuit state for that model instead of its shared state.
+   * Ignored otherwise. Omit for the shared circuit (the default) or, under
+   * isolation, the state of calls that didn't resolve a model.
+   * @returns The current circuit state for every target in declaration
+   * order, including the primary and all fallback targets. Each entry
+   * includes the target's provider name, chain index, whether it is a
+   * fallback, and its circuit state, or undefined if that target has no
+   * circuit breaker configured.
+   */
+  getCircuitStates(model?: string) {
+    return this.executors.map((executor, index) => ({
+      provider: executor.providerName,
+      index,
+      isFallback: index > 0,
+      state: executor.getCircuitState(model),
+    }));
   }
 }

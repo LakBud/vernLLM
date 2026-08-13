@@ -1,0 +1,277 @@
+---
+title: Provider Fallback Patterns
+description: Ordering targets, sizing per-target retries, and reading a fallback chain's signals
+---
+
+<a href="/docs/core/provider-fallback">Provider Fallback</a> covers the `fallback` option itself,
+target inheritance, `fallbackOn`, and every event it emits. This guide walks through putting it to
+use: choosing an order, sizing each target's own resilience knobs, and turning the signals fallback
+emits into something actionable instead of noise.
+
+## Order by what you'd actually accept, not by preference
+
+The order you declare is the order VernLLM tries, every time, with no scoring or health-checking in
+between. That means the list itself is a statement about tradeoffs you've already made, not just a
+ranked wishlist:
+
+```ts title="provider-fallback-order-by-tradeoff.ts"
+const llm = new VernLLM({
+  client: openai, // fastest, cheapest, what you'd pick if nothing were down
+  model: 'gpt-4o',
+  name: 'openai',
+  circuitBreaker: true,
+
+  fallback: [
+    {
+      // A close substitute: similar quality, similar latency, different
+      // infrastructure. The obvious next try when openai is unavailable.
+      client: fromAnthropic(anthropic),
+      model: 'claude-sonnet-5',
+      name: 'anthropic',
+      circuitBreaker: true,
+    },
+    {
+      // A genuinely different tradeoff: cheaper and faster, but you'd only
+      // accept its answers when nothing better is reachable. Listed last
+      // on purpose.
+      client: fromOpenAICompatible(groq),
+      model: 'llama-3.3-70b',
+      name: 'groq-last-resort',
+    },
+  ],
+});
+```
+
+<Callout type="warn">
+  Don't list a materially worse or cheaper model ahead of a better one just because it happens to
+  respond faster on average. VernLLM will try it first every time your primary is down, even for a
+  request where that substitution isn't acceptable. If quality matters more than speed for a given
+  call, put the closer substitute first and accept the extra latency on the rare path where it's
+  needed.
+</Callout>
+
+## Why fallback never picks a provider for you
+
+It can be tempting to want VernLLM to route to "whichever provider is healthiest right now" or
+"whichever is cheapest this month." It deliberately doesn't, and understanding why makes the
+`fallback` list easier to reason about:
+
+- **The list is the whole policy.** VernLLM never reorders it based on latency, cost, or recent
+  failures. If you want dynamic routing, that's a decision your application makes by rebuilding the
+  list (or swapping which `VernLLM` instance you call), not something to configure on VernLLM itself.
+- **`fallbackOn` decides "was this worth trying elsewhere," not "who should answer."** It classifies
+  the failure that just happened; it never inspects the _other_ targets to decide which one to try
+  next. The next target is always just the next one in the list.
+- **Every target you declare is one VernLLM will actually contact.** There's no provider registry or
+  auto-discovery step. If a client and model aren't in `fallback`, VernLLM will never call them.
+
+This keeps a fallback chain auditable: reading the `fallback` array tells you the complete set of
+providers a given call could ever reach, in the exact order it could reach them.
+
+## Give each target retry room proportional to how much you trust it
+
+`maxRetries`, `timeoutMs`, and `baseDelayMs` are per target and inherit from the parent instance
+when omitted. Don't just let every target inherit the primary's numbers uncritically, think about
+how much time you're willing to spend on a target before moving on:
+
+```ts title="provider-fallback-per-target-retries.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  maxRetries: 2, // give the primary a real chance: this is who you actually want answering
+  timeoutMs: 20_000,
+
+  fallback: [
+    {
+      client: fromAnthropic(anthropic),
+      model: 'claude-sonnet-5',
+      // A close substitute still deserves a couple of retries; a
+      // transient failure here shouldn't skip straight to the last resort.
+      maxRetries: 2,
+    },
+    {
+      client: fromOpenAICompatible(groq),
+      model: 'llama-3.3-70b',
+      // The last resort: fail fast, don't burn wall-clock time retrying
+      // a target you only reach when everything else is already down.
+      maxRetries: 0,
+      timeoutMs: 8_000,
+    },
+  ],
+});
+```
+
+<Callout type="info">
+  Every retry against a target is a real request against that provider's own limits. A target with a
+  generous `maxRetries` and no `circuitBreaker` can end up absorbing a lot of wall-clock time before
+  the chain ever reaches the next one. See{' '}
+  <a href="/docs/core/retries#backoff-and-jitter">Backoff and jitter</a> for how the per-attempt
+  delay is computed.
+</Callout>
+
+## Give every target its own circuit breaker
+
+A target without `circuitBreaker` retries from scratch, and gets checked from scratch, on every
+single call, even one that's currently down. That's usually the wrong default for anything beyond a
+last-resort target you rarely expect to reach:
+
+```ts title="provider-fallback-breakers-per-target.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000 },
+
+  fallback: {
+    client: fromAnthropic(anthropic),
+    model: 'claude-sonnet-5',
+    // Independent from the primary's breaker: tripping this one has zero
+    // effect on the primary, and vice versa.
+    circuitBreaker: { threshold: 5, cooldownMs: 30_000 },
+  },
+});
+```
+
+Once a target's breaker opens, every call against it fails immediately with
+`LLMError('circuit_open')` instead of paying for a timeout, and `fallbackOn` treats that exactly
+like any other failure: it moves straight on to the next target. This is what makes a longer
+fallback chain cheap to keep configured even when the earlier targets are actually down for a
+while, you pay the full retry/timeout cost once, then the breaker keeps every subsequent call fast
+until the cooldown elapses.
+
+<Callout type="warn">
+  `getCircuitState()` only reflects the primary's breaker. If you need to know whether a fallback
+  target is currently tripped, watch the `circuit_state` event on `onEvent` instead, it carries
+  `provider` so you can tell targets apart. See{' '}
+  <a href="/docs/core/observability#circuit_state">circuit_state</a>.
+</Callout>
+
+## Turn `onEvent`'s `fallback` event into an alert, not just a log line
+
+A single `fallback` event is normal, transient noise is exactly what fallback exists to absorb. A
+_sustained_ pattern of falling all the way to your last-resort target is worth paging on, before
+your users notice it as degraded quality rather than an outage:
+
+```ts title="provider-fallback-alerting.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  name: 'openai',
+  fallback: [
+    { client: fromAnthropic(anthropic), model: 'claude-sonnet-5', name: 'anthropic' },
+    { client: fromOpenAICompatible(groq), model: 'llama-3.3-70b', name: 'groq-last-resort' },
+  ],
+  onEvent: (event) => {
+    if (event.kind !== 'fallback') return;
+
+    metrics.increment('llm.fallback', { from: event.from, to: event.to });
+
+    if (event.to === 'groq-last-resort') {
+      // Reaching the last resort means both better options just failed.
+      alerting.page(`llm chain degraded to last resort, last failure: ${event.error.type}`);
+    }
+  },
+});
+```
+
+Pair this with `TokenUsage.usedFallback` on `onUsage` for a second, complementary signal: `onEvent`
+tells you a fallover _happened_, `onUsage` tells you which provider actually _answered_ a given
+request, useful for billing or quality dashboards that care about the outcome rather than the path
+that got there.
+
+```ts title="provider-fallback-usage-signal.ts"
+onUsage: (usage) => {
+  if (usage.usedFallback) {
+    metrics.increment('llm.answered_by_fallback', { provider: usage.provider });
+  }
+};
+```
+
+## Handle `FallbackExhaustedError` distinctly from a single-provider failure
+
+Catching `FallbackExhaustedError` specifically, rather than only `isLLMError`, lets you show a
+different message (and log a richer signal) for "every provider we tried is down" versus "the one
+provider we tried returned something we couldn't use":
+
+```ts title="provider-fallback-exhausted-handling.ts"
+import { FallbackExhaustedError, isLLMError } from 'vern-llm';
+
+try {
+  return await llm.call({ userContent: message });
+} catch (err) {
+  if (err instanceof FallbackExhaustedError) {
+    logger.error('every configured provider failed', {
+      attempts: err.attempts.map((a) => ({ provider: a.provider, type: a.error.type })),
+    });
+    return {
+      message: "We're having trouble reaching any provider right now, please try again shortly.",
+    };
+  }
+
+  if (isLLMError(err) && err.type === 'validation') {
+    // A single target answered but its response didn't validate.
+    // fallbackOn already decided this wasn't worth trying elsewhere.
+    return { message: 'Something went wrong processing that request.' };
+  }
+
+  throw err;
+}
+```
+
+<Callout type="warn">
+  Don't retry a caught `FallbackExhaustedError` yourself in a tight loop. Every target already
+  exhausted its own retries and, if configured, tripped its own breaker; an immediate re-call just
+  repeats the same chain against providers that are still cooling down. Wait a meaningful amount of
+  time, or rely on the circuit breakers you configured per target to recover on their own once each
+  target's `cooldownMs` elapses.
+</Callout>
+
+## Rotating API keys is the same mechanism, no separate feature needed
+
+A "fallback target" doesn't have to be a different provider. Two targets on the _same_ provider
+with different API keys, using the default `fallbackOn` (which treats a rate-limited or otherwise
+failing target as `'next'`), gives you key rotation for free:
+
+```ts title="provider-fallback-key-rotation.ts"
+const llm = new VernLLM({
+  client: new OpenAI({ apiKey: process.env.OPENAI_KEY_PRIMARY }),
+  model: 'gpt-4o',
+  name: 'openai-key-a',
+
+  fallback: {
+    client: new OpenAI({ apiKey: process.env.OPENAI_KEY_SECONDARY }),
+    model: 'gpt-4o',
+    name: 'openai-key-b',
+  },
+});
+```
+
+When `openai-key-a` gets rate limited, the default policy moves on to `openai-key-b` rather than
+waiting out the full retry/backoff cycle on a key that's already over its limit. No separate
+feature or wrapper is needed, it's the exact same ordered-list mechanism this whole guide has been
+about.
+
+## Test the chain by breaking the primary on purpose
+
+Before relying on a fallback chain in production, verify it actually falls over the way you expect,
+rather than discovering the behavior for the first time during a real outage. Point the primary at
+an invalid endpoint or an intentionally wrong API key and confirm the call still succeeds:
+
+```ts title="provider-fallback-smoke-test.ts"
+const llm = new VernLLM({
+  client: new OpenAI({ apiKey: 'intentionally-invalid', baseURL: 'https://invalid.test' }),
+  model: 'gpt-4o',
+  maxRetries: 0, // fail fast for the test, don't wait out real backoff
+  timeoutMs: 3_000,
+
+  fallback: {
+    client: fromAnthropic(anthropic), // a real, working client
+    model: 'claude-sonnet-5',
+  },
+});
+
+const result = await llm.call({ userContent: 'ping', jsonMode: false });
+// Should succeed, answered by the fallback target.
+```
+
+This also exercises the exact wire request your fallback target will receive under a real outage,
+including `tools` and `jsonSchema`, since VernLLM builds the same request shape for every target.

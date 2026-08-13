@@ -66,9 +66,11 @@ Two separate `VernLLM` instances pointed at the same provider account have two s
 buckets between them, and can together exceed the account's real limit even though each instance
 individually stays under its own configured number.
 
-If you run multiple providers behind one logical service, each gets its own instance and its own
-`rateLimit`, sized against that provider's own numbers. See <a href="/docs/guides/provider-fallback">Provider Fallback</a> for wiring several instances
-together.
+If you run multiple providers behind one logical service, `fallback` targets each get their own
+`rateLimit`, sized against that provider's own numbers; it's never inherited from the primary. See
+
+<a href="/docs/core/provider-fallback">Provider Fallback</a> for declaring several targets on one
+instance.
 
 ## Choosing maxQueueMs for your call site
 

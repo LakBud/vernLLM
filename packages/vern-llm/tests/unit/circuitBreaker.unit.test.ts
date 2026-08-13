@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import { CircuitBreaker } from '../../src/circuitBreaker.js';
+import { FallbackExhaustedError } from '../../src/types/fallback.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
@@ -307,6 +308,31 @@ describe('VernLLM, circuit breaker integration', () => {
     expect(create.mock.calls.length).toBe(callCountBefore);
   });
 
+  it('does not reserve usage for a blocked call when the sole target is open, fails fast before reserving', async () => {
+    const { client, create } = createMockClient([new Error('down')]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 60_000 },
+    });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
+    expect(llm.getCircuitState()).toBe('open');
+
+    const reserveUsage = vi.fn();
+    const refundUsage = vi.fn();
+    const callCountBefore = create.mock.calls.length;
+
+    await expect(
+      llm.call({ systemPrompt: 's', userContent: 'u', reserveUsage, refundUsage }),
+    ).rejects.toMatchObject({ type: 'circuit_open' });
+
+    expect(reserveUsage).not.toHaveBeenCalled();
+    expect(refundUsage).not.toHaveBeenCalled();
+    expect(create.mock.calls.length).toBe(callCountBefore);
+  });
+
   it('closes again after a successful call', async () => {
     const { client } = createMockClient([new Error('down'), jsonResponse({ ok: true })]);
     const llm = new VernLLM({
@@ -443,5 +469,79 @@ describe('VernLLM, circuit breaker integration', () => {
     });
 
     expect(llm.getCircuitState()).toBe('closed');
+  });
+
+  it('returns circuit state for every target in the fallback chain', () => {
+    const { client: primaryClient } = createMockClient([]);
+    const { client: fallbackClient } = createMockClient([]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      name: 'primary',
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      fallback: {
+        client: fallbackClient,
+        model: 'fallback-model',
+        name: 'fallback',
+        circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      },
+    });
+
+    expect(llm.getCircuitStates()).toEqual([
+      { provider: 'primary', index: 0, isFallback: false, state: 'closed' },
+      { provider: 'fallback', index: 1, isFallback: true, state: 'closed' },
+    ]);
+  });
+
+  it('reports fallback circuit state independently from the primary', async () => {
+    const { client: primaryClient } = createMockClient([new Error('primary down')]);
+    const { client: fallbackClient } = createMockClient([new Error('fallback down')]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      name: 'primary',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      fallback: {
+        client: fallbackClient,
+        model: 'fallback-model',
+        name: 'fallback',
+        circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      },
+    });
+
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toBeInstanceOf(
+      FallbackExhaustedError,
+    );
+
+    expect(llm.getCircuitStates()).toEqual([
+      { provider: 'primary', index: 0, isFallback: false, state: 'open' },
+      { provider: 'fallback', index: 1, isFallback: true, state: 'open' },
+    ]);
+  });
+
+  it('returns undefined state for targets without a circuit breaker', () => {
+    const { client: primaryClient } = createMockClient([]);
+    const { client: fallbackClient } = createMockClient([]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      name: 'primary',
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      fallback: {
+        client: fallbackClient,
+        model: 'fallback-model',
+        name: 'fallback',
+        // No circuit breaker.
+      },
+    });
+
+    expect(llm.getCircuitStates()).toEqual([
+      { provider: 'primary', index: 0, isFallback: false, state: 'closed' },
+      { provider: 'fallback', index: 1, isFallback: true, state: undefined },
+    ]);
   });
 });

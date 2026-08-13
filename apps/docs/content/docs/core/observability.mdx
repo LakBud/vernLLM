@@ -18,15 +18,18 @@ const llm = new VernLLM({
       case 'rate_limited':
         metrics.observe('llm.rate_limit.wait_ms', event.waitedMs, { reason: event.reason });
         break;
+      case 'fallback':
+        metrics.increment('llm.fallback', { from: event.from, to: event.to });
+        break;
     }
   },
 });
 ```
 
 `onEvent` reports what happened during a call as it happens: a retry about to wait out its backoff
-delay, a circuit breaker changing state, or an attempt that had to wait for `rateLimit` capacity.
-It's a single event stream instead of a separate option per concern, so handling one kind doesn't
-require leaving the others unset.
+delay, a circuit breaker changing state, an attempt that had to wait for `rateLimit` capacity, or
+the chain moving to the next `fallback` target. It's a single event stream instead of a separate
+option per concern, so handling one kind doesn't require leaving the others unset.
 
 ## Fire and forget
 
@@ -54,8 +57,11 @@ await llm.call({ userContent: '...' }); // still resolves normally
 
 ## Event kinds
 
-Every event carries `provider`, the `name` configured on the instance (default `'primary'`), so a
-single handler shared across multiple `VernLLM` instances can tell them apart. See <a href="/docs/API-reference/configuration#provider-identity">Provider identity</a>.
+Every event kind but `fallback` carries `provider`, the `name` resolved for the target involved
+(default `'primary'` for a lone target), so a single handler shared across multiple `VernLLM`
+instances, or across the targets in one instance's `fallback` chain, can tell them apart.
+`fallback` carries `from`/`to` instead, since it's reporting a transition between two targets
+rather than something that happened to one. See <a href="/docs/API-reference/configuration#provider-identity">Provider identity</a>.
 
 <Cards>
   <Card title="retry" href="#retry">
@@ -66,6 +72,9 @@ single handler shared across multiple `VernLLM` instances can tell them apart. S
   </Card>
   <Card title="rate_limited" href="#rate_limited">
     Fires when an attempt had to wait for `rateLimit` capacity.
+  </Card>
+  <Card title="fallback" href="#fallback">
+    Fires when the chain moves to the next `fallback` target.
   </Card>
 </Cards>
 
@@ -110,11 +119,11 @@ actually change anything, such as `open` staying `open`.
 }
 ```
 
-When `isolateByModel` is disabled, which is the default, `model` identifies the call that triggered
-this specific transition, while the failure counter it's reporting stays shared across every model
-on the instance, so a threshold crossing can be the sum of several different models' failures even
-though only the triggering call's `model` is reported here. When `isolateByModel` is enabled, the
-transition and its `consecutiveFailures` belong exclusively to that model's own circuit. See <a href="/docs/core/circuit-breaker#per-model-isolation">Per model isolation</a>.
+`provider` identifies the target whose circuit changed. For a `fallback` chain, this lets a shared
+`onEvent` handler distinguish transitions on the primary from transitions on each fallback target.
+`model` identifies the model associated with the transition.
+
+The meaning of `consecutiveFailures` and the effect of `isolateByModel` are covered in <a href="/docs/core/circuit-breaker">Circuit Breaker</a>.
 
 ```ts title="circuit-state-alerting.ts"
 onEvent: (event) => {
@@ -147,6 +156,37 @@ immediately available, so a well-provisioned `rateLimit` configuration under nor
 cleared. See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the buckets themselves, and <a href="/docs/guides/tuning-rate-limits#watching-queue-pressure-before-it-becomes-failures">Watching
 queue pressure before it becomes failures</a> for using this event as a leading indicator ahead of
 `local_rate_limit` failures.
+
+### `fallback`
+
+Emitted when a `fallback` target's own retries are exhausted or abandoned and the chain moves on
+to the next target. Not emitted when a lone target (no `fallback` configured) fails, since there's
+nowhere for the chain to move to.
+
+```ts title="fallback-event.ts"
+{
+  kind: 'fallback',
+  requestId: string,
+  from: string,       // the provider name that just failed
+  to: string,          // the provider name about to be tried
+  fromIndex: number,   // -1 for the primary
+  toIndex: number,
+  error: LLMError,     // the normalized error that caused the move
+  elapsedMs: number,    // time spent on `from`, including its own retries
+}
+```
+
+```ts title="fallback-event-metrics.ts"
+onEvent: (event) => {
+  if (event.kind === 'fallback') {
+    metrics.increment('llm.fallback', { from: event.from, to: event.to });
+  }
+};
+```
+
+See <a href="/docs/core/provider-fallback">Provider Fallback</a> for the `fallback` option itself
+and <a href="/docs/guides/provider-fallback-patterns#turn-onevents-fallback-event-into-an-alert-not-just-a-log-line">turning
+this event into an alert</a> in the companion guide.
 
 ## Narrowing by kind
 
@@ -188,9 +228,9 @@ way, but scoped to token usage rather than call mechanics. See <a href="/docs/co
 
 ## Options reference
 
-| Option    | Default | Notes                                                                                                                                      |
-| --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, or `rate_limited` occurrence. Fire and forget; cannot change the call's outcome. |
+| Option    | Default | Notes                                                                                                                                                  |
+| --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, `rate_limited`, or `fallback` occurrence. Fire and forget; cannot change the call's outcome. |
 
 See <a href="/docs/API-reference/configuration#observability">Configuration</a> for how `onEvent`
 sits alongside `onUsage`, `onUsageFailure`, `logger`, and `debug`.
