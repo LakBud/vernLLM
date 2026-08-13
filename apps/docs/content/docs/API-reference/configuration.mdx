@@ -108,6 +108,7 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 | `onEvent`        | none                          | Receives events for retries, circuit state transitions, rate-limit waits, and fallback transitions. Fire and forget; cannot change the call result or retry behavior. See [Observability](/docs/core/observability). |
 | `logger`         | console-based `ConsoleLogger` | Implement the `Logger` interface to route output elsewhere. See [Pluggable Logger](/docs/core/logging).                                                                                                              |
 | `debug`          | `false`                       | Controls diagnostic `logger.debug` calls. `warn` and `error` logs are not controlled by `debug`.                                                                                                                     |
+| `redact`         | none                          | Applied to model output before the debug log writes it. Only relevant when `debug: true`. See [Redacting debug output](/docs/core/logging#redacting-debug-output).                                                   |
 
 See [Observability](/docs/core/observability) for the full `onEvent` union and event
 shapes.

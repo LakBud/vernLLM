@@ -42,6 +42,16 @@ export interface VernLLMOptions {
   /** Enables debug logging of raw model output (logs up to 800 chars of each
    * response). Off by default */
   debug?: boolean;
+  /**
+   * Applied to model output before `finalizeResponse` writes it to the
+   * debug logger. This is the one piece of logging an app can't
+   * intercept itself, since it's an internal `logger.debug` call rather
+   * than something routed through `onEvent`/`onUsage`; anything caught
+   * elsewhere (events, `LLMError.cause`) already passes through the
+   * app's own callback and can be redacted there instead. Only relevant
+   * when `debug: true`. Default: identity (no redaction).
+   */
+  redact?: (text: string) => string;
   /** Cache adapter for cachedCall. Defaults to an in-memory adapter */
   cache?: CacheAdapter;
   /** HTTP status codes that should fail fast without retrying. Default [400, 401, 403, 404, 422] */

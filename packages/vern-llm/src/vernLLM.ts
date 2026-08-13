@@ -148,6 +148,7 @@ export class VernLLM {
           options.nonRetryableStatus ?? [400, 401, 403, 404, 422],
         parseJson: options.parseJson,
         logger: this.logger,
+        redact: options.redact,
         onUsage: options.onUsage,
         onUsageFailure: options.onUsageFailure,
         onEvent: options.onEvent,

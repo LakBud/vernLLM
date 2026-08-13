@@ -40,6 +40,31 @@ describe('VernLLM: injectable logger', () => {
     expect(logger.warn).toHaveBeenCalled(); // retry warning
     expect(logger.debug).toHaveBeenCalled(); // raw output debug line
   });
+
+  it('applies redact to the debug output line, not to the returned result', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const redact = vi.fn((text: string) => text.replace('secret-token', '[REDACTED]'));
+    const { client } = createMockClient([jsonResponse({ token: 'secret-token' })]);
+    const llm = new VernLLM({ client, model: 'm', logger, redact });
+
+    const result = await llm.call({ userContent: 'u', jsonMode: false });
+
+    expect(result).toContain('secret-token'); // redact never touches the actual return value
+    const debugCall = logger.debug.mock.calls.find((c) => String(c[0]).includes('output:'));
+    expect(debugCall?.[0]).toContain('[REDACTED]');
+    expect(debugCall?.[0]).not.toContain('secret-token');
+  });
+
+  it('leaves debug output untouched when redact is not configured', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { client } = createMockClient([jsonResponse({ token: 'secret-token' })]);
+    const llm = new VernLLM({ client, model: 'm', logger });
+
+    await llm.call({ userContent: 'u', jsonMode: false });
+
+    const debugCall = logger.debug.mock.calls.find((c) => String(c[0]).includes('output:'));
+    expect(debugCall?.[0]).toContain('secret-token');
+  });
 });
 
 describe('VernLLM: default logger resolution', () => {

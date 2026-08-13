@@ -32,6 +32,8 @@ export interface CallExecutorOptions {
   nonRetryableStatus: number[];
   parseJson?: (content: string) => unknown;
   logger: Logger;
+  /** Applied to model output before it reaches the debug logger. See `VernLLMOptions.redact`. */
+  redact?: (text: string) => string;
   onUsage?: (usage: TokenUsage) => void;
   onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
   onEvent?: (event: VernLLMEvent) => void;
@@ -55,6 +57,7 @@ export class CallExecutor {
   private readonly nonRetryableStatus: number[];
   private readonly parseJson: (content: string) => unknown;
   private readonly logger: Logger;
+  private readonly redact?: (text: string) => string;
   private readonly onUsage?: (usage: TokenUsage) => void;
   private readonly onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
   private readonly reportEvent: (event: VernLLMEvent) => void;
@@ -76,6 +79,7 @@ export class CallExecutor {
     this.nonRetryableStatus = options.nonRetryableStatus;
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
+    this.redact = options.redact;
     this.onUsage = options.onUsage;
     this.onUsageFailure = options.onUsageFailure;
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
@@ -247,6 +251,22 @@ export class CallExecutor {
   }
 
   /**
+   * Applies `redact` (if configured) to whatever the debug log is about
+   * to show: real content when there is any, otherwise the tool-call
+   * placeholder, which carries no user data and passes through
+   * `redact` unchanged in practice but is included for a caller whose
+   * `redact` does something structural (e.g. adding a marker) rather
+   * than just scrubbing PII.
+   */
+  private redactedOutput(
+    content: string | undefined,
+    wireToolCalls: WireToolCall[] | undefined,
+  ): string {
+    const output = content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`;
+    return this.redact ? this.redact(output) : output;
+  }
+
+  /**
    * Shapes a fully-arrived response (content and/or tool_calls, already
    * extracted from the provider's payload) into `T` or a
    * `CallWithToolsResult<T>`. Reused by the streaming path once it has
@@ -277,7 +297,7 @@ export class CallExecutor {
       }
 
       this.logger.debug(
-        `[VernLLM:${requestId}] output:\n${(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`).slice(0, 800)}`,
+        `[VernLLM:${requestId}] output:\n${this.redactedOutput(content, wireToolCalls).slice(0, 800)}`,
       );
 
       if (wireToolCalls?.length) {
