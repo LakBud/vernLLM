@@ -294,7 +294,7 @@ there, with no opt in needed.
 
 Both providers also support a schema constrained output mechanism that lives in its own request
 field, independent of tool calling, so this restriction doesn't apply on models covered by
-`nativeStructuredOutputModels`, a caller supplied, opt in list. See
+`nativeStructuredOutputModels`, a caller-supplied, opt-in list. See
 [Structured Output → Combining with tools](/docs/core/structured-output#combining-with-tools)
 for how to enable it.
 
@@ -341,7 +341,7 @@ verified against the compiler rather than guessed at.
 
 ## Provider support
 
-Every adapter translates VernLLM's OpenAI shaped `tools`, `tool_choice`, and `tool_calls` into that
+Every adapter translates VernLLM's OpenAI-shaped `tools`, `tool_choice`, and `tool_calls` into that
 provider's native mechanism:
 
 | Provider             | Native mechanism                                                                                                                                       |

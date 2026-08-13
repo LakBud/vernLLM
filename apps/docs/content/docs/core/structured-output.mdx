@@ -67,7 +67,7 @@ const result = await llm.call({
 ```
 
 - **`jsonSchema` implies JSON mode.** It overrides `jsonMode: false` and sends the request as structured JSON.
-  **`strict` is forwarded when supported by the adapter.** Enforcement depends on the adapter and the mechanism it uses: OpenAI/Groq use JSON Schema mode, Gemini uses schema-based structured output without relying on `strict`. On Anthropic and Bedrock, this only applies to the legacy forced-single-tool-call mechanism (Anthropic's tool strictness, Bedrock's tool strictness where supported); their native structured-output mechanism (see [Combining with tools](#combining-with-tools)) has no `strict` field at all, on either provider.
+- **`strict` is forwarded when supported by the adapter.** Enforcement depends on the adapter and the mechanism it uses: OpenAI/Groq use JSON Schema mode, Gemini uses schema-based structured output without relying on `strict`. On Anthropic and Bedrock, this only applies to the legacy forced-single-tool-call mechanism (Anthropic's tool strictness, Bedrock's tool strictness where supported); their native structured-output mechanism (see [Combining with tools](#combining-with-tools)) has no `strict` field at all, on either provider.
 - **`description` is forwarded where supported.** OpenAI-shaped providers receive it in the schema object. Gemini includes it in `responseSchema`. On Anthropic and Bedrock, this again only applies to the legacy forced-single-tool-call mechanism, where it's included in the generated tool definition; Anthropic's native mechanism has no `description` field, and Bedrock's native mechanism does accept one, but nested differently from every other schema field these adapters build (see below).
 
 <Callout>

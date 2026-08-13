@@ -211,7 +211,7 @@ closes, or transitions to half open.
 ```ts title="circuit-breaker-state.ts"
 llm.getCircuitState(); // primary target: 'closed' | 'open' | 'half-open' | undefined
 
-llm.getCircuitStates(model);
+llm.getCircuitStates('gpt-4o');
 // [
 //   { provider: 'primary', index: 0, isFallback: false, state: 'closed' },
 //   { provider: 'fallback[0]', index: 1, isFallback: true, state: 'open' },

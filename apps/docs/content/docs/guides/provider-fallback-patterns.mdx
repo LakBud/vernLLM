@@ -16,13 +16,19 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { VernLLM, fromAnthropic, fromOpenAICompatible } from 'vern-llm';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: 'https://api.groq.com/openai/v1',
+  maxRetries: 0,
 });
 ```
+
+Every client below has its own SDK-level `maxRetries: 0`. That's independent of VernLLM's own
+`maxRetries`: without it, the raw client would silently retry internally before VernLLM's retry
+loop or `fallbackOn` ever sees the failure, which would undercut the "fails fast" and "falls over
+immediately" behavior every example below is demonstrating.
 
 ## Order by what you'd actually accept, not by preference
 
@@ -249,7 +255,7 @@ failing target as `'next'`), gives you key rotation for free:
 
 ```ts title="provider-fallback-key-rotation.ts"
 const llm = new VernLLM({
-  client: new OpenAI({ apiKey: process.env.OPENAI_KEY_PRIMARY }),
+  client: new OpenAI({ apiKey: process.env.OPENAI_KEY_PRIMARY, maxRetries: 0 }),
   model: 'gpt-4o',
   name: 'openai-key-a',
   // 429 is retryable by default, which would burn a full backoff cycle
@@ -258,7 +264,7 @@ const llm = new VernLLM({
   nonRetryableStatus: [429],
 
   fallback: {
-    client: new OpenAI({ apiKey: process.env.OPENAI_KEY_SECONDARY }),
+    client: new OpenAI({ apiKey: process.env.OPENAI_KEY_SECONDARY, maxRetries: 0 }),
     model: 'gpt-4o',
     name: 'openai-key-b',
   },
@@ -278,7 +284,11 @@ an invalid endpoint or an intentionally wrong API key and confirm the call still
 
 ```ts title="provider-fallback-smoke-test.ts"
 const llm = new VernLLM({
-  client: new OpenAI({ apiKey: 'intentionally-invalid', baseURL: 'https://invalid.test' }),
+  client: new OpenAI({
+    apiKey: 'intentionally-invalid',
+    baseURL: 'https://invalid.test',
+    maxRetries: 0,
+  }),
   model: 'gpt-4o',
   maxRetries: 0, // fail fast for the test, don't wait out real backoff
   timeoutMs: 3_000,

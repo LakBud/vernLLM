@@ -111,7 +111,7 @@ export class FallbackExhaustedError extends LLMError {
     const last = attempts[attempts.length - 1]?.error;
 
     super(
-      `${attempts.length} provider${attempts.length === 1 ? '' : 's'} attempted, all failed: ${attempts
+      `${attempts.length} provider${attempts.length === 1 ? '' : 's'} attempted and failed: ${attempts
         .map((a) => `${a.provider}(${a.error.type})`)
         .join(' then ')}`,
       last?.type ?? 'unknown',

@@ -101,9 +101,9 @@ triggers each of these.
 
 The currently defined fallback code is:
 
-| Code                 | Error type                          | Meaning                                                                               |
-| -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
-| `fallback_exhausted` | the last failed target's own `type` | Every `fallback` target failed. Only ever set on `FallbackExhaustedError`, see below. |
+| Code                 | Error type                          | Meaning                                                                                                              |
+| -------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `fallback_exhausted` | the last failed target's own `type` | The primary target and every attempted fallback target failed. Only ever set on `FallbackExhaustedError`, see below. |
 
 See [Provider Fallback](/docs/core/provider-fallback) for the full `fallback` option
 and what makes `fallbackOn` move to the next target versus stop.
@@ -164,6 +164,14 @@ A lone target with no `fallback` configured, or a chain where `fallbackOn` retur
 very first failure, throws the plain, unwrapped `LLMError` instead, exactly as it did before
 `fallback` existed. `FallbackExhaustedError` only appears once more than one target was actually
 tried. See [When every target fails](/docs/core/provider-fallback#when-every-target-fails).
+
+For `stream: true`, this applies to opening the stream, not to what happens after. A failure
+before the first chunk arrives goes through the same fallback chain as a non-streaming call, so
+`call()` itself can reject with `FallbackExhaustedError` once every target's stream fails to open.
+Once a target's stream has opened and `call()` has returned `{ chunks, finalResult }`, a failure
+partway through never falls over: `finalResult` rejects with the normalized `LLMError` from
+whichever target was streaming, and fallback is not attempted. See [Streaming: open failures
+only](/docs/core/provider-fallback#streaming-open-failures-only) for why.
 
 ## What gets retried
 
