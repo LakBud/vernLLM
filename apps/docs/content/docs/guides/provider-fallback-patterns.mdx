@@ -3,10 +3,26 @@ title: Provider Fallback Patterns
 description: Ordering targets, sizing per-target retries, and reading a fallback chain's signals
 ---
 
-<a href="/docs/core/provider-fallback">Provider Fallback</a> covers the `fallback` option itself,
+[Provider Fallback](/docs/core/provider-fallback) covers the `fallback` option itself,
 target inheritance, `fallbackOn`, and every event it emits. This guide walks through putting it to
 use: choosing an order, sizing each target's own resilience knobs, and turning the signals fallback
 emits into something actionable instead of noise.
+
+Every snippet below assumes the same setup: an OpenAI primary, and Anthropic and Groq clients
+wrapped for `fallback`.
+
+```ts title="provider-fallback-patterns-setup.ts"
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+import { VernLLM, fromAnthropic, fromOpenAICompatible } from 'vern-llm';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const groq = new OpenAI({
+  apiKey: process.env.GROQ_API_KEY,
+  baseURL: 'https://api.groq.com/openai/v1',
+});
+```
 
 ## Order by what you'd actually accept, not by preference
 
@@ -104,9 +120,8 @@ const llm = new VernLLM({
 <Callout type="info">
   Every retry against a target is a real request against that provider's own limits. A target with a
   generous `maxRetries` and no `circuitBreaker` can end up absorbing a lot of wall-clock time before
-  the chain ever reaches the next one. See{' '}
-  <a href="/docs/core/retries#backoff-and-jitter">Backoff and jitter</a> for how the per-attempt
-  delay is computed.
+  the chain ever reaches the next one. See [Backoff and
+  jitter](/docs/core/retries#backoff-and-jitter) for how the per-attempt delay is computed.
 </Callout>
 
 ## Give every target its own circuit breaker
@@ -139,10 +154,11 @@ while, you pay the full retry/timeout cost once, then the breaker keeps every su
 until the cooldown elapses.
 
 <Callout type="warn">
-  `getCircuitState()` only reflects the primary's breaker. If you need to know whether a fallback
-  target is currently tripped, watch the `circuit_state` event on `onEvent` instead, it carries
-  `provider` so you can tell targets apart. See{' '}
-  <a href="/docs/core/observability#circuit_state">circuit_state</a>.
+  `getCircuitState()` only reflects the primary's breaker. For a snapshot of every target's state at
+  once, call `getCircuitStates()` instead, it returns each target's provider name, chain index, and
+  circuit state in one array. For real-time notification the moment a target's circuit transitions,
+  watch the `circuit_state` event on `onEvent`, it carries `provider` so you can tell targets apart.
+  See [circuit_state](/docs/core/observability#circuit_state).
 </Callout>
 
 ## Turn `onEvent`'s `fallback` event into an alert, not just a log line
@@ -199,7 +215,7 @@ try {
   return await llm.call({ userContent: message });
 } catch (err) {
   if (err instanceof FallbackExhaustedError) {
-    logger.error('every configured provider failed', {
+    console.error('every configured provider failed', {
       attempts: err.attempts.map((a) => ({ provider: a.provider, type: a.error.type })),
     });
     return {
@@ -236,6 +252,10 @@ const llm = new VernLLM({
   client: new OpenAI({ apiKey: process.env.OPENAI_KEY_PRIMARY }),
   model: 'gpt-4o',
   name: 'openai-key-a',
+  // 429 is retryable by default, which would burn a full backoff cycle
+  // against a key that's already over its limit. Treating it as
+  // non-retryable here means the first 429 moves straight to key b.
+  nonRetryableStatus: [429],
 
   fallback: {
     client: new OpenAI({ apiKey: process.env.OPENAI_KEY_SECONDARY }),
@@ -245,10 +265,10 @@ const llm = new VernLLM({
 });
 ```
 
-When `openai-key-a` gets rate limited, the default policy moves on to `openai-key-b` rather than
-waiting out the full retry/backoff cycle on a key that's already over its limit. No separate
-feature or wrapper is needed, it's the exact same ordered-list mechanism this whole guide has been
-about.
+When `openai-key-a` gets rate limited, `nonRetryableStatus` skips straight to `fallbackOn` instead
+of retrying against the same over-limit key, and the default policy moves on to `openai-key-b`
+rather than waiting out a backoff cycle that can't help. No separate feature or wrapper is needed,
+it's the exact same ordered-list mechanism this whole guide has been about.
 
 ## Test the chain by breaking the primary on purpose
 

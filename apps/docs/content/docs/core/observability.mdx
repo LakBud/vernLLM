@@ -61,7 +61,7 @@ Every event kind but `fallback` carries `provider`, the `name` resolved for the 
 (default `'primary'` for a lone target), so a single handler shared across multiple `VernLLM`
 instances, or across the targets in one instance's `fallback` chain, can tell them apart.
 `fallback` carries `from`/`to` instead, since it's reporting a transition between two targets
-rather than something that happened to one. See <a href="/docs/API-reference/configuration#provider-identity">Provider identity</a>.
+rather than something that happened to one. See [Provider identity](/docs/API-reference/configuration#provider-identity).
 
 <Cards>
   <Card title="retry" href="#retry">
@@ -100,7 +100,7 @@ Emitted immediately before VernLLM waits for the retry backoff delay, one event 
 count including the original try. `model` is the model actually resolved for the call, honoring a
 per call `model` override rather than always the instance default. `retryAfterHonored` is `true`
 when `delayMs` came from a `Retry-After` header on the failed attempt rather than computed
-exponential backoff. See <a href="/docs/core/retries">Retries</a> for the backoff and
+exponential backoff. See [Retries](/docs/core/retries) for the backoff and
 `Retry-After` mechanics this event is reporting on.
 
 ### `circuit_state`
@@ -123,7 +123,7 @@ actually change anything, such as `open` staying `open`.
 `onEvent` handler distinguish transitions on the primary from transitions on each fallback target.
 `model` identifies the model associated with the transition.
 
-The meaning of `consecutiveFailures` and the effect of `isolateByModel` are covered in <a href="/docs/core/circuit-breaker">Circuit Breaker</a>.
+The meaning of `consecutiveFailures` and the effect of `isolateByModel` are covered in [Circuit Breaker](/docs/core/circuit-breaker).
 
 ```ts title="circuit-state-alerting.ts"
 onEvent: (event) => {
@@ -153,15 +153,16 @@ immediately available, so a well-provisioned `rateLimit` configuration under nor
 ```
 
 `reason` identifies which of the three `rateLimit` buckets was blocking the call just before it
-cleared. See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the buckets themselves, and <a href="/docs/guides/tuning-rate-limits#watching-queue-pressure-before-it-becomes-failures">Watching
-queue pressure before it becomes failures</a> for using this event as a leading indicator ahead of
+cleared. See [Rate Limiting](/docs/core/rate-limiting) for the buckets themselves, and [Watching queue pressure before it becomes failures](/docs/guides/tuning-rate-limits#watching-queue-pressure-before-it-becomes-failures) for using this event as a leading indicator ahead of
 `local_rate_limit` failures.
 
 ### `fallback`
 
-Emitted when a `fallback` target's own retries are exhausted or abandoned and the chain moves on
-to the next target. Not emitted when a lone target (no `fallback` configured) fails, since there's
-nowhere for the chain to move to.
+Emitted when a target's own retries are exhausted or abandoned, `fallbackOn` selects `'next'`, and
+the chain advances to another target, including the very first fallback after the primary fails.
+The failed target can be the primary or any fallback target: `from` names whichever one it was.
+Not emitted when a lone target (no `fallback` configured) fails, or when `fallbackOn` returns
+`'stop'`, since there's nowhere for the chain to move to.
 
 ```ts title="fallback-event.ts"
 {
@@ -184,9 +185,8 @@ onEvent: (event) => {
 };
 ```
 
-See <a href="/docs/core/provider-fallback">Provider Fallback</a> for the `fallback` option itself
-and <a href="/docs/guides/provider-fallback-patterns#turn-onevents-fallback-event-into-an-alert-not-just-a-log-line">turning
-this event into an alert</a> in the companion guide.
+See [Provider Fallback](/docs/core/provider-fallback) for the `fallback` option itself
+and [turning this event into an alert](/docs/guides/provider-fallback-patterns#turn-onevents-fallback-event-into-an-alert-not-just-a-log-line) in the companion guide.
 
 ## Narrowing by kind
 
@@ -196,7 +196,7 @@ single check instead of leaving the others unhandled or writing an exhaustive `s
 ```ts title="observability-narrow-one-kind.ts"
 onEvent: (event) => {
   if (event.kind !== 'circuit_state') return;
-  logger.warn(`circuit ${event.from} -> ${event.to}`, { provider: event.provider });
+  console.warn(`circuit ${event.from} -> ${event.to}`, { provider: event.provider });
 };
 ```
 
@@ -213,18 +213,18 @@ of other hooks in VernLLM that genuinely do participate in the call:
 
 <Cards>
   <Card title="reserveUsage / refundUsage">
-    Run before and after a call and can stop it from proceeding. See{' '}
-    <a href="/docs/core/usage-metering">Usage Metering</a>.
+    Run before and after a call and can stop it from proceeding. See [Usage
+    Metering](/docs/core/usage-metering).
   </Card>
   <Card title="circuitBreaker.onStateChange">
     The lower level callback on `CircuitBreakerOptions` itself, observational in the same way as
-    `onEvent`'s `circuit_state`, chained rather than replaced when both are set. See{' '}
-    <a href="/docs/core/circuit-breaker#observing-state-changes">Observing state changes</a>.
+    `onEvent`'s `circuit_state`, chained rather than replaced when both are set. See [Observing
+    state changes](/docs/core/circuit-breaker#observing-state-changes).
   </Card>
 </Cards>
 
 `onUsage` and `onUsageFailure` are close cousins of `onEvent`, fire and forget in exactly the same
-way, but scoped to token usage rather than call mechanics. See <a href="/docs/core/usage-tracking">Usage Tracking</a>.
+way, but scoped to token usage rather than call mechanics. See [Usage Tracking](/docs/core/usage-tracking).
 
 ## Options reference
 
@@ -232,5 +232,5 @@ way, but scoped to token usage rather than call mechanics. See <a href="/docs/co
 | --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, `rate_limited`, or `fallback` occurrence. Fire and forget; cannot change the call's outcome. |
 
-See <a href="/docs/API-reference/configuration#observability">Configuration</a> for how `onEvent`
+See [Configuration](/docs/API-reference/configuration#observability) for how `onEvent`
 sits alongside `onUsage`, `onUsageFailure`, `logger`, and `debug`.

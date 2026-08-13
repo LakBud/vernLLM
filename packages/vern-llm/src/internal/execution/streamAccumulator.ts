@@ -16,6 +16,8 @@ export interface StreamAccumulatorOptions<T> {
   requestId: string;
   model: string;
   providerName: string;
+  /** Whether this attempt ran on a fallback target rather than the primary, mirroring `extractUsage`'s `usedFallback`. */
+  isFallback: boolean;
   /** Per-call override, falling back to the instance default, mirroring every other per-call timeout. */
   chunkIdleTimeoutMs: number | undefined;
   streamController: AbortController;
@@ -69,8 +71,16 @@ export function buildStreamResult<T>(
   first: IteratorResult<WireStreamChunk>,
   options: StreamAccumulatorOptions<T>,
 ): { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T | CallWithToolsResult<T>> } {
-  const { requestId, model, providerName, chunkIdleTimeoutMs, streamController, logger, signal } =
-    options;
+  const {
+    requestId,
+    model,
+    providerName,
+    isFallback,
+    chunkIdleTimeoutMs,
+    streamController,
+    logger,
+    signal,
+  } = options;
 
   let resolveFinal!: (value: T | CallWithToolsResult<T>) => void;
   let rejectFinal!: (error: unknown) => void;
@@ -222,6 +232,7 @@ export function buildStreamResult<T>(
             requestId,
             model,
             provider: providerName,
+            usedFallback: isFallback,
           };
           push({ type: 'usage', usage });
         }

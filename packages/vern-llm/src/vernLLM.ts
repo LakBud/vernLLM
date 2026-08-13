@@ -22,6 +22,7 @@ import {
   type FallbackOn,
   type FallbackTarget,
   type StreamCallResult,
+  type TargetCircuitState,
   type StreamEnabledCallParams,
   type ToolEnabledCallParams,
   type VernLLMEvent,
@@ -218,7 +219,13 @@ export class VernLLM {
         });
 
         const isLast = i === this.executors.length - 1;
-        const decision = isLast ? 'stop' : this.fallbackOn(normalized, { isLastTarget: isLast });
+        // Always consult fallbackOn, including on the last target, so it
+        // sees every failure and callers who log or count from inside it
+        // get a complete picture. The chain still stops once the last
+        // target fails regardless of what fallbackOn returns: there is no
+        // next executor to fall over to.
+        const policyDecision = this.fallbackOn(normalized, { isLastTarget: isLast });
+        const decision = isLast ? 'stop' : policyDecision;
 
         if (decision === 'stop') {
           // A lone target (or a chain that stopped on its first failure)
@@ -483,7 +490,7 @@ export class VernLLM {
    * fallback, and its circuit state, or undefined if that target has no
    * circuit breaker configured.
    */
-  getCircuitStates(model?: string) {
+  getCircuitStates(model?: string): TargetCircuitState[] {
     return this.executors.map((executor, index) => ({
       provider: executor.providerName,
       index,

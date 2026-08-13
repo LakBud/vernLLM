@@ -56,6 +56,7 @@ function baseOptions(overrides?: {
     requestId: 'req-1',
     model: 'test-model',
     providerName: 'test-provider',
+    isFallback: false,
     chunkIdleTimeoutMs: overrides?.chunkIdleTimeoutMs,
     streamController: new AbortController(),
     logger: overrides?.logger ?? testLogger(),
@@ -161,6 +162,7 @@ describe('buildStreamResult, chunk translation', () => {
         requestId: 'req-1',
         model: 'test-model',
         provider: 'test-provider',
+        usedFallback: false,
       },
     });
     expect(finalizeUsage).toEqual(secondChunk?.type === 'usage' ? secondChunk.usage : undefined);

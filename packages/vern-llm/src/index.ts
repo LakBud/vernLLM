@@ -103,6 +103,7 @@ export {
   type FallbackTarget,
   type FallbackOn,
   type FallbackAttempt,
+  type TargetCircuitState,
   type CallMeta,
   type SchemaLike,
   type JsonSchemaSpec,

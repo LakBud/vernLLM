@@ -429,6 +429,7 @@ export class CallExecutor {
         requestId,
         model,
         providerName: this.providerName,
+        isFallback: this.isFallback,
         chunkIdleTimeoutMs: params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs,
         streamController,
         logger: this.logger,

@@ -1,6 +1,6 @@
 import { LLMError } from './errors.js';
 
-import type { CircuitBreakerOptions } from '../circuitBreaker.js';
+import type { CircuitBreakerOptions, CircuitState } from '../circuitBreaker.js';
 import type { RateLimitOptions } from '../rateLimit.js';
 import type { LLMClient } from './client.js';
 
@@ -9,9 +9,14 @@ import type { LLMClient } from './client.js';
  * target) fails. Order is the policy: VernLLM never reorders, scores, or
  * selects a target, it only walks the list as given.
  *
- * Per-target overrides fall back to the parent `VernLLM` instance's own
- * option when omitted, so a target only needs to specify what's actually
- * different about it (a different client/model is the common case).
+ * Most per-target overrides fall back to the parent `VernLLM` instance's
+ * own option when omitted, so a target only needs to specify what's
+ * actually different about it (a different client/model is the common
+ * case). `circuitBreaker` and `rateLimit` are the exception: they are
+ * never inherited from the parent, since a breaker or limiter tuned for
+ * the primary provider's limits is rarely right for a fallback's. Leave
+ * them unset on a target to run it without one, even if the parent has
+ * one configured.
  */
 export interface FallbackTarget {
   client: LLMClient;
@@ -26,9 +31,9 @@ export interface FallbackTarget {
   defaultMaxTokens?: number;
   defaultTemperature?: number | null;
   nonRetryableStatus?: number[];
-  /** This target's own circuit breaker, independent of every other target's. */
+  /** This target's own circuit breaker, independent of every other target's. Not inherited from the parent's `circuitBreaker`. */
   circuitBreaker?: boolean | CircuitBreakerOptions;
-  /** This target's own rate limiter, independent of every other target's. */
+  /** This target's own rate limiter, independent of every other target's. Not inherited from the parent's `rateLimit`. */
   rateLimit?: RateLimitOptions;
 }
 
@@ -45,6 +50,16 @@ export interface CallMeta {
   usedFallback: boolean;
   /** Attempts made against the target that ultimately answered, including the successful one. */
   attempts: number;
+}
+
+/** One target's circuit state, as returned by `VernLLM.getCircuitStates()`. */
+export interface TargetCircuitState {
+  provider: string;
+  /** Position in the chain: `0` for the primary, `1`+ for fallback targets. */
+  index: number;
+  isFallback: boolean;
+  /** `undefined` if that target has no circuit breaker configured. */
+  state: CircuitState | undefined;
 }
 
 /** One target's failure, recorded on the way to either the next target or `FallbackExhaustedError`. */
@@ -84,19 +99,19 @@ export const defaultFallbackOn: FallbackOn = (error) => {
 };
 
 /**
- * Thrown when every target, primary and every fallback, failed. Carries
- * each attempt in order so an outage across providers stays debuggable
- * without reproducing it. Extends `LLMError` so `isLLMError` and any
- * `instanceof LLMError` check still passes, inheriting the last failure's
- * `type` so existing type-based handling keeps working on a fallback-
- * exhausted error too.
+ * Thrown when the chain gives up, whether because the last target failed
+ * or `fallbackOn` chose to stop early. Carries each attempt in order so
+ * an outage across providers stays debuggable without reproducing it.
+ * Extends `LLMError` so `isLLMError` and any `instanceof LLMError` check
+ * still passes, inheriting the last failure's `type` so existing
+ * type-based handling keeps working on a fallback-exhausted error too.
  */
 export class FallbackExhaustedError extends LLMError {
   constructor(public readonly attempts: FallbackAttempt[]) {
     const last = attempts[attempts.length - 1]?.error;
 
     super(
-      `All ${attempts.length} providers failed: ${attempts
+      `${attempts.length} provider${attempts.length === 1 ? '' : 's'} attempted, all failed: ${attempts
         .map((a) => `${a.provider}(${a.error.type})`)
         .join(' then ')}`,
       last?.type ?? 'unknown',

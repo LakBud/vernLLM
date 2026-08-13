@@ -25,14 +25,14 @@ const result = await llm.call({
 <Cards>
   <Card title="userContent">
     `string | ContentBlock[]`, **required**. The current user message. Supports text and image
-    blocks. See <a href="/docs/core/multimodal">Multimodal Input</a>.
+    blocks. See [Multimodal Input](/docs/core/multimodal).
   </Card>
   <Card title="systemPrompt">
     `string`, optional. The system message. Omit to use the provider's default behavior.
   </Card>
   <Card title="history">
-    `ConversationTurn[]`, optional. Prior conversation turns, excluding `userContent`. See{' '}
-    <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a>.
+    `ConversationTurn[]`, optional. Prior conversation turns, excluding `userContent`. See
+    [Multi-turn Conversations](/docs/guides/multi-turn-conversations).
   </Card>
 </Cards>
 
@@ -58,14 +58,14 @@ Supported image MIME types are `image/png`, `image/jpeg`, `image/gif`, and `imag
 is base64-encoded without a `data:` URL prefix.
 
 `history` must follow VernLLM's conversation ordering rules. Invalid history fails with
-`LLMError('validation')` before a provider request is made. See <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a>.
+`LLMError('validation')` before a provider request is made. See [Multi-turn Conversations](/docs/guides/multi-turn-conversations).
 
 ## Tool calling
 
 <Cards>
   <Card title="tools">
     `ToolDefinition[]`, optional. Tools the model may call. Changes the return type to
-    `CallWithToolsResult<T>`. See <a href="/docs/core/tool-calling">Tool Calling</a>.
+    `CallWithToolsResult<T>`. See [Tool Calling](/docs/core/tool-calling).
   </Card>
   <Card title="toolChoice">
     `'auto' | 'none' | 'required' | { name: string }`, optional. Defaults to `'auto'` when
@@ -79,23 +79,21 @@ declared tool.
 VernLLM validates returned tool calls. Contract failures such as `unknown_tool` and
 `duplicate_tool_call_id` are surfaced as `LLMError('api')` values with a machine-readable `code`.
 
-See <a href="/docs/core/tool-calling">Tool Calling</a> for the complete workflow and <a href="/docs/core/error-handling">Error Handling</a> for failure behavior.
+See [Tool Calling](/docs/core/tool-calling) for the complete workflow and [Error Handling](/docs/core/error-handling) for failure behavior.
 
 ## Streaming
 
 <Cards>
   <Card title="stream">
-    `boolean`, default `false`. Returns `{ chunks, finalResult }` when `true`. See{' '}
-    <a href="/docs/core/streaming">Streaming</a>.
+    `boolean`, default `false`. Returns `{ chunks, finalResult }` when `true`. See [Streaming](/docs/core/streaming).
   </Card>
   <Card title="chunkIdleTimeoutMs">
     `number`, optional. Overrides the instance value for `stream: true`. Pass `0` or `Infinity` to
-    disable the idle timeout for this call. See{' '}
-    <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
+    disable the idle timeout for this call. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).
   </Card>
 </Cards>
 
-`stream: true` combines with tools and schemas. See <a href="/docs/core/streaming#a-note-on-the-call-overload">the streaming overload note</a> for the TypeScript overload requirement.
+`stream: true` combines with tools and schemas. See [the streaming overload note](/docs/core/streaming#a-note-on-the-call-overload) for the TypeScript overload requirement.
 
 ## Model & generation
 
@@ -106,7 +104,7 @@ See <a href="/docs/core/tool-calling">Tool Calling</a> for the complete workflow
 | `maxTokens`       | `number`                                   | Instance `defaultMaxTokens`, otherwise `1000`  | Maximum response length.                                          |
 | `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Not sent                                       | Passed through when set.                                          |
 
-See <a href="/docs/guides/per-call-overrides">Per-call Overrides</a> for model and generation
+See [Per-call Overrides](/docs/guides/per-call-overrides) for model and generation
 overrides.
 
 ## JSON & validation
@@ -118,18 +116,18 @@ overrides.
   </Card>
   <Card title="jsonSchema">
     `JsonSchemaSpec`, optional. Enables provider-native JSON Schema structured output and implies
-    `jsonMode: true`. See <a href="/docs/core/structured-output">Structured Output</a>.
+    `jsonMode: true`. See [Structured Output](/docs/core/structured-output).
   </Card>
   <Card title="schema">
-    Zod or Zod-compatible schema, optional. Validates parsed JSON client-side and infers `T`. See{' '}
-    <a href="/docs/core/structured-output">Structured Output</a>.
+    Zod or Zod-compatible schema, optional. Validates parsed JSON client-side and infers `T`. See
+    [Structured Output](/docs/core/structured-output).
   </Card>
 </Cards>
 
 `schema` only runs after JSON parsing. Setting `jsonMode: false` with `schema` fails validation
 before the provider request instead of returning an unvalidated string.
 
-Provider-specific `jsonSchema` and `tools` compatibility is documented in <a href="/docs/core/structured-output#combining-with-tools">Combining with Tools</a>.
+Provider-specific `jsonSchema` and `tools` compatibility is documented in [Combining with Tools](/docs/core/structured-output#combining-with-tools).
 
 ## Request lifecycle
 
@@ -140,13 +138,12 @@ Provider-specific `jsonSchema` and `tools` compatibility is documented in <a hre
   </Card>
   <Card title="signal">
     `AbortSignal`, optional. Cancels the current call, including an in-flight attempt or pending
-    retry delay. See <a href="/docs/core/cancellation">Cancellation</a>.
+    retry delay. See [Cancellation](/docs/core/cancellation).
   </Card>
   <Card title="meta">
     `{ current?: CallMeta }`, optional. With `fallback`, reports which target answered after
-    `call()` resolves. Ignored for streaming calls. See{' '}
-    <a href="/docs/core/provider-fallback#knowing-which-target-answered">Knowing which target
-    answered</a>.
+    `call()` resolves. Ignored for streaming calls. See
+    [Knowing which target answered](/docs/core/provider-fallback#knowing-which-target-answered).
   </Card>
 </Cards>
 

@@ -3,7 +3,7 @@ title: Streaming Responses
 description: Relay a streaming call() to an HTTP client, with cancellation and cached replays handled correctly
 ---
 
-<a href="/docs/core/streaming">Streaming</a> covers the `stream: true` contract itself. This guide
+[Streaming](/docs/core/streaming) covers the `stream: true` contract itself. This guide
 walks through the part that comes right after, getting those chunks in front of a user, using a
 plain HTTP route as the example, and calling out the couple of spots where a naive relay gets
 streaming semantics wrong.
@@ -49,9 +49,9 @@ export async function streamChat(req: Request, res: Response) {
   A failure after the first chunk arrives rejects `finalResult`, not `chunks` itself. The `for
   await` loop over `chunks` finishes normally even on a mid-stream failure, so the error only
   surfaces when you `await finalResult` afterward, as in the example above. Skipping that `await`
-  silently drops the failure from view. See{' '}
-  <a href="/docs/core/streaming#what-gets-retried">What gets retried</a> for why a mid-stream
-  failure isn't retried automatically.
+  silently drops the failure from view. See [What gets
+  retried](/docs/core/streaming#what-gets-retried) for why a mid-stream failure isn't retried
+  automatically.
 </Callout>
 
 ## Forwarding client cancellation
@@ -76,7 +76,7 @@ export async function streamChat(req: Request, res: Response) {
 }
 ```
 
-See <a href="/docs/core/cancellation">Cancellation & Timeouts</a> for exactly what firing `signal`
+See [Cancellation & Timeouts](/docs/core/cancellation) for exactly what firing `signal`
 does to an in-flight request and how it interacts with retries.
 
 ## Rendering tool call chunks
@@ -111,9 +111,7 @@ for await (const chunk of chunks) {
 
 Don't parse `existing.args` as JSON yourself while it's still arriving, it's a partial string and
 will not be valid JSON until the call finishes. Read the fully parsed arguments off `finalResult`
-instead, exactly as you would for a non-streaming tool call. See{' '}
-
-<a href="/docs/core/streaming#tool-calling-while-streaming">Tool calling while streaming</a>.
+instead, exactly as you would for a non-streaming tool call. See [Tool calling while streaming](/docs/core/streaming#tool-calling-while-streaming).
 
 ## Streaming a cached call
 
@@ -136,7 +134,7 @@ const { chunks, finalResult } = await llm.cachedCall({
 });
 ```
 
-See <a href="/docs/core/streaming#caching-a-streaming-call">Caching a streaming call</a> for exactly
+See [Caching a streaming call](/docs/core/streaming#caching-a-streaming-call) for exactly
 which of the three cases (miss, hit, coalesced) a given request falls into.
 
 ## A note on framework-native streaming helpers

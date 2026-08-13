@@ -69,7 +69,7 @@ try {
   </Card>
   <Card title="aborted">
     The caller's `AbortSignal` fired. This represents intentional cancellation by the caller, not a
-    timeout. See <a href="/docs/core/cancellation">Cancellation</a>.
+    timeout. See [Cancellation](/docs/core/cancellation).
   </Card>
   <Card title="unknown">
     Anything that does not fit the above categories, including network errors with no status code
@@ -96,7 +96,7 @@ The currently defined rate-limiting codes are:
 | `local_rate_limit`      | `quota_exceeded` | A `rateLimit` call was rejected locally, without reaching the provider: the queue wait exceeded `maxQueueMs`, the queue was already at `maxQueueSize`, or the call's estimated tokens exceeded the configured `tokensPerMinute` capacity outright. |
 | `provider_rate_limited` | `api`            | The provider itself returned an HTTP 429.                                                                                                                                                                                                          |
 
-See <a href="/docs/core/rate-limiting">Rate Limiting</a> for the full `rateLimit` option and what
+See [Rate Limiting](/docs/core/rate-limiting) for the full `rateLimit` option and what
 triggers each of these.
 
 The currently defined fallback code is:
@@ -105,7 +105,7 @@ The currently defined fallback code is:
 | -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
 | `fallback_exhausted` | the last failed target's own `type` | Every `fallback` target failed. Only ever set on `FallbackExhaustedError`, see below. |
 
-See <a href="/docs/core/provider-fallback">Provider Fallback</a> for the full `fallback` option
+See [Provider Fallback](/docs/core/provider-fallback) for the full `fallback` option
 and what makes `fallbackOn` move to the next target versus stop.
 
 ```ts title="error-code.ts"
@@ -163,7 +163,7 @@ interface FallbackAttempt {
 A lone target with no `fallback` configured, or a chain where `fallbackOn` returns `'stop'` on the
 very first failure, throws the plain, unwrapped `LLMError` instead, exactly as it did before
 `fallback` existed. `FallbackExhaustedError` only appears once more than one target was actually
-tried. See <a href="/docs/core/provider-fallback#when-every-target-fails">When every target fails</a>.
+tried. See [When every target fails](/docs/core/provider-fallback#when-every-target-fails).
 
 ## What gets retried
 
@@ -176,8 +176,7 @@ tried. See <a href="/docs/core/provider-fallback#when-every-target-fails">When e
   tool contract failures
 - `error.code` is `'local_rate_limit'` because either the wait already happened (retrying would only
   requeue behind the same limit with nothing changed) or the call could never fit the configured
-  `tokensPerMinute` capacity in the first place, so no amount of retrying changes that. See{' '}
-  <a href="/docs/core/rate-limiting#interaction-with-retries">Interaction with retries</a>.
+  `tokensPerMinute` capacity in the first place, so no amount of retrying changes that. See [Interaction with retries](/docs/core/rate-limiting#interaction-with-retries).
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to
@@ -187,7 +186,7 @@ Otherwise the wait falls back to exponential backoff with jitter.
 
 ### Tool contract errors are not retried
 
-`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable. See <a href="/docs/core/tool-calling">Tool Calling</a> for the canonical contract workflow and handling
+`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable. See [Tool Calling](/docs/core/tool-calling) for the canonical contract workflow and handling
 guidance. These errors therefore fail immediately instead of consuming the remaining `maxRetries`.
 
 <Callout type="warn">

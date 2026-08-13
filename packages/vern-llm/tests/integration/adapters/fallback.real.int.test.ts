@@ -61,8 +61,12 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
   const servers: RealSdkServer[] = [];
 
   afterEach(async () => {
-    await Promise.all(servers.map((s) => s.close()));
-    servers.length = 0;
+    // Snapshot and clear before awaiting: if a close() rejects, the array is
+    // already reset and `allSettled` (rather than `all`) means the rest of
+    // the servers still get their close() called instead of one failure
+    // aborting cleanup for the others.
+    const toClose = servers.splice(0, servers.length);
+    await Promise.allSettled(toClose.map((s) => s.close()));
   });
 
   async function mockServer(...responses: Parameters<typeof startRealSdkServer>[0]) {

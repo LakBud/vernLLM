@@ -140,9 +140,7 @@ A `tool` turn has its own rules on top of the alternation check:
 - An assistant turn that requested tools cannot be followed by anything except its matching `tool`
   turn, including the final entry in `history` itself.
 
-Any violation throws `LLMError('validation')` before a request is sent. See{' '}
-
-<a href="/docs/core/tool-calling">Tool Calling</a> for how this fits into a full request, execute,
+Any violation throws `LLMError('validation')` before a request is sent. See [Tool Calling](/docs/core/tool-calling) for how this fits into a full request, execute,
 continue loop.
 
 ### Valid history

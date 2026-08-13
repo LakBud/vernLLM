@@ -29,9 +29,7 @@ const llm = new VernLLM({
 `tools` and `tool_calls` map onto Anthropic's native `tool_use` / `tool_result` content blocks.
 Since Anthropic requires strict `user`/`assistant` alternation, `fromAnthropic` merges consecutive
 tool result messages from a multi-tool turn back into a single `user` turn with multiple
-`tool_result` blocks. `ToolResult.isError` is forwarded as `tool_result.is_error`. See{' '}
-
-<a href="/docs/core/tool-calling">Tool Calling</a> for the full reference.
+`tool_result` blocks. `ToolResult.isError` is forwarded as `tool_result.is_error`. See [Tool Calling](/docs/core/tool-calling) for the full reference.
 
 For the Anthropic adapter, tool parameter schemas and `response_format: { type: 'json_schema' }`
 schemas must have a root `type: 'object'`. The public VernLLM request types remain broadly typed
@@ -60,7 +58,7 @@ const llm = new VernLLM({
 });
 ```
 
-There is no built-in default list, see <a href="/docs/core/structured-output#combining-with-tools">Structured Output → Combining with tools</a> for why. On a covered model, `jsonSchema` is sent as `output_config.format` instead of a forced
+There is no built-in default list, see [Structured Output → Combining with tools](/docs/core/structured-output#combining-with-tools) for why. On a covered model, `jsonSchema` is sent as `output_config.format` instead of a forced
 tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
 while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
@@ -100,11 +98,11 @@ for await (const chunk of chunks) {
 <Callout>
   Anthropic's documented `ping` events, sent periodically to keep long-running streams alive (e.g.
   extended thinking), are recognized and reset VernLLM's `chunkIdleTimeoutMs` clock. They carry no
-  content and are never surfaced through `chunks`. See{' '}
-  <a href="/docs/core/streaming#per-chunk-idle-timeout">Per-chunk idle timeout</a>.
+  content and are never surfaced through `chunks`. See [Per-chunk idle
+  timeout](/docs/core/streaming#per-chunk-idle-timeout).
 </Callout>
 
-See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract, none of
+See [Streaming](/docs/core/streaming) for the full `stream: true` contract, none of
 which changes per-provider beyond how each adapter maps its own streaming events.
 
 ## Multimodal input

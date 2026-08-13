@@ -57,7 +57,7 @@ const llm = new VernLLM({
 
 ## Structured output via tool use
 
-When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text. This is the default behavior for every model; see <a href="#combining-tools-with-jsonschema">Combining tools with jsonSchema</a> below for the native alternative available on models covered by `nativeStructuredOutputModels`, which uses `outputConfig.textFormat` instead and composes with real `tools`.
+When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text. This is the default behavior for every model; see [Combining tools with jsonSchema](#combining-tools-with-jsonschema) below for the native alternative available on models covered by `nativeStructuredOutputModels`, which uses `outputConfig.textFormat` instead and composes with real `tools`.
 
 ```ts title="bedrock-structured-output.ts"
 import { z } from 'zod';
@@ -141,7 +141,7 @@ const llm = new VernLLM({
 });
 ```
 
-There is no built-in default list, see <a href="/docs/core/structured-output#combining-with-tools">Structured Output → Combining with tools</a> for why. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
+There is no built-in default list, see [Structured Output → Combining with tools](/docs/core/structured-output#combining-with-tools) for why. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
 tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
 while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
@@ -201,11 +201,11 @@ for await (const chunk of chunks) {
   A mid-stream AWS exception event, `throttlingException`, `validationException`,
   `internalServerException`, `serviceUnavailableException`, or `modelStreamErrorException`, is
   surfaced as a correctly-typed `LLMError` (with a real HTTP status where AWS provides one) rather
-  than being silently dropped. See <a href="/docs/core/error-handling">Error Handling</a> for the
-  `LLMError` shape.
+  than being silently dropped. See [Error Handling](/docs/core/error-handling) for the `LLMError`
+  shape.
 </Callout>
 
-See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` contract.
+See [Streaming](/docs/core/streaming) for the full `stream: true` contract.
 
 ## Tool calling
 
@@ -213,9 +213,7 @@ See <a href="/docs/core/streaming">Streaming</a> for the full `stream: true` con
 same mechanism used internally for `jsonSchema`. Consecutive tool result messages from a
 multi-tool turn are merged back into a single `user` turn, matching what Converse expects. Converse
 has no `toolChoice` equivalent to `'none'` while tools are still offered, so `fromBedrock` throws
-`LLMError('validation')` for that case rather than silently falling back to `'auto'`. See{' '}
-
-<a href="/docs/core/tool-calling">Tool Calling</a> for the full reference.
+`LLMError('validation')` for that case rather than silently falling back to `'auto'`. See [Tool Calling](/docs/core/tool-calling) for the full reference.
 
 ## Multimodal input
 

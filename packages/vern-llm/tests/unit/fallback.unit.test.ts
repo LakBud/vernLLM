@@ -43,8 +43,10 @@ describe('VernLLM, fallback', () => {
     });
   });
 
-  it('primary exhausts retries, target 1 receives a byte-identical wire request including tools', async () => {
-    const { client: primaryClient } = createMockClient([new Error('primary down')]);
+  it("primary exhausts retries, target 1 receives a wire request identical to the primary's except for model", async () => {
+    const { client: primaryClient, calls: primaryCalls } = createMockClient([
+      new Error('primary down'),
+    ]);
     const { client: fallbackClient, calls: fallbackCalls } = createMockClient([
       jsonResponse({ ok: true }),
     ]);
@@ -68,6 +70,7 @@ describe('VernLLM, fallback', () => {
     const result = await llm.call({ userContent: 'u', tools });
 
     expect(result).toEqual({ type: 'content', content: '{"ok":true}' });
+    expect(primaryCalls).toHaveLength(1);
     expect(fallbackCalls).toHaveLength(1);
     expect(fallbackCalls[0]?.model).toBe('fallback-model');
     expect(fallbackCalls[0]?.tools).toEqual([
@@ -80,6 +83,14 @@ describe('VernLLM, fallback', () => {
         },
       },
     ]);
+
+    // Same request, modulo the model each target was configured with:
+    // fallback isn't rewriting or dropping anything on the way over.
+    const { model: primaryModel, ...primaryRest } = primaryCalls[0]!;
+    const { model: fallbackModel, ...fallbackRest } = fallbackCalls[0]!;
+    expect(fallbackRest).toEqual(primaryRest);
+    expect(primaryModel).toBe('primary-model');
+    expect(fallbackModel).toBe('fallback-model');
   });
 
   it('a parse error stops the chain instead of falling over', async () => {
@@ -292,7 +303,11 @@ describe('VernLLM, fallback', () => {
       await llm.call({ userContent: 'u' });
     }
 
-    expect(llm.getCircuitState()).toBe('open');
+    const states = llm.getCircuitStates();
+    expect(states).toEqual([
+      expect.objectContaining({ provider: 'primary', isFallback: false, state: 'open' }),
+      expect.objectContaining({ isFallback: true, state: 'closed' }),
+    ]);
   });
 
   it('stream open failure falls over to the next target', async () => {

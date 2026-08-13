@@ -1,5 +1,5 @@
 ---
-title: Provider Fallback
+title: Multi Provider Fallback
 description: Try a declared list of backup providers, in order, when the primary fails
 ---
 
@@ -25,7 +25,7 @@ const llm = new VernLLM({
 
   onEvent: (event) => {
     if (event.kind === 'fallback') {
-      logger.warn(`falling over ${event.from} -> ${event.to}`, { error: event.error });
+      console.warn(`falling over ${event.from} -> ${event.to}`, { error: event.error });
     }
   },
 });
@@ -92,8 +92,8 @@ const llm = new VernLLM({
 `circuitBreaker` and `rateLimit` are the exception: they are never inherited from the parent
 instance. Each target's breaker and limiter, if any, are entirely its own. See
 
-<a href="/docs/core/circuit-breaker#scope">Circuit Breaker</a> and
-<a href="/docs/core/rate-limiting">Rate Limiting</a> for their individual behavior.
+[Circuit Breaker](/docs/core/circuit-breaker#scope) and
+[Rate Limiting](/docs/core/rate-limiting) for their individual behavior.
 
 ## Every target is independent
 
@@ -119,7 +119,7 @@ An open target breaker is treated as a target failure for fallback purposes. If 
 `'next'`, the chain moves to the next target without waiting for that target's cooldown.
 
 For the full circuit-breaker lifecycle, including cooldowns, half-open trials, per-model isolation,
-and state inspection, see <a href="/docs/core/circuit-breaker">Circuit Breaker</a>.
+and state inspection, see [Circuit Breaker](/docs/core/circuit-breaker).
 
 ## Deciding whether to move on
 
@@ -157,7 +157,7 @@ A `circuit_open` error therefore normally moves the call to the next configured 
 particularly useful when each target has its own breaker: a provider that is already known to be
 unhealthy can be skipped immediately rather than consuming another provider attempt.
 
-See <a href="/docs/core/error-handling">Error Handling</a> for the full `LLMError` type and code
+See [Error Handling](/docs/core/error-handling) for the full `LLMError` type and code
 reference this table draws from.
 
 ## Streaming: open failures only
@@ -179,8 +179,8 @@ before dying, `finalResult` rejects directly and no other target is tried.
 
 <Callout type="warn">
   Falling over mid-stream would splice a second model's output into a response the consumer has
-  already started rendering. There's no way to do that safely, so VernLLM doesn't attempt it. See{' '}
-  <a href="/docs/core/streaming">Streaming</a> for the rest of the `stream: true` contract.
+  already started rendering. There's no way to do that safely, so VernLLM doesn't attempt it. See
+  [Streaming](/docs/core/streaming) for the rest of the `stream: true` contract.
 </Callout>
 
 ## Knowing which target answered
@@ -248,7 +248,7 @@ The `error` is the normalized error that caused the chain to move on. This can b
 failure such as a timeout, or `circuit_open` when the target was already blocked by its circuit
 breaker.
 
-See <a href="/docs/core/observability#event-kinds">Event kinds</a> for the rest of the `onEvent`
+See [Event kinds](/docs/core/observability#event-kinds) for the rest of the `onEvent`
 union this composes with.
 
 ## When every target fails
@@ -265,7 +265,7 @@ try {
 } catch (err) {
   if (err instanceof FallbackExhaustedError) {
     for (const attempt of err.attempts) {
-      logger.error(`${attempt.provider} failed`, {
+      console.error(`${attempt.provider} failed`, {
         type: attempt.error.type,
         code: attempt.error.code,
       });
@@ -287,7 +287,7 @@ nothing to aggregate.
 `cachedCall` composes with `fallback` automatically, no extra wiring needed. Fallback lives inside
 `call()`, which `cachedCall` already wraps, so the whole chain caches under one key and the
 successful result, however far down the chain it came from, is what gets stored. In-flight
-coalescing for concurrent misses on the same `cacheKey` covers the full chain too. See <a href="/docs/core/caching">Caching</a>.
+coalescing for concurrent misses on the same `cacheKey` covers the full chain too. See [Caching](/docs/core/caching).
 
 ## Options reference
 
@@ -296,8 +296,8 @@ coalescing for concurrent misses on the same `cacheKey` covers the full chain to
 | `fallback`   | none                | A `FallbackTarget` or `FallbackTarget[]`, tried in order after the primary. Each target's `circuitBreaker`/`rateLimit` are independent; every other field inherits the parent instance's resolved value when omitted. |
 | `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget }) => 'next' \| 'stop'`, called once per failed target. See the decision table above.                                                                                                         |
 
-See <a href="/docs/API-reference/configuration#fallback">Configuration</a> for how `fallback` sits
+See [Configuration](/docs/API-reference/configuration#fallback) for how `fallback` sits
 alongside every other constructor option, and
 
-<a href="/docs/guides/provider-fallback-patterns">Provider Fallback Patterns</a> in Guides for
+[Provider Fallback Patterns](/docs/guides/provider-fallback-patterns) in Guides for
 putting this to use effectively.

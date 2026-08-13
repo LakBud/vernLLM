@@ -61,7 +61,7 @@ Type renames follow the same mapping:
 - The old generic `CachedCallParams<T>` (the `fn`-based shape) is no longer exported from the
   package; it now backs a private internal primitive.
 
-See <a href="/docs/core/caching">Caching</a> for the current `cachedCall` reference.
+See [Caching](/docs/core/caching) for the current `cachedCall` reference.
 
 ## 2.0.0: Tool calling
 
@@ -110,7 +110,7 @@ is no longer narrowed to `never`.
 
 </Callout>
 
-See <a href="/docs/guides/multi-turn-conversations">Multi-turn Conversations</a> for the full
+See [Multi-turn Conversations](/docs/guides/multi-turn-conversations) for the full
 updated history rules.
 
 ### `LLMClient.messages` is a wider union
@@ -144,7 +144,7 @@ support tool calling yet, the minimum fix is exhaustiveness only, add a case tha
 rejects `role === 'tool'`, since VernLLM only ever sends one when the caller opted in with
 `tools`.
 
-See <a href="/docs/core/tool-calling">Tool Calling</a> for the full feature, and <a href="/docs/API-reference/configuration">Configuration</a> for the `LLMClient` field reference.
+See [Tool Calling](/docs/core/tool-calling) for the full feature, and [Configuration](/docs/API-reference/configuration) for the `LLMClient` field reference.
 
 ### `LLMClient.temperature` is now optional
 
@@ -171,7 +171,7 @@ temperature?: number;
 
 To update a custom `LLMClient`, handle `params.temperature` being `undefined` the same way you'd
 already handle any other optional field, omit it from the outgoing request, or substitute your own
-default before forwarding it. See <a href="/docs/API-reference/configuration">Configuration</a> for `defaultTemperature`'s full
+default before forwarding it. See [Configuration](/docs/API-reference/configuration) for `defaultTemperature`'s full
 behavior.
 
 ## Nothing else changed
