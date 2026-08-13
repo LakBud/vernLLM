@@ -168,6 +168,27 @@ describe('withReservedUsage', () => {
 });
 
 describe('withReservedUsageForStream', () => {
+  it('refunds and rejects as aborted, without ever calling openStream, when the signal aborts while reserveUsage is pending', async () => {
+    const controller = new AbortController();
+    const reserveUsage = vi.fn().mockImplementation(async () => {
+      controller.abort();
+    });
+    const refundUsage = vi.fn().mockResolvedValue(undefined);
+    const openStream = vi.fn();
+
+    await expect(
+      withReservedUsageForStream(
+        { reserveUsage, refundUsage },
+        openStream,
+        controller.signal,
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({ type: 'aborted' });
+
+    expect(openStream).not.toHaveBeenCalled();
+    expect(refundUsage).toHaveBeenCalledOnce();
+  });
+
   it('refunds immediately when openStream itself throws, before any chunks/finalResult exist', async () => {
     const reserveUsage = vi.fn().mockResolvedValue(undefined);
     const refundUsage = vi.fn().mockResolvedValue(undefined);

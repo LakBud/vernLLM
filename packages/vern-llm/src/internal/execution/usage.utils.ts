@@ -128,6 +128,11 @@ export async function withReservedUsageForStream<T>(
   const reserved = await reserve(params, false, signal);
   const refund = makeRefund(params, false, signal, onRefundError);
 
+  if (signal?.aborted) {
+    if (reserved) await refund('[VernLLM] refundUsage failed after abort');
+    throw new LLMError('LLM request aborted', 'aborted');
+  }
+
   let opened: { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> };
 
   try {
