@@ -115,7 +115,7 @@ export function buildStreamResult<T>(
       // high-volume stream doesn't spam dozens of near-identical lines.
       if (!hasLoggedEviction) {
         hasLoggedEviction = true;
-        logger.debug(
+        logger.warn(
           `[VernLLM] stream chunk buffer exceeded cap (${MAX_BUFFERED_CHUNKS}), evicting ` +
             `${buffered.length - MAX_BUFFERED_CHUNKS} oldest chunk(s); buffered=${buffered.length}. ` +
             'The chunks iterable was never read (or fell far behind) for this stream.',
@@ -265,7 +265,12 @@ export function buildStreamResult<T>(
 
       const normalized = normalizeError(error, signal);
 
-      options.onStreamFailure(normalized, usage);
+      try {
+        options.onStreamFailure(normalized, usage);
+      } catch {
+        // A throwing callback must not stop fail/rejectFinal from settling
+        // the promises below; the stream failure itself is still reported.
+      }
 
       fail(normalized);
       rejectFinal(normalized);
@@ -274,7 +279,13 @@ export function buildStreamResult<T>(
     }
 
     finish();
-    options.onStreamSuccess(usage);
+
+    try {
+      options.onStreamSuccess(usage);
+    } catch {
+      // A throwing callback must not stop finalize/resolveFinal below from
+      // running; the stream itself still completed successfully.
+    }
 
     try {
       const wireToolCalls: WireToolCall[] | undefined = toolCallAcc.size

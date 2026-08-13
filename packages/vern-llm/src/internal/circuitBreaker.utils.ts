@@ -5,6 +5,31 @@ import type { VernLLMEvent } from '../types/events.js';
 import type { VernLLMOptions } from '../types/options.js';
 
 /**
+ * Builds a `(event) => void` reporter that no-ops when `onEvent` is unset,
+ * and otherwise calls it, swallowing and logging any error the handler
+ * throws so a broken `onEvent` can't break the call that triggered it.
+ * Shared by `buildCircuitBreaker` (which needs to report before any
+ * executor exists) and `CallExecutor.reportEvent`, kept independent of the
+ * executor for that reason.
+ */
+export function makeEventReporter(
+  onEvent: ((event: VernLLMEvent) => void) | undefined,
+  logger: Logger,
+): (event: VernLLMEvent) => void {
+  return (event) => {
+    if (!onEvent) return;
+
+    try {
+      onEvent(event);
+    } catch (error) {
+      logger.error('[VernLLM] onEvent failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  };
+}
+
+/**
  * Builds the optional circuit breaker for one provider target, wiring its
  * `onStateChange` to emit a `circuit_state` event and chain any
  * caller-supplied `onStateChange`. Returns `undefined` when
@@ -27,17 +52,7 @@ export function buildCircuitBreaker(
     typeof options.circuitBreaker === 'object' ? options.circuitBreaker : undefined;
   const userOnStateChange = breakerOptions?.onStateChange;
 
-  const reportEvent = (event: VernLLMEvent) => {
-    if (!options.onEvent) return;
-
-    try {
-      options.onEvent(event);
-    } catch (error) {
-      logger.error('[VernLLM] onEvent failed', {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
-    }
-  };
+  const reportEvent = makeEventReporter(options.onEvent, logger);
 
   return new CircuitBreaker({
     ...breakerOptions,

@@ -1,5 +1,6 @@
 import { CircuitBreaker } from '../../circuitBreaker.js';
 import { LLMError } from '../../types/errors.js';
+import { makeEventReporter } from '../circuitBreaker.utils.js';
 import { describeError, extractStatus, normalizeError } from './errors.utils.js';
 import { defaultParseJson } from './parse.utils.js';
 import { RequestBuilder } from './requestBuilder.js';
@@ -49,14 +50,12 @@ export class CallExecutor {
   private readonly timeoutMs: number;
   private readonly chunkIdleTimeoutMs: number;
   private readonly baseDelayMs: number;
-  private readonly defaultMaxTokens: number;
-  private readonly defaultTemperature: number | null;
   private readonly nonRetryableStatus: number[];
   private readonly parseJson: (content: string) => unknown;
   private readonly logger: Logger;
   private readonly onUsage?: (usage: TokenUsage) => void;
   private readonly onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
-  private readonly onEvent?: (event: VernLLMEvent) => void;
+  private readonly reportEvent: (event: VernLLMEvent) => void;
   private readonly breaker?: CircuitBreaker;
   private readonly limiter?: RateLimiter;
   private readonly requestBuilder: RequestBuilder;
@@ -71,14 +70,12 @@ export class CallExecutor {
     this.timeoutMs = options.timeoutMs;
     this.chunkIdleTimeoutMs = options.chunkIdleTimeoutMs;
     this.baseDelayMs = options.baseDelayMs;
-    this.defaultMaxTokens = options.defaultMaxTokens;
-    this.defaultTemperature = options.defaultTemperature;
     this.nonRetryableStatus = options.nonRetryableStatus;
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
     this.onUsage = options.onUsage;
     this.onUsageFailure = options.onUsageFailure;
-    this.onEvent = options.onEvent;
+    this.reportEvent = makeEventReporter(options.onEvent, this.logger);
     this.breaker = options.breaker;
     this.limiter = options.limiter;
     this.requestBuilder = new RequestBuilder({
@@ -93,15 +90,27 @@ export class CallExecutor {
   }
 
   /**
-   * Runs a single logical call against this target: breaker check, retry
-   * with backoff, normalized error on exhaustion. Mirrors the old
-   * `VernLLM.call`'s non-streaming branch, minus cache/usage-reservation,
-   * which stay one layer up since they aren't per-target concerns.
+   * Throws if the breaker is open for this target/model, exactly like the
+   * check `run`/`runStream` used to make internally. Exposed so `VernLLM`
+   * can gate on it before reserving usage, avoiding a reserve-then-refund
+   * round trip on a call that was never going to be attempted. `assertClosed`
+   * has a stateful side effect (claiming a half-open trial slot), so it must
+   * run exactly once per logical call: `run`/`runStream` no longer call it
+   * themselves, this is now the only call site.
+   */
+  assertBreakerClosed(model?: string): void {
+    this.breaker?.assertClosed(model ?? this.model);
+  }
+
+  /**
+   * Runs a single logical call against this target: retry with backoff,
+   * normalized error on exhaustion. Mirrors the old `VernLLM.call`'s
+   * non-streaming branch, minus cache/usage-reservation and the breaker
+   * check, which stay one layer up since they aren't per-target concerns
+   * (see `assertBreakerClosed`).
    */
   async run<T>(params: CallParams<T>, requestId: string): Promise<T | CallWithToolsResult<T>> {
     const model = params.model ?? this.model;
-
-    this.breaker?.assertClosed(model);
 
     try {
       return await this.retryWithBackoff(
@@ -132,8 +141,6 @@ export class CallExecutor {
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
     const model = params.model ?? this.model;
-
-    this.breaker?.assertClosed(model);
 
     try {
       return await this.retryWithBackoff(
@@ -335,11 +342,13 @@ export class CallExecutor {
   }> {
     const { useJson, model, request } = this.requestBuilder.build(params);
 
-    const createStream = this.client.chat.completions.createStream;
+    const completions = this.client.chat.completions;
 
-    if (!createStream) {
+    if (!completions.createStream) {
       throw new LLMError('stream: true requires a client/adapter with createStream', 'validation');
     }
+
+    const createStream = completions.createStream.bind(completions);
 
     // A stream holds a real connection for its whole life, so its
     // capacity is released on completion (in `buildStreamResult`), not
@@ -466,8 +475,9 @@ export class CallExecutor {
    * has these errors cannot help (`shouldRetry` excludes them by `code`)
    * and a caller fixing them wants to see every one, not just the first.
    * Schema failures keep the original single-error, `type: 'validation'`
-   * shape: retrying can genuinely help there if the model changes its
-   * arguments, and mixing that type into the aggregate would blur the two.
+   * shape rather than being folded into the aggregate, since they're a
+   * distinct failure kind from the contract failures above (also excluded
+   * from retry, by `type` rather than `code`; see `shouldRetry`).
    */
   private validateToolCallArguments(
     toolCalls: { id: string; name: string; arguments: unknown }[],
@@ -648,19 +658,6 @@ export class CallExecutor {
     }
   }
 
-  /** Reports a `VernLLMEvent`, swallowing and logging any error the handler throws. */
-  private reportEvent(event: VernLLMEvent): void {
-    if (!this.onEvent) return;
-
-    try {
-      this.onEvent(event);
-    } catch (error) {
-      this.logger.error('[VernLLM] onEvent failed', {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
-    }
-  }
-
   /** Parses response content as JSON and validates it against `schema` when supplied. */
   private parseAndValidate<T>(content: string, schema?: CallParams<T>['schema']): T {
     let parsed: unknown;
@@ -690,7 +687,7 @@ export class CallExecutor {
    * Waits out the backoff delay for a retry attempt, honoring a
    * Retry-After header on the failed attempt's error when present.
    * Both Retry-After and plain exponential backoff are capped at the same
-   * max delay (see `DEFAULT_MAX_DELAY_MS` in `vernLLM.utils.ts`).
+   * max delay (see `DEFAULT_MAX_DELAY_MS` in `retry.utils.ts`).
    */
   private async recoverDelay(
     requestId: string,

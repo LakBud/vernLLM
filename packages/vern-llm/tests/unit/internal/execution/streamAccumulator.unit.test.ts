@@ -150,7 +150,9 @@ describe('buildStreamResult, chunk translation', () => {
     const collected = await drain(chunks);
     await finalResult;
 
-    expect(collected[1]).toEqual({
+    const secondChunk = collected[1];
+
+    expect(secondChunk).toEqual({
       type: 'usage',
       usage: {
         promptTokens: 3,
@@ -161,7 +163,7 @@ describe('buildStreamResult, chunk translation', () => {
         provider: 'test-provider',
       },
     });
-    expect(finalizeUsage).toEqual(collected[1]!.type === 'usage' ? collected[1].usage : undefined);
+    expect(finalizeUsage).toEqual(secondChunk?.type === 'usage' ? secondChunk.usage : undefined);
   });
 });
 
@@ -308,6 +310,25 @@ describe('buildStreamResult, transport failure path', () => {
     await expect(finalResult).rejects.toMatchObject({ type: 'aborted' });
     expect(onStreamFailure.mock.calls[0]![0]).toMatchObject({ type: 'aborted' });
   });
+
+  it('fails with type "timeout" and aborts streamController when no chunk arrives within chunkIdleTimeoutMs', async () => {
+    const iterator = scriptedIterator([{ type: 'text-delta', delta: 'more' }], { hangAt: 0 });
+    const first: IteratorResult<WireStreamChunk> = {
+      done: false,
+      value: { type: 'text-delta', delta: 'first' },
+    };
+
+    const onStreamFailure = vi.fn();
+    const options = baseOptions({ onStreamFailure, chunkIdleTimeoutMs: 20 });
+    const { chunks, finalResult } = buildStreamResult(iterator, first, options);
+
+    await expect(drain(chunks)).rejects.toMatchObject({ type: 'timeout' });
+    await expect(finalResult).rejects.toMatchObject({ type: 'timeout' });
+
+    expect(onStreamFailure).toHaveBeenCalledOnce();
+    expect(onStreamFailure.mock.calls[0]![0]).toMatchObject({ type: 'timeout' });
+    expect(options.streamController.signal.aborted).toBe(true);
+  });
 });
 
 describe('buildStreamResult, chunks iterable semantics', () => {
@@ -427,7 +448,7 @@ describe('buildStreamResult, unread-backlog eviction', () => {
     // The oldest MAX_BUFFERED_CHUNKS + 1 pushes were evicted, so the
     // surviving oldest entry is the one right after that cut.
     expect(collected[0]).toEqual({ type: 'text-delta', delta: String(MAX_BUFFERED_CHUNKS + 1) });
-    expect(logger.debug).toHaveBeenCalledTimes(1);
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('exceeded cap'));
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeded cap'));
   });
 });

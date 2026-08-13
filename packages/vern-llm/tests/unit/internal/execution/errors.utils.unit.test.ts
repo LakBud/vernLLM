@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { normalizeError } from '../../../../src/internal/execution/errors.utils.js';
+import { describeError, normalizeError } from '../../../../src/internal/execution/errors.utils.js';
 import { LLMError } from '../../../../src/types/errors.js';
 
 describe('normalizeError', () => {
@@ -86,5 +86,29 @@ describe('normalizeError', () => {
 
     expect(result.type).toBe('unknown');
     expect(result.status).toBeUndefined();
+  });
+});
+
+describe('describeError', () => {
+  it('prefers a truthy `error` payload over `message`, JSON-stringified', () => {
+    const result = describeError({ message: 'ignored', error: { code: 'bad_request' } });
+
+    expect(result).toBe(JSON.stringify({ code: 'bad_request' }, null, 2));
+  });
+
+  it('falls back to the Error message when no `error` payload exists', () => {
+    const result = describeError(new Error('boom'));
+
+    expect(result).toBe('boom');
+  });
+
+  it('returns a safe string instead of throwing when the `error` payload is circular', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    const result = describeError({ error: circular });
+
+    expect(typeof result).toBe('string');
+    expect(result.length).toBeGreaterThan(0);
   });
 });

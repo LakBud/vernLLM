@@ -1,6 +1,60 @@
 import { LLMError, type StreamChunk, type UsageHooks } from '../../types/index.js';
 
 /**
+ * Calls `params.reserveUsage`, if present, mapping any failure to a
+ * `quota_exceeded` LLMError (or an aborted error, if the signal fired
+ * during reservation). Returns whether a reservation was actually made,
+ * so callers know whether a later refund is needed. Shared by
+ * `withReservedUsage` and `withReservedUsageForStream`, which differ only
+ * in whether `coalesced` is caller-supplied or always `false`.
+ */
+async function reserve(
+  params: UsageHooks,
+  coalesced: boolean,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  if (!params.reserveUsage) return false;
+
+  try {
+    await params.reserveUsage({ coalesced, signal });
+    return true;
+  } catch (error) {
+    if (signal?.aborted) {
+      throw new LLMError('LLM request aborted', 'aborted');
+    }
+
+    throw new LLMError(
+      error instanceof Error ? error.message : 'Usage reservation failed',
+      'quota_exceeded',
+      undefined,
+      undefined,
+      error,
+    );
+  }
+}
+
+/**
+ * Builds a `(logMessage) => Promise<void>` refund function bound to the
+ * given hooks/coalesced/signal, reporting (instead of throwing) any error
+ * the refund hook itself raises, so a broken refund hook never masks the
+ * original error it was called to clean up after.
+ */
+function makeRefund(
+  params: UsageHooks,
+  coalesced: boolean,
+  signal: AbortSignal | undefined,
+  onRefundError: (logMessage: string, error: unknown) => void,
+): (logMessage: string) => Promise<void> {
+  return async (logMessage: string) => {
+    try {
+      await params.refundUsage?.({ coalesced, signal });
+    } catch (refundError) {
+      onRefundError(logMessage, refundError);
+    }
+  };
+}
+
+/**
  * Runs `getResult` after reserving usage, if a `reserveUsage` hook was
  * provided. `refundUsage` fires only if a reservation was actually made.
  * `onRefundError` is called (instead of throwing) whenever a refund attempt
@@ -17,34 +71,9 @@ export async function withReservedUsage<T>(
     throw new LLMError('LLM request aborted', 'aborted');
   }
 
-  let reserved = false;
+  const reserved = await reserve(params, coalesced, signal);
 
-  try {
-    if (params.reserveUsage) {
-      await params.reserveUsage({ coalesced, signal });
-      reserved = true;
-    }
-  } catch (error) {
-    if (signal?.aborted) {
-      throw new LLMError('LLM request aborted', 'aborted');
-    }
-
-    throw new LLMError(
-      error instanceof Error ? error.message : 'Usage reservation failed',
-      'quota_exceeded',
-      undefined,
-      undefined,
-      error,
-    );
-  }
-
-  const refund = async (logMessage: string) => {
-    try {
-      await params.refundUsage?.({ coalesced, signal });
-    } catch (refundError) {
-      onRefundError(logMessage, refundError);
-    }
-  };
+  const refund = makeRefund(params, coalesced, signal, onRefundError);
 
   if (signal?.aborted) {
     if (reserved) await refund('[VernLLM] refundUsage failed after abort');
@@ -96,34 +125,8 @@ export async function withReservedUsageForStream<T>(
     throw new LLMError('LLM request aborted', 'aborted');
   }
 
-  let reserved = false;
-
-  try {
-    if (params.reserveUsage) {
-      await params.reserveUsage({ coalesced: false, signal });
-      reserved = true;
-    }
-  } catch (error) {
-    if (signal?.aborted) {
-      throw new LLMError('LLM request aborted', 'aborted');
-    }
-
-    throw new LLMError(
-      error instanceof Error ? error.message : 'Usage reservation failed',
-      'quota_exceeded',
-      undefined,
-      undefined,
-      error,
-    );
-  }
-
-  const refund = async (logMessage: string) => {
-    try {
-      await params.refundUsage?.({ coalesced: false, signal });
-    } catch (refundError) {
-      onRefundError(logMessage, refundError);
-    }
-  };
+  const reserved = await reserve(params, false, signal);
+  const refund = makeRefund(params, false, signal, onRefundError);
 
   let opened: { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> };
 

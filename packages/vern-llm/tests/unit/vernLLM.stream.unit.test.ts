@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { LLMError, type StreamChunk, type WireStreamChunk } from '../../src/index.js';
+import { LLMError, type WireStreamChunk } from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
-import { createMockStreamingClient, scriptedIteratorWithReturn } from '../helpers.js';
+import { createMockStreamingClient, drain, scriptedIteratorWithReturn } from '../helpers.js';
 
 const weatherTool = {
   name: 'get_weather',
@@ -13,12 +13,6 @@ const weatherTool = {
     required: ['city'],
   },
 };
-
-async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
-  const out: StreamChunk[] = [];
-  for await (const chunk of chunks) out.push(chunk);
-  return out;
-}
 
 describe('VernLLM.call, stream: true', () => {
   it('yields live text-delta chunks and resolves finalResult to the same shape a non-streaming call would return', async () => {
@@ -587,14 +581,14 @@ describe('VernLLM.call, stream: true', () => {
     expect(elapsedMs).toBeLessThan(5000);
   });
 
-  it('logs (at debug level) when the unread chunk backlog is evicted past its cap', async () => {
+  it('logs (at warn level) when the unread chunk backlog is evicted past its cap', async () => {
     const wireChunks: WireStreamChunk[] = Array.from({ length: 25_000 }, () => ({
       type: 'text-delta',
       delta: 'x',
     }));
     const { client } = createMockStreamingClient([wireChunks]);
-    const debug = vi.fn();
-    const logger = { debug, warn: vi.fn(), error: vi.fn() };
+    const warn = vi.fn();
+    const logger = { debug: vi.fn(), warn, error: vi.fn() };
     const llm = new VernLLM({ client, model: 'test-model', logger });
 
     // `chunks` deliberately never read: this is exactly the pathological
@@ -602,8 +596,8 @@ describe('VernLLM.call, stream: true', () => {
     const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
     await finalResult;
 
-    expect(debug).toHaveBeenCalled();
-    const message = debug.mock.calls.map(([msg]) => String(msg)).join('\n');
+    expect(warn).toHaveBeenCalled();
+    const message = warn.mock.calls.map(([msg]) => String(msg)).join('\n');
     expect(message).toContain('evicting');
   });
 
@@ -618,14 +612,14 @@ describe('VernLLM.call, stream: true', () => {
       delta: 'x',
     }));
     const { client } = createMockStreamingClient([wireChunks]);
-    const debug = vi.fn();
-    const logger = { debug, warn: vi.fn(), error: vi.fn() };
+    const warn = vi.fn();
+    const logger = { debug: vi.fn(), warn, error: vi.fn() };
     const llm = new VernLLM({ client, model: 'test-model', logger });
 
     const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
     await finalResult;
 
-    const evictionLogs = debug.mock.calls.filter(([msg]) => String(msg).includes('evicting'));
+    const evictionLogs = warn.mock.calls.filter(([msg]) => String(msg).includes('evicting'));
     expect(evictionLogs).toHaveLength(1);
   });
 });

@@ -165,6 +165,12 @@ export class CacheOrchestrator {
         (logMessage, error) => this.logRefundError(logMessage, error),
       );
 
+      // Mirror the no-op catch in withReservedUsageForStream: buildReplayChunksFromPromise
+      // doesn't await this promise until `chunks` is iterated, so a caller that only reads
+      // `finalResult` eagerly (or never reads `chunks`) could otherwise trigger an
+      // unhandled-rejection warning.
+      finalResult.catch(() => {});
+
       return { chunks: buildReplayChunksFromPromise(finalResult, hasTools), finalResult };
     }
 

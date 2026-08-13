@@ -13,7 +13,7 @@ import type { CallWithToolsResult } from '../../types/tools.js';
  * to support.
  */
 function toReplayText(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
+  return typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
 }
 
 /**

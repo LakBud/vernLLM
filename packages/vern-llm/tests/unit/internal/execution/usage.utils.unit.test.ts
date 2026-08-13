@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { withReservedUsage } from '../../../src/internal/execution/usage.utils.js';
+import {
+  withReservedUsage,
+  withReservedUsageForStream,
+} from '../../../../src/internal/execution/usage.utils.js';
 
 describe('withReservedUsage', () => {
   it('runs getResult and returns its value when no reserveUsage hook is given', async () => {
@@ -161,5 +164,99 @@ describe('withReservedUsage', () => {
     ).rejects.toMatchObject({ type: 'aborted' });
 
     expect(refundUsage).toHaveBeenCalledOnce();
+  });
+});
+
+describe('withReservedUsageForStream', () => {
+  it('refunds immediately when openStream itself throws, before any chunks/finalResult exist', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn().mockResolvedValue(undefined);
+    const openError = new Error('failed to open stream');
+    const openStream = vi.fn().mockRejectedValue(openError);
+
+    await expect(
+      withReservedUsageForStream({ reserveUsage, refundUsage }, openStream, undefined, vi.fn()),
+    ).rejects.toBe(openError);
+
+    expect(refundUsage).toHaveBeenCalledOnce();
+  });
+
+  it('does not refund when finalResult resolves successfully', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn();
+    const openStream = vi.fn().mockResolvedValue({
+      chunks: (async function* () {})(),
+      finalResult: Promise.resolve('done'),
+    });
+
+    const { finalResult } = await withReservedUsageForStream(
+      { reserveUsage, refundUsage },
+      openStream,
+      undefined,
+      vi.fn(),
+    );
+
+    await expect(finalResult).resolves.toBe('done');
+    expect(refundUsage).not.toHaveBeenCalled();
+  });
+
+  it('defers the refund until finalResult rejects, not until openStream returns', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn().mockResolvedValue(undefined);
+    const streamError = new Error('stream failed mid-flight');
+
+    // A pending promise, settled explicitly below, so the assertion before
+    // that point genuinely proves the refund waits for real settlement
+    // rather than an already-rejected promise's microtask ordering.
+    let rejectStream!: (error: unknown) => void;
+    const pendingFinalResult = new Promise<never>((_, reject) => {
+      rejectStream = reject;
+    });
+    const openStream = vi.fn().mockResolvedValue({
+      chunks: (async function* () {})(),
+      finalResult: pendingFinalResult,
+    });
+
+    const { finalResult } = await withReservedUsageForStream(
+      { reserveUsage, refundUsage },
+      openStream,
+      undefined,
+      vi.fn(),
+    );
+
+    // The refund only happens once finalResult itself settles, not as a
+    // side effect of openStream resolving.
+    expect(refundUsage).not.toHaveBeenCalled();
+
+    rejectStream(streamError);
+
+    await expect(finalResult).rejects.toBe(streamError);
+
+    expect(refundUsage).toHaveBeenCalledOnce();
+  });
+
+  it('reports a failing refundUsage via onRefundError after a stream error, without masking the original error', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundUsage = vi.fn().mockRejectedValue(new Error('refund boom'));
+    const streamError = new Error('stream failed');
+    const openStream = vi.fn().mockResolvedValue({
+      chunks: (async function* () {})(),
+      finalResult: Promise.reject(streamError),
+    });
+    const onRefundError = vi.fn();
+
+    const { finalResult } = await withReservedUsageForStream(
+      { reserveUsage, refundUsage },
+      openStream,
+      undefined,
+      onRefundError,
+    );
+
+    await expect(finalResult).rejects.toBe(streamError);
+
+    expect(onRefundError).toHaveBeenCalledWith(
+      '[VernLLM] refundUsage failed after stream error',
+      expect.any(Error),
+    );
   });
 });

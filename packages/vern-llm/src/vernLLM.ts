@@ -145,6 +145,8 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
+    this.executor.assertBreakerClosed(params.model);
+
     if (params.stream) {
       // Same breaker/logging treatment as non-streaming, applied around
       // opening the stream; mid-stream failures are handled separately

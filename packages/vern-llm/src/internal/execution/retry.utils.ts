@@ -17,9 +17,15 @@ export const DEFAULT_MAX_DELAY_MS = 10_000;
  */
 const MAX_SETTIMEOUT_MS = 2_147_483_647;
 
-/** True when a timeout value should be treated as "disabled" rather than passed to `setTimeout`. */
-function isTimeoutDisabled(ms: number | undefined): boolean {
-  return !ms || ms <= 0 || ms === Infinity;
+/**
+ * Resolves a timeout value to the number `setTimeout` should actually use,
+ * or `undefined` when the timeout should be treated as disabled (0,
+ * negative, or `Infinity`). Returning the resolved value directly, rather
+ * than a boolean, lets callers narrow `number | undefined` to `number`
+ * without an `as number` cast.
+ */
+function resolveActiveTimeoutMs(ms: number | undefined): number | undefined {
+  return !ms || ms <= 0 || ms === Infinity ? undefined : ms;
 }
 
 /** Caps a timeout at the largest delay `setTimeout` actually honors. */
@@ -48,11 +54,14 @@ export async function withTimeout<T>(
 ): Promise<T> {
   const controller = new AbortController();
 
-  const timer = isTimeoutDisabled(timeoutMs)
-    ? undefined
-    : setTimeout(() => {
-        controller.abort();
-      }, clampTimeoutMs(timeoutMs));
+  const activeTimeoutMs = resolveActiveTimeoutMs(timeoutMs);
+
+  const timer =
+    activeTimeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          controller.abort();
+        }, clampTimeoutMs(activeTimeoutMs));
 
   const signal = externalSignal
     ? AbortSignal.any([externalSignal, controller.signal])
@@ -101,11 +110,11 @@ export function withChunkIdleTimeout<T>(
   onIdle?: () => void,
   logger?: Pick<Logger, 'debug'>,
 ): Promise<IteratorResult<T>> {
-  if (isTimeoutDisabled(timeoutMs)) {
+  const activeTimeoutMs = resolveActiveTimeoutMs(timeoutMs);
+
+  if (activeTimeoutMs === undefined) {
     return next();
   }
-
-  const activeTimeoutMs = timeoutMs as number;
 
   let settled = false;
 
@@ -210,6 +219,10 @@ export function getBackoffDelay(
  * would have finished on its own
  */
 export async function waitForRetry(delay: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    throw new LLMError('Operation aborted', 'aborted');
+  }
+
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
