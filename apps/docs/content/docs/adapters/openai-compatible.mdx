@@ -20,17 +20,12 @@ The named adapters exist purely for readability and discoverability. They also l
 ## Named providers
 
 <Callout title="These do not set baseURL for you">
-  Mutating `client.baseURL` after construction does not work with the official OpenAI SDK. It
-  reads `baseURL` once at construction time and never rereads a value assigned to it afterward. 
-  Because of that, every named adapter below validates the client's `baseURL` instead of injecting one. 
-  The check compares origins (protocol + host) only, not the full path, since a path like `/v1` 
-  is an API-version or routing detail a provider can change independently of its identity. 
-  If `baseURL` is missing or resolves to a different origin than the provider's known one, 
-  the adapter throws an `LLMError` with `type: 'validation'` and 
-  `issues: { expectedBaseURL, actualBaseURL }`, so callers using `isLLMError` can catch this the
-  same way as vern-llm's other errors. Always set `baseURL` yourself, at construction time, when
-  creating the client, using that provider's full documented path (the origin below plus its
-  conventional path, e.g. `/v1`):
+  The official OpenAI SDK reads `baseURL` once at construction and never rereads it, so setting
+  `client.baseURL` afterward has no effect. Every named adapter below validates it instead of
+  injecting it, checking only the origin (not the path, e.g. `/v1`, which a provider can change
+  independently). If `baseURL` is missing or the origin doesn't match, the adapter throws an
+  `LLMError` with `type: 'validation'` and `issues: { expectedBaseURL, actualBaseURL }`, catchable
+  via `isLLMError`. Always pass `baseURL` at construction, using that provider's full path.
 </Callout>
 
 ```ts title="correct-setup.ts"
