@@ -195,8 +195,12 @@ export interface CachedCallInput extends UsageHooks {
  * belong at the top level, alongside `cacheKey`/`ttl`, not nested inside
  * `call`. Both positions used to typecheck, which meant `cachedCall`
  * could only catch the mistake at runtime with a warning, after silently
- * ignoring the caller's usage hooks. Putting them inside `call` is now a
- * compile error instead.
+ * ignoring the caller's usage hooks. Putting them inside `call` as an
+ * inline object literal is now a compile error instead; TypeScript's
+ * excess-property check only applies to object literals though, so a
+ * preconstructed value carrying `reserveUsage`/`refundUsage` can still be
+ * structurally assignable, which is why `cachedCall` also checks for and
+ * rejects both hooks at runtime.
  */
 export type CachedCallParams<T> = CachedCallInput & {
   call: Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>;

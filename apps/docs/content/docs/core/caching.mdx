@@ -191,6 +191,8 @@ always wraps a `call()` invocation. If you need general-purpose caching or coale
 an LLM call, reach for a dedicated caching library (e.g. `async-cache-dedupe`) at the application
 level instead.
 
+### Usage hooks
+
 Usage hooks are applied at the cache level. `reserveUsage`/`refundUsage` no longer type-check inside
 the nested `call` options at all — `CachedCallParams`'s `call` field omits them, so putting them
 there is a compile error, not just a mistake caught later. If a caller bypasses that (plain JS, or

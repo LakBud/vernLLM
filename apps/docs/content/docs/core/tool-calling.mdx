@@ -297,8 +297,11 @@ const result = await llm.call({
 console.log(result.content);
 ```
 
-This is purely a type-level narrowing; it doesn't change what gets sent on the wire or how the
-provider is instructed, only what TypeScript can prove about the shape you get back.
+`toolChoice: 'none'` is sent on the wire like any other `toolChoice` value, instructing the provider
+not to call a tool. The type-level narrowing to `ContentResult<T>` builds on that: if a provider (or
+a custom adapter) returns `tool_calls` anyway despite `'none'`, `call()` treats it as an API-contract
+violation and throws `LLMError('api')` rather than returning a shape that would contradict the type
+you were given.
 
 </Callout>
 

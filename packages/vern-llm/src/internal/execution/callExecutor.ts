@@ -314,6 +314,16 @@ export class CallExecutor {
           );
         }
 
+        if (params.toolChoice === 'none') {
+          // `toolChoice: 'none'` is what lets `call()`'s type narrow to
+          // `ContentResult<T>` (see `ToolsDisabledCallParams`). A
+          // nonconforming provider/adapter returning tool_calls anyway
+          // would silently break that guarantee for the caller, so this
+          // is treated as a hard API-contract violation rather than
+          // passed through as a normal tool_calls result.
+          throw new LLMError("Provider returned tool_calls despite toolChoice: 'none'.", 'api');
+        }
+
         const toolCalls = parseWireToolCalls(wireToolCalls);
 
         this.validateToolCallArguments(toolCalls, params.tools);
