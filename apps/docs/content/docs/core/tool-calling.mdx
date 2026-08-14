@@ -275,6 +275,36 @@ for how tool turns fit into `history` more generally.
   </Card>
 </Cards>
 
+<Callout type="info">
+  Setting `toolChoice: 'none'` also narrows `call()`'s return type to `ContentResult<T>` alone,
+  instead of the full `CallWithToolsResult<T>` union. Since the model is structurally barred from
+  returning a `tool_calls` result in that case, TypeScript can prove `result.content` is exactly
+  `T`. No `isToolCallResult` narrowing check is needed at that call site:
+
+```ts title="tool-choice-none-narrowing.ts"
+const result = await llm.call({
+  userContent: 'Summarize using the tool result above.',
+  tools: [weatherTool],
+  toolChoice: 'none',
+  history: [
+    { role: 'assistant', toolCalls: first.toolCalls },
+    { role: 'tool', toolResults },
+  ],
+});
+
+// No `isToolCallResult(result)` check required. `result.content` is
+// already typed as the plain response, not `T | string | undefined`.
+console.log(result.content);
+```
+
+`toolChoice: 'none'` is sent on the wire like any other `toolChoice` value, instructing the provider
+not to call a tool. The type-level narrowing to `ContentResult<T>` builds on that: if a provider (or
+a custom adapter) returns `tool_calls` anyway despite `'none'`, `call()` treats it as an API-contract
+violation and throws `LLMError('api')` rather than returning a shape that would contradict the type
+you were given.
+
+</Callout>
+
 <Callout type="warn">
   Bedrock's Converse API has no equivalent to `'none'` while tools are still offered. `fromBedrock`
   throws `LLMError('validation')` rather than silently falling back to `'auto'`, which would let the

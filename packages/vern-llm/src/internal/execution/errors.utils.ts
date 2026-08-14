@@ -25,6 +25,68 @@ export function extractStatus(err: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * POSIX/libuv error codes libuv (and so Node's `fetch`/undici) attaches to
+ * genuine transport-level failures: connection refused, DNS lookup
+ * failure, connection reset mid-request, a connect that never completed,
+ * DNS server unreachable, broken pipe, or host/network unreachable.
+ * Deliberately narrow: only codes that can only mean "the connection
+ * itself failed," not anything that could also indicate an application
+ * error.
+ */
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'EPIPE',
+  'ECONNABORTED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+]);
+
+/** `fetch`'s own wording for a transport-level failure, across runtimes/browsers. */
+const NETWORK_ERROR_MESSAGES = new Set([
+  'fetch failed', // Node/undici
+  'failed to fetch', // Chromium
+  'load failed', // Safari
+  'networkerror when attempting to fetch resource.', // Firefox
+]);
+
+/**
+ * Whether `error` is, with reasonable confidence, a transport-level
+ * failure (never reached the provider, as opposed to the provider itself
+ * responding with an error) rather than some other unexpected exception.
+ * Checked via explicit, well-known signals only, so a genuinely unknown
+ * error never gets misclassified as a connection failure just because it
+ * also lacked an HTTP status.
+ */
+function isNetworkError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+
+  const err = error as { code?: unknown; message?: unknown; cause?: unknown };
+
+  if (typeof err.code === 'string' && NETWORK_ERROR_CODES.has(err.code)) return true;
+
+  if (typeof err.message === 'string' && NETWORK_ERROR_MESSAGES.has(err.message.toLowerCase())) {
+    return true;
+  }
+
+  // undici/Node's `fetch` wraps the real libuv error one level down, as
+  // TypeError('fetch failed', { cause: <the real error, with .code> }).
+  // The message check above already catches that wrapper by itself if
+  // the cause is missing or unrecognized, this catches it by the cause's
+  // code when the wrapper's own message wasn't matched (e.g. a runtime
+  // that phrases the wrapper differently but still sets `cause.code`).
+  if (err.cause && typeof err.cause === 'object') {
+    const cause = err.cause as { code?: unknown };
+    if (typeof cause.code === 'string' && NETWORK_ERROR_CODES.has(cause.code)) return true;
+  }
+
+  return false;
+}
+
 function formatSafely(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2) ?? String(value);
@@ -72,11 +134,16 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
 
   if (error instanceof LLMError) {
     // A caller or adapter can throw an already-built LLMError directly
-    // (bypassing the generic-SDK-error path below), so a 429 reaching us
-    // this way still needs the same `code` a generic 429 gets, without
-    // overwriting a `code` that error already carries.
-    if (error.status === 429 && error.code === undefined) {
-      error.code = 'provider_rate_limited';
+    // (bypassing the generic-SDK-error path below), so a 429/401/403
+    // reaching us this way still needs the same `code` a generic error
+    // with that status gets, without overwriting a `code` that error
+    // already carries.
+    if (error.code === undefined) {
+      if (error.status === 429) {
+        error.code = 'provider_rate_limited';
+      } else if (error.status === 401 || error.status === 403) {
+        error.code = 'invalid_credentials';
+      }
     }
 
     return error;
@@ -93,9 +160,25 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
       undefined,
       error,
       retryAfterMs,
-      status === 429 ? 'provider_rate_limited' : undefined,
+      status === 429
+        ? 'provider_rate_limited'
+        : status === 401 || status === 403
+          ? 'invalid_credentials'
+          : undefined,
     );
   }
 
-  return new LLMError('LLM request failed', 'unknown', undefined, undefined, error, retryAfterMs);
+  // No extractable HTTP status: distinguish a genuine transport-level
+  // failure (DNS, connection refused, connection reset) from any other
+  // unexpected exception via explicit signals only, rather than assuming
+  // every status-less error reaching here is a connection failure.
+  return new LLMError(
+    'LLM request failed',
+    'unknown',
+    undefined,
+    undefined,
+    error,
+    retryAfterMs,
+    isNetworkError(error) ? 'connection_failed' : undefined,
+  );
 }

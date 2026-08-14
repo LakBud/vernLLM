@@ -1,8 +1,22 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 
-import { type AnthropicClient, type CallParams, isToolCallResult } from '../../src/index.js';
+import {
+  type AnthropicClient,
+  type CallParams,
+  type StreamCallResult,
+  type ContentResult,
+  isToolCallResult,
+} from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse, textResponse, toolCallResponse, at } from '../helpers.js';
+import {
+  createMockClient,
+  createMockStreamingClient,
+  jsonResponse,
+  textResponse,
+  toolCallResponse,
+  at,
+  drain,
+} from '../helpers.js';
 
 const weatherTool = {
   name: 'get_weather',
@@ -134,6 +148,81 @@ describe('VernLLM.call, happy paths', () => {
     });
 
     expect(at(calls, 1).tool_choice).toBe('none');
+  });
+
+  it('toolChoice: "none" narrows call()\'s return type to ContentResult<T> alone', async () => {
+    const { client } = createMockClient([textResponse('hi there')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const result = await llm.call<string>({
+      userContent: 'hi',
+      tools: [weatherTool],
+      toolChoice: 'none',
+    });
+
+    // Runtime: an ordinary content result, same shape as any non-tool call.
+    expect(result).toEqual({ type: 'content', content: 'hi there' });
+
+    // Compile-time: the actual point of this overload. `result.content` is
+    // exactly `string` here (this call's own T), not the looser
+    // `string | undefined` it would carry if TypeScript still had to
+    // account for the tool_calls branch of the union (ToolCallResult's
+    // `content?: string`). `toolCalls` isn't a field on this type at all.
+    expectTypeOf(result).toEqualTypeOf<{ type: 'content'; content: string }>();
+    expectTypeOf(result.content).toEqualTypeOf<string>();
+  });
+
+  it('toolChoice: "none" combined with stream: true narrows to StreamCallResult<ContentResult<T>>', async () => {
+    const { client } = createMockStreamingClient([
+      [
+        { type: 'text-delta', delta: 'hi ' },
+        { type: 'text-delta', delta: 'there' },
+      ],
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const result = await llm.call<string>({
+      userContent: 'hi',
+      tools: [weatherTool],
+      toolChoice: 'none',
+      stream: true,
+    });
+
+    const collected = await drain(result.chunks);
+    expect(collected).toEqual([
+      { type: 'text-delta', delta: 'hi ' },
+      { type: 'text-delta', delta: 'there' },
+    ]);
+    await expect(result.finalResult).resolves.toEqual({ type: 'content', content: 'hi there' });
+
+    // Compile-time: the streaming overload for `toolChoice: 'none'` resolves
+    // `finalResult` to `ContentResult<T>` rather than the full
+    // `CallWithToolsResult<T>` union.
+    expectTypeOf(result).toEqualTypeOf<StreamCallResult<ContentResult<string>>>();
+    expectTypeOf(result.finalResult).toEqualTypeOf<Promise<ContentResult<string>>>();
+  });
+
+  it('rejects with LLMError("api", code: "tool_choice_none_violated") if the provider returns tool_calls despite toolChoice: "none", and does not retry', async () => {
+    const { client, create } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'NYC' } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await expect(
+      llm.call<string>({
+        userContent: 'hi',
+        tools: [weatherTool],
+        toolChoice: 'none',
+      }),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'api',
+      code: 'tool_choice_none_violated',
+    });
+
+    // Deterministic model/provider misbehavior repeats identically on
+    // retry, so this must not be retried: the provider is only called once.
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
 

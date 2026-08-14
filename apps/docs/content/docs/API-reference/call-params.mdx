@@ -69,7 +69,8 @@ is base64-encoded without a `data:` URL prefix.
   </Card>
   <Card title="toolChoice">
     `'auto' | 'none' | 'required' | { name: string }`, optional. Defaults to `'auto'` when
-    `tools` is set.
+    `tools` is set. `'none'` narrows the return type further, to `ContentResult<T>` instead of
+    `CallWithToolsResult<T>` — see the callout in [Tool Calling](/docs/core/tool-calling#toolchoice).
   </Card>
 </Cards>
 
@@ -166,7 +167,10 @@ These hooks are application supplied. VernLLM manages their lifecycle but does n
 billing policy.
 
 For `cachedCall`, `reserveUsage` and `refundUsage` belong at the top level rather than inside the
-nested `call` object.
+nested `call` object. `call`'s type doesn't include them there at all, so a normally-typed caller
+gets a compile error rather than discovering the mistake later. A caller that bypasses the type
+system and sets them inside `call` anyway hits `LLMError('validation')` at runtime instead of
+having them silently ignored.
 
 ## Type parameter
 

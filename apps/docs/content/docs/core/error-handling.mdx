@@ -46,7 +46,7 @@ try {
     `nonRetryableStatus` (default `400, 401, 403, 404, 422`).
 
     `api` is also used for tool contract failures. These errors have a specific `code`, such as
-    `unknown_tool` or `duplicate_tool_call_id`, and are not retried.
+    `unknown_tool`, `duplicate_tool_call_id`, or `tool_choice_none_violated`, and are not retried.
 
   </Card>
   <Card title="parse">
@@ -84,10 +84,11 @@ does not describe the failure precisely.
 
 The currently defined tool contract codes are:
 
-| Code                     | Error type | Meaning                                                                       |
-| ------------------------ | ---------- | ----------------------------------------------------------------------------- |
-| `unknown_tool`           | `api`      | The model requested a tool that was not included in the call's `tools` array. |
-| `duplicate_tool_call_id` | `api`      | The model returned more than one tool call with the same call ID.             |
+| Code                        | Error type | Meaning                                                                                                       |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `unknown_tool`              | `api`      | The model requested a tool that was not included in the call's `tools` array.                                 |
+| `duplicate_tool_call_id`    | `api`      | The model returned more than one tool call with the same call ID.                                             |
+| `tool_choice_none_violated` | `api`      | The provider returned `tool_calls` despite `toolChoice: 'none'`. See [Tool Calling](/docs/core/tool-calling). |
 
 The currently defined rate-limiting codes are:
 
@@ -98,6 +99,13 @@ The currently defined rate-limiting codes are:
 
 See [Rate Limiting](/docs/core/rate-limiting) for the full `rateLimit` option and what
 triggers each of these.
+
+The currently defined connectivity codes are:
+
+| Code                  | Error type | Meaning                                                                                                                                                                                                                                                                                     |
+| --------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invalid_credentials` | `api`      | The provider returned HTTP 401 or 403. Set whenever a response, or an already-normalized `LLMError`, carries that status and no more specific `code` is already present, regardless of which adapter or client raised the error.                                                            |
+| `connection_failed`   | `unknown`  | The request never reached the provider: a transport-level failure such as DNS resolution failing, the connection being refused, or the connection resetting mid-request. Detected via known libuv error codes or `fetch`'s own transport-failure wording, not just the absence of a status. |
 
 The currently defined fallback code is:
 
@@ -180,8 +188,8 @@ only](/docs/core/provider-fallback#streaming-open-failures-only) for why.
 - The signal has already aborted
 - `error.type` is `'parse'` or `'validation'` because these are deterministic response processing
   failures rather than transient provider faults
-- `error.code` is `'unknown_tool'` or `'duplicate_tool_call_id'` because these are deterministic
-  tool contract failures
+- `error.code` is `'unknown_tool'`, `'duplicate_tool_call_id'`, or `'tool_choice_none_violated'`
+  because these are deterministic tool contract failures
 - `error.code` is `'local_rate_limit'` because either the wait already happened (retrying would only
   requeue behind the same limit with nothing changed) or the call could never fit the configured
   `tokensPerMinute` capacity in the first place, so no amount of retrying changes that. See [Interaction with retries](/docs/core/rate-limiting#interaction-with-retries).
@@ -194,13 +202,16 @@ Otherwise the wait falls back to exponential backoff with jitter.
 
 ### Tool contract errors are not retried
 
-`unknown_tool` and `duplicate_tool_call_id` are deliberately non retryable. See [Tool Calling](/docs/core/tool-calling) for the canonical contract workflow and handling
-guidance. These errors therefore fail immediately instead of consuming the remaining `maxRetries`.
+`unknown_tool`, `duplicate_tool_call_id`, and `tool_choice_none_violated` are deliberately non
+retryable. See [Tool Calling](/docs/core/tool-calling) for the canonical contract workflow and
+handling guidance. These errors therefore fail immediately instead of consuming the remaining
+`maxRetries`.
 
 <Callout type="warn">
-  Tool contract errors also do not count toward the circuit breaker. They describe a model response
-  problem rather than provider availability or transport health, so `unknown_tool` and
-  `duplicate_tool_call_id` cannot cause a healthy provider's circuit to open.
+  Tool contract errors also do not count toward the circuit breaker. They describe a model or
+  provider response problem rather than provider availability or transport health, so
+  `unknown_tool`, `duplicate_tool_call_id`, and `tool_choice_none_violated` cannot cause a healthy
+  provider's circuit to open.
 </Callout>
 
 <Callout type="warn">

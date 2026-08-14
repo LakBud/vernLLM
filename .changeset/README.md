@@ -16,6 +16,8 @@ Choose:
 - **minor** — new features or backwards-compatible changes
 - **major** — breaking changes
 
+IMPORTANT: Currently some breaking changes will be on minor changes
+
 Write a short summary explaining what changed and why.
 
 ## Release process

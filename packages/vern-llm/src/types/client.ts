@@ -38,8 +38,7 @@ export type WireToolChoice =
   | { type: 'function'; function: { name: string } };
 
 /**
- * Minimal shape compatible with the OpenAI SDKs chat.completions.create,
- * so consumers can pass an OpenAI client directly
+ * Minimal shape similar to the OpenAI SDK's chat.completions.create API,
  * `response_format.json_schema` and `reasoning_effort` are optional on the wire
  * providers that don't support them will just ignore fields they don't recognize,
  * but not every SDKs TS types accept them, hence this being a structural type
