@@ -45,6 +45,48 @@ describe('normalizeError', () => {
     expect(result.code).toBe('local_rate_limit');
   });
 
+  it('tags an already-normalized LLMError carrying status 401 with code "invalid_credentials"', () => {
+    const original = new LLMError('unauthorized', 'api', 401);
+
+    const result = normalizeError(original);
+
+    expect(result).toBe(original);
+    expect(result.code).toBe('invalid_credentials');
+  });
+
+  it('tags an already-normalized LLMError carrying status 403 with code "invalid_credentials"', () => {
+    const original = new LLMError('forbidden', 'api', 403);
+
+    const result = normalizeError(original);
+
+    expect(result).toBe(original);
+    expect(result.code).toBe('invalid_credentials');
+  });
+
+  it('does not overwrite an existing code on an already-normalized 401/403 LLMError', () => {
+    const unauthorized = new LLMError(
+      'unauthorized',
+      'api',
+      401,
+      undefined,
+      undefined,
+      undefined,
+      'local_rate_limit',
+    );
+    const forbidden = new LLMError(
+      'forbidden',
+      'api',
+      403,
+      undefined,
+      undefined,
+      undefined,
+      'local_rate_limit',
+    );
+
+    expect(normalizeError(unauthorized).code).toBe('local_rate_limit');
+    expect(normalizeError(forbidden).code).toBe('local_rate_limit');
+  });
+
   it('does not add a code to an already-normalized LLMError with a non-429 status', () => {
     const original = new LLMError('server error', 'api', 500);
 

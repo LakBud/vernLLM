@@ -134,11 +134,16 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
 
   if (error instanceof LLMError) {
     // A caller or adapter can throw an already-built LLMError directly
-    // (bypassing the generic-SDK-error path below), so a 429 reaching us
-    // this way still needs the same `code` a generic 429 gets, without
-    // overwriting a `code` that error already carries.
-    if (error.status === 429 && error.code === undefined) {
-      error.code = 'provider_rate_limited';
+    // (bypassing the generic-SDK-error path below), so a 429/401/403
+    // reaching us this way still needs the same `code` a generic error
+    // with that status gets, without overwriting a `code` that error
+    // already carries.
+    if (error.code === undefined) {
+      if (error.status === 429) {
+        error.code = 'provider_rate_limited';
+      } else if (error.status === 401 || error.status === 403) {
+        error.code = 'invalid_credentials';
+      }
     }
 
     return error;
