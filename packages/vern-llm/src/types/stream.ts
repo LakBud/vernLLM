@@ -102,9 +102,12 @@ export type WireStreamChunk =
  * and a hit synthesizes a one-shot `chunks` replay from the cached value
  * (see `VernLLM.cachedCall`'s docs for exactly what that replay looks
  * like).
+ *
+ * `reserveUsage`/`refundUsage` are omitted from `call`'s type; see
+ * `CachedCallParams` for why — they belong at the top level here too.
  */
 export type CachedStreamCallParams<T> = CachedCallInput & {
-  call: StreamEnabledCallParams<T>;
+  call: Omit<StreamEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
 };
 
 /**
@@ -115,5 +118,5 @@ export type CachedStreamCallParams<T> = CachedCallInput & {
  * replayed-chunks-on-hit behavior as `CachedStreamCallParams<T>`.
  */
 export type CachedStreamToolCallParams<T> = CachedCallInput & {
-  call: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>;
+  call: Omit<StreamEnabledCallParams<T> & ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
 };

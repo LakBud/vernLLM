@@ -18,6 +18,7 @@ import {
   type CachedToolCallParams,
   type CallParams,
   type CallWithToolsResult,
+  type ContentResult,
   type FallbackAttempt,
   type FallbackOn,
   type FallbackTarget,
@@ -25,6 +26,7 @@ import {
   type TargetCircuitState,
   type StreamEnabledCallParams,
   type ToolEnabledCallParams,
+  type ToolsDisabledCallParams,
   type VernLLMEvent,
   type VernLLMOptions,
 } from './types/index.js';
@@ -282,16 +284,24 @@ export class VernLLM {
    *
    * @param params System/user content plus per-call overrides. See `CallParams`.
    * @returns Without `tools` or `stream`: the parsed response, or raw
-   * string if `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`.
-   * With `stream: true` (statically): a `{ chunks, finalResult }`
+   * string if `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`,
+   * narrowed to `ContentResult<T>` when `toolChoice: 'none'` is set, since
+   * the model is then structurally barred from returning a `tool_calls`
+   * result. With `stream: true` (statically): a `{ chunks, finalResult }`
    * `StreamCallResult`, `finalResult` resolving to whichever of the above
    * shapes applies once the stream completes. See `StreamCallResult`.
    */
+  async call<T = unknown>(
+    params: StreamEnabledCallParams<T> & ToolsDisabledCallParams<T>,
+  ): Promise<StreamCallResult<ContentResult<T>>>;
+
   async call<T = unknown>(
     params: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>,
   ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
 
   async call<T = unknown>(params: StreamEnabledCallParams<T>): Promise<StreamCallResult<T>>;
+
+  async call<T = unknown>(params: ToolsDisabledCallParams<T>): Promise<ContentResult<T>>;
 
   async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
 
@@ -442,11 +452,21 @@ export class VernLLM {
   ): Promise<T | CallWithToolsResult<T> | StreamCallResult<T | CallWithToolsResult<T>>> {
     const { call: callParams, ...cacheParams } = params;
 
-    const { reserveUsage, refundUsage, ...restCallParams } = callParams;
+    // `callParams`'s type no longer includes reserveUsage/refundUsage (see
+    // CachedCallParams et al.): a well-typed caller can't reach this branch
+    // at all, TypeScript rejects it at the call site instead. This check is
+    // a defense-in-depth backstop for callers that bypass the type system
+    // (plain JS, or an `as any` cast), and now throws instead of silently
+    // ignoring the hooks and continuing: reserveUsage/refundUsage exist as
+    // a cost-control safety mechanism, so silently dropping them fails
+    // open, not safe, which a warning callers may never see doesn't fix.
+    const restCallParams = callParams as CallParams<T>;
 
-    if (reserveUsage || refundUsage) {
-      this.logger.warn(
-        '[VernLLM] reserveUsage/refundUsage on `call` are ignored by cachedCall; set them at the top level instead.',
+    if (restCallParams.reserveUsage || restCallParams.refundUsage) {
+      throw new LLMError(
+        '`reserveUsage`/`refundUsage` were set inside `call`, where cachedCall ignores them. Move them ' +
+          'to the top level of the cachedCall() params, alongside cacheKey/ttl, instead.',
+        'validation',
       );
     }
 

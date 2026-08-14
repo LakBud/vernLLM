@@ -191,9 +191,13 @@ always wraps a `call()` invocation. If you need general-purpose caching or coale
 an LLM call, reach for a dedicated caching library (e.g. `async-cache-dedupe`) at the application
 level instead.
 
-Usage hooks are applied at the cache level. Do not also provide `reserveUsage` or `refundUsage`
-inside the nested `call` options; those are ignored (with a warning) to avoid reserving twice for
-the same logical request. When `reserveUsage` and `refundUsage` are provided, they run once per
+Usage hooks are applied at the cache level. `reserveUsage`/`refundUsage` no longer type-check inside
+the nested `call` options at all — `CachedCallParams`'s `call` field omits them, so putting them
+there is a compile error, not just a mistake caught later. If a caller bypasses that (plain JS, or
+an explicit type cast) and sets them inside `call` anyway, `cachedCall` throws `LLMError('validation')`
+before doing anything else, rather than silently ignoring them and continuing: silently dropping a
+cost-control hook fails open, not safe, and a caller may never see a warning-level log. Set them at
+the top level instead. When `reserveUsage` and `refundUsage` are provided, they run once per
 caller on cache misses, including coalesced callers. The `coalesced` value passed to the hooks
 indicates whether the caller joined an existing in-flight operation.
 

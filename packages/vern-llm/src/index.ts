@@ -81,6 +81,7 @@ export {
   type VernLLMOptions,
   type CallParams,
   type ToolEnabledCallParams,
+  type ToolsDisabledCallParams,
   type StreamEnabledCallParams,
   type StreamCallResult,
   type StreamChunk,

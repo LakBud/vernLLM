@@ -7,6 +7,55 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 2.2.0: `cachedCall`'s `call` no longer accepts `reserveUsage`/`refundUsage`
+
+`CachedCallInput` (the top-level shape `cachedCall()` takes, alongside `cacheKey`/`ttl`) already
+extends `UsageHooks`, the same interface `CallParams<T>` extends for plain `call()`. Since both
+positions structurally accepted the same two fields, nothing stopped `reserveUsage`/`refundUsage`
+from being placed inside the nested `call` object instead of at the top level, where `cachedCall`
+actually reads them from. That mistake used to be caught only at runtime, with a warning, and the
+hooks were silently ignored:
+
+```ts
+// Before: typechecked, but silently ignored with a runtime warning
+await llm.cachedCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  call: {
+    systemPrompt,
+    userContent,
+    reserveUsage: (p) => quota.reserve(userId, p), // ignored
+    refundUsage: (p) => quota.refund(userId, p), // ignored
+  },
+});
+```
+
+`call`'s type on `CachedCallParams`, `CachedToolCallParams`, `CachedStreamCallParams`, and
+`CachedStreamToolCallParams` now omits `reserveUsage`/`refundUsage` entirely
+(`Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>`), so this is a compile error instead:
+
+```ts
+// After: reserveUsage/refundUsage move to the top level
+await llm.cachedCall({
+  cacheKey: `cv:${cvId}`,
+  ttl: 3600,
+  reserveUsage: (p) => quota.reserve(userId, p),
+  refundUsage: (p) => quota.refund(userId, p),
+  call: { systemPrompt, userContent },
+});
+```
+
+<Callout type="warn">
+  A caller that bypasses the type system entirely (plain JS with no type checking, or an explicit
+  cast past the narrower `call` type) can still construct the old, invalid shape at runtime. That
+  case now throws `LLMError('validation')` instead of logging a warning and silently continuing:
+  reserving usage twice for the same logical request, or silently skipping reservation altogether,
+  are both worth failing loudly over rather than depending on whether anyone was watching the logs.
+</Callout>
+
+See [Caching](/docs/core/caching#usage-hooks) and [Usage Metering](/docs/core/usage-metering#with-caching)
+for the current reference.
+
 ## 2.1.1: `fromOpenAI`: wrap raw OpenAI clients
 
 Passing `client: new OpenAI(...)` straight into `VernLLM` isn't a hard requirement, `LLMClient` is

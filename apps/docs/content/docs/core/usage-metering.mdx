@@ -59,9 +59,12 @@ await llm.call({
 
 ## With caching
 
-Usage metering also works with `cachedCall`. Provide usage hooks at the cache level; do not also
-set `reserveUsage`/`refundUsage` inside the nested `call` options; those are stripped automatically
-to prevent reserving usage twice for the same logical request.
+Usage metering also works with `cachedCall`. Provide usage hooks at the cache level, not inside the
+nested `call` options. `CachedCallParams`'s `call` field doesn't type-permit `reserveUsage`/
+`refundUsage` at all, so this is a compile error for a normally-typed caller. A caller that bypasses
+the type system and sets them inside `call` anyway hits a runtime `LLMError('validation')` instead
+of having them silently stripped: reserving usage twice for the same logical request, or silently
+skipping reservation, are both worth failing loudly over.
 
 On a cache miss, the usage flow runs around the underlying call. A cache hit skips the LLM call
 entirely, so no new reservation or usage record is created.

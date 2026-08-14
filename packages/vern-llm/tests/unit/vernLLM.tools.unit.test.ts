@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 
 import { type AnthropicClient, type CallParams, isToolCallResult } from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
@@ -134,6 +134,28 @@ describe('VernLLM.call, happy paths', () => {
     });
 
     expect(at(calls, 1).tool_choice).toBe('none');
+  });
+
+  it('toolChoice: "none" narrows call()\'s return type to ContentResult<T> alone', async () => {
+    const { client } = createMockClient([textResponse('hi there')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const result = await llm.call<string>({
+      userContent: 'hi',
+      tools: [weatherTool],
+      toolChoice: 'none',
+    });
+
+    // Runtime: an ordinary content result, same shape as any non-tool call.
+    expect(result).toEqual({ type: 'content', content: 'hi there' });
+
+    // Compile-time: the actual point of this overload. `result.content` is
+    // exactly `string` here (this call's own T), not the looser
+    // `string | undefined` it would carry if TypeScript still had to
+    // account for the tool_calls branch of the union (ToolCallResult's
+    // `content?: string`). `toolCalls` isn't a field on this type at all.
+    expectTypeOf(result).toEqualTypeOf<{ type: 'content'; content: string }>();
+    expectTypeOf(result.content).toEqualTypeOf<string>();
   });
 });
 

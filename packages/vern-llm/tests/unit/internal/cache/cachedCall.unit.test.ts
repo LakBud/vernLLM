@@ -3,6 +3,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { createMockClient } from '../../../helpers.js';
 
+import type { CachedCallParams } from '../../../../src/types/index.js';
+
 describe('VernLLM.cachedCall, reserveUsage/refundUsage dedup', () => {
   it('reserves and refunds exactly once when only the top-level hooks are provided', async () => {
     const reserveUsage = vi.fn();
@@ -24,17 +26,18 @@ describe('VernLLM.cachedCall, reserveUsage/refundUsage dedup', () => {
     expect(refundUsage).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores reserveUsage/refundUsage set on the inner call object, top-level hooks win, no double reservation', async () => {
+  it('throws instead of silently ignoring reserveUsage/refundUsage set on the inner call object', async () => {
     const outerReserve = vi.fn();
     const outerRefund = vi.fn();
     const innerReserve = vi.fn();
     const innerRefund = vi.fn();
     const { client } = createMockClient([new Error('fail')]);
-    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, logger });
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
 
-    await llm
-      .cachedCall({
+    // `call`'s type no longer permits reserveUsage/refundUsage (see
+    // CachedCallParams), so a well-typed caller can't construct this
+    await expect(
+      llm.cachedCall({
         cacheKey: 'k',
         ttl: 60,
         call: {
@@ -45,13 +48,14 @@ describe('VernLLM.cachedCall, reserveUsage/refundUsage dedup', () => {
         },
         reserveUsage: outerReserve,
         refundUsage: outerRefund,
-      })
-      .catch(() => {});
+      } as unknown as CachedCallParams<string>),
+    ).rejects.toThrow(/reserveUsage.*refundUsage.*cachedCall ignores them/i);
 
-    expect(outerReserve).toHaveBeenCalledTimes(1);
-    expect(outerRefund).toHaveBeenCalledTimes(1);
+    // Nothing should run at all: this is a validation failure caught
+    // before any reservation, request, or refund is attempted.
+    expect(outerReserve).not.toHaveBeenCalled();
+    expect(outerRefund).not.toHaveBeenCalled();
     expect(innerReserve).not.toHaveBeenCalled();
     expect(innerRefund).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ignored by cachedCall'));
   });
 });

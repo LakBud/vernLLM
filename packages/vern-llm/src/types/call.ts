@@ -162,6 +162,21 @@ export type ToolEnabledCallParams<T> = CallParams<T> & {
   tools: NonNullable<CallParams<T>['tools']>;
 };
 
+/**
+ * A `CallParams` variant where tools are offered but the model is barred
+ * from calling one. `toolChoice: 'none'` guarantees the response can never
+ * be a `tool_calls` result, so `call()` can narrow straight to
+ * `ContentResult<T>` instead of the full `CallWithToolsResult<T>` union.
+ * A call site that already knows it forced `'none'` no longer needs a
+ * runtime `isToolCallResult` check, or to remember that `String(result)`
+ * on the wrapper object silently produces `"[object Object]"` instead of
+ * throwing. The type itself rules that shape out.
+ */
+export type ToolsDisabledCallParams<T> = CallParams<T> & {
+  tools: NonNullable<CallParams<T>['tools']>;
+  toolChoice: 'none';
+};
+
 /** Shared cache-configuration fields, minus the internal `fn` primitive. */
 export interface CachedCallInput extends UsageHooks {
   cacheKey: string;
@@ -174,9 +189,17 @@ export interface CachedCallInput extends UsageHooks {
  *
  * Combines the cache configuration with the `CallParams` passed to
  * `VernLLM.call()`. The cached value is the normal LLM response type `T`.
+ *
+ * `reserveUsage`/`refundUsage` are omitted from `call`'s type on purpose:
+ * `CachedCallInput` already extends `UsageHooks`, so those two hooks
+ * belong at the top level, alongside `cacheKey`/`ttl`, not nested inside
+ * `call`. Both positions used to typecheck, which meant `cachedCall`
+ * could only catch the mistake at runtime with a warning, after silently
+ * ignoring the caller's usage hooks. Putting them inside `call` is now a
+ * compile error instead.
  */
 export type CachedCallParams<T> = CachedCallInput & {
-  call: CallParams<T>;
+  call: Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>;
 };
 
 /**
@@ -185,7 +208,10 @@ export type CachedCallParams<T> = CachedCallInput & {
  * The cached value includes the full `CallWithToolsResult<T>`, meaning
  * tool requests and normal content responses are cached exactly as returned
  * by the model.
+ *
+ * See `CachedCallParams` for why `reserveUsage`/`refundUsage` are omitted
+ * from `call`'s type here too.
  */
 export type CachedToolCallParams<T> = CachedCallInput & {
-  call: ToolEnabledCallParams<T>;
+  call: Omit<ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
 };
