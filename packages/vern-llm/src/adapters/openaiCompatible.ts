@@ -295,9 +295,6 @@ export const fromVercelAIGateway = fromOpenAICompatible;
 /** Cloudflare Workers AI exposes an OpenAI-compatible endpoint */
 export const fromCloudflareWorkersAI = fromOpenAICompatible;
 
-/** GitHub Models is OpenAI-compatible */
-export const fromGitHubModels = fromOpenAICompatible;
-
 /** Nebius AI Studio is OpenAI-compatible */
 export const fromNebius = fromOpenAICompatible;
 
@@ -336,9 +333,6 @@ export const fromAnyscale = fromOpenAICompatible;
 
 /** Lepton AI's inference API is OpenAI-compatible */
 export const fromLepton = fromOpenAICompatible;
-
-/** kluster.ai's inference API is OpenAI-compatible */
-export const fromKlusterAI = fromOpenAICompatible;
 
 /** Inference.net's API is OpenAI-compatible */
 export const fromInferenceNet = fromOpenAICompatible;
