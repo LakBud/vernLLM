@@ -136,6 +136,50 @@ describe('RateLimiter', () => {
     held.release();
   });
 
+  it('does not lose refilled capacity when the system clock jumps backward mid-window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const limiter = new RateLimiter({ requestsPerMinute: 60, maxQueueMs: 0 });
+
+    // Drain the bucket to empty (60/min capacity, starts full). Each of
+    // these calls refill() at t=0, so `lastRefill` ends at 0.
+    for (let i = 0; i < 60; i++) {
+      const r = await limiter.acquire(1);
+      r.release();
+    }
+
+    // t=300: this acquire call synchronously calls refill() (60/min =>
+    // 1/1000ms, so 300ms => 0.3 tokens refilled, still short of the 1
+    // needed) before queueing. `lastRefill` is now pinned at 300.
+    vi.setSystemTime(300);
+    const first = limiter.acquire(1);
+
+    // Clock jumps backward to before the last refill (NTP correction, VM
+    // migration, etc.). This second acquire enqueues behind the first and
+    // triggers `drain()`, which re-checks the head waiter and so calls
+    // refill() again, this time with a negative elapsed time relative to
+    // the `lastRefill` pinned above.
+    vi.setSystemTime(0);
+    void limiter.acquire(1).catch(() => {});
+
+    // Without the fix, the negative elapsed time gets multiplied into
+    // `available`, erasing the 0.3 tokens already refilled (0.3 + (-300 *
+    // 1/1000) = 0), so reaching 1 full token needs another 1000ms from
+    // here. With the fix, `available` is untouched by the backward jump
+    // (stays 0.3), so only ~700ms more is needed. Advancing to 850ms
+    // distinguishes the two: the fixed bucket has already woken by then,
+    // the buggy one has not.
+    let resolved = false;
+    void first.then(() => {
+      resolved = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(850);
+
+    expect(resolved).toBe(true);
+  });
+
   it('maxQueueSize rejects immediately once the queue is already full', async () => {
     const limiter = new RateLimiter({ maxConcurrent: 1, maxQueueSize: 1, maxQueueMs: 0 });
 
