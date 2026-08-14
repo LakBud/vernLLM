@@ -87,6 +87,48 @@ describe('normalizeError', () => {
     expect(result.type).toBe('unknown');
     expect(result.status).toBeUndefined();
   });
+
+  it('does not tag a status-less error with "connection_failed" unless it carries a recognized network signal', () => {
+    const result = normalizeError(new Error('mystery failure'));
+
+    expect(result.code).toBeUndefined();
+  });
+
+  it('tags a status-less error with code "connection_failed" when it carries a known libuv error code', () => {
+    const err = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), {
+      code: 'ECONNREFUSED',
+    });
+
+    const result = normalizeError(err);
+
+    expect(result.type).toBe('unknown');
+    expect(result.code).toBe('connection_failed');
+  });
+
+  it('tags a status-less error with code "connection_failed" when the message matches fetch\'s own transport-failure wording', () => {
+    const result = normalizeError(new TypeError('fetch failed'));
+
+    expect(result.code).toBe('connection_failed');
+  });
+
+  it('tags a status-less error with code "connection_failed" via a wrapped cause carrying a known libuv error code', () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), {
+      code: 'ENOTFOUND',
+    });
+    const err = new TypeError('fetch failed but phrased differently', { cause });
+
+    const result = normalizeError(err);
+
+    expect(result.code).toBe('connection_failed');
+  });
+
+  it('does not tag an unrelated error code as "connection_failed"', () => {
+    const err = Object.assign(new Error('boom'), { code: 'SOME_APP_ERROR' });
+
+    const result = normalizeError(err);
+
+    expect(result.code).toBeUndefined();
+  });
 });
 
 describe('describeError', () => {

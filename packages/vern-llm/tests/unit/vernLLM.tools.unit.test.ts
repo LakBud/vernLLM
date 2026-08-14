@@ -202,8 +202,8 @@ describe('VernLLM.call, happy paths', () => {
     expectTypeOf(result.finalResult).toEqualTypeOf<Promise<ContentResult<string>>>();
   });
 
-  it('rejects with LLMError("api") if the provider returns tool_calls despite toolChoice: "none"', async () => {
-    const { client } = createMockClient([
+  it('rejects with LLMError("api", code: "tool_choice_none_violated") if the provider returns tool_calls despite toolChoice: "none", and does not retry', async () => {
+    const { client, create } = createMockClient([
       toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'NYC' } }]),
     ]);
     const llm = new VernLLM({ client, model: 'test-model' });
@@ -214,7 +214,15 @@ describe('VernLLM.call, happy paths', () => {
         tools: [weatherTool],
         toolChoice: 'none',
       }),
-    ).rejects.toMatchObject({ name: 'LLMError', type: 'api' });
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'api',
+      code: 'tool_choice_none_violated',
+    });
+
+    // Deterministic model/provider misbehavior repeats identically on
+    // retry, so this must not be retried: the provider is only called once.
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
 

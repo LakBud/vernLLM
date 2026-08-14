@@ -320,8 +320,19 @@ export class CallExecutor {
           // nonconforming provider/adapter returning tool_calls anyway
           // would silently break that guarantee for the caller, so this
           // is treated as a hard API-contract violation rather than
-          // passed through as a normal tool_calls result.
-          throw new LLMError("Provider returned tool_calls despite toolChoice: 'none'.", 'api');
+          // passed through as a normal tool_calls result. The request
+          // itself is byte-for-byte identical on retry, so this repeats
+          // deterministically like the other tool-contract failures
+          // below: not retryable, and not the provider being unhealthy.
+          throw new LLMError(
+            "Provider returned tool_calls despite toolChoice: 'none'.",
+            'api',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            'tool_choice_none_violated',
+          );
         }
 
         const toolCalls = parseWireToolCalls(wireToolCalls);
@@ -774,7 +785,9 @@ export class CallExecutor {
   private isNonRetryableToolContractError(error: unknown): error is LLMError {
     return (
       error instanceof LLMError &&
-      (error.code === 'unknown_tool' || error.code === 'duplicate_tool_call_id')
+      (error.code === 'unknown_tool' ||
+        error.code === 'duplicate_tool_call_id' ||
+        error.code === 'tool_choice_none_violated')
     );
   }
 
@@ -806,11 +819,12 @@ export class CallExecutor {
 
   /**
    * Decides whether a failed attempt should count toward the circuit
-   * breaker's failure threshold. A model hallucinating a tool name or
-   * reusing a call id isn't the provider being unhealthy, it's a model
-   * response defect that will very likely recur regardless of provider
-   * health, so it shouldn't push a healthy provider's circuit toward
-   * opening. Mirrors the same reasoning `shouldRetry` already applies to
+   * breaker's failure threshold. A model hallucinating a tool name,
+   * reusing a call id, or a provider ignoring `toolChoice: 'none'` isn't
+   * the provider being unhealthy, it's a model/provider response defect
+   * that will very likely recur regardless of provider health, so it
+   * shouldn't push a healthy provider's circuit toward opening. Mirrors
+   * the same reasoning `shouldRetry` already applies to
    * `parse`/`validation`/these same tool-contract codes.
    */
   private countsTowardBreaker(error: LLMError): boolean {
