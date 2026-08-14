@@ -103,8 +103,9 @@ export const defaultFallbackOn: FallbackOn = (error) => {
  * or `fallbackOn` chose to stop early. Carries each attempt in order so
  * an outage across providers stays debuggable without reproducing it.
  * Extends `LLMError` so `isLLMError` and any `instanceof LLMError` check
- * still passes, inheriting the last failure's `type` so existing
- * type-based handling keeps working on a fallback-exhausted error too.
+ * still passes, inheriting the last failure's `type`/`status`/`retryAfterMs`
+ * so existing type-based handling, including reading `retryAfterMs` on an
+ * `'api'`-typed error, keeps working on a fallback-exhausted error too.
  */
 export class FallbackExhaustedError extends LLMError {
   constructor(public readonly attempts: FallbackAttempt[]) {
@@ -118,7 +119,7 @@ export class FallbackExhaustedError extends LLMError {
       last?.status,
       undefined,
       last,
-      undefined,
+      last?.retryAfterMs,
       'fallback_exhausted',
     );
   }

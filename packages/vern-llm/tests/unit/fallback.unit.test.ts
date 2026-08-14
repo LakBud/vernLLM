@@ -263,6 +263,42 @@ describe('VernLLM, fallback', () => {
     ]);
   });
 
+  it("every target fails: FallbackExhaustedError inherits the last attempt's retryAfterMs, not just its type/status", async () => {
+    const lastFailure = Object.assign(new Error('rate limited'), {
+      status: 429,
+      headers: { get: (name: string) => (name === 'Retry-After' ? '7' : null) },
+    });
+    const { client: primaryClient } = createMockClient([new Error('primary down')]);
+    const { client: fallbackClient } = createMockClient([lastFailure]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      maxRetries: 0,
+      baseDelayMs: 0,
+      fallback: { client: fallbackClient, model: 'fallback-model', name: 'fallback-1' },
+    });
+
+    let caught: unknown;
+    try {
+      await llm.call({ userContent: 'u' });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(FallbackExhaustedError);
+
+    const exhausted = caught as FallbackExhaustedError;
+    const last = exhausted.attempts.at(-1)!.error;
+
+    // The bug: retryAfterMs used to be hardcoded to undefined even though
+    // type/status/cause were correctly inherited from the last attempt.
+    expect(exhausted.type).toBe(last.type);
+    expect(exhausted.status).toBe(last.status);
+    expect(exhausted.retryAfterMs).toBe(last.retryAfterMs);
+    expect(exhausted.retryAfterMs).toBe(7_000);
+  });
+
   it('no fallback configured throws the plain error, identical to pre-fallback behavior', async () => {
     const { client } = createMockClient([new Error('down')]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 0, baseDelayMs: 0 });

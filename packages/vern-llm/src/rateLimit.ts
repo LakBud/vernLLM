@@ -87,9 +87,18 @@ class TokenBucket {
     if (this.refillPerMs === 0) return;
 
     const now = Date.now();
+    const elapsedMs = now - this.lastRefill;
+
+    // A backward clock adjustment (NTP correction, VM migration, etc.)
+    // makes `elapsedMs` negative, which would otherwise reduce `available`
+    // on the next line, rate-limiting harder than configured for no
+    // real-world reason. Treat a negative elapsed time as no time having
+    // passed instead: `available` just doesn't grow this tick, rather
+    // than shrinking, and `lastRefill` still advances so a subsequent
+    // forward-moving `now` measures from here, not from the skewed past.
     this.available = Math.min(
       this.capacity,
-      this.available + (now - this.lastRefill) * this.refillPerMs,
+      this.available + Math.max(0, elapsedMs) * this.refillPerMs,
     );
     this.lastRefill = now;
   }
@@ -252,10 +261,10 @@ export class RateLimiter {
         return { release: this.makeRelease(estimatedTokens), waitedMs: 0 };
       }
 
-      if (this.maxQueueSize > 0 && this.queue.length >= this.maxQueueSize) {
-        throw this.queueFullError();
-      }
-
+      // No maxQueueSize check needed here: the queue is empty (this
+      // branch's own condition), so enqueueing this one waiter can never
+      // exceed any maxQueueSize > 0. The check below only becomes
+      // reachable once the queue is non-empty.
       return this.enqueue(estimatedTokens, attempt.reason, signal);
     }
 
