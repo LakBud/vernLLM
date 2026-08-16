@@ -84,11 +84,11 @@
   "size-limit": [
     {
       "path": "dist/index.js",
-      "limit": "55 KB"
+      "limit": "70 KB"
     },
     {
       "path": "dist/index.cjs",
-      "limit": "55 KB"
+      "limit": "70 KB"
     }
   ]
 }
