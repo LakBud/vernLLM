@@ -209,4 +209,23 @@ describe('createSafeLogger', () => {
     expect(logger.debug).toHaveBeenCalledWith('d');
     expect(logger.error).toHaveBeenCalledWith('e');
   });
+
+  it('does not produce an unhandled rejection when an async logger method rejects', async () => {
+    const unhandled = vi.fn();
+    process.once('unhandledRejection', unhandled);
+
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(async () => {
+        throw new Error('async boom');
+      }),
+      error: vi.fn(),
+    };
+    const safe = createSafeLogger(logger);
+
+    expect(() => safe.warn('w')).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(unhandled).not.toHaveBeenCalled();
+  });
 });
