@@ -36,7 +36,11 @@ describe('fromFetch().chat.completions.createStream', () => {
           { signal: new AbortController().signal },
         ),
       ),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'unsupported_capability',
+      issues: { capability: 'mapStreamEvent' },
+    });
   });
 
   it('opens the request via requestStream and translates each SSE event via mapStreamEvent (default SSE framing)', async () => {
@@ -352,7 +356,11 @@ describe('fromFetch().chat.completions.createStream', () => {
           { signal: new AbortController().signal },
         ),
       ),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'unsupported_capability',
+      issues: { capability: 'requestStream' },
+    });
 
     // Neither transport was actually invoked, the check fails fast,
     // before opening any connection.

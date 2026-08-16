@@ -136,7 +136,7 @@ describe('fromAnthropic', () => {
     ]);
   });
 
-  it('throws a validation LLMError for an unsupported image mimeType', async () => {
+  it('throws an invalid_params LLMError for an unsupported image mimeType', async () => {
     const { client } = makeFakeAnthropicClient('unused');
     const adapted = fromAnthropic(client);
 
@@ -155,7 +155,7 @@ describe('fromAnthropic', () => {
         },
         { signal: new AbortController().signal },
       ),
-    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
   });
 
   it('forces tool-use for json_schema mode instead of embedding the schema in the prompt', async () => {

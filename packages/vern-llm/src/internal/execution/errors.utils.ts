@@ -1,4 +1,4 @@
-import { LLMError } from '../../types/errors.js';
+import { LLMError, type LLMErrorCode } from '../../types/errors.js';
 import { extractRetryAfterMs } from './retry.utils.js';
 
 /**
@@ -126,6 +126,30 @@ export function describeError(err: unknown): string {
   return formatSafely(err);
 }
 
+/**
+ * Maps an HTTP status to its corresponding `LLMErrorCode`, derived purely
+ * from the status itself so it applies the same way regardless of which
+ * adapter or client raised the error. Used both when building a fresh
+ * `LLMError` and when filling in a `code` on an already-normalized one
+ * that doesn't have one yet, so the two paths can't drift apart.
+ */
+function codeForStatus(status: number): LLMErrorCode | undefined {
+  switch (status) {
+    case 429:
+      return 'provider_rate_limited';
+    case 401:
+      return 'authentication';
+    case 403:
+      return 'authorization';
+    case 404:
+      return 'not_found';
+    case 413:
+      return 'payload_too_large';
+    default:
+      return status >= 500 ? 'server_error' : undefined;
+  }
+}
+
 /** Converts any thrown value into a well-typed LLMError. */
 export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
   if (signal?.aborted) {
@@ -134,16 +158,11 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
 
   if (error instanceof LLMError) {
     // A caller or adapter can throw an already-built LLMError directly
-    // (bypassing the generic-SDK-error path below), so a 429/401/403
-    // reaching us this way still needs the same `code` a generic error
-    // with that status gets, without overwriting a `code` that error
-    // already carries.
-    if (error.code === undefined) {
-      if (error.status === 429) {
-        error.code = 'provider_rate_limited';
-      } else if (error.status === 401 || error.status === 403) {
-        error.code = 'invalid_credentials';
-      }
+    // (bypassing the generic-SDK-error path below), so a status reaching
+    // us this way still needs the same `code` a generic error with that
+    // status gets, without overwriting a `code` that error already carries.
+    if (error.code === undefined && error.status !== undefined) {
+      error.code = codeForStatus(error.status);
     }
 
     return error;
@@ -153,32 +172,25 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
   const retryAfterMs = extractRetryAfterMs(error);
 
   if (status !== undefined) {
-    return new LLMError(
-      'LLM request failed',
-      'api',
+    return new LLMError('LLM request failed', 'api', {
       status,
-      undefined,
-      error,
+      cause: error,
       retryAfterMs,
-      status === 429
-        ? 'provider_rate_limited'
-        : status === 401 || status === 403
-          ? 'invalid_credentials'
-          : undefined,
-    );
+      code: codeForStatus(status),
+    });
   }
 
   // No extractable HTTP status: distinguish a genuine transport-level
   // failure (DNS, connection refused, connection reset) from any other
   // unexpected exception via explicit signals only, rather than assuming
   // every status-less error reaching here is a connection failure.
-  return new LLMError(
-    'LLM request failed',
-    'unknown',
-    undefined,
-    undefined,
-    error,
-    retryAfterMs,
-    isNetworkError(error) ? 'connection_failed' : undefined,
-  );
+  if (isNetworkError(error)) {
+    return new LLMError('LLM request failed', 'network', {
+      cause: error,
+      retryAfterMs,
+      code: 'connection_failed',
+    });
+  }
+
+  return new LLMError('LLM request failed', 'unknown', { cause: error, retryAfterMs });
 }

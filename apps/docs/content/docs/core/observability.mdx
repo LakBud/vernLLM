@@ -154,7 +154,7 @@ immediately available, so a well-provisioned `rateLimit` configuration under nor
 
 `reason` identifies which of the three `rateLimit` buckets was blocking the call just before it
 cleared. See [Rate Limiting](/docs/core/rate-limiting) for the buckets themselves, and [Watching queue pressure before it becomes failures](/docs/guides/tuning-rate-limits#watching-queue-pressure-before-it-becomes-failures) for using this event as a leading indicator ahead of
-`local_rate_limit` failures.
+`rate_limit_queue_full`/`rate_limit_queue_timeout` failures.
 
 ### `fallback`
 

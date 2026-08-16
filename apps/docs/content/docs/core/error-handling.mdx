@@ -17,14 +17,16 @@ try {
   if (isLLMError(err)) {
     switch (err.type) {
       case 'validation':
-        console.log(err.issues); // the schema's error object
+        console.log(err.issues); // the schema's error object, or the tool contract issues
+        break;
+      case 'invalid_params':
+        console.log(err.message); // the call site's own input was malformed
         break;
       case 'api':
         console.log(err.status); // HTTP status, if the provider returned one
         console.log(err.cause); // the original error thrown by the provider client
         console.log(err.retryAfterMs); // Retry-After from the last attempt, if the provider sent one
         console.log(err.code); // more specific machine readable error code, when available
-        console.log(err.toolIssues); // all detected tool contract problems, when available
         break;
       case 'circuit_open':
         // provider is down, back off and do not retry immediately
@@ -39,24 +41,43 @@ try {
 
 <Cards>
   <Card title="timeout">
-    A single attempt exceeded `timeoutMs`. Retried like any other transient failure.
+    A single attempt exceeded `timeoutMs`, or a stream went quiet past `chunkIdleTimeoutMs`. Retried
+    like any other transient failure.
   </Card>
   <Card title="api">
     The provider returned an HTTP error with a status code. Retried unless the status is in
     `nonRetryableStatus` (default `400, 401, 403, 404, 422`).
-
-    `api` is also used for tool contract failures. These errors have a specific `code`, such as
-    `unknown_tool`, `duplicate_tool_call_id`, or `tool_choice_none_violated`, and are not retried.
-
+  </Card>
+  <Card title="network">
+    The request never reached the provider at all: DNS resolution failing, the connection being
+    refused, or the connection resetting mid-request. Retried like any other transient failure.
   </Card>
   <Card title="parse">
-    The response content was not valid JSON. Never retried because a malformed response will not fix
-    itself on retry.
+    A response body, SSE frame, or tool call argument string was not valid JSON. Never retried
+    because a malformed response will not fix itself on retry.
   </Card>
   <Card title="validation">
-    JSON parsed successfully but failed `schema.safeParse`. Never retried for the same reason as
-    `parse`. Carries `.issues` with the validator's error object. Note that usage tracking may have
-    already reported the provider response before this validation failure occurs.
+    The model's or provider's own response failed a local contract check: JSON parsed successfully
+    but failed `schema.safeParse`, or a tool contract problem such as `unknown_tool`,
+    `duplicate_tool_call_id`, `tool_choice_none_violated`, or `unexpected_tool_calls`. Never
+    retried, for the same reason as `parse`. Carries `.issues` with the validator's error object or
+    the detected tool contract problems. Note that usage tracking may have already reported the
+    provider response before this validation failure occurs.
+  </Card>
+  <Card title="invalid_params">
+    The caller's own call site input was malformed, caught before any request was built or sent: an
+    empty or duplicate `tools` array, a `toolChoice` naming a tool that isn't in `tools`, a schema
+    combined with `jsonMode: false`, invalid conversation history, an unsupported image `mimeType`,
+    or a capability the current adapter/client/model doesn't support (see `unsupported_capability`
+    below). Deterministic on the caller's own input and never touches the network, so it is never
+    retried.
+  </Card>
+  <Card title="rate_limited">
+    VernLLM's own local `rateLimit` queue rejected the call before it reached the provider: the
+    queue was full, the wait exceeded `maxQueueMs`, or the call could never fit the configured
+    capacity. See [Rate Limiting](/docs/core/rate-limiting). A provider's own HTTP 429 is `type:
+    'api'` with `code: 'provider_rate_limited'`, not this type. Whether `rate_limited` itself is
+    retried depends on `code`, see below.
   </Card>
   <Card title="quota_exceeded">
     The usage reservation failed before the request was sent. This happens when `reserveUsage`
@@ -67,51 +88,87 @@ try {
     The circuit breaker is open because the provider has failed too many times in a row. Fails
     immediately without hitting the provider.
   </Card>
+  <Card title="fallback_exhausted">
+    Every configured fallback target failed. Only ever set on `FallbackExhaustedError`, see below.
+  </Card>
   <Card title="aborted">
     The caller's `AbortSignal` fired. This represents intentional cancellation by the caller, not a
     timeout. See [Cancellation](/docs/core/cancellation).
   </Card>
-  <Card title="unknown">
-    Anything that does not fit the above categories, including network errors with no status code
-    and unexpected provider responses. Retried by default.
-  </Card>
+  <Card title="unknown">Anything that does not fit the above categories. Retried by default.</Card>
 </Cards>
 
 ## Error codes
 
 `LLMError.code` provides a more specific machine readable error code when `LLMError.type` alone
-does not describe the failure precisely.
+does not describe the failure precisely. `type` and `code` are independent: `code` is not owned by
+a single `type`, so the same code can in principle appear under a different `type` as VernLLM
+learns to detect more.
 
 The currently defined tool contract codes are:
 
-| Code                        | Error type | Meaning                                                                                                       |
-| --------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------- |
-| `unknown_tool`              | `api`      | The model requested a tool that was not included in the call's `tools` array.                                 |
-| `duplicate_tool_call_id`    | `api`      | The model returned more than one tool call with the same call ID.                                             |
-| `tool_choice_none_violated` | `api`      | The provider returned `tool_calls` despite `toolChoice: 'none'`. See [Tool Calling](/docs/core/tool-calling). |
+| Code                        | Error type   | Meaning                                                                                                       |
+| --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `unknown_tool`              | `validation` | The model requested a tool that was not included in the call's `tools` array.                                 |
+| `duplicate_tool_call_id`    | `validation` | The model returned more than one tool call with the same call ID.                                             |
+| `tool_choice_none_violated` | `validation` | The provider returned `tool_calls` despite `toolChoice: 'none'`. See [Tool Calling](/docs/core/tool-calling). |
+| `unexpected_tool_calls`     | `validation` | The provider returned `tool_calls` when no `tools` were sent with the call at all.                            |
+
+The currently defined caller input codes are:
+
+| Code                        | Error type       | Meaning                                                                                                                                                                                                                                                    |
+| --------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unsupported_capability`    | `invalid_params` | The caller asked for something this specific adapter, client, or model can't do: `stream: true` against a client with no streaming method, a model not covered by `toolUseSupportedModels`, or `toolChoice: 'none'` against a provider with no equivalent. |
+| `duplicate_tool_names`      | `invalid_params` | The call's `tools` array had more than one entry sharing a name.                                                                                                                                                                                           |
+| `unknown_tool_choice`       | `invalid_params` | `toolChoice` named a tool that wasn't in the call's own `tools` array.                                                                                                                                                                                     |
+| `duplicate_tool_result_ids` | `invalid_params` | A `history` "tool" turn's `toolResults` had more than one entry for the same `toolCallId`.                                                                                                                                                                 |
+| `unknown_tool_result_ids`   | `invalid_params` | A `history` "tool" turn's `toolResults` referenced a `toolCallId` the preceding assistant turn never requested.                                                                                                                                            |
+| `missing_tool_results`      | `invalid_params` | A `history` "tool" turn was missing a result for a `toolCallId` the preceding assistant turn did request.                                                                                                                                                  |
+
+Everything else under `invalid_params` stays uncoded: the thrown `message` already names the exact
+problem, and a code only earns its place when a caller would realistically branch on it. These six
+are exactly the ones whose `message` already embeds structured data a caller might want directly
+instead of re-parsing it out of prose: a joined list of names/ids for the five history- and
+tools-shape checks, or the specific missing capability for `unsupported_capability`; see
+[`issues`](#issues) below for the typed payload each one carries.
 
 The currently defined rate-limiting codes are:
 
-| Code                    | Error type       | Meaning                                                                                                                                                                                                                                            |
-| ----------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `local_rate_limit`      | `quota_exceeded` | A `rateLimit` call was rejected locally, without reaching the provider: the queue wait exceeded `maxQueueMs`, the queue was already at `maxQueueSize`, or the call's estimated tokens exceeded the configured `tokensPerMinute` capacity outright. |
-| `provider_rate_limited` | `api`            | The provider itself returned an HTTP 429.                                                                                                                                                                                                          |
+| Code                           | Error type     | Meaning                                                                                                                                       |
+| ------------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rate_limit_queue_full`        | `rate_limited` | A `rateLimit` call was rejected locally because the queue was already at `maxQueueSize`.                                                      |
+| `rate_limit_queue_timeout`     | `rate_limited` | A `rateLimit` call's queue wait exceeded `maxQueueMs`.                                                                                        |
+| `rate_limit_capacity_exceeded` | `rate_limited` | The call's estimated tokens exceed the configured `tokensPerMinute` capacity outright; can never succeed no matter how long the caller waits. |
+| `provider_rate_limited`        | `api`          | The provider itself returned an HTTP 429.                                                                                                     |
 
 See [Rate Limiting](/docs/core/rate-limiting) for the full `rateLimit` option and what
 triggers each of these.
 
-The currently defined connectivity codes are:
+The currently defined HTTP status codes are:
 
-| Code                  | Error type | Meaning                                                                                                                                                                                                                                                                                     |
-| --------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `invalid_credentials` | `api`      | The provider returned HTTP 401 or 403. Set whenever a response, or an already-normalized `LLMError`, carries that status and no more specific `code` is already present, regardless of which adapter or client raised the error.                                                            |
-| `connection_failed`   | `unknown`  | The request never reached the provider: a transport-level failure such as DNS resolution failing, the connection being refused, or the connection resetting mid-request. Detected via known libuv error codes or `fetch`'s own transport-failure wording, not just the absence of a status. |
+| Code                | Error type | Meaning                                                                                           |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------------- |
+| `authentication`    | `api`      | The provider returned HTTP 401: the request itself was not authenticated.                         |
+| `authorization`     | `api`      | The provider returned HTTP 403: the request was authenticated but not permitted.                  |
+| `not_found`         | `api`      | The provider returned HTTP 404, most commonly meaning the requested model doesn't exist as named. |
+| `payload_too_large` | `api`      | The provider returned HTTP 413: the request body exceeded the provider's size limit.              |
+| `server_error`      | `api`      | The provider returned a 5xx: an internal failure on the provider's side.                          |
+| `empty_response`    | `api`      | The provider returned a response with no content and no tool calls at all.                        |
+
+These are derived purely from the HTTP status code, so they apply the same way regardless of which
+adapter or client raised the error.
+
+The currently defined connectivity code is:
+
+| Code                | Error type | Meaning                                                                                                                                                                                                                                                                                     |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connection_failed` | `network`  | The request never reached the provider: a transport-level failure such as DNS resolution failing, the connection being refused, or the connection resetting mid-request. Detected via known libuv error codes or `fetch`'s own transport-failure wording, not just the absence of a status. |
 
 The currently defined fallback code is:
 
-| Code                 | Error type                          | Meaning                                                                                                              |
-| -------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `fallback_exhausted` | the last failed target's own `type` | The primary target and every attempted fallback target failed. Only ever set on `FallbackExhaustedError`, see below. |
+| Code                 | Error type           | Meaning                                                                                                              |
+| -------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `fallback_exhausted` | `fallback_exhausted` | The primary target and every attempted fallback target failed. Only ever set on `FallbackExhaustedError`, see below. |
 
 See [Provider Fallback](/docs/core/provider-fallback) for the full `fallback` option
 and what makes `fallbackOn` move to the next target versus stop.
@@ -131,10 +188,61 @@ try {
 
 `code` is optional. Errors without a more specific machine readable code leave `code` undefined.
 
-## Tool contract issues
+## `issues`
+
+Three fields split one failure three ways: `message` is prose for a human, `code` is a stable
+string a program can `===` against, and `issues` is the structured data behind that specific
+failure, for a program to act on without re-parsing it out of `message`. Two calls can throw the
+same `code` with completely different specifics (which tool names collided, which history index
+was bad); `issues` is where those per-instance specifics live.
+
+`LLMErrorIssuesByCode` maps each code that carries structured `issues` to that payload's exact
+shape:
+
+```ts title="issues-by-code.ts"
+interface LLMErrorIssuesByCode {
+  unknown_tool: ToolIssue[];
+  duplicate_tool_call_id: ToolIssue[];
+  duplicate_tool_names: { names: string[] };
+  unknown_tool_choice: { requested: string; available: string[] };
+  duplicate_tool_result_ids: { historyIndex: number; ids: string[] };
+  unknown_tool_result_ids: { historyIndex: number; ids: string[] };
+  missing_tool_results: { historyIndex: number; ids: string[] };
+  unsupported_capability: { capability: string };
+}
+```
+
+Not every code appears there. Most `invalid_params` failures are a single deterministic fact the
+`message` already states in full (an empty `tools` array, `toolChoice` set without `tools`, a
+`schema` combined with `jsonMode: false`), so a typed `issues` entry for them would only duplicate
+the message into a field, the same near-duplicate-code problem `code` itself avoids by staying
+uncoded there. The codes that do appear are exactly the ones whose `message` already string-joins
+a list.
+
+`code` stays the only discriminator; `hasIssues` just gives that existing check a typed return
+instead of a manual cast:
+
+```ts title="has-issues-example.ts"
+import { isLLMError, hasIssues } from 'vern-llm';
+
+try {
+  await llm.call({ userContent: 'hi', tools: [weatherTool, weatherTool] });
+} catch (err) {
+  if (isLLMError(err) && hasIssues(err, 'duplicate_tool_names')) {
+    console.log(err.issues.names); // string[], fully typed, no cast
+  }
+}
+```
+
+Schema-validation failures (`type: 'validation'`, no `code`) are the one deliberate exception:
+`issues` there is the caller's own Zod-compatible validator's error object, a shape VernLLM can't
+know in advance since it accepts any compatible validator. That case stays `unknown` on
+`LLMError.issues` rather than being forced into `LLMErrorIssuesByCode`.
+
+### Tool contract issues
 
 A single model response can contain multiple tool contract problems. When this happens,
-`LLMError.toolIssues` contains the complete set of detected issues, while the top level `code`
+`LLMError.issues` contains the complete set of detected issues, while the top level `code`
 identifies the primary contract error.
 
 Each issue identifies the affected tool, tool call ID, and machine readable error code:
@@ -168,6 +276,13 @@ interface FallbackAttempt {
 }
 ```
 
+`FallbackExhaustedError.type` is always `'fallback_exhausted'`, its own identity, rather than
+inheriting the last attempted target's own `type`: every target failing is a meaningfully
+different event from any single target's own failure. `status` and `retryAfterMs` still inherit
+from the last attempt, and `retryable` on this class defers to the last attempt's own `retryable`
+rather than anything about the `fallback_exhausted` type itself, since the type alone carries no
+retry signal.
+
 A lone target with no `fallback` configured, or a chain where `fallbackOn` returns `'stop'` on the
 very first failure, throws the plain, unwrapped `LLMError` instead, exactly as it did before
 `fallback` existed. `FallbackExhaustedError` only appears once more than one target was actually
@@ -181,18 +296,42 @@ partway through never falls over: `finalResult` rejects with the normalized `LLM
 whichever target was streaming, and fallback is not attempted. See [Streaming: open failures
 only](/docs/core/provider-fallback#streaming-open-failures-only) for why.
 
+## `retryable`
+
+`LLMError.retryable` is computed purely from `type`/`code`, independent of any specific call's
+`nonRetryableStatus` list or whether its signal has since aborted:
+
+```ts title="retryable-example.ts"
+if (isLLMError(err) && !err.retryable) {
+  // safe to give up immediately, without inspecting type/code yourself
+}
+```
+
+It is `false` when:
+
+- `type` is `'parse'`, `'validation'`, `'invalid_params'`, or `'aborted'`
+- `code` is one of the tool contract codes (`unknown_tool`, `duplicate_tool_call_id`,
+  `tool_choice_none_violated`, `unexpected_tool_calls`)
+- `code` is one of the local rate limit codes (`rate_limit_queue_full`,
+  `rate_limit_queue_timeout`, `rate_limit_capacity_exceeded`)
+
+`FallbackExhaustedError` overrides this to defer to the last attempted target's own `retryable`,
+since `type: 'fallback_exhausted'` by itself says nothing about whether retrying could help.
+
 ## What gets retried
 
 `shouldRetry` skips a retry when any of these are true:
 
-- The signal has already aborted
-- `error.type` is `'parse'` or `'validation'` because these are deterministic response processing
-  failures rather than transient provider faults
-- `error.code` is `'unknown_tool'`, `'duplicate_tool_call_id'`, or `'tool_choice_none_violated'`
-  because these are deterministic tool contract failures
-- `error.code` is `'local_rate_limit'` because either the wait already happened (retrying would only
-  requeue behind the same limit with nothing changed) or the call could never fit the configured
-  `tokensPerMinute` capacity in the first place, so no amount of retrying changes that. See [Interaction with retries](/docs/core/rate-limiting#interaction-with-retries).
+- The signal has already aborted, or `error.type` is `'aborted'`
+- `error.type` is `'parse'`, `'validation'`, or `'invalid_params'` because these are deterministic
+  input or response processing failures rather than transient provider faults
+- `error.code` is `'unknown_tool'`, `'duplicate_tool_call_id'`, `'tool_choice_none_violated'`, or
+  `'unexpected_tool_calls'` because these are deterministic tool contract failures
+- `error.code` is `'rate_limit_queue_full'` or `'rate_limit_queue_timeout'` because the wait
+  already happened and retrying would only requeue behind the same limit with nothing changed, or
+  `'rate_limit_capacity_exceeded'` because the call could never fit the configured
+  `tokensPerMinute` capacity in the first place, so no amount of retrying changes that. See
+  [Interaction with retries](/docs/core/rate-limiting#interaction-with-retries).
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to
@@ -202,28 +341,40 @@ Otherwise the wait falls back to exponential backoff with jitter.
 
 ### Tool contract errors are not retried
 
-`unknown_tool`, `duplicate_tool_call_id`, and `tool_choice_none_violated` are deliberately non
-retryable. See [Tool Calling](/docs/core/tool-calling) for the canonical contract workflow and
-handling guidance. These errors therefore fail immediately instead of consuming the remaining
-`maxRetries`.
+`unknown_tool`, `duplicate_tool_call_id`, `tool_choice_none_violated`, and `unexpected_tool_calls`
+are deliberately non retryable. See [Tool Calling](/docs/core/tool-calling) for the canonical
+contract workflow and handling guidance. These errors therefore fail immediately instead of
+consuming the remaining `maxRetries`.
 
 <Callout type="warn">
   Tool contract errors also do not count toward the circuit breaker. They describe a model or
   provider response problem rather than provider availability or transport health, so
-  `unknown_tool`, `duplicate_tool_call_id`, and `tool_choice_none_violated` cannot cause a healthy
-  provider's circuit to open.
+  `unknown_tool`, `duplicate_tool_call_id`, `tool_choice_none_violated`, and `unexpected_tool_calls`
+  cannot cause a healthy provider's circuit to open. The same is true of `invalid_params` errors:
+  they never reach the provider at all, so they say nothing about the provider's health either.
 </Callout>
 
 <Callout type="warn">
   Exhausting all retries also records a circuit breaker failure if one is configured and throws the
-  final normalized `LLMError`. Tool contract errors are excluded from both retry handling and
-  circuit breaker failure accounting.
+  final normalized `LLMError`. Tool contract errors and `invalid_params` errors are excluded from
+  both retry handling and circuit breaker failure accounting.
 </Callout>
 
 For raw API or unknown thrown errors, the underlying error is preserved on `err.cause`, so it is
 still available even though the top level `message` is a generic `'LLM request failed'`. Existing
 `LLMError` instances are not wrapped again, so some error types such as timeout, parse, and
 validation may not have a `cause`.
+
+## `kind` on events versus `type` on errors
+
+VernLLM's event stream uses a `kind` discriminant, not `type`, and `kind: 'rate_limited'` shares a
+string with `LLMErrorType: 'rate_limited'` without meaning the same thing. A `rate_limited` event
+fires whenever a call sat in the local rate limiter's queue before clearing, success included:
+that's the entire point of the event, reporting that rate limiting affected timing even when
+nothing failed. A `rate_limited` error only exists when a call did not clear: the queue timed out,
+the queue was full, or the request could never fit at all. Reading `kind: 'rate_limited'` as a
+failure count would be a real, plausible misreading, since most events with that `kind` correspond
+to calls that went on to succeed.
 
 ## Debugging a failed call
 

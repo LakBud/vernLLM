@@ -137,6 +137,7 @@ export class CircuitBreaker {
         throw new LLMError(
           `Circuit open, provider has failed ${bucket.consecutiveFailures} times in a row. Retry in ${Math.ceil((this.cooldownMs - elapsed) / 1000)}s.`,
           'circuit_open',
+          { code: 'circuit_cooling_down' },
         );
       }
 
@@ -153,6 +154,7 @@ export class CircuitBreaker {
       throw new LLMError(
         'Circuit half-open. A trial request is already in flight. Try again shortly.',
         'circuit_open',
+        { code: 'circuit_trial_in_flight' },
       );
     }
 

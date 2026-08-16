@@ -149,7 +149,7 @@ describe('fromGemini().chat.completions.createStream', () => {
           { signal: new AbortController().signal },
         ),
       ),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
   it("propagates .return() on the outer generator down to the underlying SDK stream's own .return()", async () => {

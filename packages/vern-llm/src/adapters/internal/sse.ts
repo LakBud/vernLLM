@@ -43,7 +43,7 @@ export async function* parseSseStream(
     try {
       text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
     } catch (cause) {
-      throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', undefined, undefined, cause);
+      throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', { cause });
     }
 
     // Normalized against the whole buffer, not just the newly-arrived
@@ -77,7 +77,7 @@ export async function* parseSseStream(
   try {
     buffer += decoder.decode();
   } catch (cause) {
-    throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', undefined, undefined, cause);
+    throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', { cause });
   }
 
   // The stream has ended, so a trailing `\r` still held back above (it
@@ -150,12 +150,9 @@ function parseSseFrame(frame: string): unknown {
   try {
     return JSON.parse(data);
   } catch (cause) {
-    throw new LLMError(
-      `Invalid JSON in SSE frame: ${data.slice(0, 200)}`,
-      'parse',
-      undefined,
-      undefined,
+    throw new LLMError(`Invalid JSON in SSE frame: ${data.slice(0, 200)}`, 'parse', {
       cause,
-    );
+      code: 'stream_frame_invalid',
+    });
   }
 }

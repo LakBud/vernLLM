@@ -41,7 +41,9 @@ export function parseWireToolCalls(wireToolCalls: WireToolCall[]): ToolCall[] {
     try {
       parsedArgs = wc.function.arguments.trim() ? JSON.parse(wc.function.arguments) : {};
     } catch {
-      throw new LLMError(`Invalid JSON arguments for tool call "${wc.function.name}"`, 'parse');
+      throw new LLMError(`Invalid JSON arguments for tool call "${wc.function.name}"`, 'parse', {
+        code: 'tool_arguments_parse_failed',
+      });
     }
 
     return { id: wc.id, name: wc.function.name, arguments: parsedArgs };

@@ -7,6 +7,9 @@ import {
   TieredCacheAdapter,
   parseSseStream,
   SSE_PING,
+  isLLMError,
+  hasIssues,
+  LLMError,
   type AnthropicClient,
   type BedrockConverseClient,
   type GeminiClient,
@@ -30,6 +33,28 @@ describe('package entrypoint exports', () => {
     expect(typeof parseSseStream).toBe('function');
     expect(SSE_PING).toBeDefined();
     expect(typeof SSE_PING).toBe('symbol');
+  });
+
+  it('exports isLLMError and hasIssues as runtime functions from the package root', () => {
+    expect(typeof isLLMError).toBe('function');
+    expect(typeof hasIssues).toBe('function');
+
+    expect(isLLMError(new LLMError('boom', 'unknown'))).toBe(true);
+    expect(isLLMError(new Error('plain error'))).toBe(false);
+    expect(isLLMError('not an error')).toBe(false);
+    expect(isLLMError(undefined)).toBe(false);
+
+    const withIssues = new LLMError('dup', 'invalid_params', {
+      code: 'duplicate_tool_names',
+      issues: { names: ['a'] },
+    });
+    const withoutIssues = new LLMError('unrelated', 'invalid_params', {
+      code: 'unsupported_capability',
+    });
+
+    expect(hasIssues(withIssues, 'duplicate_tool_names')).toBe(true);
+    expect(hasIssues(withIssues, 'unsupported_capability')).toBe(false);
+    expect(hasIssues(withoutIssues, 'duplicate_tool_names')).toBe(false);
   });
 
   it('exports public client and schema types', () => {

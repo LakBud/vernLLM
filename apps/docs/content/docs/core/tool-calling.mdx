@@ -142,8 +142,8 @@ const weatherTool = {
 
 <Callout type="warn">
   If validation fails, `call()` throws `LLMError('validation')` before returning a result. If the
-  model requests a tool name that was not in the `tools` array, `call()` throws `LLMError('api')`
-  with `code: 'unknown_tool'`.
+  model requests a tool name that was not in the `tools` array, `call()` throws
+  `LLMError('validation')` with `code: 'unknown_tool'`.
 </Callout>
 
 ## Tool contract errors
@@ -163,7 +163,7 @@ A `duplicate_tool_call_id` error is raised when multiple tool calls in the same 
 same call ID. Tool call IDs must be unique so that the application can associate each tool result
 with the corresponding model request.
 
-Both errors are surfaced as `LLMError('api')` with the corresponding `code`:
+Both errors are surfaced as `LLMError('validation')` with the corresponding `code`:
 
 ```ts title="tool-contract-errors.ts"
 try {
@@ -185,18 +185,25 @@ try {
 ```
 
 A single model response can contain multiple tool contract problems. VernLLM reports the detected
-problems together through `LLMError.toolIssues` so applications can inspect the complete set
-instead of handling only the first problem encountered.
+problems together through `LLMError.issues` so applications can inspect the complete set
+instead of handling only the first problem encountered. `hasIssues` narrows `issues` to `ToolIssue[]`
+for either tool-contract code, no manual cast needed. See [`issues`](/docs/core/error-handling#issues)
+for the full set of codes that carry typed `issues`.
 
 ```ts title="tool-contract-issues.ts"
+import { isLLMError, hasIssues } from 'vern-llm';
+
 try {
   await llm.call({
     userContent: 'Use the available tools.',
     tools: [weatherTool],
   });
 } catch (error) {
-  if (isLLMError(error) && error.toolIssues) {
-    for (const issue of error.toolIssues) {
+  if (
+    isLLMError(error) &&
+    (hasIssues(error, 'unknown_tool') || hasIssues(error, 'duplicate_tool_call_id'))
+  ) {
+    for (const issue of error.issues) {
       console.log(issue);
     }
   }
@@ -270,8 +277,8 @@ for how tool turns fit into `history` more generally.
   </Card>
   <Card title="'none'">The model must not call a tool, even though `tools` were offered.</Card>
   <Card title="{ name: string }">
-    Forces the model to call the named tool. Throws `LLMError('validation')` if the name is not
-    present in `tools`.
+    Forces the model to call the named tool. Throws `LLMError('invalid_params')` with `code:
+    'unknown_tool_choice'` if the name is not present in `tools`.
   </Card>
 </Cards>
 
@@ -300,16 +307,16 @@ console.log(result.content);
 `toolChoice: 'none'` is sent on the wire like any other `toolChoice` value, instructing the provider
 not to call a tool. The type-level narrowing to `ContentResult<T>` builds on that: if a provider (or
 a custom adapter) returns `tool_calls` anyway despite `'none'`, `call()` treats it as an API-contract
-violation and throws `LLMError('api')` rather than returning a shape that would contradict the type
+violation and throws `LLMError('validation')` with `code: 'tool_choice_none_violated'` rather than returning a shape that would contradict the type
 you were given.
 
 </Callout>
 
 <Callout type="warn">
   Bedrock's Converse API has no equivalent to `'none'` while tools are still offered. `fromBedrock`
-  throws `LLMError('validation')` rather than silently falling back to `'auto'`, which would let the
-  model call tools despite the caller explicitly asking it not to. Omit `tools` entirely for that
-  call instead.
+  throws `LLMError('invalid_params')` with `code: 'unsupported_capability'` rather than silently
+  falling back to `'auto'`, which would let the model call tools despite the caller explicitly
+  asking it not to. Omit `tools` entirely for that call instead.
 </Callout>
 
 ## Combining with jsonSchema

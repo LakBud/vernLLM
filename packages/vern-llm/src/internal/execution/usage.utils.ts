@@ -26,9 +26,7 @@ async function reserve(
     throw new LLMError(
       error instanceof Error ? error.message : 'Usage reservation failed',
       'quota_exceeded',
-      undefined,
-      undefined,
-      error,
+      { cause: error },
     );
   }
 }

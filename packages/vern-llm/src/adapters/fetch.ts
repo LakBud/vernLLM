@@ -319,7 +319,8 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
           if (!config.mapStreamEvent) {
             throw new LLMError(
               'stream: true requires mapStreamEvent to be configured on fromFetch',
-              'validation',
+              'invalid_params',
+              { code: 'unsupported_capability', issues: { capability: 'mapStreamEvent' } },
             );
           }
 
@@ -342,7 +343,8 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
                 'would silently use plain native `fetch` instead of your configured transport. ' +
                 'Add a `requestStream` that opens the same connection your `request` does, or ' +
                 'omit `request` if native `fetch` is fine for both.',
-              'validation',
+              'invalid_params',
+              { code: 'unsupported_capability', issues: { capability: 'requestStream' } },
             );
           }
 

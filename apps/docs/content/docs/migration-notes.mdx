@@ -7,6 +7,135 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 2.3.0: `LLMError` taxonomy rework
+
+`type` stays a small, closed set a caller can exhaustively `switch` over, while `code` carries the
+specific reason underneath it. Several already-shipped `type`/`code` values move as part of this,
+and the constructor shape changes. Skip to what applies to you: [tool contract errors move to
+`validation`](#230-tool-contract-errors-move-to-validation), [local rate limits get three specific
+codes](#230-local-rate-limiting-codes), [`invalid_credentials` splits into two
+codes](#230-authenticationauthorization-replace-invalid_credentials), [`FallbackExhaustedError.type`
+is now fixed](#230-fallbackexhaustederrortype-is-always-fallback_exhausted), [the constructor takes
+an options object](#230-llmerrors-constructor-is-now-an-options-object), or [`toolIssues` is
+removed](#230-toolissues-is-removed-use-issues). Reading an already-normalized `LLMError` (the
+`switch (err.type)` / `isLLMError` pattern) is unaffected by any of this; only specific values and
+construction change.
+
+### 2.3.0: Tool contract errors move to `validation`
+
+`unknown_tool`, `duplicate_tool_call_id`, `tool_choice_none_violated`, and the previously uncoded
+"provider returned `tool_calls` with no `tools` sent" case (now `code: 'unexpected_tool_calls'`)
+move from `type: 'api'` to `type: 'validation'`. They're a provider contract violation, not an
+HTTP failure:
+
+```ts
+// Before
+if (err.type === 'api' && err.code === 'unknown_tool') { ... }
+
+// After
+if (err.type === 'validation' && err.code === 'unknown_tool') { ... }
+```
+
+<Callout type="warn">
+  A `switch (err.type)` with an exhaustiveness check no longer needs an `'api'` case to cover tool
+  contract codes, but does need to route them through `'validation'` instead if it branches on
+  `code` inside that case.
+</Callout>
+
+### 2.3.0: Local rate-limiting codes
+
+Local rate-limit rejections move from `type: 'quota_exceeded'`, `code: 'local_rate_limit'` to
+`type: 'rate_limited'`, split into three specific codes:
+
+```ts
+// Before
+if (err.type === 'quota_exceeded' && err.code === 'local_rate_limit') { ... }
+
+// After
+if (
+  err.type === 'rate_limited' &&
+  (err.code === 'rate_limit_queue_full' ||
+    err.code === 'rate_limit_queue_timeout' ||
+    err.code === 'rate_limit_capacity_exceeded')
+) { ... }
+```
+
+`type: 'quota_exceeded'` now means only what it originally described: a `reserveUsage` hook
+rejecting the call before a request was sent. See [Rate Limiting](/docs/core/rate-limiting) for
+what triggers each of the three new codes.
+
+### 2.3.0: `authentication`/`authorization` replace `invalid_credentials`
+
+```ts
+// Before
+if (err.code === 'invalid_credentials') { ... }
+
+// After
+if (err.code === 'authentication' || err.code === 'authorization') { ... }
+```
+
+`authentication` is HTTP 401, `authorization` is HTTP 403, so a caller can now tell a missing key
+apart from a key that lacks access. New codes `not_found` (404), `payload_too_large` (413),
+`server_error` (5xx), and `empty_response` round out the HTTP-status-derived set; a new
+`type: 'network'` with `code: 'connection_failed'` separates transport-level failures (DNS,
+connection refused, connection reset) from the catch-all `type: 'unknown'`.
+
+### 2.3.0: `FallbackExhaustedError.type` is always `'fallback_exhausted'`
+
+```ts
+// Before: type inherited from whichever target failed last
+err.type; // e.g. 'api', 'timeout' — varied per failure
+
+// After: always its own identity
+err.type; // 'fallback_exhausted'
+```
+
+`status` and `retryAfterMs` still inherit from the last attempt. Read the last attempt's own
+`type` via `err.attempts.at(-1)!.error.type` if you need it. See
+[FallbackExhaustedError](/docs/core/error-handling#fallbackexhaustederror) for the full shape.
+
+### 2.3.0: `LLMError`'s constructor is now an options object
+
+```ts
+// Before
+new LLMError(
+  'Rate limit queue timed out',
+  'rate_limited',
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  'rate_limit_queue_timeout',
+);
+
+// After
+new LLMError('Rate limit queue timed out', 'rate_limited', { code: 'rate_limit_queue_timeout' });
+```
+
+<Callout type="warn">
+  This only affects constructing an `LLMError` directly, not catching one. Two real audiences:
+  someone writing a custom `LLMClient` adapter who throws `LLMError` themselves the way VernLLM's
+  own adapters do internally, and a subclass calling `super()` positionally
+  (`FallbackExhaustedError` itself needed updating for this same change). Every field (`status`,
+  `code`, `issues`, `cause`, `retryAfterMs`, `type`) keeps the same name and meaning, only how they
+  get set changes.
+</Callout>
+
+### 2.3.0: `toolIssues` is removed, use `issues`
+
+```ts
+// Before
+console.log(err.toolIssues);
+
+// After
+console.log(err.issues);
+```
+
+`issues` is now the only place tool contract problems (a `ToolIssue[]`) or a schema validator's
+error object are carried. `issues` also gained real types for several other `invalid_params`
+codes previously uncoded; see [`issues`](/docs/core/error-handling#issues) for the full
+`LLMErrorIssuesByCode` table and the new `hasIssues` type guard.
+
 ## 2.3.0: `getCircuitState`'s `model` argument moved into a `target` object
 
 `getCircuitState` used to take a bare `model` string directly:

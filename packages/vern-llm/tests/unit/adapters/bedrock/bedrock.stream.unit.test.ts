@@ -221,7 +221,7 @@ describe('fromBedrock().chat.completions.createStream', () => {
           { signal: new AbortController().signal },
         ),
       ),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
   describe('mid-stream AWS exception events', () => {

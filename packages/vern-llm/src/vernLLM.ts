@@ -256,7 +256,7 @@ export class VernLLM {
     // Unreachable: the loop above always either returns or throws before
     // running out of targets (the last iteration's `isLast` forces a
     // throw). Kept only to satisfy the return type.
-    throw new LLMError('No provider targets configured', 'unknown');
+    throw new LLMError('No provider targets configured', 'invalid_params');
   }
 
   /**
@@ -468,7 +468,7 @@ export class VernLLM {
       throw new LLMError(
         '`reserveUsage`/`refundUsage` were set inside `call`, where cachedCall ignores them. Move them ' +
           'to the top level of the cachedCall() params, alongside cacheKey/ttl, instead.',
-        'validation',
+        'invalid_params',
       );
     }
 

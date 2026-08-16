@@ -170,14 +170,16 @@ describe('VernLLM.call, stream: true', () => {
     await expect(finalResult).rejects.toMatchObject({ message: 'LLM request failed' });
   });
 
-  it('throws LLMError(validation) immediately when the client has no createStream', async () => {
+  it('throws LLMError(invalid_params) immediately when the client has no createStream', async () => {
     const llm = new VernLLM({
       client: { chat: { completions: { create: vi.fn() } } },
       model: 'test-model',
     });
 
     await expect(llm.call({ userContent: 'hi', stream: true })).rejects.toMatchObject({
-      type: 'validation',
+      type: 'invalid_params',
+      code: 'unsupported_capability',
+      issues: { capability: 'createStream' },
     });
   });
 

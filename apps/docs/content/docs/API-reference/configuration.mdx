@@ -137,8 +137,9 @@ behavior, per-model isolation, and state inspection.
 | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `rateLimit` | unlimited | `{ requestsPerMinute, tokensPerMinute, maxConcurrent, maxQueueMs, maxQueueSize, estimateTokens }`. Queues calls locally to stay under configured limits. Every field is independent and optional. See [Rate Limiting](/docs/core/rate-limiting). |
 
-A local rate-limit rejection fails immediately with `LLMError('quota_exceeded')` and
-`code: 'local_rate_limit'`. It is never retried and does not count as a circuit-breaker failure.
+A local rate-limit rejection fails immediately with `LLMError('rate_limited')` and
+`code: 'rate_limit_queue_timeout'`, `'rate_limit_queue_full'`, or `'rate_limit_capacity_exceeded'`.
+It is never retried and does not count as a circuit-breaker failure.
 
 A provider 429 carries `code: 'provider_rate_limited'` and is handled separately from local
 rate-limit rejections. See [Error codes](/docs/core/error-handling#error-codes).

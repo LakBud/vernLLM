@@ -102,7 +102,7 @@ describe('fromBedrock', () => {
     );
   });
 
-  it('throws a validation LLMError for an unsupported image mimeType', async () => {
+  it('throws an invalid_params LLMError for an unsupported image mimeType', async () => {
     const { client } = makeFakeBedrockClient('unused');
     const adapted = fromBedrock(client);
 
@@ -121,7 +121,7 @@ describe('fromBedrock', () => {
         },
         { signal: new AbortController().signal },
       ),
-    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
   });
 
   it('maps output.message.content back into choices[0].message.content', async () => {
@@ -388,7 +388,7 @@ describe('fromBedrock', () => {
   });
 
   describe('toolUseSupportedModels preflight', () => {
-    it('rejects with a validation LLMError, without calling converse, when the model is not in the allowlist', async () => {
+    it('rejects with an invalid_params LLMError, without calling converse, when the model is not in the allowlist', async () => {
       const { client, converse } = makeFakeBedrockClient('unused');
       const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
 
@@ -406,7 +406,7 @@ describe('fromBedrock', () => {
           },
           { signal: new AbortController().signal },
         ),
-      ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+      ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
 
       expect(converse).not.toHaveBeenCalled();
     });
@@ -452,7 +452,7 @@ describe('fromBedrock', () => {
           },
           { signal: new AbortController().signal },
         ),
-      ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+      ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
 
       expect(converse).not.toHaveBeenCalled();
     });
@@ -531,7 +531,7 @@ describe('fromBedrock, tools', () => {
     },
   };
 
-  it('throws a clear validation error for toolChoice: none, instead of silently falling back to auto', async () => {
+  it('throws a clear invalid_params error for toolChoice: none, instead of silently falling back to auto', async () => {
     const { client } = makeFakeBedrockClient('ok');
     const adapted = fromBedrock(client);
 
@@ -547,7 +547,7 @@ describe('fromBedrock, tools', () => {
         },
         { signal: new AbortController().signal },
       ),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
   it('translates OpenAI-shaped tools into toolConfig.tools, and tool_choice into toolConfig.toolChoice', async () => {
@@ -1052,7 +1052,7 @@ describe('fromBedrock, native structured output', () => {
         },
         { signal: new AbortController().signal },
       ),
-    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
 
     expect(converse).not.toHaveBeenCalled();
   });
@@ -1087,7 +1087,7 @@ describe('fromBedrock, native structured output', () => {
         },
         { signal: new AbortController().signal },
       ),
-    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
 
     expect(converse).not.toHaveBeenCalled();
   });

@@ -233,7 +233,7 @@ export class RateLimiter {
     if (!Number.isFinite(estimatedTokens) || estimatedTokens < 0) {
       throw new LLMError(
         `estimatedTokens must be a finite, non-negative number, got ${String(estimatedTokens)}`,
-        'validation',
+        'invalid_params',
       );
     }
 
@@ -243,12 +243,8 @@ export class RateLimiter {
     if (this.tokens && estimatedTokens > this.tokens.getCapacity()) {
       throw new LLMError(
         `estimatedTokens (${estimatedTokens}) exceeds the configured tokensPerMinute capacity (${this.tokens.getCapacity()}); this call could never acquire capacity.`,
-        'quota_exceeded',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'local_rate_limit',
+        'rate_limited',
+        { code: 'rate_limit_capacity_exceeded' },
       );
     }
 
@@ -276,15 +272,9 @@ export class RateLimiter {
   }
 
   private queueFullError(): LLMError {
-    return new LLMError(
-      'Rate limit queue is full',
-      'quota_exceeded',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      'local_rate_limit',
-    );
+    return new LLMError('Rate limit queue is full', 'rate_limited', {
+      code: 'rate_limit_queue_full',
+    });
   }
 
   private enqueue(
@@ -339,12 +329,10 @@ export class RateLimiter {
           waiter.reject(
             new LLMError(
               'Rate limit queue timed out before capacity was available',
-              'quota_exceeded',
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              'local_rate_limit',
+              'rate_limited',
+              {
+                code: 'rate_limit_queue_timeout',
+              },
             ),
           );
         }, this.maxQueueMs);
