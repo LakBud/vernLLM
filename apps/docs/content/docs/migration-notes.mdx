@@ -7,6 +7,36 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 2.3.0: `getCircuitState`'s `model` argument moved into a `target` object
+
+`getCircuitState` used to take a bare `model` string directly:
+
+```ts
+// Before
+llm.getCircuitState('gpt-4o');
+```
+
+It now takes an optional `target: { index?, model? }`, matching the new `openCircuit`/
+`closeCircuit` methods added in this release, so a `model` can be paired with `index` to address a
+fallback target rather than only the primary:
+
+```ts
+// After
+llm.getCircuitState({ model: 'gpt-4o' });
+```
+
+Calling `getCircuitState()` with no arguments is unaffected either way, it still reads the primary
+target's state. `getCircuitStates(model?)` also keeps its existing bare-string signature, this
+change is scoped to `getCircuitState` only.
+
+<Callout type="warn">
+  Being accepted on a minor rather than a major since `vern-llm` is still in beta and
+  `getCircuitState` was itself a fairly recent addition.
+</Callout>
+
+See [Circuit Breaker](/docs/core/circuit-breaker#checking-and-controlling-state-manually) for the
+current reference, including `openCircuit`/`closeCircuit` and how an omitted `model` now resolves.
+
 ## 2.2.0: `cachedCall`'s `call` no longer accepts `reserveUsage`/`refundUsage`
 
 `CachedCallInput` (the top-level shape `cachedCall()` takes, alongside `cacheKey`/`ttl`) already

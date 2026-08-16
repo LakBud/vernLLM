@@ -108,8 +108,8 @@ llm.getCircuitState(); // primary target's state
 
 llm.getCircuitStates();
 // [
-//   { provider: 'primary', state: 'closed' },
-//   { provider: 'fallback[0]', state: 'closed' },
+//   { provider: 'primary', index: 0, isFallback: false, isolateByModel: false, state: 'closed' },
+//   { provider: 'fallback[0]', index: 1, isFallback: true, isolateByModel: false, state: 'closed' },
 // ]
 ```
 
@@ -154,8 +154,8 @@ await llm.call({
   model: 'gpt-4o-mini',
 });
 
-llm.getCircuitState('gpt-4o'); // 'open'
-llm.getCircuitState('gpt-4o-mini'); // 'closed'
+llm.getCircuitState({ model: 'gpt-4o' }); // 'open'
+llm.getCircuitState({ model: 'gpt-4o-mini' }); // 'closed'
 ```
 
 With `isolateByModel` enabled, a failure on one model cannot open another model's circuit.
@@ -206,33 +206,55 @@ model reported by the callback.
 The `onStateChange` callback is observational. It does not control whether the circuit opens,
 closes, or transitions to half open.
 
-## Checking state manually
+## Checking and controlling state manually
 
 ```ts title="circuit-breaker-state.ts"
 llm.getCircuitState(); // primary target: 'closed' | 'open' | 'half-open' | undefined
 
 llm.getCircuitStates('gpt-4o');
 // [
-//   { provider: 'primary', index: 0, isFallback: false, state: 'closed' },
-//   { provider: 'fallback[0]', index: 1, isFallback: true, state: 'open' },
-//   { provider: 'fallback[1]', index: 2, isFallback: true, state: 'half-open' },
+//   { provider: 'primary', index: 0, isFallback: false, isolateByModel: false, state: 'closed' },
+//   { provider: 'fallback[0]', index: 1, isFallback: true, isolateByModel: false, state: 'open' },
+//   { provider: 'fallback[1]', index: 2, isFallback: true, isolateByModel: false, state: 'half-open' },
 // ]
 ```
 
-`getCircuitState()` returns the state of the primary target. It returns `undefined` when the primary
-target does not have a configured circuit breaker.
+`getCircuitState(target?)` and `getCircuitStates(model?)` are read-only. `openCircuit(target?)` and
+`closeCircuit(target?)` mutate a target's breaker directly:
 
-`getCircuitStates()` returns the circuit state of every target in the fallback chain, in declaration
-order. A target without a configured circuit breaker reports `undefined` rather than inheriting the
-state of another target. Its optional `model` parameter behaves the same way it does on
-`getCircuitState()`: it is used to look up each target's isolated state when that target has
-`circuitBreaker.isolateByModel` enabled, and is ignored for a target that doesn't.
+```ts title="circuit-breaker-manual-control.ts"
+llm.openCircuit(); // pull the primary out of rotation ahead of known maintenance
+llm.closeCircuit(); // put it back, skipping the cooldown
 
-The optional `model` parameter on `getCircuitState()` is used when `isolateByModel` is enabled. When
-model isolation is disabled, the circuit is shared and the model parameter is ignored.
+llm.openCircuit({ index: 1 }); // same, for the first fallback target
+```
+
+`openCircuit` sets the breaker to `open` and starts the cooldown from now, exactly as if `threshold`
+consecutive real failures had just happened. `closeCircuit` sets it to `closed` and resets the
+failure count to zero, without requiring an actual successful call first. Neither call requires a
+configured `circuitBreaker`; both are a no-op on a target that doesn't have one.
+
+`getCircuitState`, `openCircuit`, and `closeCircuit` all take an optional `target: { index?, model? }`
+(`getCircuitStates` takes a bare `model?` and reports every target at once):
+
+- `index` selects which target in the fallback chain to read or act on, defaulting to `0`, the
+  primary. An out-of-range `index` throws `RangeError`, so it stays distinguishable from a real
+  target that simply has no breaker configured, which returns `undefined` (for reads) or is a no-op
+  (for `openCircuit`/`closeCircuit`) instead of throwing.
+- `model` selects which model's bucket to read or act on, for a target with
+  `circuitBreaker.isolateByModel` enabled. Passing `model` to a target that doesn't isolate by model
+  still works, since the shared bucket is used regardless, but logs a warning because the argument
+  had no effect. Omitting `model` on a target that does isolate defaults to that target's own
+  configured `model`, the same bucket its real call failures and successes are recorded under, not
+  an unlabeled bucket shared across every caller that also omits it.
+
+`getCircuitState()` returns the state of the primary target. `getCircuitStates()` returns the
+circuit state of every target in the fallback chain, in declaration order, each entry also carrying
+that target's own `isolateByModel` setting so a caller sweeping `model` across a mixed chain can tell
+which entries actually honored it.
 
 ```ts title="checking-isolated-state.ts"
-const state = llm.getCircuitState('gpt-4o');
+const state = llm.getCircuitState({ model: 'gpt-4o' });
 
 if (state === 'open') {
   console.log('gpt-4o is currently blocked by the circuit breaker');
