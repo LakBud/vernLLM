@@ -24,6 +24,7 @@ import {
   type FallbackTarget,
   type StreamCallResult,
   type TargetCircuitState,
+  type CircuitTarget,
   type StreamEnabledCallParams,
   type ToolEnabledCallParams,
   type ToolsDisabledCallParams,
@@ -31,6 +32,7 @@ import {
   type VernLLMOptions,
 } from './types/index.js';
 
+import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/cache.utils.js';
 
 /**
@@ -489,34 +491,85 @@ export class VernLLM {
   }
 
   /**
-   * @param model With `circuitBreaker.isolateByModel` on, returns that
-   * model's own circuit state instead of the shared one. Ignored
-   * otherwise. Omit for the shared circuit (the default) or, under
-   * isolation, the state of calls that didn't resolve a model.
-   * @returns The current circuit breaker state (`'closed' | 'open' |
-   * 'half-open'`), or undefined if no circuit breaker was configured.
+   * @param target.index Which target to read. Defaults to the primary.
+   * @param target.model Which model bucket to read, if the target isolates by model.
+   * @returns The breaker state, or `undefined` if that target has no breaker.
+   * @throws {RangeError} If `target.index` names no target. Lets a real
+   * target with no breaker (`undefined`) stay distinguishable from a
+   * target that doesn't exist.
    */
-  getCircuitState(model?: string) {
-    return this.executors[0]!.getCircuitState(model);
+  getCircuitState(target?: CircuitTarget): CircuitState | undefined {
+    const executor = this.resolveExecutor(target?.index ?? 0, 'getCircuitState');
+    this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'getCircuitState');
+
+    return executor.getCircuitState(target?.model);
   }
 
   /**
-   * @param model With `circuitBreaker.isolateByModel` on, returns each
-   * target's circuit state for that model instead of its shared state.
-   * Ignored otherwise. Omit for the shared circuit (the default) or, under
-   * isolation, the state of calls that didn't resolve a model.
-   * @returns The current circuit state for every target in declaration
-   * order, including the primary and all fallback targets. Each entry
-   * includes the target's provider name, chain index, whether it is a
-   * fallback, and its circuit state, or undefined if that target has no
-   * circuit breaker configured.
+   * @param model Which model bucket to read, for targets that isolate by model.
+   * @returns Every target's state, in chain order.
    */
   getCircuitStates(model?: string): TargetCircuitState[] {
     return this.executors.map((executor, index) => ({
       provider: executor.providerName,
       index,
       isFallback: index > 0,
+      isolateByModel: executor.isolateByModel,
       state: executor.getCircuitState(model),
     }));
+  }
+
+  /**
+   * Manually opens a target's breaker, e.g. to pull a provider out of
+   * rotation ahead of known maintenance instead of waiting for it to fail.
+   *
+   * @param target.index Which target to open. Defaults to the primary.
+   * @param target.model Which model bucket to open, if the target isolates by model.
+   * @throws {RangeError} If `target.index` names no target.
+   */
+  openCircuit(target?: CircuitTarget): void {
+    const executor = this.resolveExecutor(target?.index ?? 0, 'openCircuit');
+    this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'openCircuit');
+    executor.openCircuit(target?.model);
+  }
+
+  /**
+   * Manually closes a target's breaker, e.g. once a provider is confirmed
+   * healthy again without waiting out the cooldown.
+   *
+   * @param target.index Which target to close. Defaults to the primary.
+   * @param target.model Which model bucket to close, if the target isolates by model.
+   * @throws {RangeError} If `target.index` names no target.
+   */
+  closeCircuit(target?: CircuitTarget): void {
+    const executor = this.resolveExecutor(target?.index ?? 0, 'closeCircuit');
+    this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'closeCircuit');
+    executor.closeCircuit(target?.model);
+  }
+
+  /** Resolves a target index so every circuit-breaker method agrees on what counts as valid. */
+  private resolveExecutor(index: number, caller: string): CallExecutor {
+    const executor = this.executors[index];
+
+    if (!executor) {
+      throw new RangeError(
+        `${caller}: no target at index ${index} (chain has ${this.executors.length} target${this.executors.length === 1 ? '' : 's'})`,
+      );
+    }
+
+    return executor;
+  }
+
+  /** Warns when `model` can't do anything on this target, so it's never silently ignored. */
+  private warnIfModelUnsupported(
+    isolateByModel: boolean,
+    model: string | undefined,
+    caller: string,
+  ): void {
+    if (model !== undefined && !isolateByModel) {
+      this.logger.warn(
+        `[VernLLM] ${caller}: \`model: '${model}'\` has no effect here. This target's circuitBreaker doesn't have isolateByModel on, so it only tracks one shared circuit regardless of \`model\`. Omit \`model\`, or set \`circuitBreaker.isolateByModel: true\` on this target if per-model tracking is what you want.`,
+      );
+    }
   }
 }

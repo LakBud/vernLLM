@@ -71,7 +71,8 @@ export class CircuitBreaker {
   private readonly threshold: number;
   private readonly cooldownMs: number;
   private readonly onStateChange?: CircuitBreakerOptions['onStateChange'];
-  private readonly isolateByModel: boolean;
+  /** Whether this breaker tracks failures per model instead of one shared circuit. Read by `CallExecutor`/`VernLLM` to report per-target in `getCircuitStates`. */
+  readonly isolateByModel: boolean;
 
   // Exactly one of these is used, chosen once at construction by
   // `isolateByModel`, so every method has a single, unambiguous place to
@@ -205,5 +206,41 @@ export class CircuitBreaker {
    */
   getState(model?: string): CircuitState {
     return this.lookupBucket(model)?.state ?? 'closed';
+  }
+
+  /**
+   * Manually opens the circuit, as if `threshold` consecutive failures had
+   * just happened, e.g. to pull a provider out of rotation ahead of known
+   * maintenance. Resets the cooldown window from now, same as a real
+   * threshold-crossing failure would, and clears any in-flight half-open
+   * trial since it no longer applies once the circuit is (re)opened.
+   */
+  open(model?: string): void {
+    const bucket = this.ensureBucketFor(model);
+
+    bucket.openedAt = Date.now();
+    bucket.trialInFlight = false;
+    this.transition(bucket, 'open', model);
+  }
+
+  /**
+   * Manually closes the circuit and resets its failure count, e.g. once a
+   * provider is confirmed healthy again without waiting out the cooldown.
+   * Mirrors `recordSuccess`'s bookkeeping (including dropping the
+   * per-model bucket under `isolateByModel`, once idle) but without
+   * requiring an actual successful call first.
+   */
+  close(model?: string): void {
+    const bucket = this.ensureBucketFor(model);
+
+    bucket.consecutiveFailures = 0;
+    bucket.trialInFlight = false;
+    this.transition(bucket, 'closed', model);
+
+    // No need to re-check bucket.state/consecutiveFailures here, unlike
+    // recordSuccess: both were just set unconditionally above.
+    if (this.isolateByModel) {
+      this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
+    }
   }
 }
