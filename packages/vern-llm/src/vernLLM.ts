@@ -502,7 +502,7 @@ export class VernLLM {
     const executor = this.resolveExecutor(target?.index ?? 0, 'getCircuitState');
     this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'getCircuitState');
 
-    return executor.getCircuitState(target?.model);
+    return executor.getCircuitState(target?.model ?? executor.model);
   }
 
   /**
@@ -515,7 +515,7 @@ export class VernLLM {
       index,
       isFallback: index > 0,
       isolateByModel: executor.isolateByModel,
-      state: executor.getCircuitState(model),
+      state: executor.getCircuitState(model ?? executor.model),
     }));
   }
 
@@ -530,7 +530,7 @@ export class VernLLM {
   openCircuit(target?: CircuitTarget): void {
     const executor = this.resolveExecutor(target?.index ?? 0, 'openCircuit');
     this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'openCircuit');
-    executor.openCircuit(target?.model);
+    executor.openCircuit(target?.model ?? executor.model);
   }
 
   /**
@@ -544,7 +544,7 @@ export class VernLLM {
   closeCircuit(target?: CircuitTarget): void {
     const executor = this.resolveExecutor(target?.index ?? 0, 'closeCircuit');
     this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'closeCircuit');
-    executor.closeCircuit(target?.model);
+    executor.closeCircuit(target?.model ?? executor.model);
   }
 
   /** Resolves a target index so every circuit-breaker method agrees on what counts as valid. */

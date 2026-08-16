@@ -237,9 +237,12 @@ export class CircuitBreaker {
     bucket.trialInFlight = false;
     this.transition(bucket, 'closed', model);
 
-    // No need to re-check bucket.state/consecutiveFailures here, unlike
-    // recordSuccess: both were just set unconditionally above.
-    if (this.isolateByModel) {
+    // transition() may have synchronously re-entered (e.g. an
+    // onStateChange callback that calls open(model) on this same
+    // bucket), so re-check state/consecutiveFailures rather than
+    // assuming they still hold the values set above, same as
+    // recordSuccess does.
+    if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
       this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
     }
   }

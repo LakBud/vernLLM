@@ -8,4 +8,6 @@ Added manual circuit-breaker control: `VernLLM.openCircuit(target?)` and `VernLL
 
 An out-of-range `index` on `getCircuitState`/`openCircuit`/`closeCircuit` now throws `RangeError`, so it stays distinguishable from a real target that simply has no breaker configured (which still returns/no-ops normally). Passing `model` to a target whose breaker doesn't have `circuitBreaker.isolateByModel` on now logs a warning instead of silently doing nothing, since the shared-bucket state or action is used regardless.
 
+When `model` is omitted on `getCircuitState`/`openCircuit`/`closeCircuit`/`getCircuitStates`, it now defaults to that target's own configured model instead of the unlabeled bucket, matching the bucket real call failures/successes are recorded under for a target with `isolateByModel` on. An explicit `model` argument is unaffected.
+
 `getCircuitStates()` entries now include `isolateByModel`, so a caller sweeping `model` across a fallback chain with mixed per-target configs can tell which entries actually honored it.

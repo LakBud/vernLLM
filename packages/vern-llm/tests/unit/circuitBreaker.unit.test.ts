@@ -201,6 +201,28 @@ describe('CircuitBreaker, isolateByModel (unit)', () => {
     expect(buckets.size).toBe(0);
   });
 
+  it('close() does not evict a bucket a synchronous onStateChange callback just reopened', () => {
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      isolateByModel: true,
+      onStateChange: (_from, to) => {
+        if (to === 'closed') {
+          cb.open('gpt-4o'); // re-enters synchronously before close() returns
+        }
+      },
+    });
+    const buckets = (cb as unknown as { bucketsByModel: Map<string, unknown> }).bucketsByModel;
+
+    cb.recordFailure('gpt-4o');
+    expect(buckets.size).toBe(1);
+
+    cb.close('gpt-4o');
+
+    expect(cb.getState('gpt-4o')).toBe('open');
+    expect(buckets.size).toBe(1);
+  });
+
   it('assertClosed throws only for the model whose bucket is open', () => {
     const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 10_000, isolateByModel: true });
 
@@ -735,6 +757,59 @@ describe('VernLLM, circuit breaker integration', () => {
     expect(() => llm.openCircuit({ index: 9, model: 'gpt-4o' })).toThrow(RangeError);
 
     expect(() => llm.closeCircuit({ index: 9, model: 'gpt-4o' })).toThrow(RangeError);
+  });
+
+  it("getCircuitState/openCircuit/closeCircuit default an omitted model to the target's configured model, on the primary", () => {
+    const { client } = createMockClient([]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000, isolateByModel: true },
+    });
+
+    llm.openCircuit(); // no model given
+    // The state must show up under the executor's configured model, the
+    // same bucket real call failures would use, not an unlabeled bucket.
+    expect(llm.getCircuitState({ model: 'gpt-4o' })).toBe('open');
+    expect(llm.getCircuitState()).toBe('open');
+
+    llm.closeCircuit();
+    expect(llm.getCircuitState({ model: 'gpt-4o' })).toBe('closed');
+  });
+
+  it("getCircuitState/openCircuit/closeCircuit default an omitted model to the target's configured model, on a fallback", () => {
+    const { client: primaryClient } = createMockClient([]);
+    const { client: fallbackClient } = createMockClient([]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'gpt-4o',
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000, isolateByModel: true },
+      fallback: {
+        client: fallbackClient,
+        model: 'claude-sonnet',
+        circuitBreaker: { threshold: 1, cooldownMs: 10_000, isolateByModel: true },
+      },
+    });
+
+    llm.openCircuit({ index: 1 }); // no model given
+
+    expect(llm.getCircuitState({ index: 1, model: 'claude-sonnet' })).toBe('open');
+    expect(llm.getCircuitState({ index: 1 })).toBe('open');
+    // Primary is untouched.
+    expect(llm.getCircuitState({ index: 0 })).toBe('closed');
+
+    expect(llm.getCircuitStates()).toEqual([
+      { provider: 'primary', index: 0, isFallback: false, isolateByModel: true, state: 'closed' },
+      {
+        provider: 'fallback[0]',
+        index: 1,
+        isFallback: true,
+        isolateByModel: true,
+        state: 'open',
+      },
+    ]);
   });
 
   it('getCircuitStates() stays permissive: model is safely ignored on non-isolating targets, no throw', () => {
