@@ -35,7 +35,13 @@ export class CacheOrchestrator {
   async deleteCache(key: string): Promise<void> {
     if (!this.cache.delete) return;
 
-    await this.cache.delete(await this.resolveCacheKey(key));
+    try {
+      await this.cache.delete(await this.resolveCacheKey(key));
+    } catch (error) {
+      this.logger.warn(
+        `[VernLLM] cache delete failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
   }
 
   /** Logs a failed refundUsage attempt via the configured logger. */
@@ -43,6 +49,23 @@ export class CacheOrchestrator {
     this.logger.error(logMessage, {
       message: error instanceof Error ? error.message : 'unknown',
     });
+  }
+
+  /**
+   * Reads from the cache, treating a failed adapter read as a miss rather
+   * than letting it fail the call. The request still falls through to a
+   * real provider call, but that fallback is now logged instead of silent.
+   */
+  private async getCached(key: string): Promise<{ hit: boolean; value?: unknown }> {
+    try {
+      return await this.cache.get(key);
+    } catch (error) {
+      this.logger.warn(
+        `[VernLLM] cache read failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+
+      return { hit: false };
+    }
   }
 
   /**
@@ -64,7 +87,7 @@ export class CacheOrchestrator {
     const resolvedParams =
       resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
 
-    const cached = await this.cache.get(resolvedKey);
+    const cached = await this.getCached(resolvedKey);
 
     if (cached.hit) return cached.value as T;
 
@@ -111,9 +134,9 @@ export class CacheOrchestrator {
     try {
       await this.cache.set(params.cacheKey, result, params.ttl);
     } catch (error) {
-      this.logger.error('[VernLLM] cache write failed', {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
+      this.logger.warn(
+        `[VernLLM] cache write failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
     }
 
     return result;
@@ -146,7 +169,7 @@ export class CacheOrchestrator {
     const resolvedParams =
       resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
 
-    const cached = await this.cache.get(resolvedKey);
+    const cached = await this.getCached(resolvedKey);
 
     if (cached.hit) {
       const value = cached.value as T;
@@ -219,9 +242,9 @@ export class CacheOrchestrator {
             try {
               await this.cache.set(params.cacheKey, value, params.ttl);
             } catch (error) {
-              this.logger.error('[VernLLM] cache write failed', {
-                message: error instanceof Error ? error.message : 'unknown',
-              });
+              this.logger.warn(
+                `[VernLLM] cache write failed: ${error instanceof Error ? error.message : 'unknown'}`,
+              );
             }
 
             return value;

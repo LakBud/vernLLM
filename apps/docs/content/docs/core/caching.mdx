@@ -296,3 +296,10 @@ Custom adapters should keep the same `ttl` convention (seconds, not milliseconds
 stays consistent across adapters.
 
 </Callout>
+
+<Callout type="warn">
+  If `get`, `set`, or `delete` throws (a Redis connection drop, for example), VernLLM does not fail
+  the call: a broken `get` is treated as a miss and falls through to a real provider call, and a
+  broken `set`/`delete` is swallowed. Either way the failure is reported via `logger.warn`, not
+  silently ignored, so configure a `logger` if you want visibility into a misbehaving adapter.
+</Callout>

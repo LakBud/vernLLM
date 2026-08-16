@@ -782,7 +782,7 @@ export class CallExecutor {
     const retryAfterHonored = retryAfterMs !== undefined;
 
     this.logger.warn(
-      `[VernLLM:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${delay}ms` +
+      `[VernLLM:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${Math.ceil(delay)}ms` +
         (retryAfterHonored ? ' (honoring Retry-After)' : ''),
     );
 
