@@ -169,6 +169,17 @@ export interface LLMErrorIssuesByCode {
   unsupported_capability: UnsupportedCapabilityIssue;
 }
 
+/**
+ * One failed attempt on the way to a terminal error: which attempt index
+ * it was, and the normalized error it failed with. The base shape every
+ * richer attempt record (e.g. `FallbackAttempt`) extends, rather than
+ * duplicates.
+ */
+export interface RetryAttempt {
+  index: number;
+  error: LLMError;
+}
+
 /** Optional fields for constructing an {@link LLMError}. `message` and `type` stay positional since every throw site sets both. */
 export interface LLMErrorOptions {
   status?: number;
@@ -177,6 +188,8 @@ export interface LLMErrorOptions {
   retryAfterMs?: number;
   /** Stable discriminator within `type`. Absent on errors predating it. */
   code?: LLMErrorCode;
+  /** Every attempt made before this error was thrown, in order. Absent when nothing was retried. */
+  attempts?: RetryAttempt[];
 }
 
 export class LLMError extends Error {
@@ -186,6 +199,8 @@ export class LLMError extends Error {
   public retryAfterMs?: number;
   /** Stable discriminator within `type`. Absent on errors predating it. */
   public code?: LLMErrorCode;
+  /** Every attempt made before this error was thrown, in order. Absent when nothing was retried. */
+  public attempts?: RetryAttempt[];
 
   constructor(
     message: string,
@@ -199,6 +214,7 @@ export class LLMError extends Error {
     this.cause = options.cause;
     this.retryAfterMs = options.retryAfterMs;
     this.code = options.code;
+    this.attempts = options.attempts;
   }
 
   /**

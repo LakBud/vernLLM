@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   FallbackExhaustedError,
   defaultFallbackOn,
+  isFallbackExhaustedError,
   isLLMError,
   LLMError,
   type VernLLMEvent,
@@ -313,6 +314,66 @@ describe('VernLLM, fallback', () => {
 
     expect(caught).toBeInstanceOf(LLMError);
     expect(caught).not.toBeInstanceOf(FallbackExhaustedError);
+  });
+
+  it('a single target exhausting its own retries carries each retry attempt on the plain LLMError', async () => {
+    const { client } = createMockClient([new Error('a'), new Error('b'), new Error('c')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 2, baseDelayMs: 0 });
+
+    let caught: unknown;
+    try {
+      await llm.call({ userContent: 'u' });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(LLMError);
+    expect(caught).not.toBeInstanceOf(FallbackExhaustedError);
+
+    const error = caught as LLMError;
+    expect(error.attempts).toHaveLength(3);
+    expect(error.attempts?.map((a) => a.index)).toEqual([0, 1, 2]);
+    expect(error.attempts?.every((a) => a.error instanceof LLMError)).toBe(true);
+  });
+
+  it("every target fails: each FallbackAttempt's own error still carries that target's own retry attempts", async () => {
+    const { client: primaryClient } = createMockClient([new Error('a'), new Error('b')]);
+    const { client: fallbackClient } = createMockClient([new Error('c'), new Error('d')]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      maxRetries: 1,
+      baseDelayMs: 0,
+      fallback: { client: fallbackClient, model: 'fallback-model', name: 'fallback-1' },
+    });
+
+    let caught: unknown;
+    try {
+      await llm.call({ userContent: 'u' });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isFallbackExhaustedError(caught)).toBe(true);
+    const exhausted = caught as FallbackExhaustedError;
+
+    for (const targetAttempt of exhausted.attempts) {
+      expect(targetAttempt.error.attempts).toHaveLength(2);
+    }
+  });
+
+  it('isFallbackExhaustedError narrows a caught error and rejects a plain LLMError', () => {
+    const attempts = [
+      { index: -1, provider: 'primary', model: 'm', error: new LLMError('down', 'api') },
+      { index: 0, provider: 'fallback-1', model: 'm2', error: new LLMError('down', 'api') },
+    ];
+    const exhausted = new FallbackExhaustedError(attempts);
+    const plain = new LLMError('down', 'api');
+
+    expect(isFallbackExhaustedError(exhausted)).toBe(true);
+    expect(isFallbackExhaustedError(plain)).toBe(false);
+    expect(isFallbackExhaustedError(new Error('not an LLMError'))).toBe(false);
   });
 
   it("each target's breaker is independent: tripping target 0 leaves target 1 closed", async () => {

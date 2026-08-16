@@ -14,6 +14,7 @@ import type {
   CallParams,
   CallWithToolsResult,
   LLMClient,
+  RetryAttempt,
   StreamChunk,
   TokenUsage,
   ToolIssue,
@@ -138,6 +139,7 @@ export class CallExecutor {
     onAttempt?: () => void,
   ): Promise<T | CallWithToolsResult<T>> {
     const model = params.model ?? this.model;
+    const attempts: RetryAttempt[] = [];
 
     try {
       return await this.retryWithBackoff(
@@ -146,9 +148,10 @@ export class CallExecutor {
         model,
         params.signal,
         onAttempt,
+        attempts,
       );
     } catch (error) {
-      const normalized = normalizeError(error, params.signal);
+      const normalized = normalizeError(error, params.signal, attempts);
 
       if (this.countsTowardBreaker(normalized)) {
         this.breaker?.recordFailure(model);
@@ -170,6 +173,7 @@ export class CallExecutor {
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
     const model = params.model ?? this.model;
+    const attempts: RetryAttempt[] = [];
 
     try {
       return await this.retryWithBackoff(
@@ -178,9 +182,10 @@ export class CallExecutor {
         model,
         params.signal,
         onAttempt,
+        attempts,
       );
     } catch (error) {
-      const normalized = normalizeError(error, params.signal);
+      const normalized = normalizeError(error, params.signal, attempts);
 
       if (this.countsTowardBreaker(normalized)) {
         this.breaker?.recordFailure(model);
@@ -621,13 +626,19 @@ export class CallExecutor {
     }
   }
 
-  /** Runs `fn`, retrying with backoff according to `shouldRetry`. */
+  /**
+   * Runs `fn`, retrying with backoff according to `shouldRetry`. When
+   * `attempts` is given, every failed attempt is recorded onto it as it
+   * happens, in order, so the caller can hand the accumulated record to
+   * `normalizeError` once the loop finally gives up.
+   */
   private async retryWithBackoff<T>(
     fn: (attempt: number) => Promise<T>,
     requestId: string,
     model: string,
     signal?: AbortSignal,
     onAttempt?: () => void,
+    attempts?: RetryAttempt[],
   ): Promise<T> {
     let lastError: unknown;
 
@@ -641,6 +652,7 @@ export class CallExecutor {
         return await fn(attempt);
       } catch (error) {
         lastError = error;
+        attempts?.push({ index: attempt, error: normalizeError(error, signal) });
 
         if (!this.shouldRetry(error, signal)) break;
       }

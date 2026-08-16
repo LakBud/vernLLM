@@ -1,4 +1,4 @@
-import { LLMError, type LLMErrorCode } from '../../types/errors.js';
+import { LLMError, type LLMErrorCode, type RetryAttempt } from '../../types/errors.js';
 import { extractRetryAfterMs } from './retry.utils.js';
 
 /**
@@ -150,10 +150,21 @@ function codeForStatus(status: number): LLMErrorCode | undefined {
   }
 }
 
-/** Converts any thrown value into a well-typed LLMError. */
-export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
+/**
+ * Converts any thrown value into a well-typed LLMError. `attempts`, when
+ * given, is the accumulated record of every attempt made before `error`
+ * was thrown; it's passed straight into the constructed error's options
+ * rather than assigned onto the error afterward, so `attempts` is always
+ * settled once, through the constructor, like every other field on
+ * `LLMError`.
+ */
+export function normalizeError(
+  error: unknown,
+  signal?: AbortSignal,
+  attempts?: RetryAttempt[],
+): LLMError {
   if (signal?.aborted) {
-    return new LLMError('LLM request aborted', 'aborted');
+    return new LLMError('LLM request aborted', 'aborted', { attempts });
   }
 
   if (error instanceof LLMError) {
@@ -163,6 +174,12 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
     // status gets, without overwriting a `code` that error already carries.
     if (error.code === undefined && error.status !== undefined) {
       error.code = codeForStatus(error.status);
+    }
+
+    // Same rule for `attempts`: fill it in if this already-built error
+    // doesn't carry one of its own, without overwriting one it does.
+    if (error.attempts === undefined && attempts !== undefined) {
+      error.attempts = attempts;
     }
 
     return error;
@@ -177,6 +194,7 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
       cause: error,
       retryAfterMs,
       code: codeForStatus(status),
+      attempts,
     });
   }
 
@@ -189,8 +207,9 @@ export function normalizeError(error: unknown, signal?: AbortSignal): LLMError {
       cause: error,
       retryAfterMs,
       code: 'connection_failed',
+      attempts,
     });
   }
 
-  return new LLMError('LLM request failed', 'unknown', { cause: error, retryAfterMs });
+  return new LLMError('LLM request failed', 'unknown', { cause: error, retryAfterMs, attempts });
 }

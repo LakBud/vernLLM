@@ -71,6 +71,24 @@ Everything else, including timeouts, 5xx errors, network failures, and unknown e
 
 If a `signal` fires while a retry is waiting out its backoff delay, the pending wait is cancelled immediately rather than sitting idle until the delay finishes. An abort during backoff is never retried, it is treated as a deliberate cancellation. See [Cancellation & Timeouts](/docs/core/cancellation) for the full abort lifecycle.
 
+## Reading attempt history
+
+Every normalized `LLMError` carries an optional `attempts` array: one entry per attempt made against the current target before the error was thrown, each with the attempt's `index` and its own normalized `error`.
+
+```ts
+try {
+  await llm.call({ userContent: 'hello' });
+} catch (err) {
+  if (isLLMError(err)) {
+    for (const attempt of err.attempts ?? []) {
+      console.log(attempt.index, attempt.error.type);
+    }
+  }
+}
+```
+
+`attempts` is absent when nothing was retried, for example a call that failed on its first and only try. With `fallback` configured, each `FallbackAttempt` on a `FallbackExhaustedError` extends this same shape, adding `provider` and `model`, and that attempt's own `error.attempts` still holds the retries made against that one target. See [Provider Fallback](/docs/core/provider-fallback) for `FallbackExhaustedError` itself.
+
 ## Options reference
 
 | Option               | Default                     | Notes                                                                                                                    |
