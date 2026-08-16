@@ -336,7 +336,12 @@ describe('VernLLM, fallback', () => {
     // recorded in `attempts`.
     expect(error.attempts).toHaveLength(2);
     expect(error.attempts?.map((a) => a.index)).toEqual([0, 1]);
-    expect(error.attempts?.every((a) => a.error instanceof LLMError)).toBe(true);
+    // `a.error` is an `LLMErrorSnapshot` (an inert copy of the fields),
+    // not a live `LLMError`: a past attempt is a record, not a
+    // throwable, so it deliberately doesn't carry `instanceof LLMError`
+    // identity. Assert on the shape instead.
+    expect(error.attempts?.every((a) => typeof a.error.message === 'string')).toBe(true);
+    expect(error.attempts?.every((a) => typeof a.error.retryable === 'boolean')).toBe(true);
   });
 
   it("every target fails: each FallbackAttempt's own error still carries that target's own retry attempts", async () => {

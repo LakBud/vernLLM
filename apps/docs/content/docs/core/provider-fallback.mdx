@@ -254,7 +254,7 @@ union this composes with.
 ## When every target fails
 
 `call()` throws `FallbackExhaustedError`, which extends `LLMError`, so `isLLMError` and any
-`instanceof LLMError` check still passes. It carries `attempts`, every target's own normalized
+`instanceof LLMError` check still passes. It carries `attempts`, a snapshot of every target's own
 error, in order:
 
 ```ts title="provider-fallback-exhausted.ts"

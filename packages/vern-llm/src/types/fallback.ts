@@ -139,6 +139,10 @@ export class FallbackExhaustedError extends LLMError {
       'fallback_exhausted',
       {
         status: last?.status,
+        // `last` is an `LLMErrorSnapshot`, not the live `LLMError` that
+        // target actually threw, so `cause` here is the same descriptive
+        // data a caller would get from `err.attempts.at(-1)!.error`
+        // rather than a distinct object.
         cause: last,
         retryAfterMs: last?.retryAfterMs,
         code: 'fallback_exhausted',

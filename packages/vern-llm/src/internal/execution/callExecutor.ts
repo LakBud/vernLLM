@@ -646,6 +646,8 @@ export class CallExecutor {
    * terminal failure is never pushed since it isn't a prior attempt, it
    * is the error being thrown. `attempts` stays empty when nothing was
    * retried, so no separate bookkeeping is needed at the call sites.
+   * Each failure is recorded as a snapshot (`LLMError.toSnapshot()`),
+   * not the live `LLMError`, per `RetryAttempt`'s contract.
    */
   private async retryWithBackoff<T>(
     fn: (attempt: number) => Promise<T>,
@@ -671,7 +673,7 @@ export class CallExecutor {
         const willRetry = attempt < this.maxRetries && this.shouldRetry(error, signal);
         if (!willRetry) break;
 
-        attempts?.push({ index: attempt, error: normalizeError(error, signal) });
+        attempts?.push({ index: attempt, error: normalizeError(error, signal).toSnapshot() });
       }
     }
 

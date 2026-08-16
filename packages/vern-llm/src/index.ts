@@ -74,6 +74,7 @@ export {
   TieredCacheAdapter,
   type LLMErrorType,
   type LLMErrorCode,
+  type LLMErrorSnapshot,
   type ToolIssue,
   type LLMErrorIssuesByCode,
   type DuplicateToolNamesIssue,
