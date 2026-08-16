@@ -208,6 +208,8 @@ export interface LLMErrorSnapshot {
   issues?: unknown;
   retryAfterMs?: number;
   code?: LLMErrorCode;
+  /** The original thrown value this attempt's error was built from, same as `LLMError.cause`. */
+  cause?: unknown;
   /** Computed once, at snapshot time, since a snapshot has no live getter. */
   retryable: boolean;
   /** This attempt's own prior attempts, if it was itself the terminal failure of a retry loop. */
@@ -292,6 +294,7 @@ export class LLMError extends Error {
       issues: this.issues,
       retryAfterMs: this.retryAfterMs,
       code: this.code,
+      cause: this.cause,
       retryable: this.retryable,
       attempts: this.attempts,
     };
