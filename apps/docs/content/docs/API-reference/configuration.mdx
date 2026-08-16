@@ -125,7 +125,8 @@ errors also do not count.
 
 With `isolateByModel: false` (the default), one circuit is shared across models used by the same
 target. With `isolateByModel: true`, each resolved model gets its own circuit and
-`getCircuitState(model)` can be used to inspect that model's state.
+`getCircuitState({ model })` can be used to inspect that model's state. Omitting `model` reads or
+acts on the target's own configured model rather than an unlabeled bucket.
 
 See [Circuit Breaker](/docs/core/circuit-breaker) for failure conditions, half-open
 behavior, per-model isolation, and state inspection.

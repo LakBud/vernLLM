@@ -18,13 +18,13 @@ describe('VernLLM workflow, circuit breaker isolateByModel', () => {
     });
 
     await llm.call({ userContent: 'u' }).catch(() => {});
-    expect(llm.getCircuitState('gpt-4o')).toBe('open');
+    expect(llm.getCircuitState({ model: 'gpt-4o' })).toBe('open');
 
     // A different model, via a per-call override, is unaffected and still reaches the client.
     await expect(llm.call({ userContent: 'u', model: 'gpt-4o-mini' })).resolves.toEqual({
       ok: true,
     });
-    expect(llm.getCircuitState('gpt-4o-mini')).toBe('closed');
+    expect(llm.getCircuitState({ model: 'gpt-4o-mini' })).toBe('closed');
 
     // The failing model is still blocked without hitting the client again.
     await expect(llm.call({ userContent: 'u' })).rejects.toMatchObject({ type: 'circuit_open' });

@@ -104,6 +104,7 @@ export {
   type FallbackOn,
   type FallbackAttempt,
   type TargetCircuitState,
+  type CircuitTarget,
   type CallMeta,
   type SchemaLike,
   type JsonSchemaSpec,

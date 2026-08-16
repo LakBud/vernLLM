@@ -58,8 +58,18 @@ export interface TargetCircuitState {
   /** Position in the chain: `0` for the primary, `1`+ for fallback targets. */
   index: number;
   isFallback: boolean;
+  /** Whether this target tracks failures per model. `false` means `model` on `getCircuitStates` had no effect on this entry. */
+  isolateByModel: boolean;
   /** `undefined` if that target has no circuit breaker configured. */
   state: CircuitState | undefined;
+}
+
+/** Which target/model `VernLLM.getCircuitState`, `openCircuit`, and `closeCircuit` act on. */
+export interface CircuitTarget {
+  /** Which target to act on. `0` is the primary, `1`+ are fallbacks. Defaults to `0`. */
+  index?: number;
+  /** Which model bucket to act on, if the resolved target isolates by model. */
+  model?: string;
 }
 
 /** One target's failure, recorded on the way to either the next target or `FallbackExhaustedError`. */

@@ -97,6 +97,21 @@ export class CallExecutor {
     return this.breaker?.getState(model);
   }
 
+  /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured. */
+  get isolateByModel(): boolean {
+    return this.breaker?.isolateByModel ?? false;
+  }
+
+  /** Manually opens this target's circuit breaker, if one is configured. No-op otherwise. */
+  openCircuit(model?: string): void {
+    this.breaker?.open(model);
+  }
+
+  /** Manually closes this target's circuit breaker, if one is configured. No-op otherwise. */
+  closeCircuit(model?: string): void {
+    this.breaker?.close(model);
+  }
+
   /**
    * Throws if the breaker is open for this target/model, exactly like the
    * check `run`/`runStream` used to make internally. Exposed so `VernLLM`
