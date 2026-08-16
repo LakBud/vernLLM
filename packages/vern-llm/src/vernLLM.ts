@@ -5,6 +5,7 @@ import { buildCircuitBreaker, makeEventReporter } from './internal/circuitBreake
 import { CallExecutor } from './internal/execution/callExecutor.js';
 import { normalizeError } from './internal/execution/errors.utils.js';
 import { withReservedUsage, withReservedUsageForStream } from './internal/execution/usage.utils.js';
+import { createSafeLogger } from './internal/logger.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import { RateLimiter } from './rateLimit.js';
 import {
@@ -75,7 +76,7 @@ export class VernLLM {
    * `nonRetryableStatus` `[400, 401, 403, 404, 422]`, `debug` false.
    */
   constructor(options: VernLLMOptions) {
-    this.logger = options.logger ?? new ConsoleLogger(options.debug ?? false);
+    this.logger = createSafeLogger(options.logger ?? new ConsoleLogger(options.debug ?? false));
 
     const providerName = options.name ?? 'primary';
 
