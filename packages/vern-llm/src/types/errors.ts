@@ -98,6 +98,19 @@ const NON_RETRYABLE_TYPES: ReadonlySet<LLMErrorType> = new Set([
   'aborted',
 ]);
 
+/**
+ * Shared retryability rule behind both `LLMError.retryable` and
+ * `LLMErrorSnapshot.retryable`. Pulled out so the two can't drift apart:
+ * a snapshot is a point-in-time copy of an error's fields, and this is
+ * one of them, so it has to be computed the same way in both places.
+ */
+function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): boolean {
+  if (NON_RETRYABLE_TYPES.has(type)) return false;
+  if (code && NON_RETRYABLE_TOOL_CONTRACT_CODES.has(code)) return false;
+  if (code && LOCAL_RATE_LIMIT_CODES.has(code)) return false;
+  return true;
+}
+
 /** One tool call's contract failure, used to report every bad call in a response at once. */
 export interface ToolIssue {
   name: string;
@@ -169,6 +182,51 @@ export interface LLMErrorIssuesByCode {
   unsupported_capability: UnsupportedCapabilityIssue;
 }
 
+/**
+ * Immutable, point-in-time copy of an `LLMError`'s fields, produced by
+ * `LLMError.toSnapshot()`. This is what `RetryAttempt.error` holds
+ * instead of a live `LLMError`.
+ *
+ * A past attempt needs to be *describable* (its message, type, code,
+ * whether it was retryable) but never needs to be *thrown* again, so it
+ * doesn't need `Error`'s behavior, `instanceof` identity, or a live
+ * getter. Using the full `LLMError` class here would also make the type
+ * self-referential through its own `attempts` field; a snapshot is a
+ * plain, inert record and carries only what a past attempt can
+ * meaningfully have.
+ *
+ * `attempts` is still present, because a recorded attempt can itself be
+ * the terminal failure of an inner retry loop that had its own history
+ * (see `FallbackAttempt`, where one target's own retries land here).
+ * That's a tree of past data, not a cycle: nothing on `LLMErrorSnapshot`
+ * lets you get back to a throwable, extendable `LLMError`.
+ */
+export interface LLMErrorSnapshot {
+  message: string;
+  type: LLMErrorType;
+  status?: number;
+  issues?: unknown;
+  retryAfterMs?: number;
+  code?: LLMErrorCode;
+  /** The original thrown value this attempt's error was built from, same as `LLMError.cause`. */
+  cause?: unknown;
+  /** Computed once, at snapshot time, since a snapshot has no live getter. */
+  retryable: boolean;
+  /** This attempt's own prior attempts, if it was itself the terminal failure of a retry loop. */
+  attempts?: RetryAttempt[];
+}
+
+/**
+ * One failed attempt on the way to a terminal error: which attempt index
+ * it was, and a snapshot of the error it failed with. The base shape
+ * every richer attempt record (e.g. `FallbackAttempt`) extends, rather
+ * than duplicates.
+ */
+export interface RetryAttempt {
+  index: number;
+  error: LLMErrorSnapshot;
+}
+
 /** Optional fields for constructing an {@link LLMError}. `message` and `type` stay positional since every throw site sets both. */
 export interface LLMErrorOptions {
   status?: number;
@@ -177,6 +235,8 @@ export interface LLMErrorOptions {
   retryAfterMs?: number;
   /** Stable discriminator within `type`. Absent on errors predating it. */
   code?: LLMErrorCode;
+  /** Every attempt made before this error was thrown, in order. Absent when nothing was retried. */
+  attempts?: RetryAttempt[];
 }
 
 export class LLMError extends Error {
@@ -186,6 +246,8 @@ export class LLMError extends Error {
   public retryAfterMs?: number;
   /** Stable discriminator within `type`. Absent on errors predating it. */
   public code?: LLMErrorCode;
+  /** Every attempt made before this error was thrown, in order. Absent when nothing was retried. */
+  public attempts?: RetryAttempt[];
 
   constructor(
     message: string,
@@ -199,6 +261,7 @@ export class LLMError extends Error {
     this.cause = options.cause;
     this.retryAfterMs = options.retryAfterMs;
     this.code = options.code;
+    this.attempts = options.attempts;
   }
 
   /**
@@ -211,10 +274,30 @@ export class LLMError extends Error {
    * override this when `type` alone carries no retry signal.
    */
   get retryable(): boolean {
-    if (NON_RETRYABLE_TYPES.has(this.type)) return false;
-    if (this.code && NON_RETRYABLE_TOOL_CONTRACT_CODES.has(this.code)) return false;
-    if (this.code && LOCAL_RATE_LIMIT_CODES.has(this.code)) return false;
-    return true;
+    return computeRetryable(this.type, this.code);
+  }
+
+  /**
+   * Copies this error's fields into an inert {@link LLMErrorSnapshot},
+   * for recording as a `RetryAttempt`/`FallbackAttempt`. `retryable` is
+   * captured here since a snapshot has no getter of its own; every other
+   * field is copied as-is, including `attempts`, since this error's own
+   * prior attempts are already snapshots (an `LLMError`'s `attempts` is
+   * only ever populated by `normalizeError`, which always pushes
+   * snapshots, never live errors).
+   */
+  toSnapshot(): LLMErrorSnapshot {
+    return {
+      message: this.message,
+      type: this.type,
+      status: this.status,
+      issues: this.issues,
+      retryAfterMs: this.retryAfterMs,
+      code: this.code,
+      cause: this.cause,
+      retryable: this.retryable,
+      attempts: this.attempts,
+    };
   }
 }
 

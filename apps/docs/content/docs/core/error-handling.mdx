@@ -260,8 +260,8 @@ interface ToolIssue {
 
 When `fallback` is configured and every target fails, `call()` throws `FallbackExhaustedError`
 instead of the last target's raw error. It extends `LLMError`, so `isLLMError` and any
-`instanceof LLMError` check still passes, and it carries `attempts`, every target's own normalized
-error, in the order they were tried:
+`instanceof LLMError` check still passes, and it carries `attempts`, a snapshot of every target's
+own error, in the order they were tried:
 
 ```ts title="fallback-exhausted-error.ts"
 class FallbackExhaustedError extends LLMError {
@@ -272,7 +272,7 @@ interface FallbackAttempt {
   index: number; // -1 for the primary
   provider: string;
   model: string;
-  error: LLMError;
+  error: LLMErrorSnapshot;
 }
 ```
 

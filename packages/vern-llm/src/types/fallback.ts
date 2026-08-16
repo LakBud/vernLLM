@@ -1,4 +1,4 @@
-import { LLMError } from './errors.js';
+import { LLMError, type RetryAttempt } from './errors.js';
 
 import type { CircuitBreakerOptions, CircuitState } from '../circuitBreaker.js';
 import type { RateLimitOptions } from '../rateLimit.js';
@@ -72,13 +72,15 @@ export interface CircuitTarget {
   model?: string;
 }
 
-/** One target's failure, recorded on the way to either the next target or `FallbackExhaustedError`. */
-export interface FallbackAttempt {
-  /** `-1` for the primary target. */
-  index: number;
+/**
+ * One target's failure, recorded on the way to either the next target or
+ * `FallbackExhaustedError`. Extends `RetryAttempt`: `index` is `-1` for
+ * the primary target here (rather than a plain retry count), and
+ * `provider`/`model` identify which target failed.
+ */
+export interface FallbackAttempt extends RetryAttempt {
   provider: string;
   model: string;
-  error: LLMError;
 }
 
 /**
@@ -123,7 +125,7 @@ export const defaultFallbackOn: FallbackOn = (error) => {
  * `'api'`-typed error, keeps working on a fallback-exhausted error too.
  */
 export class FallbackExhaustedError extends LLMError {
-  constructor(public readonly attempts: FallbackAttempt[]) {
+  constructor(public override readonly attempts: FallbackAttempt[]) {
     const last = attempts[attempts.length - 1]?.error;
 
     // `type` is always `'fallback_exhausted'`, never inherited from the last
@@ -137,9 +139,14 @@ export class FallbackExhaustedError extends LLMError {
       'fallback_exhausted',
       {
         status: last?.status,
+        // `last` is an `LLMErrorSnapshot`, not the live `LLMError` that
+        // target actually threw, so `cause` here is the same descriptive
+        // data a caller would get from `err.attempts.at(-1)!.error`
+        // rather than a distinct object.
         cause: last,
         retryAfterMs: last?.retryAfterMs,
         code: 'fallback_exhausted',
+        attempts,
       },
     );
   }
@@ -154,4 +161,9 @@ export class FallbackExhaustedError extends LLMError {
     const last = this.attempts[this.attempts.length - 1]?.error;
     return last ? last.retryable : super.retryable;
   }
+}
+
+/** Narrows `err` to {@link FallbackExhaustedError}, for direct access to its `attempts` (`provider`/`model` per failed target) without a manual `instanceof` check. */
+export function isFallbackExhaustedError(err: unknown): err is FallbackExhaustedError {
+  return err instanceof FallbackExhaustedError;
 }

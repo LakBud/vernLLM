@@ -175,6 +175,44 @@ describe('normalizeError', () => {
     expect(result.type).toBe('unknown');
     expect(result.code).toBeUndefined();
   });
+
+  it('carries a given attempts array through onto a freshly built LLMError', () => {
+    const attempts = [
+      { index: 0, error: new LLMError('first try failed', 'api', { status: 500 }) },
+    ];
+
+    const result = normalizeError(new Error('boom'), undefined, attempts);
+
+    expect(result.attempts).toBe(attempts);
+  });
+
+  it('leaves attempts undefined on a freshly built LLMError when none is given', () => {
+    const result = normalizeError(new Error('boom'));
+
+    expect(result.attempts).toBeUndefined();
+  });
+
+  it('fills in attempts on an already-normalized LLMError that has none yet', () => {
+    const original = new LLMError('already normalized', 'validation');
+    const attempts = [
+      { index: 0, error: new LLMError('first try failed', 'api', { status: 500 }) },
+    ];
+
+    const result = normalizeError(original, undefined, attempts);
+
+    expect(result).toBe(original);
+    expect(result.attempts).toBe(attempts);
+  });
+
+  it('does not overwrite attempts already set on an already-normalized LLMError', () => {
+    const existing = [{ index: 0, error: new LLMError('existing', 'api', { status: 500 }) }];
+    const original = new LLMError('already normalized', 'validation', { attempts: existing });
+    const incoming = [{ index: 0, error: new LLMError('incoming', 'api', { status: 500 }) }];
+
+    const result = normalizeError(original, undefined, incoming);
+
+    expect(result.attempts).toBe(existing);
+  });
 });
 
 describe('describeError', () => {

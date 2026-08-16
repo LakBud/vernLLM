@@ -221,7 +221,10 @@ export class VernLLM {
           index: i - 1,
           provider: executor.providerName,
           model: params.model ?? executor.model,
-          error: normalized,
+          // `.toSnapshot()`: this target's own `attempts` (from its own
+          // retries, already snapshots per `CallExecutor`) come along
+          // for free since `toSnapshot()` copies them as-is.
+          error: normalized.toSnapshot(),
         });
 
         const isLast = i === this.executors.length - 1;

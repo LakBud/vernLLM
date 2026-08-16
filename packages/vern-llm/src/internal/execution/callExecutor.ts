@@ -14,6 +14,7 @@ import type {
   CallParams,
   CallWithToolsResult,
   LLMClient,
+  RetryAttempt,
   StreamChunk,
   TokenUsage,
   ToolIssue,
@@ -138,6 +139,7 @@ export class CallExecutor {
     onAttempt?: () => void,
   ): Promise<T | CallWithToolsResult<T>> {
     const model = params.model ?? this.model;
+    const attempts: RetryAttempt[] = [];
 
     try {
       return await this.retryWithBackoff(
@@ -146,9 +148,17 @@ export class CallExecutor {
         model,
         params.signal,
         onAttempt,
+        attempts,
       );
     } catch (error) {
-      const normalized = normalizeError(error, params.signal);
+      // `attempts` only holds prior attempts that were actually retried
+      // past. It's `[]` when nothing was retried, so normalize that to
+      // `undefined` per `LLMError.attempts`'s contract.
+      const normalized = normalizeError(
+        error,
+        params.signal,
+        attempts.length > 0 ? attempts : undefined,
+      );
 
       if (this.countsTowardBreaker(normalized)) {
         this.breaker?.recordFailure(model);
@@ -170,6 +180,7 @@ export class CallExecutor {
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
     const model = params.model ?? this.model;
+    const attempts: RetryAttempt[] = [];
 
     try {
       return await this.retryWithBackoff(
@@ -178,9 +189,15 @@ export class CallExecutor {
         model,
         params.signal,
         onAttempt,
+        attempts,
       );
     } catch (error) {
-      const normalized = normalizeError(error, params.signal);
+      // See the matching comment in `run`.
+      const normalized = normalizeError(
+        error,
+        params.signal,
+        attempts.length > 0 ? attempts : undefined,
+      );
 
       if (this.countsTowardBreaker(normalized)) {
         this.breaker?.recordFailure(model);
@@ -621,13 +638,24 @@ export class CallExecutor {
     }
   }
 
-  /** Runs `fn`, retrying with backoff according to `shouldRetry`. */
+  /**
+   * Runs `fn`, retrying with backoff according to `shouldRetry`. When
+   * `attempts` is given, every failed attempt that is actually followed by
+   * a retry is recorded, in order. This mirrors `LLMError.attempts`'s
+   * contract: every attempt made before this error was thrown. The
+   * terminal failure is never pushed since it isn't a prior attempt, it
+   * is the error being thrown. `attempts` stays empty when nothing was
+   * retried, so no separate bookkeeping is needed at the call sites.
+   * Each failure is recorded as a snapshot (`LLMError.toSnapshot()`),
+   * not the live `LLMError`, per `RetryAttempt`'s contract.
+   */
   private async retryWithBackoff<T>(
     fn: (attempt: number) => Promise<T>,
     requestId: string,
     model: string,
     signal?: AbortSignal,
     onAttempt?: () => void,
+    attempts?: RetryAttempt[],
   ): Promise<T> {
     let lastError: unknown;
 
@@ -642,7 +670,10 @@ export class CallExecutor {
       } catch (error) {
         lastError = error;
 
-        if (!this.shouldRetry(error, signal)) break;
+        const willRetry = attempt < this.maxRetries && this.shouldRetry(error, signal);
+        if (!willRetry) break;
+
+        attempts?.push({ index: attempt, error: normalizeError(error, signal).toSnapshot() });
       }
     }
 
