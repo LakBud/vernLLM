@@ -331,8 +331,11 @@ describe('VernLLM, fallback', () => {
     expect(caught).not.toBeInstanceOf(FallbackExhaustedError);
 
     const error = caught as LLMError;
-    expect(error.attempts).toHaveLength(3);
-    expect(error.attempts?.map((a) => a.index)).toEqual([0, 1, 2]);
+    // 3 attempts total (maxRetries: 2); the terminal (3rd) failure IS
+    // `error` itself, so only the 2 retried-past failures before it are
+    // recorded in `attempts`.
+    expect(error.attempts).toHaveLength(2);
+    expect(error.attempts?.map((a) => a.index)).toEqual([0, 1]);
     expect(error.attempts?.every((a) => a.error instanceof LLMError)).toBe(true);
   });
 
@@ -359,7 +362,9 @@ describe('VernLLM, fallback', () => {
     const exhausted = caught as FallbackExhaustedError;
 
     for (const targetAttempt of exhausted.attempts) {
-      expect(targetAttempt.error.attempts).toHaveLength(2);
+      // maxRetries: 1 → 2 attempts per target; the terminal one is
+      // `targetAttempt.error` itself, so only 1 prior attempt is recorded.
+      expect(targetAttempt.error.attempts).toHaveLength(1);
     }
   });
 

@@ -151,7 +151,14 @@ export class CallExecutor {
         attempts,
       );
     } catch (error) {
-      const normalized = normalizeError(error, params.signal, attempts);
+      // `attempts` only holds prior attempts that were actually retried
+      // past. It's `[]` when nothing was retried, so normalize that to
+      // `undefined` per `LLMError.attempts`'s contract.
+      const normalized = normalizeError(
+        error,
+        params.signal,
+        attempts.length > 0 ? attempts : undefined,
+      );
 
       if (this.countsTowardBreaker(normalized)) {
         this.breaker?.recordFailure(model);
@@ -185,7 +192,12 @@ export class CallExecutor {
         attempts,
       );
     } catch (error) {
-      const normalized = normalizeError(error, params.signal, attempts);
+      // See the matching comment in `run`.
+      const normalized = normalizeError(
+        error,
+        params.signal,
+        attempts.length > 0 ? attempts : undefined,
+      );
 
       if (this.countsTowardBreaker(normalized)) {
         this.breaker?.recordFailure(model);
@@ -628,9 +640,12 @@ export class CallExecutor {
 
   /**
    * Runs `fn`, retrying with backoff according to `shouldRetry`. When
-   * `attempts` is given, every failed attempt is recorded onto it as it
-   * happens, in order, so the caller can hand the accumulated record to
-   * `normalizeError` once the loop finally gives up.
+   * `attempts` is given, every failed attempt that is actually followed by
+   * a retry is recorded, in order. This mirrors `LLMError.attempts`'s
+   * contract: every attempt made before this error was thrown. The
+   * terminal failure is never pushed since it isn't a prior attempt, it
+   * is the error being thrown. `attempts` stays empty when nothing was
+   * retried, so no separate bookkeeping is needed at the call sites.
    */
   private async retryWithBackoff<T>(
     fn: (attempt: number) => Promise<T>,
@@ -652,9 +667,11 @@ export class CallExecutor {
         return await fn(attempt);
       } catch (error) {
         lastError = error;
-        attempts?.push({ index: attempt, error: normalizeError(error, signal) });
 
-        if (!this.shouldRetry(error, signal)) break;
+        const willRetry = attempt < this.maxRetries && this.shouldRetry(error, signal);
+        if (!willRetry) break;
+
+        attempts?.push({ index: attempt, error: normalizeError(error, signal) });
       }
     }
 

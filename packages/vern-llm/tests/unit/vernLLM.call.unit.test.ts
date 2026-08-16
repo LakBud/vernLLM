@@ -286,6 +286,75 @@ describe('VernLLM.call, retry & backoff', () => {
     const result = await promise;
     expect(result).toEqual({ ok: true });
   });
+
+  it('accumulates one attempts entry per retried-past failure when a call eventually succeeds then fails later', async () => {
+    // Not a realistic single call, but exercises retryWithBackoff directly
+    // enough to confirm attempts grows across multiple retried failures
+    // before the terminal one.
+    const { client } = createMockClient([
+      new Error('fail 1'),
+      new Error('fail 2'),
+      new Error('fail 3'),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 2, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'unknown' });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    // 3 attempts total (maxRetries: 2); the first 2 are retried past and
+    // recorded, the 3rd is the terminal failure itself and isn't.
+    expect(thrown.attempts).toHaveLength(2);
+    expect(thrown.attempts?.map((a) => a.index)).toEqual([0, 1]);
+  });
+
+  it('leaves attempts undefined when maxRetries is 0 (no retry was actually made)', async () => {
+    const { client } = createMockClient([new Error('single failure')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const thrown = (await llm
+      .call({ systemPrompt: 's', userContent: 'u' })
+      .catch((e) => e)) as LLMError;
+
+    expect(thrown.attempts).toBeUndefined();
+  });
+
+  it('leaves attempts undefined when the first failure is non-retryable', async () => {
+    const { client } = createMockClient([new FakeApiError('unauthorized', 401)]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 3, baseDelayMs: 10 });
+
+    const thrown = (await llm
+      .call({ systemPrompt: 's', userContent: 'u' })
+      .catch((e) => e)) as LLMError;
+
+    expect(thrown.type).toBe('api');
+    expect(thrown.status).toBe(401);
+    expect(thrown.attempts).toBeUndefined();
+  });
+
+  it('records only prior (pre-terminal) attempts, never the thrown error itself, on an LLMError retry', async () => {
+    const first = new LLMError('server hiccup', 'api', { status: 500 });
+    const final = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, final]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    expect(thrown).toBe(final);
+    // Terminal failure is thrown itself, not a prior attempt, so it's
+    // never in attempts and no entry can reference thrown.
+    expect(thrown.attempts).toHaveLength(1);
+    const [entry] = thrown.attempts ?? [];
+    expect(entry?.error).not.toBe(thrown);
+    expect(entry?.error.message).toBe(first.message);
+    expect(() => JSON.stringify(thrown)).not.toThrow();
+  });
 });
 
 describe('VernLLM.call, abort during backoff wait', () => {
