@@ -5,6 +5,12 @@ description: Swap in your own logger implementation
 
 `VernLLM` accepts a custom logger through the `logger` option. The logger must implement the `Logger` interface.
 
+<Callout type="info">
+  A logger you pass in is wrapped internally so a throwing implementation can never break the call
+  it's describing. If your `debug`, `warn`, or `error` throws, the error is caught and dropped, and
+  the operation it was logging still completes normally.
+</Callout>
+
 ```ts title="pluggable-logger-setup.ts"
 import pino from 'pino';
 import type { Logger } from 'vern-llm';

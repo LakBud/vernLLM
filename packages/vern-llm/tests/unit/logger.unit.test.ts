@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
+import { createSafeLogger } from '../../src/internal/logger.utils.js';
 import { ConsoleLogger } from '../../src/logger.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
@@ -135,5 +136,77 @@ describe('VernLLM: default logger resolution', () => {
     const llm = new VernLLM({ client, model: 'm', redact }); // no logger, no debug
     await llm.call({ userContent: 'u' });
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSafeLogger', () => {
+  it('passes calls through to the wrapped logger', () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const safe = createSafeLogger(logger);
+
+    safe.debug('d');
+    safe.warn('w');
+    safe.error('e', { detail: 1 });
+
+    expect(logger.debug).toHaveBeenCalledWith('d');
+    expect(logger.warn).toHaveBeenCalledWith('w');
+    expect(logger.error).toHaveBeenCalledWith('e', { detail: 1 });
+  });
+
+  it('swallows a throwing debug() instead of propagating', () => {
+    const logger = {
+      debug: vi.fn(() => {
+        throw new Error('boom');
+      }),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const safe = createSafeLogger(logger);
+
+    expect(() => safe.debug('d')).not.toThrow();
+  });
+
+  it('swallows a throwing warn() instead of propagating', () => {
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(() => {
+        throw new Error('boom');
+      }),
+      error: vi.fn(),
+    };
+    const safe = createSafeLogger(logger);
+
+    expect(() => safe.warn('w')).not.toThrow();
+  });
+
+  it('swallows a throwing error() instead of propagating', () => {
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(() => {
+        throw new Error('boom');
+      }),
+    };
+    const safe = createSafeLogger(logger);
+
+    expect(() => safe.error('e')).not.toThrow();
+  });
+
+  it('keeps other methods working when one method throws', () => {
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(() => {
+        throw new Error('boom');
+      }),
+      error: vi.fn(),
+    };
+    const safe = createSafeLogger(logger);
+
+    safe.warn('w');
+    safe.debug('d');
+    safe.error('e');
+
+    expect(logger.debug).toHaveBeenCalledWith('d');
+    expect(logger.error).toHaveBeenCalledWith('e');
   });
 });
