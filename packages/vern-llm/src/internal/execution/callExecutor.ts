@@ -314,7 +314,7 @@ export class CallExecutor {
       const content = rawContent?.trim();
 
       if (!content && !wireToolCalls?.length) {
-        throw new LLMError('Empty LLM response', 'api');
+        throw new LLMError('Empty LLM response', 'api', { code: 'empty_response' });
       }
 
       this.logger.debug(
@@ -323,9 +323,14 @@ export class CallExecutor {
 
       if (wireToolCalls?.length) {
         if (!params.tools) {
+          // Same class of problem as the other tool-contract codes below:
+          // a provider contract violation, not an HTTP failure, so this is
+          // `type: 'validation'` rather than `'api'`. Byte-for-byte
+          // identical on retry, so not retryable.
           throw new LLMError(
             'Provider returned tool_calls but no `tools` were sent with this call.',
-            'api',
+            'validation',
+            { code: 'unexpected_tool_calls' },
           );
         }
 
@@ -341,12 +346,10 @@ export class CallExecutor {
           // below: not retryable, and not the provider being unhealthy.
           throw new LLMError(
             "Provider returned tool_calls despite toolChoice: 'none'.",
-            'api',
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            'tool_choice_none_violated',
+            'validation',
+            {
+              code: 'tool_choice_none_violated',
+            },
           );
         }
 
@@ -418,7 +421,14 @@ export class CallExecutor {
     const completions = this.client.chat.completions;
 
     if (!completions.createStream) {
-      throw new LLMError('stream: true requires a client/adapter with createStream', 'validation');
+      throw new LLMError(
+        'stream: true requires a client/adapter with createStream',
+        'invalid_params',
+        {
+          code: 'unsupported_capability',
+          issues: { capability: 'createStream' },
+        },
+      );
     }
 
     const createStream = completions.createStream.bind(completions);
@@ -545,13 +555,13 @@ export class CallExecutor {
    * `argumentsSchema`, if present.
    *
    * Contract failures (unknown name, duplicate id) are collected across
-   * every call and thrown together, since retrying a request that already
-   * has these errors cannot help (`shouldRetry` excludes them by `code`)
-   * and a caller fixing them wants to see every one, not just the first.
-   * Schema failures keep the original single-error, `type: 'validation'`
-   * shape rather than being folded into the aggregate, since they're a
-   * distinct failure kind from the contract failures above (also excluded
-   * from retry, by `type` rather than `code`; see `shouldRetry`).
+   * every call and thrown together as one `type: 'validation'` error with
+   * `issues: ToolIssue[]`, since retrying a request that already has these
+   * errors cannot help (excluded from retry by `type`) and a caller fixing
+   * them wants to see every one, not just the first. Schema failures keep
+   * the original single-error, `type: 'validation'` shape rather than being
+   * folded into the aggregate, since they're a distinct failure kind from
+   * the contract failures above.
    */
   private validateToolCallArguments(
     toolCalls: { id: string; name: string; arguments: unknown }[],
@@ -583,20 +593,13 @@ export class CallExecutor {
       // the whole story.
       const message =
         toolIssues.length > 1
-          ? `${primary} (${toolIssues.length} tool call issues total, see toolIssues.)`
+          ? `${primary} (${toolIssues.length} tool call issues total, see error.issues.)`
           : primary;
 
-      const error = new LLMError(
-        message,
-        'api',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        unknownTool ? 'unknown_tool' : 'duplicate_tool_call_id',
-      );
-      error.toolIssues = toolIssues;
-      throw error;
+      throw new LLMError(message, 'validation', {
+        code: unknownTool ? 'unknown_tool' : 'duplicate_tool_call_id',
+        issues: toolIssues,
+      });
     }
 
     for (const call of toolCalls) {
@@ -610,8 +613,9 @@ export class CallExecutor {
         throw new LLMError(
           `Arguments for tool call "${call.name}" failed validation`,
           'validation',
-          undefined,
-          result.error,
+          {
+            issues: result.error,
+          },
         );
       }
     }
@@ -754,7 +758,7 @@ export class CallExecutor {
     const result = schema.safeParse(parsed);
 
     if (!result.success) {
-      throw new LLMError('Schema validation failed', 'validation', undefined, result.error);
+      throw new LLMError('Schema validation failed', 'validation', { issues: result.error });
     }
 
     return result.data;
@@ -797,35 +801,15 @@ export class CallExecutor {
     await waitForRetry(delay, signal);
   }
 
-  private isNonRetryableToolContractError(error: unknown): error is LLMError {
-    return (
-      error instanceof LLMError &&
-      (error.code === 'unknown_tool' ||
-        error.code === 'duplicate_tool_call_id' ||
-        error.code === 'tool_choice_none_violated')
-    );
-  }
-
   /** Decides whether a failed attempt is worth retrying. */
   private shouldRetry(error: unknown, signal?: AbortSignal): boolean {
     if (signal?.aborted) return false;
 
-    if (error instanceof LLMError && (error.type === 'parse' || error.type === 'validation')) {
-      return false;
-    }
-
-    // The queue wait already happened; retrying immediately would just
-    // requeue behind the same limit with nothing changed.
-    if (error instanceof LLMError && error.code === 'local_rate_limit') {
-      return false;
-    }
-
-    // Tool contract failures repeat identically on retry: the wire request
-    // is byte-for-byte the same, so nothing about a retry can change
-    // whether the model names a real tool or reuses a call id.
-    if (this.isNonRetryableToolContractError(error)) {
-      return false;
-    }
+    // `LLMError.retryable` already covers the deterministic cases: parse/
+    // validation/invalid_params/aborted types, the tool contract codes,
+    // and the local rate-limit codes. Only `nonRetryableStatus`, specific
+    // to this call, isn't part of that general-purpose property.
+    if (error instanceof LLMError && !error.retryable) return false;
 
     const status = extractStatus(error);
 
@@ -838,24 +822,12 @@ export class CallExecutor {
    * reusing a call id, or a provider ignoring `toolChoice: 'none'` isn't
    * the provider being unhealthy, it's a model/provider response defect
    * that will very likely recur regardless of provider health, so it
-   * shouldn't push a healthy provider's circuit toward opening. Mirrors
-   * the same reasoning `shouldRetry` already applies to
-   * `parse`/`validation`/these same tool-contract codes.
+   * shouldn't push a healthy provider's circuit toward opening. Same for
+   * a caller-input bug or a local rate-limit rejection: neither ever
+   * reached the provider at all. This is exactly what `LLMError.retryable`
+   * already excludes, so this defers to it directly.
    */
   private countsTowardBreaker(error: LLMError): boolean {
-    if (
-      error.type === 'validation' ||
-      error.type === 'parse' ||
-      error.type === 'aborted' ||
-      // A local queue timeout/full-queue rejection never reached the
-      // provider at all, so it says nothing about the provider's health
-      // and shouldn't push a healthy provider's circuit toward opening.
-      error.code === 'local_rate_limit' ||
-      this.isNonRetryableToolContractError(error)
-    ) {
-      return false;
-    }
-
-    return true;
+    return error.retryable;
   }
 }

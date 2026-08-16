@@ -29,7 +29,7 @@ describe('VernLLM.call, Zod schema validation', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it('throws LLMError(validation) instead of silently skipping when schema is combined with jsonMode: false', async () => {
+  it('throws LLMError(invalid_params) instead of silently skipping when schema is combined with jsonMode: false', async () => {
     const { client, create } = createMockClient([jsonResponse({ name: 'Fammy', skills: [] })]);
     const llm = new VernLLM({ client, model: 'm' });
 
@@ -37,7 +37,7 @@ describe('VernLLM.call, Zod schema validation', () => {
       .call({ systemPrompt: 's', userContent: 'u', schema: Schema, jsonMode: false })
       .catch((e) => e)) as LLMError;
 
-    expect(err.type).toBe('validation');
+    expect(err.type).toBe('invalid_params');
     expect(err.message).toMatch(/nothing would validate it/);
     expect(create).not.toHaveBeenCalled();
   });
@@ -403,7 +403,7 @@ describe('VernLLM.call, onUsageFailure', () => {
     );
   });
 
-  it('reports usage failure for an "api" error thrown post-response too, e.g. unexpected tool_calls', async () => {
+  it('reports usage failure for a "validation" error thrown post-response too, e.g. unexpected tool_calls', async () => {
     const onUsage = vi.fn();
     const onUsageFailure = vi.fn();
     const { client } = createMockClient([]);
@@ -422,17 +422,17 @@ describe('VernLLM.call, onUsageFailure', () => {
     });
     const llm = new VernLLM({ client, model: 'm', maxRetries: 0, onUsage, onUsageFailure });
 
-    // No `tools` passed, so the tool_calls response is unexpected -> LLMError('api').
+    // No `tools` passed, so the tool_calls response is unexpected -> LLMError('validation', code: 'unexpected_tool_calls').
     const err = (await llm
       .call({ systemPrompt: 's', userContent: 'u' })
       .catch((e) => e)) as LLMError;
 
-    expect(err.type).toBe('api');
+    expect(err.type).toBe('validation');
     expect(onUsage).not.toHaveBeenCalled();
     expect(onUsageFailure).toHaveBeenCalledTimes(1);
     expect(onUsageFailure).toHaveBeenCalledWith(
       expect.objectContaining({ totalTokens: 4 }),
-      expect.objectContaining({ type: 'api' }),
+      expect.objectContaining({ type: 'validation' }),
     );
   });
 

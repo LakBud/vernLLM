@@ -96,8 +96,10 @@ const batchLlm = new VernLLM({
 });
 ```
 
-For the interactive case, catch the `local_rate_limit` failure and degrade gracefully instead of
-surfacing a raw error:
+For the interactive case, catch the local rate-limit failure and degrade gracefully instead of
+surfacing a raw error. `type: 'rate_limited'` covers both a local rejection and the provider's own
+429; `code` tells them apart, and `rate_limit_queue_full`/`rate_limit_queue_timeout` specifically
+mean the local queue gave up:
 
 ```ts title="rate-limiting-graceful-degrade.ts"
 import { isLLMError } from 'vern-llm';
@@ -105,7 +107,10 @@ import { isLLMError } from 'vern-llm';
 try {
   return await chatLlm.call({ userContent: message });
 } catch (err) {
-  if (isLLMError(err) && err.code === 'local_rate_limit') {
+  if (
+    isLLMError(err) &&
+    (err.code === 'rate_limit_queue_full' || err.code === 'rate_limit_queue_timeout')
+  ) {
     return { message: "We're a little busy right now, please try again in a moment." };
   }
   throw err;
@@ -113,9 +118,9 @@ try {
 ```
 
 <Callout type="warn">
-  Don't retry a `local_rate_limit` error yourself in a tight loop. The call already waited up to
-  `maxQueueMs` for capacity that never came; retrying it immediately just requeues it behind the
-  same limit. If you want another attempt, wait a meaningful amount of time first, or size
+  Don't retry a `rate_limit_queue_timeout` error yourself in a tight loop. The call already waited
+  up to `maxQueueMs` for capacity that never came; retrying it immediately just requeues it behind
+  the same limit. If you want another attempt, wait a meaningful amount of time first, or size
   `maxQueueMs` longer instead of handling it at the call site.
 </Callout>
 
@@ -131,7 +136,10 @@ import { isLLMError } from 'vern-llm';
 try {
   await llm.call({ userContent: message });
 } catch (err) {
-  if (isLLMError(err) && err.code === 'local_rate_limit') {
+  if (
+    isLLMError(err) &&
+    (err.code === 'rate_limit_queue_full' || err.code === 'rate_limit_queue_timeout')
+  ) {
     console.warn('rateLimit queue gave up, consider raising the configured limits');
   } else if (isLLMError(err) && err.code === 'provider_rate_limited') {
     console.warn('provider itself rate limited this request');
@@ -140,18 +148,19 @@ try {
 }
 ```
 
-A `local_rate_limit` error in your logs is a signal that your configured `rateLimit` numbers are
-tighter than your real traffic, worth revisiting rather than something to retry away. A
-`provider_rate_limited` error, on the other hand, already went through the normal retry and
-`Retry-After` handling before you ever see it; seeing one at all after retries were exhausted means
-the provider is sustained-throttling you past what backoff alone recovers from.
+A `rate_limit_queue_full` or `rate_limit_queue_timeout` error in your logs is a signal that your
+configured `rateLimit` numbers are tighter than your real traffic, worth revisiting rather than
+something to retry away. A `provider_rate_limited` error, on the other hand, already went through
+the normal retry and `Retry-After` handling before you ever see it; seeing one at all after retries
+were exhausted means the provider is sustained-throttling you past what backoff alone recovers
+from.
 
 ## Watching queue pressure before it becomes failures
 
 `onEvent`'s `rate_limited` event fires on every attempt that had to wait, before any of those waits
-turn into an actual `local_rate_limit` failure. Wiring it into your existing metrics gives you a
-leading indicator, so you can raise a limit (or investigate a traffic spike) before callers start
-seeing errors:
+turn into an actual `rate_limit_queue_full` or `rate_limit_queue_timeout` failure. Wiring it into
+your existing metrics gives you a leading indicator, so you can raise a limit (or investigate a
+traffic spike) before callers start seeing errors:
 
 ```ts title="rate-limiting-metrics.ts"
 const llm = new VernLLM({

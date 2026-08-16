@@ -7,6 +7,8 @@ import {
   TieredCacheAdapter,
   parseSseStream,
   SSE_PING,
+  isLLMError,
+  hasIssues,
   type AnthropicClient,
   type BedrockConverseClient,
   type GeminiClient,
@@ -30,6 +32,11 @@ describe('package entrypoint exports', () => {
     expect(typeof parseSseStream).toBe('function');
     expect(SSE_PING).toBeDefined();
     expect(typeof SSE_PING).toBe('symbol');
+  });
+
+  it('exports isLLMError and hasIssues as runtime functions from the package root', () => {
+    expect(typeof isLLMError).toBe('function');
+    expect(typeof hasIssues).toBe('function');
   });
 
   it('exports public client and schema types', () => {

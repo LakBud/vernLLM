@@ -6,6 +6,8 @@ import {
   type StreamCallResult,
   type ContentResult,
   isToolCallResult,
+  isLLMError,
+  hasIssues,
 } from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import {
@@ -202,7 +204,7 @@ describe('VernLLM.call, happy paths', () => {
     expectTypeOf(result.finalResult).toEqualTypeOf<Promise<ContentResult<string>>>();
   });
 
-  it('rejects with LLMError("api", code: "tool_choice_none_violated") if the provider returns tool_calls despite toolChoice: "none", and does not retry', async () => {
+  it('rejects with LLMError("validation", code: "tool_choice_none_violated") if the provider returns tool_calls despite toolChoice: "none", and does not retry', async () => {
     const { client, create } = createMockClient([
       toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'NYC' } }]),
     ]);
@@ -216,7 +218,7 @@ describe('VernLLM.call, happy paths', () => {
       }),
     ).rejects.toMatchObject({
       name: 'LLMError',
-      type: 'api',
+      type: 'validation',
       code: 'tool_choice_none_violated',
     });
 
@@ -317,7 +319,7 @@ describe('VernLLM.call, multi-turn continuation via history', () => {
           { role: 'tool', toolResults: [{ toolCallId: 'call_1', content: 'x' }] },
         ],
       }),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 });
 
@@ -487,7 +489,7 @@ describe('VernLLM.call, bug fixes / hardening', () => {
           { role: 'tool', toolResults: [{ toolCallId: 'x', content: 'y' }] },
         ],
       }),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
   it('rejects a "tool" history turn whose toolResults reference an unknown toolCallId', async () => {
@@ -506,7 +508,7 @@ describe('VernLLM.call, bug fixes / hardening', () => {
           { role: 'tool', toolResults: [{ toolCallId: 'call_WRONG', content: 'y' }] },
         ],
       }),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
   it('rejects a duplicate toolCallId in toolResults, even when every requested id has a known match', async () => {
@@ -537,7 +539,10 @@ describe('VernLLM.call, bug fixes / hardening', () => {
           },
         ],
       }),
-    ).rejects.toMatchObject({ type: 'validation', message: expect.stringMatching(/duplicate/i) });
+    ).rejects.toMatchObject({
+      type: 'invalid_params',
+      message: expect.stringMatching(/duplicate/i),
+    });
   });
 
   it('throws a clear error when the model requests a tool name that was not offered, and does not retry, since the wire request would repeat identically', async () => {
@@ -547,10 +552,10 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
 
     await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
-      type: 'api',
+      type: 'validation',
       code: 'unknown_tool',
       message: expect.stringContaining('not_a_real_tool'),
-      toolIssues: [{ name: 'not_a_real_tool', toolCallId: 'call_1', code: 'unknown_tool' }],
+      issues: [{ name: 'not_a_real_tool', toolCallId: 'call_1', code: 'unknown_tool' }],
     });
 
     // Guards the retry-classification fix: even with retries configured,
@@ -570,9 +575,9 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0 });
 
     await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
-      type: 'api',
+      type: 'validation',
       code: 'unknown_tool',
-      toolIssues: [
+      issues: [
         { name: 'not_real_1', toolCallId: 'call_1', code: 'unknown_tool' },
         { name: 'not_real_2', toolCallId: 'call_3', code: 'unknown_tool' },
       ],
@@ -589,9 +594,9 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
 
     await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
-      type: 'api',
+      type: 'validation',
       code: 'duplicate_tool_call_id',
-      toolIssues: [{ name: 'get_weather', toolCallId: 'call_1', code: 'duplicate_tool_call_id' }],
+      issues: [{ name: 'get_weather', toolCallId: 'call_1', code: 'duplicate_tool_call_id' }],
     });
 
     expect(create.mock.calls.length).toBe(1);
@@ -607,9 +612,9 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     const llm = new VernLLM({ client, model: 'test-model', maxRetries: 3 });
 
     await expect(llm.call({ userContent: 'hi', tools: [weatherTool] })).rejects.toMatchObject({
-      type: 'api',
+      type: 'validation',
       code: 'unknown_tool',
-      toolIssues: [
+      issues: [
         { name: 'not_a_real_tool', toolCallId: 'call_1', code: 'unknown_tool' },
         { name: 'get_weather', toolCallId: 'call_1', code: 'duplicate_tool_call_id' },
       ],
@@ -637,7 +642,7 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     };
 
     await expect(llm.call({ userContent: 'hi', tools: [strictWeatherTool] })).rejects.toMatchObject(
-      { type: 'validation', code: undefined, toolIssues: undefined },
+      { type: 'validation', code: undefined, issues: 'city must be a string' },
     );
 
     // Validation failures were never retryable, before or after this change.
@@ -650,7 +655,7 @@ describe('VernLLM.call, bug fixes / hardening', () => {
 
     await expect(
       llm.call({ userContent: 'hi', toolChoice: 'required' } as CallParams<unknown>),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
   it('rejects toolChoice naming a tool that is not in tools', async () => {
@@ -663,7 +668,11 @@ describe('VernLLM.call, bug fixes / hardening', () => {
         tools: [weatherTool],
         toolChoice: { name: 'not_a_real_tool' },
       }),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'unknown_tool_choice',
+      issues: { requested: 'not_a_real_tool', available: ['get_weather'] },
+    });
   });
 
   it('rejects an empty tools array instead of silently switching on tool-call mode', async () => {
@@ -671,7 +680,7 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     const llm = new VernLLM({ client, model: 'test-model' });
 
     await expect(llm.call({ userContent: 'hi', tools: [] })).rejects.toMatchObject({
-      type: 'validation',
+      type: 'invalid_params',
     });
   });
 
@@ -681,7 +690,29 @@ describe('VernLLM.call, bug fixes / hardening', () => {
 
     await expect(
       llm.call({ userContent: 'hi', tools: [weatherTool, { ...weatherTool, description: 'dup' }] }),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'duplicate_tool_names',
+      issues: { names: ['get_weather'] },
+    });
+  });
+
+  it('narrows `issues` through `hasIssues` without a manual cast', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const err = (await llm
+      .call({ userContent: 'hi', tools: [weatherTool, { ...weatherTool, description: 'dup' }] })
+      .catch((e) => e)) as unknown;
+
+    expect(isLLMError(err)).toBe(true);
+    if (isLLMError(err) && hasIssues(err, 'duplicate_tool_names')) {
+      // Type-level assertion: `err.issues.names` is `string[]` here with no cast.
+      const names: string[] = err.issues.names;
+      expect(names).toEqual(['get_weather']);
+    } else {
+      throw new Error('expected a duplicate_tool_names error');
+    }
   });
 
   it('isToolCallResult() narrows a tool_calls result and rejects a content result', async () => {

@@ -291,9 +291,10 @@ describe('VernLLM, fallback', () => {
     const exhausted = caught as FallbackExhaustedError;
     const last = exhausted.attempts.at(-1)!.error;
 
-    // The bug: retryAfterMs used to be hardcoded to undefined even though
-    // type/status/cause were correctly inherited from the last attempt.
-    expect(exhausted.type).toBe(last.type);
+    // retryAfterMs and status still inherit from the last attempt, but
+    // type is always 'fallback_exhausted' (its own identity), never
+    // inherited from the last attempt's own type.
+    expect(exhausted.type).toBe('fallback_exhausted');
     expect(exhausted.status).toBe(last.status);
     expect(exhausted.retryAfterMs).toBe(last.retryAfterMs);
     expect(exhausted.retryAfterMs).toBe(7_000);
@@ -469,24 +470,8 @@ describe('VernLLM, fallback', () => {
     });
 
     it('returns "stop" for tool-contract error codes', () => {
-      const unknownTool = new LLMError(
-        'm',
-        'api',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'unknown_tool',
-      );
-      const dup = new LLMError(
-        'm',
-        'api',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'duplicate_tool_call_id',
-      );
+      const unknownTool = new LLMError('m', 'validation', { code: 'unknown_tool' });
+      const dup = new LLMError('m', 'validation', { code: 'duplicate_tool_call_id' });
 
       expect(defaultFallbackOn(unknownTool, { isLastTarget: false })).toBe('stop');
       expect(defaultFallbackOn(dup, { isLastTarget: false })).toBe('stop');

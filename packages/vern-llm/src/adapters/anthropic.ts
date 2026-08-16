@@ -642,9 +642,7 @@ function toAnthropicMessage(
         throw new LLMError(
           `Assistant tool call "${tc.function.name}" (${tc.id}) has arguments that are not valid JSON.`,
           'validation',
-          undefined,
-          undefined,
-          cause,
+          { cause },
         );
       }
 

@@ -21,7 +21,7 @@ describe('normalizeError', () => {
   });
 
   it('tags an already-normalized LLMError carrying status 429 with code "provider_rate_limited"', () => {
-    const original = new LLMError('rate limited', 'api', 429);
+    const original = new LLMError('rate limited', 'api', { status: 429 });
 
     const result = normalizeError(original);
 
@@ -30,65 +30,50 @@ describe('normalizeError', () => {
   });
 
   it('does not overwrite an existing code on an already-normalized 429 LLMError', () => {
-    const original = new LLMError(
-      'rate limited',
-      'api',
-      429,
-      undefined,
-      undefined,
-      undefined,
-      'local_rate_limit',
-    );
+    const original = new LLMError('rate limited', 'api', {
+      status: 429,
+      code: 'rate_limit_queue_full',
+    });
 
     const result = normalizeError(original);
 
-    expect(result.code).toBe('local_rate_limit');
+    expect(result.code).toBe('rate_limit_queue_full');
   });
 
-  it('tags an already-normalized LLMError carrying status 401 with code "invalid_credentials"', () => {
-    const original = new LLMError('unauthorized', 'api', 401);
+  it('tags an already-normalized LLMError carrying status 401 with code "authentication"', () => {
+    const original = new LLMError('unauthorized', 'api', { status: 401 });
 
     const result = normalizeError(original);
 
     expect(result).toBe(original);
-    expect(result.code).toBe('invalid_credentials');
+    expect(result.code).toBe('authentication');
   });
 
-  it('tags an already-normalized LLMError carrying status 403 with code "invalid_credentials"', () => {
-    const original = new LLMError('forbidden', 'api', 403);
+  it('tags an already-normalized LLMError carrying status 403 with code "authorization"', () => {
+    const original = new LLMError('forbidden', 'api', { status: 403 });
 
     const result = normalizeError(original);
 
     expect(result).toBe(original);
-    expect(result.code).toBe('invalid_credentials');
+    expect(result.code).toBe('authorization');
   });
 
   it('does not overwrite an existing code on an already-normalized 401/403 LLMError', () => {
-    const unauthorized = new LLMError(
-      'unauthorized',
-      'api',
-      401,
-      undefined,
-      undefined,
-      undefined,
-      'local_rate_limit',
-    );
-    const forbidden = new LLMError(
-      'forbidden',
-      'api',
-      403,
-      undefined,
-      undefined,
-      undefined,
-      'local_rate_limit',
-    );
+    const unauthorized = new LLMError('unauthorized', 'api', {
+      status: 401,
+      code: 'rate_limit_queue_full',
+    });
+    const forbidden = new LLMError('forbidden', 'api', {
+      status: 403,
+      code: 'rate_limit_queue_full',
+    });
 
-    expect(normalizeError(unauthorized).code).toBe('local_rate_limit');
-    expect(normalizeError(forbidden).code).toBe('local_rate_limit');
+    expect(normalizeError(unauthorized).code).toBe('rate_limit_queue_full');
+    expect(normalizeError(forbidden).code).toBe('rate_limit_queue_full');
   });
 
-  it('does not add a code to an already-normalized LLMError with a non-429 status', () => {
-    const original = new LLMError('server error', 'api', 500);
+  it('does not add a code to an already-normalized LLMError with a status that maps to none', () => {
+    const original = new LLMError('teapot', 'api', { status: 418 });
 
     const result = normalizeError(original);
 
@@ -100,6 +85,21 @@ describe('normalizeError', () => {
 
     expect(result.type).toBe('api');
     expect(result.status).toBe(500);
+    expect(result.code).toBe('server_error');
+  });
+
+  it('tags a fresh 404 as code "not_found"', () => {
+    const result = normalizeError({ status: 404 });
+
+    expect(result.type).toBe('api');
+    expect(result.code).toBe('not_found');
+  });
+
+  it('tags a fresh 413 as code "payload_too_large"', () => {
+    const result = normalizeError({ status: 413 });
+
+    expect(result.type).toBe('api');
+    expect(result.code).toBe('payload_too_large');
   });
 
   it("falls back to AWS SDK v3's $metadata.httpStatusCode when status/statusCode are absent", () => {
@@ -130,30 +130,32 @@ describe('normalizeError', () => {
     expect(result.status).toBeUndefined();
   });
 
-  it('does not tag a status-less error with "connection_failed" unless it carries a recognized network signal', () => {
+  it('does not tag a status-less error as "network" unless it carries a recognized network signal', () => {
     const result = normalizeError(new Error('mystery failure'));
 
+    expect(result.type).toBe('unknown');
     expect(result.code).toBeUndefined();
   });
 
-  it('tags a status-less error with code "connection_failed" when it carries a known libuv error code', () => {
+  it('tags a status-less error as type "network", code "connection_failed" when it carries a known libuv error code', () => {
     const err = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), {
       code: 'ECONNREFUSED',
     });
 
     const result = normalizeError(err);
 
-    expect(result.type).toBe('unknown');
+    expect(result.type).toBe('network');
     expect(result.code).toBe('connection_failed');
   });
 
-  it('tags a status-less error with code "connection_failed" when the message matches fetch\'s own transport-failure wording', () => {
+  it('tags a status-less error as type "network", code "connection_failed" when the message matches fetch\'s own transport-failure wording', () => {
     const result = normalizeError(new TypeError('fetch failed'));
 
+    expect(result.type).toBe('network');
     expect(result.code).toBe('connection_failed');
   });
 
-  it('tags a status-less error with code "connection_failed" via a wrapped cause carrying a known libuv error code', () => {
+  it('tags a status-less error as type "network", code "connection_failed" via a wrapped cause carrying a known libuv error code', () => {
     const cause = Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), {
       code: 'ENOTFOUND',
     });
@@ -161,6 +163,7 @@ describe('normalizeError', () => {
 
     const result = normalizeError(err);
 
+    expect(result.type).toBe('network');
     expect(result.code).toBe('connection_failed');
   });
 
@@ -169,6 +172,7 @@ describe('normalizeError', () => {
 
     const result = normalizeError(err);
 
+    expect(result.type).toBe('unknown');
     expect(result.code).toBeUndefined();
   });
 });

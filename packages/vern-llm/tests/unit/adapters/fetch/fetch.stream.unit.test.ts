@@ -36,7 +36,7 @@ describe('fromFetch().chat.completions.createStream', () => {
           { signal: new AbortController().signal },
         ),
       ),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
   it('opens the request via requestStream and translates each SSE event via mapStreamEvent (default SSE framing)', async () => {
@@ -352,7 +352,7 @@ describe('fromFetch().chat.completions.createStream', () => {
           { signal: new AbortController().signal },
         ),
       ),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
 
     // Neither transport was actually invoked, the check fails fast,
     // before opening any connection.

@@ -167,6 +167,6 @@ describe('VernLLM.call(stream: true) through fromFetch, end to end', () => {
 
     await expect(
       llm.call({ userContent: 'hi', jsonMode: false, stream: true }),
-    ).rejects.toMatchObject({ type: 'validation' });
+    ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 });

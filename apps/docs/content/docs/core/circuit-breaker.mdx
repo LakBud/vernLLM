@@ -38,13 +38,16 @@ Counts as a failure:
 Does not count as a failure:
 
 - `LLMError('validation')`
+- `LLMError('invalid_params')`
 - `LLMError('parse')`
 - `LLMError('aborted')`
-- `LLMError('api')` with `code: 'unknown_tool'`
-- `LLMError('api')` with `code: 'duplicate_tool_call_id'`
-- `LLMError('quota_exceeded')` with `code: 'local_rate_limit'`, a local `rateLimit` rejection that
-  never reached the provider, whether from a queue giving up or from a call rejected outright before
-  it ever queued. See
+- `LLMError('validation')` with `code: 'unknown_tool'`
+- `LLMError('validation')` with `code: 'duplicate_tool_call_id'`
+- `LLMError('validation')` with `code: 'tool_choice_none_violated'`
+- `LLMError('validation')` with `code: 'unexpected_tool_calls'`
+- `LLMError('rate_limited')` with `code: 'rate_limit_queue_full'`, `'rate_limit_queue_timeout'`, or
+  `'rate_limit_capacity_exceeded'`, a local `rateLimit` rejection that never reached the provider,
+  whether from a queue giving up or from a call rejected outright before it ever queued. See
   [Interaction with the circuit breaker](/docs/core/rate-limiting#interaction-with-the-circuit-breaker).
 
 The tool contract errors are model response defects rather than provider health failures. An

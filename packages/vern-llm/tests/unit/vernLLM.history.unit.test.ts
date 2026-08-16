@@ -69,7 +69,7 @@ describe('VernLLM.call, conversation history validation', () => {
       err = e as LLMError;
     }
 
-    expect(err?.type).toBe('validation');
+    expect(err?.type).toBe('invalid_params');
     expect(err?.message).toMatch(/last entry in history/i);
     expect(create).not.toHaveBeenCalled();
   });
@@ -93,7 +93,7 @@ describe('VernLLM.call, conversation history validation', () => {
       err = e as LLMError;
     }
 
-    expect(err?.type).toBe('validation');
+    expect(err?.type).toBe('invalid_params');
     expect(err?.message).toMatch(/alternate user\/assistant turns/i);
     expect(create).not.toHaveBeenCalled();
   });
@@ -143,7 +143,9 @@ describe('VernLLM.call, conversation history validation', () => {
       err = e as LLMError;
     }
 
-    expect(err?.type).toBe('validation');
+    expect(err?.type).toBe('invalid_params');
+    expect(err?.code).toBe('missing_tool_results');
+    expect(err?.issues).toEqual({ historyIndex: 1, ids: ['call_2'] });
     expect(err?.message).toMatch(/missing toolResults/i);
     expect(create).not.toHaveBeenCalled();
   });
@@ -172,8 +174,74 @@ describe('VernLLM.call, conversation history validation', () => {
       err = e as LLMError;
     }
 
-    expect(err?.type).toBe('validation');
+    expect(err?.type).toBe('invalid_params');
     expect(err?.message).toMatch(/tool request without.*tool results|required tool results/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('throws code: "unknown_tool_result_ids" with the offending index and ids when toolResults reference an id that was never requested', async () => {
+    const { client, create } = createMockClient([textResponse('unused')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 3 });
+
+    let err: LLMError | undefined;
+    try {
+      await llm.call({
+        userContent: 'continue',
+        jsonMode: false,
+        history: [
+          {
+            role: 'assistant',
+            toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: {} }],
+          },
+          {
+            role: 'tool',
+            toolResults: [
+              { toolCallId: 'call_1', content: 'sunny' },
+              { toolCallId: 'call_ghost', content: 'x' },
+            ],
+          },
+        ],
+      });
+    } catch (e) {
+      err = e as LLMError;
+    }
+
+    expect(err?.type).toBe('invalid_params');
+    expect(err?.code).toBe('unknown_tool_result_ids');
+    expect(err?.issues).toEqual({ historyIndex: 1, ids: ['call_ghost'] });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('throws code: "duplicate_tool_result_ids" with the offending index and ids when the same toolCallId appears twice', async () => {
+    const { client, create } = createMockClient([textResponse('unused')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 3 });
+
+    let err: LLMError | undefined;
+    try {
+      await llm.call({
+        userContent: 'continue',
+        jsonMode: false,
+        history: [
+          {
+            role: 'assistant',
+            toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: {} }],
+          },
+          {
+            role: 'tool',
+            toolResults: [
+              { toolCallId: 'call_1', content: 'sunny' },
+              { toolCallId: 'call_1', content: 'sunny again' },
+            ],
+          },
+        ],
+      });
+    } catch (e) {
+      err = e as LLMError;
+    }
+
+    expect(err?.type).toBe('invalid_params');
+    expect(err?.code).toBe('duplicate_tool_result_ids');
+    expect(err?.issues).toEqual({ historyIndex: 1, ids: ['call_1'] });
     expect(create).not.toHaveBeenCalled();
   });
 });

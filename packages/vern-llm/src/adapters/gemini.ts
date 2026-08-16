@@ -189,13 +189,10 @@ function parseToolArguments(text: string, toolName: string): Record<string, unkn
   try {
     parsed = text.trim() ? JSON.parse(text) : {};
   } catch (cause) {
-    throw new LLMError(
-      `Tool call "${toolName}" arguments are not valid JSON.`,
-      'validation',
-      undefined,
-      undefined,
+    throw new LLMError(`Tool call "${toolName}" arguments are not valid JSON.`, 'parse', {
       cause,
-    );
+      code: 'tool_arguments_parse_failed',
+    });
   }
 
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
@@ -391,7 +388,8 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
           if (!geminiClient.generateContentStream) {
             throw new LLMError(
               'stream: true requires a Gemini client with generateContentStream',
-              'validation',
+              'invalid_params',
+              { code: 'unsupported_capability', issues: { capability: 'generateContentStream' } },
             );
           }
 

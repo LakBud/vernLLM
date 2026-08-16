@@ -90,7 +90,12 @@ export interface FallbackAttempt {
 export type FallbackOn = (error: LLMError, context: { isLastTarget: boolean }) => 'next' | 'stop';
 
 /** Tool contract failures are the model ignoring the request, not a sick provider: repeating it elsewhere can't help. */
-const TOOL_CONTRACT_CODES = new Set(['unknown_tool', 'duplicate_tool_call_id']);
+const TOOL_CONTRACT_CODES = new Set([
+  'unknown_tool',
+  'duplicate_tool_call_id',
+  'tool_choice_none_violated',
+  'unexpected_tool_calls',
+]);
 
 /**
  * The default `fallbackOn` policy. Exported so a caller can wrap rather
@@ -121,16 +126,32 @@ export class FallbackExhaustedError extends LLMError {
   constructor(public readonly attempts: FallbackAttempt[]) {
     const last = attempts[attempts.length - 1]?.error;
 
+    // `type` is always `'fallback_exhausted'`, never inherited from the last
+    // target's own type: every target failing is a meaningfully different
+    // event from any single target's own failure. `status` and
+    // `retryAfterMs` still inherit from the last attempt.
     super(
       `${attempts.length} provider${attempts.length === 1 ? '' : 's'} attempted and failed: ${attempts
         .map((a) => `${a.provider}(${a.error.type})`)
         .join(' then ')}`,
-      last?.type ?? 'unknown',
-      last?.status,
-      undefined,
-      last,
-      last?.retryAfterMs,
       'fallback_exhausted',
+      {
+        status: last?.status,
+        cause: last,
+        retryAfterMs: last?.retryAfterMs,
+        code: 'fallback_exhausted',
+      },
     );
+  }
+
+  /**
+   * `type: 'fallback_exhausted'` by itself says nothing about whether
+   * retrying could help; the reason the last target failed does. Defers to
+   * that attempt's own `retryable` instead of anything about this class's
+   * own type.
+   */
+  override get retryable(): boolean {
+    const last = this.attempts[this.attempts.length - 1]?.error;
+    return last ? last.retryable : super.retryable;
   }
 }

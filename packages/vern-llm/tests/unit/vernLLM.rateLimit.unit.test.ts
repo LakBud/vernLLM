@@ -57,7 +57,7 @@ describe('VernLLM, rateLimit option', () => {
     expect(rateLimited[0]).toMatchObject({ provider: 'primary', reason: 'concurrency' });
   });
 
-  it('a queued call rejects with a local_rate_limit-coded quota_exceeded error on maxQueueMs', async () => {
+  it('a queued call rejects with a rate_limit_queue_timeout-coded rate_limited error on maxQueueMs', async () => {
     let resolveFirst!: () => void;
     const gate = new Promise<void>((resolve) => {
       resolveFirst = resolve;
@@ -82,8 +82,8 @@ describe('VernLLM, rateLimit option', () => {
     await new Promise((r) => setTimeout(r, 5));
 
     await expect(llm.call<{ n: number }>({ userContent: 'two' })).rejects.toMatchObject({
-      type: 'quota_exceeded',
-      code: 'local_rate_limit',
+      type: 'rate_limited',
+      code: 'rate_limit_queue_timeout',
     });
 
     resolveFirst();

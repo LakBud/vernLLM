@@ -390,7 +390,8 @@ function buildBedrockRequest(
         `Bedrock model "${params.model}" is not listed in toolUseSupportedModels, but this call ` +
           'requires Converse tool use (either jsonSchema emulated as a forced tool call, or real ' +
           '`tools` sent alongside native structured output).',
-        'validation',
+        'invalid_params',
+        { code: 'unsupported_capability', issues: { capability: 'toolUseSupportedModels' } },
       );
     }
   }
@@ -550,7 +551,8 @@ export function fromBedrock(
           if (!bedrockClient.converseStream) {
             throw new LLMError(
               'stream: true requires a Bedrock client with converseStream',
-              'validation',
+              'invalid_params',
+              { code: 'unsupported_capability', issues: { capability: 'converseStream' } },
             );
           }
 
@@ -623,7 +625,7 @@ export function fromBedrock(
               throw new LLMError(
                 event.throttlingException.message ?? 'Bedrock throttled the request mid-stream',
                 'api',
-                429,
+                { status: 429, code: 'provider_rate_limited' },
               );
             } else if ('validationException' in event) {
               throw new LLMError(
@@ -648,7 +650,10 @@ export function fromBedrock(
                 ('serviceUnavailableException' in event && 503) ||
                 500;
 
-              throw new LLMError(detail, 'api', status);
+              throw new LLMError(detail, 'api', {
+                status,
+                code: status >= 500 ? 'server_error' : undefined,
+              });
             }
           }
         },
@@ -674,7 +679,8 @@ function toBedrockToolChoice(
       "'none' is not supported by fromBedrock: Bedrock Converse has no " +
         '`tool_choice` equivalent to forbidding tool use while tools are still offered. Omit ' +
         '`tools` entirely for this call instead.',
-      'validation',
+      'invalid_params',
+      { code: 'unsupported_capability', issues: { capability: "toolChoice: 'none'" } },
     );
   }
 
@@ -722,9 +728,7 @@ function toBedrockMessage(
           throw new LLMError(
             `Assistant tool call "${tc.function.name}" (${tc.id}) has arguments that are not valid JSON.`,
             'validation',
-            undefined,
-            undefined,
-            cause,
+            { cause },
           );
         }
       }

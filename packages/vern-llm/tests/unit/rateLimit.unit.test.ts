@@ -118,7 +118,7 @@ describe('RateLimiter', () => {
     expect(secondSettled).toBe(true);
   });
 
-  it('maxQueueMs throws a local_rate_limit-coded quota_exceeded error', async () => {
+  it('maxQueueMs throws a rate_limit_queue_timeout-coded rate_limited error', async () => {
     vi.useFakeTimers();
     const limiter = new RateLimiter({ maxConcurrent: 1, maxQueueMs: 1000 });
 
@@ -126,8 +126,8 @@ describe('RateLimiter', () => {
 
     const pending = limiter.acquire(1);
     const assertion = expect(pending).rejects.toMatchObject({
-      type: 'quota_exceeded',
-      code: 'local_rate_limit',
+      type: 'rate_limited',
+      code: 'rate_limit_queue_timeout',
     });
 
     await vi.advanceTimersByTimeAsync(1000);
@@ -187,8 +187,8 @@ describe('RateLimiter', () => {
     const queued = limiter.acquire(1); // fills the one queue slot
 
     await expect(limiter.acquire(1)).rejects.toMatchObject({
-      type: 'quota_exceeded',
-      code: 'local_rate_limit',
+      type: 'rate_limited',
+      code: 'rate_limit_queue_full',
     });
 
     held.release();
@@ -271,8 +271,8 @@ describe('RateLimiter', () => {
     const limiter = new RateLimiter({ tokensPerMinute: 100 });
 
     await expect(limiter.acquire(150)).rejects.toMatchObject({
-      type: 'quota_exceeded',
-      code: 'local_rate_limit',
+      type: 'rate_limited',
+      code: 'rate_limit_capacity_exceeded',
     });
   });
 
@@ -295,7 +295,9 @@ describe('RateLimiter', () => {
     expect(smallSettled).toBe(false);
 
     // A separate, unsatisfiable request must fail fast without disturbing the queue.
-    await expect(limiter.acquire(1000)).rejects.toMatchObject({ code: 'local_rate_limit' });
+    await expect(limiter.acquire(1000)).rejects.toMatchObject({
+      code: 'rate_limit_capacity_exceeded',
+    });
 
     await vi.advanceTimersByTimeAsync(6_100); // 10 tokens at 1/600ms
     await small;
@@ -307,8 +309,8 @@ describe('RateLimiter', () => {
     // 100 tokens/min => 1 token per 600ms.
     const limiter = new RateLimiter({ tokensPerMinute: 100, maxQueueMs: 0 });
 
-    await expect(limiter.acquire(Number.NaN)).rejects.toMatchObject({ type: 'validation' });
-    await expect(limiter.acquire(-1)).rejects.toMatchObject({ type: 'validation' });
+    await expect(limiter.acquire(Number.NaN)).rejects.toMatchObject({ type: 'invalid_params' });
+    await expect(limiter.acquire(-1)).rejects.toMatchObject({ type: 'invalid_params' });
 
     // The bucket must still be enforcing capacity afterward, i.e. not poisoned.
     const held = await limiter.acquire(100);

@@ -76,7 +76,7 @@ export async function withTimeout<T>(
       err instanceof DOMException &&
       err.name === 'AbortError'
     ) {
-      throw new LLMError('Request timed out', 'timeout');
+      throw new LLMError('Request timed out', 'timeout', { code: 'request_timeout' });
     }
 
     throw err;
@@ -123,7 +123,13 @@ export function withChunkIdleTimeout<T>(
       settled = true;
       onIdle?.();
       reject(
-        new LLMError(`No stream chunk received for ${activeTimeoutMs}ms (idle timeout)`, 'timeout'),
+        new LLMError(
+          `No stream chunk received for ${activeTimeoutMs}ms (idle timeout)`,
+          'timeout',
+          {
+            code: 'idle_timeout',
+          },
+        ),
       );
     }, clampTimeoutMs(activeTimeoutMs));
 

@@ -453,7 +453,7 @@ describe('VernLLM.call, abort handling', () => {
 
 describe('LLMError', () => {
   it('carries type, status, and issues', () => {
-    const err = new LLMError('boom', 'validation', undefined, { field: 'name' });
+    const err = new LLMError('boom', 'validation', { issues: { field: 'name' } });
     expect(err.type).toBe('validation');
     expect(err.issues).toEqual({ field: 'name' });
     expect(err).toBeInstanceOf(Error);

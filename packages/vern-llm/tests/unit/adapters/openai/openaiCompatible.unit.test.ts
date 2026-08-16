@@ -71,7 +71,7 @@ describe('fromOpenAICompatible and its aliases', () => {
     expect(result.choices?.[0]?.message?.content).toBe('ok');
   });
 
-  it('throws a validation LLMError for an unsupported image mimeType', async () => {
+  it('throws an invalid_params LLMError for an unsupported image mimeType', async () => {
     const fakeClient = {
       chat: {
         completions: { create: async () => ({ choices: [{ message: { content: 'ok' } }] }) },
@@ -94,7 +94,7 @@ describe('fromOpenAICompatible and its aliases', () => {
         },
         { signal: new AbortController().signal },
       ),
-    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
   });
 
   it('translates ContentBlock[] userContent into OpenAI text/image_url parts', async () => {

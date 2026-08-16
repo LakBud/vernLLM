@@ -69,7 +69,7 @@ describe('VernLLM.cachedCall, reserveUsage/refundUsage dedup', () => {
     }
 
     expect(isLLMError(caught)).toBe(true);
-    expect((caught as LLMError).type).toBe('validation');
+    expect((caught as LLMError).type).toBe('invalid_params');
     expect((caught as LLMError).message).toMatch(
       /reserveUsage.*refundUsage.*cachedCall ignores them/i,
     );

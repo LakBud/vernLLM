@@ -68,7 +68,8 @@ const llm = new VernLLM({
 | `maxQueueSize` | `0`     | Max number of calls allowed to queue at once. Pass `0` for an unbounded queue.    |
 
 A call that exceeds `maxQueueMs`, or arrives when the queue is already at `maxQueueSize`, fails with
-`LLMError('quota_exceeded')` carrying `code: 'local_rate_limit'`:
+`LLMError('rate_limited')` carrying `code: 'rate_limit_queue_timeout'` or `code:
+'rate_limit_queue_full'` respectively:
 
 ```ts title="rate-limiting-local-error.ts"
 import { isLLMError } from 'vern-llm';
@@ -76,7 +77,10 @@ import { isLLMError } from 'vern-llm';
 try {
   await llm.call({ userContent: '...' });
 } catch (err) {
-  if (isLLMError(err) && err.code === 'local_rate_limit') {
+  if (
+    isLLMError(err) &&
+    (err.code === 'rate_limit_queue_timeout' || err.code === 'rate_limit_queue_full')
+  ) {
     // Never reached the provider. Retrying immediately won't help,
     // the wait already happened. See "Interaction with retries" below.
   }
@@ -85,9 +89,9 @@ try {
 
 <Callout type="warn">
   A single call whose estimated token cost exceeds the configured `tokensPerMinute` ceiling can
-  never be satisfied by any amount of waiting. VernLLM rejects it immediately with the same
-  `local_rate_limit` error rather than letting it sit in the queue forever, which would also block
-  every smaller call queued behind it.
+  never be satisfied by any amount of waiting. VernLLM rejects it immediately with `code:
+  'rate_limit_capacity_exceeded'` rather than letting it sit in the queue forever, which would also
+  block every smaller call queued behind it.
 </Callout>
 
 An aborted signal on a queued call removes it from the queue immediately and rejects with
@@ -158,11 +162,21 @@ See [Streaming](/docs/core/streaming) for the rest of the `stream: true` contrac
 
 ## Interaction with retries
 
-`local_rate_limit` errors are never retried. The wait already happened while the call was queued,
-so retrying immediately would only requeue it behind the same limit with nothing changed:
+The three local rate-limit codes (`rate_limit_queue_full`, `rate_limit_queue_timeout`,
+`rate_limit_capacity_exceeded`) are never retried. For the two queue codes, the wait already
+happened while the call was queued, so retrying immediately would only requeue it behind the same
+limit with nothing changed; for `rate_limit_capacity_exceeded`, the call could never fit the
+configured capacity regardless of how long it waits:
 
 ```ts title="rate-limiting-shouldretry.ts"
-if (error instanceof LLMError && error.code === 'local_rate_limit') return false;
+if (
+  error instanceof LLMError &&
+  (error.code === 'rate_limit_queue_full' ||
+    error.code === 'rate_limit_queue_timeout' ||
+    error.code === 'rate_limit_capacity_exceeded')
+) {
+  return false;
+}
 ```
 
 See [What gets retried](/docs/core/retries#what-gets-retried) for the full list of
@@ -170,7 +184,7 @@ non-retried error conditions.
 
 ## Interaction with the circuit breaker
 
-A `local_rate_limit` error never reached the provider, so it says nothing about the provider's
+A local rate-limit error never reached the provider, so it says nothing about the provider's
 health. It does not count toward the circuit breaker's failure threshold, the same treatment tool
 contract errors already get. See [What counts as a failure](/docs/core/circuit-breaker#what-counts-as-a-failure).
 
@@ -186,7 +200,10 @@ if (isLLMError(err) && err.code === 'provider_rate_limited') {
   // A real provider 429. Already retried per the normal retry/Retry-After flow.
 }
 
-if (isLLMError(err) && err.code === 'local_rate_limit') {
+if (
+  isLLMError(err) &&
+  (err.code === 'rate_limit_queue_full' || err.code === 'rate_limit_queue_timeout')
+) {
   // Never left this process. VernLLM's own queue gave up.
 }
 ```

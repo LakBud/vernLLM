@@ -18,9 +18,13 @@ export interface RequestBuilderOptions {
 /**
  * Builds the wire request object for one call, applying per-instance
  * defaults (model, max tokens, temperature) and per-call overrides.
- * Owns every validation that depends only on shape, not on execution:
- * history alternation, duplicate/empty tool lists, `toolChoice` naming a
- * real tool. Has no knowledge of retry, timeouts, or the breaker, only
+ * Owns every check that depends only on the caller's own input shape, not
+ * on execution: history alternation, duplicate/empty tool lists,
+ * `toolChoice` naming a real tool. All deterministic on the call site's
+ * own input and never touch the network, so every throw here is
+ * `type: 'invalid_params'`, not `'validation'` (which is reserved for the
+ * model/provider's own response failing a contract check). Has no
+ * knowledge of retry, timeouts, or the breaker, only
  * the three defaults a `FallbackTarget` can override per-target (see the
  * `defaultMaxTokens`/`defaultTemperature` overrides in the fallback
  * design), which is what keeps it separable from `CallExecutor`.
@@ -59,7 +63,7 @@ export class RequestBuilder {
           'that ended up empty). An empty `tools` array still switches on tool-call mode ' +
           '(response shape, jsonMode default, wire format) with nothing for the model to call. ' +
           'Omit `tools` entirely for a normal call, or make sure the array is non-empty.',
-        'validation',
+        'invalid_params',
       );
     }
 
@@ -75,7 +79,8 @@ export class RequestBuilder {
       if (duplicates.size) {
         throw new LLMError(
           `\`tools\` has duplicate name(s): [${[...duplicates].join(', ')}]. Tool names must be unique.`,
-          'validation',
+          'invalid_params',
+          { code: 'duplicate_tool_names', issues: { names: [...duplicates] } },
         );
       }
     }
@@ -84,14 +89,18 @@ export class RequestBuilder {
       throw new LLMError(
         '`toolChoice` was set without `tools`. There is nothing for it to choose between. ' +
           'Set `tools`, or remove `toolChoice`.',
-        'validation',
+        'invalid_params',
       );
     }
 
     if (tools && typeof toolChoice === 'object' && !tools.some((t) => t.name === toolChoice.name)) {
       throw new LLMError(
         `toolChoice names "${toolChoice.name}", which is not in \`tools\` ([${tools.map((t) => t.name).join(', ')}]).`,
-        'validation',
+        'invalid_params',
+        {
+          code: 'unknown_tool_choice',
+          issues: { requested: toolChoice.name, available: tools.map((t) => t.name) },
+        },
       );
     }
 
@@ -104,7 +113,7 @@ export class RequestBuilder {
     if (params.schema && !useJson) {
       throw new LLMError(
         'schema was provided but jsonMode: false disables JSON parsing, so nothing would validate it. Remove jsonMode: false, set jsonSchema, or remove schema.',
-        'validation',
+        'invalid_params',
       );
     }
 
@@ -142,14 +151,14 @@ export class RequestBuilder {
         if (previousTurn?.role !== 'assistant' || !previousTurn.toolCalls?.length) {
           throw new LLMError(
             `history[${index}] is a "tool" turn, but must immediately follow an "assistant" turn that requested tools`,
-            'validation',
+            'invalid_params',
           );
         }
 
         if (!turn.toolResults?.length) {
           throw new LLMError(
             `history[${index}] is a "tool" turn but has no toolResults`,
-            'validation',
+            'invalid_params',
           );
         }
 
@@ -161,7 +170,8 @@ export class RequestBuilder {
         if (unknownIds.length) {
           throw new LLMError(
             `history[${index}].toolResults references unknown toolCallId(s) [${unknownIds.join(', ')}]`,
-            'validation',
+            'invalid_params',
+            { code: 'unknown_tool_result_ids', issues: { historyIndex: index, ids: unknownIds } },
           );
         }
 
@@ -177,7 +187,11 @@ export class RequestBuilder {
         if (duplicateIds.size) {
           throw new LLMError(
             `history[${index}].toolResults has duplicate toolCallId(s) [${[...duplicateIds].join(', ')}]`,
-            'validation',
+            'invalid_params',
+            {
+              code: 'duplicate_tool_result_ids',
+              issues: { historyIndex: index, ids: [...duplicateIds] },
+            },
           );
         }
 
@@ -186,21 +200,22 @@ export class RequestBuilder {
         if (missingIds.length) {
           throw new LLMError(
             `history[${index}] is missing toolResults for toolCallId(s) [${missingIds.join(', ')}]`,
-            'validation',
+            'invalid_params',
+            { code: 'missing_tool_results', issues: { historyIndex: index, ids: missingIds } },
           );
         }
       } else {
         if (turn.role === previousTurn?.role) {
           throw new LLMError(
             `history must alternate user/assistant turns: consecutive "${turn.role}" turns at history[${index - 1}] and history[${index}]`,
-            'validation',
+            'invalid_params',
           );
         }
 
         if (previousTurn?.role === 'assistant' && previousTurn.toolCalls?.length) {
           throw new LLMError(
             `history[${index}] follows an assistant tool request without tool results`,
-            'validation',
+            'invalid_params',
           );
         }
       }
@@ -211,14 +226,14 @@ export class RequestBuilder {
     if (previousTurn?.role === 'assistant' && previousTurn.toolCalls?.length) {
       throw new LLMError(
         'The last entry in history is an assistant tool request without tool results',
-        'validation',
+        'invalid_params',
       );
     }
 
     if (previousTurn?.role === 'user') {
       throw new LLMError(
         'The last entry in history is a "user" turn, which would collide with the current userContent turn.',
-        'validation',
+        'invalid_params',
       );
     }
   }
