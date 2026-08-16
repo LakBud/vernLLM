@@ -1,0 +1,43 @@
+name: Canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm install -g npm@latest && npm --version
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run typecheck
+
+      - run: pnpm run test
+
+      - run: pnpm --filter vern-llm run build
+
+      - name: Set canary version
+        working-directory: packages/vern-llm
+        run: npm pkg set version="0.0.0-canary-${GITHUB_SHA::7}"
+
+      - name: Publish canary to npm
+        working-directory: packages/vern-llm
+        run: npm publish --tag next
+
+      - name: Summary
+        run: echo "Published 0.0.0-canary-${GITHUB_SHA::7} to the next tag on npm" >> "$GITHUB_STEP_SUMMARY"
