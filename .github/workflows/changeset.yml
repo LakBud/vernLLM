@@ -1,19 +1,24 @@
-name: Test
+name: Changeset
 
 on:
   pull_request:
-  push:
     branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  changeset:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
 
@@ -24,5 +29,5 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Test
-        run: pnpm run test
+      - name: Check for changeset
+        run: pnpm changeset status --since=origin/main

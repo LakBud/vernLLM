@@ -37,6 +37,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
+    "smoke-test": "node scripts/smoke-test.mts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
@@ -47,13 +48,15 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "pnpm run build && changeset publish",
-    "prepublishOnly": "pnpm run typecheck && pnpm run build"
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+    "size": "size-limit"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1106.0",
     "@changesets/cli": "^2.31.1",
     "@google/genai": "^2.16.0",
+    "@size-limit/file": "^13.0.3",
     "@smithy/eventstream-serde-node": "^4.4.16",
     "@smithy/node-http-handler": "^4.9.13",
     "@smithy/util-utf8": "^4.4.16",
@@ -61,12 +64,13 @@
     "@vitest/coverage-v8": "^4.1.10",
     "groq-sdk": "^1.5.0",
     "openai": "^7.4.0",
+    "size-limit": "^13.0.3",
     "tsdown": "^0.9.9",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10",
     "zod": "^4.4.3"
   },
-  "packageManager": "pnpm@11.14.0",
+  "packageManager": "pnpm@11.22.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/LakBud/vernLLM",
@@ -76,5 +80,15 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
-  }
+  },
+  "size-limit": [
+    {
+      "path": "dist/index.js",
+      "limit": "70 KB"
+    },
+    {
+      "path": "dist/index.cjs",
+      "limit": "70 KB"
+    }
+  ]
 }

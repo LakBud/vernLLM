@@ -42,7 +42,9 @@ Record your change with:
 pnpm run changeset
 ```
 
-This drives versioned release notes. Releases themselves are automated through `.github/workflows/release.yml`, so there are no manual version bumps or publishing steps.
+CI checks every PR touching `packages/vern-llm` for a changeset. If your change doesn't need a release, run `pnpm changeset add --empty` instead of skipping it.
+
+This drives versioned release notes. Releases themselves are automated through `.github/workflows/version.yml` and `.github/workflows/publish.yml`, so there are no manual version bumps or publishing steps.
 
 ## Code of Conduct
 

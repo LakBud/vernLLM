@@ -13,5 +13,6 @@ pnpm run test
 ```
 
 Record your change with `pnpm run changeset` before opening a PR.
+If it doesn't need a release, run `pnpm run changeset add --empty` instead of skipping it, CI checks for one.
 
 Security issue? See [SECURITY.md](./SECURITY.md) instead of opening a public issue. Participation is governed by our [Code of Conduct](./CODE_OF_CONDUCT.md).

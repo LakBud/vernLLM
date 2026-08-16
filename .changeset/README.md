@@ -38,3 +38,6 @@ Do not add changesets for:
 
 - Documentation-only changes
 - Formatting changes
+- CI/workflow changes
+
+CI checks every PR touching `packages/vern-llm` for a changeset. If your change doesn't need a release, run `pnpm changeset add --empty` instead of skipping it.
