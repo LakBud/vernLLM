@@ -428,11 +428,12 @@ describe('VernLLM.call, onUsageFailure', () => {
       .catch((e) => e)) as LLMError;
 
     expect(err.type).toBe('validation');
+    expect(err.code).toBe('unexpected_tool_calls');
     expect(onUsage).not.toHaveBeenCalled();
     expect(onUsageFailure).toHaveBeenCalledTimes(1);
     expect(onUsageFailure).toHaveBeenCalledWith(
       expect.objectContaining({ totalTokens: 4 }),
-      expect.objectContaining({ type: 'validation' }),
+      expect.objectContaining({ type: 'validation', code: 'unexpected_tool_calls' }),
     );
   });
 

@@ -238,5 +238,5 @@ export function hasIssues<C extends keyof LLMErrorIssuesByCode>(
   err: LLMError,
   code: C,
 ): err is LLMError & { code: C; issues: LLMErrorIssuesByCode[C] } {
-  return err.code === code;
+  return err.code === code && err.issues !== undefined;
 }

@@ -73,9 +73,11 @@ try {
     retried.
   </Card>
   <Card title="rate_limited">
-    A rate limit was hit, either VernLLM's own local `rateLimit` queue or the provider's own HTTP
-    429. See [Rate Limiting](/docs/core/rate-limiting). Whether this is retried depends on `code`,
-    see below.
+    VernLLM's own local `rateLimit` queue rejected the call before it reached the provider: the
+    queue was full, the wait exceeded `maxQueueMs`, or the call could never fit the configured
+    capacity. See [Rate Limiting](/docs/core/rate-limiting). A provider's own HTTP 429 is `type:
+    'api'` with `code: 'provider_rate_limited'`, not this type. Whether `rate_limited` itself is
+    retried depends on `code`, see below.
   </Card>
   <Card title="quota_exceeded">
     The usage reservation failed before the request was sent. This happens when `reserveUsage`
@@ -125,9 +127,10 @@ The currently defined caller input codes are:
 
 Everything else under `invalid_params` stays uncoded: the thrown `message` already names the exact
 problem, and a code only earns its place when a caller would realistically branch on it. These six
-are exactly the ones whose `message` already string-joins a list a caller might want to consume
-directly instead of re-parsing it out of prose; see [`issues`](#issues) below for the typed payload
-each one carries.
+are exactly the ones whose `message` already embeds structured data a caller might want directly
+instead of re-parsing it out of prose: a joined list of names/ids for the five history- and
+tools-shape checks, or the specific missing capability for `unsupported_capability`; see
+[`issues`](#issues) below for the typed payload each one carries.
 
 The currently defined rate-limiting codes are:
 
@@ -306,7 +309,7 @@ if (isLLMError(err) && !err.retryable) {
 
 It is `false` when:
 
-- `type` is `'parse'`, `'validation'`, or `'invalid_params'`
+- `type` is `'parse'`, `'validation'`, `'invalid_params'`, or `'aborted'`
 - `code` is one of the tool contract codes (`unknown_tool`, `duplicate_tool_call_id`,
   `tool_choice_none_violated`, `unexpected_tool_calls`)
 - `code` is one of the local rate limit codes (`rate_limit_queue_full`,
@@ -319,7 +322,7 @@ since `type: 'fallback_exhausted'` by itself says nothing about whether retrying
 
 `shouldRetry` skips a retry when any of these are true:
 
-- The signal has already aborted
+- The signal has already aborted, or `error.type` is `'aborted'`
 - `error.type` is `'parse'`, `'validation'`, or `'invalid_params'` because these are deterministic
   input or response processing failures rather than transient provider faults
 - `error.code` is `'unknown_tool'`, `'duplicate_tool_call_id'`, `'tool_choice_none_violated'`, or

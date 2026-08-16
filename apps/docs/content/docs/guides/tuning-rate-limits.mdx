@@ -97,9 +97,10 @@ const batchLlm = new VernLLM({
 ```
 
 For the interactive case, catch the local rate-limit failure and degrade gracefully instead of
-surfacing a raw error. `type: 'rate_limited'` covers both a local rejection and the provider's own
-429; `code` tells them apart, and `rate_limit_queue_full`/`rate_limit_queue_timeout` specifically
-mean the local queue gave up:
+surfacing a raw error. `type: 'rate_limited'` covers only VernLLM's own local `rateLimit` queue
+rejecting the call; a provider's own HTTP 429 is `type: 'api'` with `code: 'provider_rate_limited'`
+instead. `rate_limit_queue_full`/`rate_limit_queue_timeout` specifically mean the local queue gave
+up:
 
 ```ts title="rate-limiting-graceful-degrade.ts"
 import { isLLMError } from 'vern-llm';

@@ -277,8 +277,8 @@ for how tool turns fit into `history` more generally.
   </Card>
   <Card title="'none'">The model must not call a tool, even though `tools` were offered.</Card>
   <Card title="{ name: string }">
-    Forces the model to call the named tool. Throws `LLMError('validation')` if the name is not
-    present in `tools`.
+    Forces the model to call the named tool. Throws `LLMError('invalid_params')` with `code:
+    'unknown_tool_choice'` if the name is not present in `tools`.
   </Card>
 </Cards>
 
