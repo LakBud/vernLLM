@@ -15,7 +15,7 @@ and the constructor shape changes. Skip to what applies to you: [tool contract e
 `validation`](#230-tool-contract-errors-move-to-validation), [local rate limits get three specific
 codes](#230-local-rate-limiting-codes), [`invalid_credentials` splits into two
 codes](#230-authenticationauthorization-replace-invalid_credentials), [`FallbackExhaustedError.type`
-is now fixed](#230-fallbackexhaustedertype-is-always-fallback_exhausted), [the constructor takes
+is now fixed](#230-fallbackexhaustederrortype-is-always-fallback_exhausted), [the constructor takes
 an options object](#230-llmerrors-constructor-is-now-an-options-object), or [`toolIssues` is
 removed](#230-toolissues-is-removed-use-issues). Reading an already-normalized `LLMError` (the
 `switch (err.type)` / `isLLMError` pattern) is unaffected by any of this; only specific values and
