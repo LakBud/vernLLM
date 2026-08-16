@@ -2,4 +2,4 @@
 'vern-llm': patch
 ---
 
-Cache adapter get, set, and delete failures now call logger.warn instead of being swallowed silently. The failure itself is still swallowed, so a broken cache adapter still falls through to a real provider call, it's just no longer invisible.
+Cache adapter failures now go through logger.warn instead of being invisible. A get failure is treated as a miss and falls through to a real provider call. A set failure happens after the result is already computed and is still swallowed, just now logged. A delete failure used to propagate as a thrown error; it is now caught and logged instead.
