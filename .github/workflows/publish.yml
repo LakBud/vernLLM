@@ -7,16 +7,17 @@ on:
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
   publish:
+    if: startsWith(github.event.release.tag_name, 'vern-llm@')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.release.tag_name }}
 
       - uses: pnpm/action-setup@v4
 
@@ -26,9 +27,18 @@ jobs:
           cache: pnpm
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install -g npm@latest && npm --version
+      - run: npm install -g npm@11.5.1 && npm --version
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Verify package.json version matches release tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#vern-llm@}"
+          PKG_VERSION="$(node -p "require('./packages/vern-llm/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
 
       - run: pnpm run typecheck
 
@@ -46,6 +56,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
           git add apps/docs/content/docs/changelog.mdx
           git commit -m "docs: update changelog" || exit 0
-          git push
+          git push origin main

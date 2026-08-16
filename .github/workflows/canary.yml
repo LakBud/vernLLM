@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
 
@@ -21,7 +23,7 @@ jobs:
           cache: pnpm
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install -g npm@latest && npm --version
+      - run: npm install -g npm@11.5.1 && npm --version
 
       - run: pnpm install --frozen-lockfile
 

@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "smoke-test": "node scripts/smoke-test.mjs",
+    "smoke-test": "node scripts/smoke-test.mts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
@@ -48,7 +48,7 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "pnpm run build && changeset publish",
-    "prepublishOnly": "pnpm run typecheck && pnpm run build",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
     "size": "size-limit"
   },
   "devDependencies": {
@@ -84,11 +84,11 @@
   "size-limit": [
     {
       "path": "dist/index.js",
-      "limit": "70 KB"
+      "limit": "55 KB"
     },
     {
       "path": "dist/index.cjs",
-      "limit": "70 KB"
+      "limit": "55 KB"
     }
   ]
 }

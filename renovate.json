@@ -2,18 +2,33 @@
   "extends": ["config:recommended"],
 
   "dependencyDashboard": true,
+  "dependencyDashboardApproval": false,
 
   "rangeStrategy": "bump",
 
   "timezone": "Europe/Oslo",
 
-  "schedule": ["weekend"],
+  "schedule": ["every weekend"],
 
   "labels": ["dependencies"],
 
   "commitMessagePrefix": "chore(deps):",
 
+  "prConcurrentLimit": 3,
+
   "packageRules": [
+    {
+      "description": "Group all docs app updates into one PR",
+      "groupName": "docs app dependencies",
+      "matchFileNames": ["apps/docs/**"]
+    },
+
+    {
+      "description": "Group GitHub Actions updates into one PR",
+      "groupName": "github actions",
+      "matchManagers": ["github-actions"]
+    },
+
     {
       "description": "Group TypeScript ecosystem updates",
       "groupName": "typescript tooling",
@@ -40,9 +55,10 @@
     },
 
     {
-      "description": "Disable major version auto updates",
+      "description": "Require manual dashboard approval and no automerge for majors",
       "matchUpdateTypes": ["major"],
-      "automerge": false
+      "automerge": false,
+      "dependencyDashboardApproval": true
     }
   ],
 
