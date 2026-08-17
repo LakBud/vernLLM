@@ -8,6 +8,83 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 2.3.0
+
+### Minor Changes
+
+- a441b47: `LLMError` now defines `toJSON()`, controlling what `JSON.stringify(err)` produces:
+  `name`, `message`, `type`, `status`, `issues`, `retryAfterMs`, `code`, `retryable`, `attempts`.
+  `LLMErrorSnapshot` (the shape of `RetryAttempt.error`, also what `toSnapshot()` returns) carries
+  the same fields except `name`: `message`, `type`, `status`, `issues`, `retryAfterMs`, `code`,
+  `retryable`, `attempts`.
+
+  `cause` is left out of both, deliberately. `cause` is `unknown` and never validated by VernLLM, so
+  it is the one field on `LLMError` that is not guaranteed safe to hand to `JSON.stringify`: some
+  SDKs throw errors with circular internal references, which `JSON.stringify` cannot serialize.
+  `err.cause` on the live, just-caught error is unaffected and still holds the exact original value.
+  That is where `cause` is meant to be read, on the spot, not folded into serialization or carried
+  inside retry history.
+
+  `message` and `retryable` are included even though a plain property walk would miss both:
+  `message` is non-enumerable on `Error`, and `retryable` is a getter, not an own property.
+
+  `issues` is included, but not unconditionally. For a schema validation failure, `issues` is a
+  caller supplied `SchemaLike` validator's own `error: unknown`, not controlled by VernLLM and not
+  guaranteed circular free. A circular `issues` value is replaced with an explicit marker string in
+  the serialized output, rather than dropped silently or left to throw. `err.issues` on the live
+  error is unaffected. This check runs recursively through every nested `attempts` entry's own
+  `issues` too, not just the top level `issues`, since `attempts` is itself a public constructor
+  option a caller can hand build, and a previously safe `issues` reference on a snapshot can be
+  mutated into a circular one later.
+
+- 7af6ecd: Reworked the `LLMError` taxonomy so `type` stays a small, closed set a caller can exhaustively `switch` over, while `code` carries the specific reason underneath it. This is a breaking change to several already-shipped `type`/`code` values, accepted on minor since `vern-llm` is still in beta:
+
+  - Tool contract failures (`unknown_tool`, `duplicate_tool_call_id`, `tool_choice_none_violated`, and the previously uncoded "provider returned `tool_calls` with no `tools` sent" case, now `code: 'unexpected_tool_calls'`) move from `type: 'api'` to `type: 'validation'`. They're a provider contract violation, not an HTTP failure.
+  - A new `type: 'invalid_params'` splits off from `type: 'validation'` for every check that's deterministic on the caller's own input and never touches the network: the `requestBuilder.ts` checks (empty/duplicate tools, `toolChoice` issues, schema/`jsonMode` conflicts, history ordering), the `cachedCall` `reserveUsage`/`refundUsage` guard, `imageFormat.ts`'s mimeType check, and "no provider targets configured." A new `code: 'unsupported_capability'` covers the one pattern repeated across adapters: `stream: true` against a client with no streaming method, a model outside `toolUseSupportedModels`, or `toolChoice: 'none'` against a provider with no equivalent.
+  - Local rate-limit rejections move from `type: 'quota_exceeded'`, `code: 'local_rate_limit'` to `type: 'rate_limited'`, split into three specific codes: `rate_limit_queue_full`, `rate_limit_queue_timeout`, and `rate_limit_capacity_exceeded`. The old single code couldn't tell a caller whether waiting and retrying later was worth attempting; `rate_limit_capacity_exceeded` never will, the other two usually will once load drops. `type: 'quota_exceeded'` now means only what it originally described: a `reserveUsage` hook rejecting the call.
+  - `code: 'invalid_credentials'` is replaced by `authentication` (401) and `authorization` (403), so a caller can tell a missing key apart from a key that lacks access without VernLLM inventing a new `type` for every HTTP status. New codes `not_found` (404), `payload_too_large` (413), `server_error` (5xx), and `empty_response` round out the HTTP-status-derived set.
+  - A new `type: 'network'` with `code: 'connection_failed'` separates transport-level failures (DNS, connection refused, connection reset) from the catch-all `type: 'unknown'`.
+  - `FallbackExhaustedError.type` is now always `'fallback_exhausted'`, its own identity, instead of inheriting the last attempted target's `type`. `status` and `retryAfterMs` still inherit from the last attempt.
+
+  Added `LLMError.retryable`, computed purely from `type`/`code`, independent of any specific call's `nonRetryableStatus` list or its signal's abort state. `FallbackExhaustedError` overrides it to defer to the last attempted target's own `retryable`, since `type: 'fallback_exhausted'` alone carries no retry signal.
+
+  `LLMError`'s constructor collapses everything after `type` into one optional object: `new LLMError(message, type, { status, code, issues, cause, retryAfterMs })`. Previously these were five more positional parameters, so a throw site that only needed `code` still had to write four `undefined`s to reach it. This breaks any `new LLMError(...)` call site outside the package itself, including a custom `LLMClient` adapter or a subclass calling `super()` positionally — narrower than it sounds, since callers normally only catch `LLMError`, not construct it, but worth naming directly: the last time this constructor grew, the explicit goal was that every existing call site would keep compiling unchanged, and this change knowingly reverses that.
+
+  Removed the deprecated `toolIssues` getter/setter on `LLMError`. `issues` is now the only place tool contract problems (or a schema validator's error object) are carried; read `error.issues` instead of `error.toolIssues`.
+
+  `LLMError.retryable` now also returns `false` for `type: 'aborted'`, matching the taxonomy's own type table (previously an aborted error would report `retryable: true`, which contradicted intentional-cancellation semantics). `CallExecutor`'s internal retry/circuit-breaker accounting is unaffected, since an aborted signal was already checked separately before either ever consulted `retryable`.
+
+  `issues` gained real types instead of being blanket `unknown`. `LLMErrorIssuesByCode` maps every code that carries structured data to its exact shape, and a new `hasIssues(err, code)` type guard narrows `err.issues` off that same `code` with no manual cast:
+
+  ```ts
+  if (isLLMError(err) && hasIssues(err, "duplicate_tool_names")) {
+    console.log(err.issues.names); // string[], fully typed
+  }
+  ```
+
+  Five new codes back this: `duplicate_tool_names` and `unknown_tool_choice` (both `requestBuilder.ts` checks that previously threw uncoded), and `duplicate_tool_result_ids`/`unknown_tool_result_ids`/`missing_tool_results` (the three `history` "tool" turn checks, also previously uncoded). All five, plus the existing `unsupported_capability`, now carry a typed `issues` payload built from the same list the `message` already string-joins, rather than making a caller re-parse it out of prose. `unknown_tool`/`duplicate_tool_call_id` (`ToolIssue[]`) are unchanged, just added to the same lookup table. Every other `invalid_params` check stays uncoded and without `issues`, since it's a single deterministic fact the `message` already states in full. Schema-validation failures (`type: 'validation'`, no `code`) are the one deliberate exception left as `unknown`: that payload is the caller's own Zod-compatible validator's error object, a shape VernLLM can't know in advance.
+
+- 532ebf4: LLMError now carries an optional attempts array, one entry per attempt made against the current target before the error was thrown, each with that attempt's index and a snapshot of that attempt's error. Absent when nothing was retried.
+
+  Added RetryAttempt, the shape of each entry, and LLMErrorSnapshot, the shape of `RetryAttempt.error`: an inert, point-in-time copy of an LLMError's fields (message, type, code, status, issues, retryAfterMs, cause, retryable), produced by the new `LLMError.toSnapshot()`. A recorded attempt is a record, not a live, throwable error, so `RetryAttempt.error` is a snapshot rather than an `LLMError` itself; this also keeps `RetryAttempt` from being self-referential through `LLMError.attempts`. FallbackAttempt now extends RetryAttempt instead of declaring its own index and error fields, so FallbackExhaustedError.attempts keeps its existing shape unchanged, provider and model alongside the inherited index and error.
+
+  Added isFallbackExhaustedError, a guard function for narrowing a caught error to FallbackExhaustedError without a manual instanceof check.
+
+- 53ec728: Added manual circuit-breaker control: `VernLLM.openCircuit(target?)` and `VernLLM.closeCircuit(target?)` let a caller force a target's breaker open or closed (e.g. to pull a provider out of rotation ahead of known maintenance, or to skip the cooldown once a provider is confirmed healthy again), without waiting for real traffic to trip it. Both take an optional `{ index?, model? }`, defaulting to the primary target's shared circuit.
+
+  `getCircuitState` now takes the same `{ index?, model? }` shape instead of a bare `model` string, so it can address fallback targets too, not just the primary. This is a breaking change to an already-shipped signature: `llm.getCircuitState('gpt-4o')` becomes `llm.getCircuitState({ model: 'gpt-4o' })`. Being accepted on minor since `vern-llm` is still in beta and `getCircuitState` was itself a fairly recent addition.
+
+  An out-of-range `index` on `getCircuitState`/`openCircuit`/`closeCircuit` now throws `RangeError`, so it stays distinguishable from a real target that simply has no breaker configured (which still returns/no-ops normally). Passing `model` to a target whose breaker doesn't have `circuitBreaker.isolateByModel` on now logs a warning instead of silently doing nothing, since the shared-bucket state or action is used regardless.
+
+  When `model` is omitted on `getCircuitState`/`openCircuit`/`closeCircuit`/`getCircuitStates`, it now defaults to that target's own configured model instead of the unlabeled bucket, matching the bucket real call failures/successes are recorded under for a target with `isolateByModel` on. An explicit `model` argument is unaffected.
+
+  `getCircuitStates()` entries now include `isolateByModel`, so a caller sweeping `model` across a fallback chain with mixed per-target configs can tell which entries actually honored it.
+
+### Patch Changes
+
+- af02955: The internal logger is now wrapped so a throwing custom logger can no longer break the call it was logging about. If a user-supplied logger.debug, logger.warn, or logger.error throws, the error is caught and dropped, and the original operation still completes normally.
+- b56c35b: Cache adapter failures now go through logger.warn instead of being invisible. A get failure is treated as a miss and falls through to a real provider call. A set failure happens after the result is already computed and is still swallowed, just now logged. A delete failure used to propagate as a thrown error; it is now caught and logged instead.
+
 ## 2.2.0
 
 ### Minor Changes
