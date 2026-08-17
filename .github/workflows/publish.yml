@@ -75,3 +75,7 @@ jobs:
           git add apps/docs/content/docs/changelog.mdx
           git commit -m "docs: update changelog" || exit 0
           git push origin main
+
+      - name: Deploy to Vercel
+        run: |
+          curl -X POST "${{ secrets.VERNLLM_RELEASE }}"
