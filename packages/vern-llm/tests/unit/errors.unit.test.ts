@@ -94,6 +94,71 @@ describe('LLMError.toJSON', () => {
 
     expect(parsed.issues).toEqual([{ name: 'x', toolCallId: '1', code: 'unknown_tool' }]);
   });
+
+  it('does not throw when a snapshot in attempts mutates into circular after being safe at snapshot time', () => {
+    const issues: Record<string, unknown> = { path: ['a'] };
+    const snapshot = new LLMError('Schema validation failed', 'validation', {
+      issues,
+    }).toSnapshot();
+
+    // issues was JSON-safe when toSnapshot ran, so it survived by
+    // reference. Mutating that shared object after the fact simulates a
+    // consumer (or another part of the app) altering it later.
+    issues.self = issues;
+
+    const err = new LLMError('down', 'network', {
+      attempts: [{ index: 0, error: snapshot }],
+    });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+    const parsed = JSON.parse(JSON.stringify(err));
+    expect(parsed.attempts[0].error.issues).toBe(
+      '[Unserializable: issues contained a circular reference]',
+    );
+  });
+
+  it('does not throw when a caller hand builds an attempts array with a circular nested issues', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('down', 'network', {
+      attempts: [
+        {
+          index: 0,
+          error: {
+            message: 'inner',
+            type: 'validation',
+            retryable: false,
+            issues: circularIssues,
+          },
+        },
+      ],
+    });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
+
+  it('sanitizes issues on attempts nested more than one level deep', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const innermost = new LLMError('inner', 'validation', { issues: circularIssues }).toSnapshot();
+    const err = new LLMError('down', 'network', {
+      attempts: [
+        {
+          index: 0,
+          error: {
+            message: 'mid',
+            type: 'network',
+            retryable: true,
+            attempts: [{ index: 0, error: innermost }],
+          },
+        },
+      ],
+    });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
 });
 
 describe('LLMError.toSnapshot', () => {
@@ -151,5 +216,25 @@ describe('LLMError.toSnapshot', () => {
     const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
 
     expect(err.issues).toBe(circularIssues);
+  });
+
+  it('sanitizes a circular issues value nested inside attempts, not just the top-level issues', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('down', 'network', {
+      attempts: [
+        {
+          index: 0,
+          error: { message: 'inner', type: 'validation', retryable: false, issues: circularIssues },
+        },
+      ],
+    });
+
+    expect(() => err.toSnapshot()).not.toThrow();
+    expect(() => JSON.stringify(err.toSnapshot())).not.toThrow();
+    expect(err.toSnapshot().attempts?.[0]?.error.issues).toBe(
+      '[Unserializable: issues contained a circular reference]',
+    );
   });
 });

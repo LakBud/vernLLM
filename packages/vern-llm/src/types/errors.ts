@@ -132,6 +132,40 @@ function safeIssues(issues: unknown): unknown {
   }
 }
 
+/**
+ * Depth cap for `safeAttempts`, guarding against a pathological,
+ * self referential `attempts` array. `attempts` is a public
+ * `LLMErrorOptions` field, so a caller can construct one by hand; this
+ * keeps that path bounded the same way a circular `issues` value is
+ * bounded, rather than assuming well formed input.
+ */
+const MAX_ATTEMPTS_DEPTH = 20;
+
+/**
+ * Returns a copy of `attempts` with every nested snapshot's `issues`
+ * re-checked through `safeIssues`, recursively through each snapshot's
+ * own `attempts`. Needed for two reasons: `safeIssues` returns a safe
+ * `issues` value by reference, so a shared object can be mutated into a
+ * circular one after the snapshot was created, and `attempts` is a
+ * public constructor option, so a caller can hand build a `RetryAttempt`
+ * (or a whole `LLMErrorSnapshot`) with a circular `issues` and pass it
+ * in directly, never touching `toSnapshot()` at all. Extra fields on an
+ * attempt (e.g. `FallbackAttempt`'s `provider`/`model`) are preserved.
+ */
+function safeAttempts(attempts: RetryAttempt[] | undefined, depth = 0): RetryAttempt[] | undefined {
+  if (attempts === undefined) return undefined;
+  if (depth >= MAX_ATTEMPTS_DEPTH) return [];
+
+  return attempts.map((attempt) => ({
+    ...attempt,
+    error: {
+      ...attempt.error,
+      issues: safeIssues(attempt.error.issues),
+      attempts: safeAttempts(attempt.error.attempts, depth + 1),
+    },
+  }));
+}
+
 /** One tool call's contract failure, used to report every bad call in a response at once. */
 export interface ToolIssue {
   name: string;
@@ -301,12 +335,12 @@ export class LLMError extends Error {
   /**
    * Copies this error's fields into an {@link LLMErrorSnapshot}, for
    * recording as a `RetryAttempt`/`FallbackAttempt`. `retryable` is
-   * captured here since a snapshot has no getter of its own. `attempts`
-   * is copied as is, since an `LLMError`'s own `attempts` already holds
-   * snapshots, never live errors. `cause` is not copied, see
-   * `LLMErrorSnapshot`'s own doc. `issues` goes through `safeIssues`,
+   * captured here since a snapshot has no getter of its own. `cause` is
+   * not copied, see `LLMErrorSnapshot`'s own doc. `issues` and every
+   * nested `attempts` entry's own `issues` go through `safeAttempts`,
    * since a schema validation failure's `issues` is a caller supplied
-   * value, not controlled by VernLLM.
+   * value, not controlled by VernLLM, and `attempts` is itself a public
+   * constructor option a caller can hand build.
    */
   toSnapshot(): LLMErrorSnapshot {
     return {
@@ -317,7 +351,7 @@ export class LLMError extends Error {
       retryAfterMs: this.retryAfterMs,
       code: this.code,
       retryable: this.retryable,
-      attempts: this.attempts,
+      attempts: safeAttempts(this.attempts),
     };
   }
 
@@ -326,10 +360,11 @@ export class LLMError extends Error {
    * same reason `toSnapshot()` does: `cause` is `unknown` and never
    * validated by VernLLM, and some SDK errors carry circular structures
    * `JSON.stringify` cannot serialize at all. Read `err.cause` directly
-   * instead. `issues` goes through `safeIssues` for the same reason:
-   * a schema validation failure's `issues` is caller supplied and not
-   * guaranteed circular free. Also includes `message` and `retryable`,
-   * which a plain property walk would otherwise miss: `message` is
+   * instead. `issues`, including every nested `attempts` entry's own
+   * `issues`, goes through `safeAttempts` for the same reason: a schema
+   * validation failure's `issues` is caller supplied and not guaranteed
+   * circular free. Also includes `message` and `retryable`, which a
+   * plain property walk would otherwise miss: `message` is
    * non-enumerable on `Error`, and `retryable` is a getter, not an own
    * property.
    */
@@ -343,7 +378,7 @@ export class LLMError extends Error {
       retryAfterMs: this.retryAfterMs,
       code: this.code,
       retryable: this.retryable,
-      attempts: this.attempts,
+      attempts: safeAttempts(this.attempts),
     };
   }
 }
