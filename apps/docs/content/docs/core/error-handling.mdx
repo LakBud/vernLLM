@@ -6,7 +6,7 @@ description: LLMError types, what triggers each, and what gets retried
 When a raw API error or unknown thrown error is normalized, the original error is preserved
 on `err.cause`, in case the normalized `type`/`status`/`issues` aren't enough to diagnose the
 failure. Existing `LLMError` instances are returned unchanged, so internally-created errors such
-as timeout, parse, and validation errors may not have a `cause`:
+as timeout, parse, and validation errors may not have a `cause`.
 
 ```ts title="error-handling-example.ts"
 import { isLLMError } from 'vern-llm';
@@ -400,3 +400,15 @@ ends up seeing the thrown error.
   thrown value. A thrown value that cannot be serialized or stringified at all still produces a safe
   placeholder instead of throwing a second error while trying to log the first one.
 </Callout>
+
+`err.cause` itself isn't guaranteed to be safe to `JSON.stringify` on its own, since some SDKs
+throw errors with circular references. `JSON.stringify(err)` leaves `cause` out of its own
+serialization for that reason, along with the structured `type`/`code`/`status`/`issues` fields
+it does include. `issues` gets its own check: for a schema validation failure it is the caller's
+own validator's error object, a shape VernLLM cannot know in advance. A circular `issues` value
+(or one nested inside `attempts`, which carries its own `issues` per recorded failure) is replaced
+with a short marker string in the serialized output rather than dropped silently or left to throw.
+It also adds `message` and `retryable`, since a plain `Error` subclass without this wouldn't show
+either: `message` is non-enumerable on `Error`, and `retryable` is a getter, not an own property.
+`err.attempts` works the same way and never carries
+`cause`.

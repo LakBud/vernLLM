@@ -1,0 +1,240 @@
+import { describe, it, expect } from 'vitest';
+
+import { LLMError } from '../../src/types/errors.js';
+
+describe('LLMError.toJSON', () => {
+  it('does not throw when `cause` is circular, since cause is never included', () => {
+    const circular: Record<string, unknown> = { message: 'circular boom' };
+    circular.self = circular;
+
+    const err = new LLMError('boom', 'unknown', { cause: circular });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
+
+  it('includes the structured fields, and omits cause entirely', () => {
+    const err = new LLMError('boom', 'api', {
+      status: 500,
+      code: 'server_error',
+      cause: { anything: 'here' },
+    });
+
+    const parsed = JSON.parse(JSON.stringify(err));
+
+    expect(parsed).toMatchObject({
+      name: 'LLMError',
+      message: 'boom',
+      type: 'api',
+      status: 500,
+      code: 'server_error',
+      retryable: true,
+    });
+    expect(parsed).not.toHaveProperty('cause');
+  });
+
+  it('leaves err.cause itself untouched on direct access, even when circular', () => {
+    const circular: Record<string, unknown> = { message: 'x' };
+    circular.self = circular;
+
+    const err = new LLMError('boom', 'unknown', { cause: circular });
+    JSON.stringify(err); // exercising toJSON should have no side effect on the instance
+
+    expect(err.cause).toBe(circular);
+  });
+
+  it('includes message and retryable, which a plain property walk (no toJSON) would miss', () => {
+    const err = new LLMError('boom', 'invalid_params');
+
+    const parsed = JSON.parse(JSON.stringify(err));
+
+    expect(parsed.message).toBe('boom');
+    expect(parsed.retryable).toBe(false);
+  });
+
+  it('recorded attempts (already cause-free snapshots) serialize cleanly as part of the same call', () => {
+    const circular: Record<string, unknown> = { message: 'down' };
+    circular.self = circular;
+
+    const err = new LLMError('down', 'network', {
+      cause: circular,
+      attempts: [
+        { index: 0, error: new LLMError('down', 'network', { cause: circular }).toSnapshot() },
+      ],
+    });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
+
+  it('does not throw when issues is circular, e.g. a caller supplied validator error object', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
+
+  it('replaces circular issues with an explicit marker instead of dropping it silently', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+    const parsed = JSON.parse(JSON.stringify(err));
+
+    expect(parsed.issues).toBe('[Unserializable: issues contained a circular reference]');
+  });
+
+  it('keeps a JSON-safe issues value unchanged', () => {
+    const err = new LLMError('bad tool call', 'validation', {
+      code: 'unknown_tool',
+      issues: [{ name: 'x', toolCallId: '1', code: 'unknown_tool' }],
+    });
+
+    const parsed = JSON.parse(JSON.stringify(err));
+
+    expect(parsed.issues).toEqual([{ name: 'x', toolCallId: '1', code: 'unknown_tool' }]);
+  });
+
+  it('does not throw when a snapshot in attempts mutates into circular after being safe at snapshot time', () => {
+    const issues: Record<string, unknown> = { path: ['a'] };
+    const snapshot = new LLMError('Schema validation failed', 'validation', {
+      issues,
+    }).toSnapshot();
+
+    // issues was JSON-safe when toSnapshot ran, so it survived by
+    // reference. Mutating that shared object after the fact simulates a
+    // consumer (or another part of the app) altering it later.
+    issues.self = issues;
+
+    const err = new LLMError('down', 'network', {
+      attempts: [{ index: 0, error: snapshot }],
+    });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+    const parsed = JSON.parse(JSON.stringify(err));
+    expect(parsed.attempts[0].error.issues).toBe(
+      '[Unserializable: issues contained a circular reference]',
+    );
+  });
+
+  it('does not throw when a caller hand builds an attempts array with a circular nested issues', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('down', 'network', {
+      attempts: [
+        {
+          index: 0,
+          error: {
+            message: 'inner',
+            type: 'validation',
+            retryable: false,
+            issues: circularIssues,
+          },
+        },
+      ],
+    });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
+
+  it('sanitizes issues on attempts nested more than one level deep', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const innermost = new LLMError('inner', 'validation', { issues: circularIssues }).toSnapshot();
+    const err = new LLMError('down', 'network', {
+      attempts: [
+        {
+          index: 0,
+          error: {
+            message: 'mid',
+            type: 'network',
+            retryable: true,
+            attempts: [{ index: 0, error: innermost }],
+          },
+        },
+      ],
+    });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
+});
+
+describe('LLMError.toSnapshot', () => {
+  it('never includes cause, even when cause is JSON-safe', () => {
+    const err = new LLMError('boom', 'network', { cause: { code: 'ECONNRESET' } });
+
+    const snapshot = err.toSnapshot();
+
+    expect(snapshot).not.toHaveProperty('cause');
+  });
+
+  it('does not throw when cause is circular, since cause is never copied into the snapshot', () => {
+    const circular: Record<string, unknown> = { message: 'down' };
+    circular.self = circular;
+
+    const err = new LLMError('down', 'network', { cause: circular });
+
+    expect(() => err.toSnapshot()).not.toThrow();
+    expect(() => JSON.stringify(err.toSnapshot())).not.toThrow();
+  });
+
+  it('carries the structured fields a caller actually needs to diagnose a past attempt', () => {
+    const err = new LLMError('boom', 'api', { status: 500, code: 'server_error' });
+
+    expect(err.toSnapshot()).toMatchObject({
+      message: 'boom',
+      type: 'api',
+      status: 500,
+      code: 'server_error',
+      retryable: true,
+    });
+  });
+
+  it('leaves LLMError.cause itself untouched: only toSnapshot/toJSON omit it, not the live field', () => {
+    const cause = { anything: 'goes' };
+    const err = new LLMError('boom', 'unknown', { cause });
+
+    expect(err.cause).toBe(cause);
+  });
+
+  it('does not throw when issues is circular, and replaces it with a marker', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+
+    expect(() => err.toSnapshot()).not.toThrow();
+    expect(err.toSnapshot().issues).toBe('[Unserializable: issues contained a circular reference]');
+  });
+
+  it('leaves LLMError.issues itself untouched: only toSnapshot/toJSON sanitize it', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+
+    expect(err.issues).toBe(circularIssues);
+  });
+
+  it('sanitizes a circular issues value nested inside attempts, not just the top-level issues', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('down', 'network', {
+      attempts: [
+        {
+          index: 0,
+          error: { message: 'inner', type: 'validation', retryable: false, issues: circularIssues },
+        },
+      ],
+    });
+
+    expect(() => err.toSnapshot()).not.toThrow();
+    expect(() => JSON.stringify(err.toSnapshot())).not.toThrow();
+    expect(err.toSnapshot().attempts?.[0]?.error.issues).toBe(
+      '[Unserializable: issues contained a circular reference]',
+    );
+  });
+});
