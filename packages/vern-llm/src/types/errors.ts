@@ -183,23 +183,25 @@ export interface LLMErrorIssuesByCode {
 }
 
 /**
- * Immutable, point-in-time copy of an `LLMError`'s fields, produced by
+ * Point-in-time copy of an `LLMError`'s fields, produced by
  * `LLMError.toSnapshot()`. This is what `RetryAttempt.error` holds
  * instead of a live `LLMError`.
  *
- * A past attempt needs to be *describable* (its message, type, code,
- * whether it was retryable) but never needs to be *thrown* again, so it
- * doesn't need `Error`'s behavior, `instanceof` identity, or a live
- * getter. Using the full `LLMError` class here would also make the type
- * self-referential through its own `attempts` field; a snapshot is a
- * plain, inert record and carries only what a past attempt can
- * meaningfully have.
+ * A past attempt only needs to be describable (message, type, code,
+ * whether it was retryable), never thrown again. So it skips `Error`'s
+ * behavior, `instanceof` identity, and any live getter. Using the full
+ * `LLMError` class here would also make the type self referential
+ * through its own `attempts` field.
  *
- * `attempts` is still present, because a recorded attempt can itself be
- * the terminal failure of an inner retry loop that had its own history
- * (see `FallbackAttempt`, where one target's own retries land here).
- * That's a tree of past data, not a cycle: nothing on `LLMErrorSnapshot`
- * lets you get back to a throwable, extendable `LLMError`.
+ * Has no `cause`. `cause` is `unknown` and never validated by VernLLM,
+ * and it is meant to be read directly on the live error you just
+ * caught, not carried indefinitely inside history. `type`, `code`,
+ * `status`, and `issues` are the structured fields a snapshot carries
+ * instead.
+ *
+ * `attempts` is still present, since a recorded attempt can itself be
+ * the terminal failure of an inner retry loop with its own history (see
+ * `FallbackAttempt`). That's a tree of past data, not a cycle.
  */
 export interface LLMErrorSnapshot {
   message: string;
@@ -208,8 +210,6 @@ export interface LLMErrorSnapshot {
   issues?: unknown;
   retryAfterMs?: number;
   code?: LLMErrorCode;
-  /** The original thrown value this attempt's error was built from, same as `LLMError.cause`. */
-  cause?: unknown;
   /** Computed once, at snapshot time, since a snapshot has no live getter. */
   retryable: boolean;
   /** This attempt's own prior attempts, if it was itself the terminal failure of a retry loop. */
@@ -278,13 +278,12 @@ export class LLMError extends Error {
   }
 
   /**
-   * Copies this error's fields into an inert {@link LLMErrorSnapshot},
-   * for recording as a `RetryAttempt`/`FallbackAttempt`. `retryable` is
-   * captured here since a snapshot has no getter of its own; every other
-   * field is copied as-is, including `attempts`, since this error's own
-   * prior attempts are already snapshots (an `LLMError`'s `attempts` is
-   * only ever populated by `normalizeError`, which always pushes
-   * snapshots, never live errors).
+   * Copies this error's fields into an {@link LLMErrorSnapshot}, for
+   * recording as a `RetryAttempt`/`FallbackAttempt`. `retryable` is
+   * captured here since a snapshot has no getter of its own. `attempts`
+   * is copied as is, since an `LLMError`'s own `attempts` already holds
+   * snapshots, never live errors. `cause` is not copied, see
+   * `LLMErrorSnapshot`'s own doc.
    */
   toSnapshot(): LLMErrorSnapshot {
     return {
@@ -294,7 +293,29 @@ export class LLMError extends Error {
       issues: this.issues,
       retryAfterMs: this.retryAfterMs,
       code: this.code,
-      cause: this.cause,
+      retryable: this.retryable,
+      attempts: this.attempts,
+    };
+  }
+
+  /**
+   * Controls what `JSON.stringify(err)` produces. Omits `cause` for the
+   * same reason `toSnapshot()` does: `cause` is `unknown` and never
+   * validated by VernLLM, and some SDK errors carry circular structures
+   * `JSON.stringify` cannot serialize at all. Read `err.cause` directly
+   * instead. Also includes `message` and `retryable`, which a plain
+   * property walk would otherwise miss: `message` is non-enumerable on
+   * `Error`, and `retryable` is a getter, not an own property.
+   */
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      message: this.message,
+      type: this.type,
+      status: this.status,
+      issues: this.issues,
+      retryAfterMs: this.retryAfterMs,
+      code: this.code,
       retryable: this.retryable,
       attempts: this.attempts,
     };

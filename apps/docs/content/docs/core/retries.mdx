@@ -73,7 +73,7 @@ If a `signal` fires while a retry is waiting out its backoff delay, the pending 
 
 ## Reading attempt history
 
-Every normalized `LLMError` carries an optional `attempts` array: one entry per attempt made against the current target before the error was thrown, each with the attempt's `index` and a snapshot of that attempt's `error` (an `LLMErrorSnapshot`: `message`, `type`, `code`, `status`, `retryAfterMs`, `cause`, `retryable`, and its own nested `attempts`, if that attempt was itself the terminal failure of a retry loop). It's a snapshot, not a live `LLMError`, since a past attempt is a record, not something you'd catch or rethrow.
+Every normalized `LLMError` carries an optional `attempts` array. Each entry has the attempt's `index` and a snapshot of that attempt's `error`: an `LLMErrorSnapshot` with `message`, `type`, `code`, `status`, `issues`, `retryAfterMs`, `retryable`, and its own nested `attempts` if that attempt was itself the terminal failure of a retry loop. It's a snapshot, not a live `LLMError`, since a past attempt is a record, not something you'd catch or rethrow. `cause` isn't part of it. `cause` is meant to be read on the live error you actually caught (`err.cause`), not carried inside recorded history. See [Error Handling](/docs/core/error-handling) for `cause`.
 
 ```ts
 try {
