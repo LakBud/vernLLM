@@ -402,9 +402,13 @@ ends up seeing the thrown error.
 </Callout>
 
 `err.cause` itself isn't guaranteed to be safe to `JSON.stringify` on its own, since some SDKs
-throw errors with circular references. `JSON.stringify(err)` itself is always safe: `LLMError`
-leaves `cause` out of its own serialization, along with the structured
-`type`/`code`/`status`/`issues` fields it does include. It also adds `message` and `retryable`,
-since a plain `Error` subclass without this wouldn't show either: `message` is non-enumerable on
-`Error`, and `retryable` is a getter, not an own property. `err.attempts` works the same way and
-never carries `cause`.
+throw errors with circular references. `JSON.stringify(err)` leaves `cause` out of its own
+serialization for that reason, along with the structured `type`/`code`/`status`/`issues` fields
+it does include. `issues` gets its own check: for a schema validation failure it is the caller's
+own validator's error object, a shape VernLLM cannot know in advance. A circular `issues` value
+(or one nested inside `attempts`, which carries its own `issues` per recorded failure) is replaced
+with a short marker string in the serialized output rather than dropped silently or left to throw.
+It also adds `message` and `retryable`, since a plain `Error` subclass without this wouldn't show
+either: `message` is non-enumerable on `Error`, and `retryable` is a getter, not an own property.
+`err.attempts` works the same way and never carries
+`cause`.

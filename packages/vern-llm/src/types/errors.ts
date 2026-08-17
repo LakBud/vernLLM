@@ -111,6 +111,27 @@ function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): b
   return true;
 }
 
+/**
+ * Returns `issues` unchanged when it can survive `JSON.stringify`.
+ * Most `issues` values are VernLLM's own structured shapes (see
+ * `LLMErrorIssuesByCode`) and always safe. The one exception is a
+ * schema validation failure, where `issues` is a caller supplied
+ * `SchemaLike` validator's own `error: unknown`, not controlled by
+ * VernLLM and not guaranteed to be circular free. Rather than silently
+ * dropping it in that case, this returns a marker string so a reader
+ * of serialized output can tell "no issues data" apart from "issues
+ * existed but could not be shown".
+ */
+function safeIssues(issues: unknown): unknown {
+  if (issues === undefined) return undefined;
+  try {
+    JSON.stringify(issues);
+    return issues;
+  } catch {
+    return '[Unserializable: issues contained a circular reference]';
+  }
+}
+
 /** One tool call's contract failure, used to report every bad call in a response at once. */
 export interface ToolIssue {
   name: string;
@@ -283,14 +304,16 @@ export class LLMError extends Error {
    * captured here since a snapshot has no getter of its own. `attempts`
    * is copied as is, since an `LLMError`'s own `attempts` already holds
    * snapshots, never live errors. `cause` is not copied, see
-   * `LLMErrorSnapshot`'s own doc.
+   * `LLMErrorSnapshot`'s own doc. `issues` goes through `safeIssues`,
+   * since a schema validation failure's `issues` is a caller supplied
+   * value, not controlled by VernLLM.
    */
   toSnapshot(): LLMErrorSnapshot {
     return {
       message: this.message,
       type: this.type,
       status: this.status,
-      issues: this.issues,
+      issues: safeIssues(this.issues),
       retryAfterMs: this.retryAfterMs,
       code: this.code,
       retryable: this.retryable,
@@ -303,9 +326,12 @@ export class LLMError extends Error {
    * same reason `toSnapshot()` does: `cause` is `unknown` and never
    * validated by VernLLM, and some SDK errors carry circular structures
    * `JSON.stringify` cannot serialize at all. Read `err.cause` directly
-   * instead. Also includes `message` and `retryable`, which a plain
-   * property walk would otherwise miss: `message` is non-enumerable on
-   * `Error`, and `retryable` is a getter, not an own property.
+   * instead. `issues` goes through `safeIssues` for the same reason:
+   * a schema validation failure's `issues` is caller supplied and not
+   * guaranteed circular free. Also includes `message` and `retryable`,
+   * which a plain property walk would otherwise miss: `message` is
+   * non-enumerable on `Error`, and `retryable` is a getter, not an own
+   * property.
    */
   toJSON(): Record<string, unknown> {
     return {
@@ -313,7 +339,7 @@ export class LLMError extends Error {
       message: this.message,
       type: this.type,
       status: this.status,
-      issues: this.issues,
+      issues: safeIssues(this.issues),
       retryAfterMs: this.retryAfterMs,
       code: this.code,
       retryable: this.retryable,

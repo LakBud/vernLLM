@@ -64,6 +64,36 @@ describe('LLMError.toJSON', () => {
 
     expect(() => JSON.stringify(err)).not.toThrow();
   });
+
+  it('does not throw when issues is circular, e.g. a caller supplied validator error object', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+
+    expect(() => JSON.stringify(err)).not.toThrow();
+  });
+
+  it('replaces circular issues with an explicit marker instead of dropping it silently', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+    const parsed = JSON.parse(JSON.stringify(err));
+
+    expect(parsed.issues).toBe('[Unserializable: issues contained a circular reference]');
+  });
+
+  it('keeps a JSON-safe issues value unchanged', () => {
+    const err = new LLMError('bad tool call', 'validation', {
+      code: 'unknown_tool',
+      issues: [{ name: 'x', toolCallId: '1', code: 'unknown_tool' }],
+    });
+
+    const parsed = JSON.parse(JSON.stringify(err));
+
+    expect(parsed.issues).toEqual([{ name: 'x', toolCallId: '1', code: 'unknown_tool' }]);
+  });
 });
 
 describe('LLMError.toSnapshot', () => {
@@ -102,5 +132,24 @@ describe('LLMError.toSnapshot', () => {
     const err = new LLMError('boom', 'unknown', { cause });
 
     expect(err.cause).toBe(cause);
+  });
+
+  it('does not throw when issues is circular, and replaces it with a marker', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+
+    expect(() => err.toSnapshot()).not.toThrow();
+    expect(err.toSnapshot().issues).toBe('[Unserializable: issues contained a circular reference]');
+  });
+
+  it('leaves LLMError.issues itself untouched: only toSnapshot/toJSON sanitize it', () => {
+    const circularIssues: Record<string, unknown> = { path: ['a'] };
+    circularIssues.self = circularIssues;
+
+    const err = new LLMError('Schema validation failed', 'validation', { issues: circularIssues });
+
+    expect(err.issues).toBe(circularIssues);
   });
 });
