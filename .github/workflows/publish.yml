@@ -1,10 +1,12 @@
 name: Publish
 
 on:
-  release:
-    types: [published]
+  pull_request:
+    types: [closed]
+    branches:
+      - main
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}
+concurrency: ${{ github.workflow }}-${{ github.event.pull_request.merge_commit_sha }}
 
 permissions:
   contents: write
@@ -12,12 +14,16 @@ permissions:
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'vern-llm@')
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'changeset-release/main'
+
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - uses: pnpm/action-setup@v4
 
@@ -31,12 +37,20 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Verify package.json version matches release tag
+      - name: Read package version
+        id: pkg
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#vern-llm@}"
-          PKG_VERSION="$(node -p "require('./packages/vern-llm/package.json').version")"
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+          echo "version=$(node -p "require('./packages/vern-llm/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag
+        run: |
+          TAG="vern-llm@${{ steps.pkg.outputs.version }}"
+          echo "Publishing $TAG"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG"; then
+            echo "Tag $TAG exists"
+          else
+            echo "Tag $TAG does not exist"
             exit 1
           fi
 
