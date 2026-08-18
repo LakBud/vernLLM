@@ -35,9 +35,14 @@ describe('VernLLM.call(stream: true) through fromBedrock — end to end', () => 
     const converseStream = vi.fn(async (_params: unknown, _options: unknown) => ({
       stream: fakeBedrockStream([
         { messageStart: { role: 'assistant' } },
-        { contentBlockStart: { contentBlockIndex: 0, start: {} } },
-        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '{"city":' } } },
-        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '"Denver"}' } } },
+        {
+          contentBlockStart: {
+            contentBlockIndex: 0,
+            start: { toolUse: { toolUseId: 'tool_1', name: 'location' } },
+          },
+        },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"city":' } } } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '"Denver"}' } } } },
         { contentBlockStop: { contentBlockIndex: 0 } },
         { messageStop: { stopReason: 'end_turn' } },
         { metadata: { usage: { inputTokens: 8, outputTokens: 5, totalTokens: 13 } } },
@@ -49,9 +54,14 @@ describe('VernLLM.call(stream: true) through fromBedrock — end to end', () => 
       model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
     });
 
+    // json_object is no longer supported on Bedrock (see fromBedrock's
+    // docs): nothing in Converse mechanically enforces it, unlike
+    // `jsonSchema`, which constrains generation for real (here, via the
+    // legacy forced-single-tool-call path, since this fake client has no
+    // native-structured-output override set).
     const { chunks, finalResult } = await llm.call<{ city: string }>({
       userContent: 'where?',
-      jsonMode: true,
+      jsonSchema: { name: 'location', schema: { type: 'object' } },
       stream: true,
     });
 

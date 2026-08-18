@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   fromAnthropic,
+  fromBedrockClient,
   fromOpenAICompatible,
   NormalizedCacheAdapter,
   TieredCacheAdapter,
@@ -24,6 +25,8 @@ describe('package entrypoint exports', () => {
   it('exports adapters at runtime', () => {
     expect(fromAnthropic).toBeDefined();
     expect(fromOpenAICompatible).toBeDefined();
+    expect(fromBedrockClient).toBeDefined();
+    expect(typeof fromBedrockClient).toBe('function');
   });
 
   it('exports cache adapters at runtime', () => {

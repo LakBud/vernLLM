@@ -91,6 +91,7 @@ export class CallExecutor {
       model,
       defaultMaxTokens: options.defaultMaxTokens,
       defaultTemperature: options.defaultTemperature,
+      supportsJsonObjectMode: client.supportsJsonObjectMode ?? true,
     });
   }
 

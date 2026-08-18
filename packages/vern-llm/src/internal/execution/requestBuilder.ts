@@ -13,6 +13,12 @@ export interface RequestBuilderOptions {
   model: string;
   defaultMaxTokens: number;
   defaultTemperature: number | null;
+  /**
+   * Whether the target client honors `response_format: { type: 'json_object' }`
+   * as a real constraint (see `LLMClient.supportsJsonObjectMode`'s docs).
+   * `true` for every built-in adapter except `fromAnthropic`/`fromBedrock`.
+   */
+  supportsJsonObjectMode: boolean;
 }
 
 /**
@@ -33,11 +39,13 @@ export class RequestBuilder {
   private readonly model: string;
   private readonly defaultMaxTokens: number;
   private readonly defaultTemperature: number | null;
+  private readonly supportsJsonObjectMode: boolean;
 
   constructor(options: RequestBuilderOptions) {
     this.model = options.model;
     this.defaultMaxTokens = options.defaultMaxTokens;
     this.defaultTemperature = options.defaultTemperature;
+    this.supportsJsonObjectMode = options.supportsJsonObjectMode;
   }
 
   /** Applies per-call defaults and shapes params into the client's request object. */
@@ -107,8 +115,37 @@ export class RequestBuilder {
     // Defaults to false when tools are set and the caller didn't say otherwise,
     // since forcing a JSON response format alongside tool calling is unreliable
     // across providers.
-    const jsonMode = params.jsonMode ?? (tools ? false : true);
-    const useJson = jsonMode || Boolean(jsonSchema);
+    const jsonModeExplicit = params.jsonMode;
+    const jsonMode = jsonModeExplicit ?? (tools ? false : true);
+
+    // A client that can't honor `json_object` as a real constraint
+    // (`supportsJsonObjectMode: false`, currently `fromAnthropic`/
+    // `fromBedrock`) never receives it. An *explicit* `jsonMode: true`
+    // still throws here, before the request ever reaches the client: the
+    // caller asked for a guarantee this target can't provide, and staying
+    // silent about that would be worse than the plain-text fallback below.
+    // A *default* (unset) `jsonMode`, which resolves to `true` on every
+    // plain call with no `tools`, is silently downgraded to plain text
+    // instead: this is what keeps `llm.call({ userContent })` working out
+    // of the box on Anthropic/Bedrock exactly as it did before
+    // `json_object` support was removed from those two adapters, for
+    // anyone not relying on JSON output they never actually asked for.
+    if (!this.supportsJsonObjectMode && !jsonSchema && jsonModeExplicit === true) {
+      throw new LLMError(
+        'jsonMode: true was set explicitly, but this client does not support ' +
+          '`response_format: "json_object"` (see LLMClient.supportsJsonObjectMode). Neither ' +
+          'Anthropic nor Bedrock has a field that mechanically guarantees JSON output for this ' +
+          'mode. Use `jsonSchema` instead, which maps to a real constraint on both.',
+        'invalid_params',
+      );
+    }
+
+    const jsonModeEffective =
+      !this.supportsJsonObjectMode && !jsonSchema && jsonModeExplicit === undefined
+        ? false // downgrade: default jsonMode on an unsupporting client, no jsonSchema either
+        : jsonMode;
+
+    const useJson = jsonModeEffective || Boolean(jsonSchema);
 
     if (params.schema && !useJson) {
       throw new LLMError(

@@ -466,67 +466,26 @@ describe('fromAnthropic', () => {
     ]);
   });
 
-  it('falls back to a prompt instruction for json_object mode (no schema to build a tool from)', async () => {
-    const { client, create } = makeFakeAnthropicClient('{}');
+  it('throws for json_object mode: no Anthropic field mechanically guarantees JSON output, so it is no longer emulated via a prompt instruction', async () => {
+    const { client } = makeFakeAnthropicClient('{}');
     const adapted = fromAnthropic(client);
 
-    await adapted.chat.completions.create(
-      {
-        model: 'm',
-        temperature: 0.2,
-        max_tokens: 10,
-        response_format: { type: 'json_object' },
-        messages: [{ role: 'user', content: 'hi' }],
-      },
-      { signal: new AbortController().signal },
-    );
-
-    const sentParams = at(create.mock.calls, 0)[0] as unknown as {
-      system?: string;
-      tools?: unknown;
-    };
-    expect(sentParams.system).toMatch(/valid JSON only/i);
-    expect(sentParams.tools).toBeUndefined();
-  });
-
-  it(
-    'sends real `tools` alongside the json_object prompt instruction, unmodified (regression: ' +
-      'these used to be built in a single if/else-if chain, so json_object silently dropped ' +
-      'tools instead of sending both)',
-    async () => {
-      const { client, create } = makeFakeAnthropicClient('{}');
-      const adapted = fromAnthropic(client);
-
-      await adapted.chat.completions.create(
+    await expect(
+      adapted.chat.completions.create(
         {
           model: 'm',
+          temperature: 0.2,
           max_tokens: 10,
           response_format: { type: 'json_object' },
-          tools: [
-            {
-              type: 'function',
-              function: {
-                name: 'get_weather',
-                description: 'weather',
-                parameters: { type: 'object' },
-              },
-            },
-          ],
-          tool_choice: 'auto',
           messages: [{ role: 'user', content: 'hi' }],
         },
         { signal: new AbortController().signal },
-      );
-
-      const sentParams = at(create.mock.calls, 0)[0];
-
-      expect(sentParams.system).toMatch(/valid JSON only/i);
-      expect(sentParams.tools).toEqual([
-        { name: 'get_weather', description: 'weather', input_schema: { type: 'object' } },
-      ]);
-      expect(sentParams.tool_choice).toEqual({ type: 'auto' });
-    },
-  );
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      message: expect.stringMatching(/json_object.*not supported/i),
+    });
+  });
 
   it('works with no system message at all', async () => {
     const { client, create } = makeFakeAnthropicClient('ok');

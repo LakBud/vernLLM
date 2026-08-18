@@ -252,8 +252,19 @@ function buildAnthropicRequestBody(
     );
   }
 
+  if (params.response_format?.type === 'json_object') {
+    throw new LLMError(
+      'response_format: "json_object" is not supported on Anthropic. Unlike OpenAI, Anthropic ' +
+        'has no API-level field that mechanically guarantees valid JSON output for this mode, so ' +
+        'it used to be emulated by injecting a "respond with JSON only" instruction into the ' +
+        'system prompt, a guarantee this adapter can no longer make. Use `jsonSchema` instead, ' +
+        "which maps to a real API-level constraint (Anthropic's native output_config.format on " +
+        'covered models, or a forced single tool call otherwise).',
+      'validation',
+    );
+  }
+
   let toolName: string | undefined;
-  let jsonInstruction: string | undefined;
   let outputFormat: NonNullable<AnthropicRequestBody['output_config']>['format'] | undefined;
   let tools: NonNullable<Parameters<AnthropicClient['messages']['create']>[0]['tools']> | undefined;
   let toolChoice: Parameters<AnthropicClient['messages']['create']>[0]['tool_choice'];
@@ -291,12 +302,6 @@ function buildAnthropicRequestBody(
       { name: toolName, description, input_schema: assertObjectSchema(schema, toolName), strict },
     ];
     toolChoice = { type: 'tool', name: toolName };
-  } else if (params.response_format?.type === 'json_object') {
-    // No schema to build a tool from, fall back to a prompt instruction.
-    // This does not exclude real `tools`: `json_object` mode is just a
-    // system-prompt nudge, not a request field that could collide with
-    // `tools`/`tool_choice`, so both are set independently below.
-    jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
   }
 
   if (!jsonSchema && params.tools?.length) {
@@ -307,7 +312,7 @@ function buildAnthropicRequestBody(
   // equivalent. Claude's extended thinking uses a token budget, not a tier
   // string, so it's intentionally dropped here rather than guessed at.
 
-  const system = [systemMessage?.content, jsonInstruction].filter(Boolean).join('\n\n');
+  const system = systemMessage?.content;
 
   const body: AnthropicRequestBody = {
     model: params.model,
@@ -360,11 +365,13 @@ export interface AnthropicAdapterOptions {
  * schema matching applies only when `strict: true` is forwarded and
  * supported.
  *
- * `response_format: json_object` (no schema to build a tool from) falls
- * back to a system-prompt instruction, since there's nothing to constrain
- * generation against. Unlike `jsonSchema`, this combines with real `tools`
- * freely on every model: it's a prompt nudge, not a request field, so
- * there's nothing for it to collide with.
+ * `response_format: json_object` throws `LLMError('validation')`. Anthropic
+ * has no API-level field that mechanically guarantees JSON output the way
+ * OpenAI's `json_object` mode does; the only way to emulate it was a
+ * system-prompt instruction with no actual enforcement behind it, a
+ * guarantee this adapter no longer pretends to make. Use `jsonSchema`
+ * instead, which maps to a real constraint either way (native
+ * `output_config.format` or a forced tool call).
  */
 export function fromAnthropic(
   anthropicClient: AnthropicClient,
@@ -385,6 +392,12 @@ export function fromAnthropic(
   ) => Promise<unknown> | AsyncIterable<AnthropicStreamEvent>;
 
   return {
+    // json_object is not supported: see buildAnthropicRequestBody's throw
+    // above, and LLMClient.supportsJsonObjectMode's docs for why this is
+    // false rather than the emulated-via-prompt-instruction default. Lets
+    // RequestBuilder downgrade a default (unset) jsonMode to plain text
+    // instead of requesting a mode this client can't honor.
+    supportsJsonObjectMode: false,
     chat: {
       completions: {
         async create(params, options) {

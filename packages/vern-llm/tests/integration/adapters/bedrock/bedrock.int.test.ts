@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromBedrock } from '../../../../src/adapters/bedrock.js';
+import { fromBedrock, type BedrockConverseClient } from '../../../../src/adapters/bedrock.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
 
 describe('Bedrock adapter integration', () => {
   it('maps the Converse API into LLMClient format', async () => {
@@ -22,7 +23,6 @@ describe('Bedrock adapter integration', () => {
           { role: 'system', content: 'Return JSON' },
           { role: 'user', content: 'hello' },
         ],
-        response_format: { type: 'json_object' },
       },
       { signal: new AbortController().signal },
     );
@@ -295,5 +295,41 @@ describe('Bedrock adapter integration', () => {
       }),
       expect.anything(),
     );
+  });
+
+  describe('json_object downgrade: a plain call (no jsonMode, no jsonSchema, no tools) still works on Bedrock', () => {
+    it('default jsonMode is silently downgraded to plain text', async () => {
+      const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
+        output: { message: { content: [{ text: 'plain answer, not JSON' }] } },
+        usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+      }));
+
+      const llm = new VernLLM({
+        client: fromBedrock({ converse }),
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      });
+
+      const result = await llm.call<string>({ userContent: 'hi' });
+
+      expect(result).toBe('plain answer, not JSON');
+      expect(converse.mock.calls[0]?.[0]).not.toHaveProperty('outputConfig');
+      const system = converse.mock.calls[0]?.[0]?.system;
+      expect(system).toBeUndefined();
+    });
+
+    it('an *explicit* jsonMode: true throws a clear invalid_params error instead of silently downgrading', async () => {
+      const converse = vi.fn();
+
+      const llm = new VernLLM({
+        client: fromBedrock({ converse } as never),
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: true })).rejects.toMatchObject({
+        name: 'LLMError',
+        type: 'invalid_params',
+      });
+      expect(converse).not.toHaveBeenCalled();
+    });
   });
 });

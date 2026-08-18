@@ -1,6 +1,6 @@
 export { fromAnthropic, type AnthropicClient } from './anthropic.js';
 export { fromGemini, type GeminiClient } from './gemini.js';
-export { fromBedrock, type BedrockConverseClient } from './bedrock.js';
+export { fromBedrock, fromBedrockClient, type BedrockConverseClient } from './bedrock.js';
 export { fromFetch, type FetchAdapterConfig } from './fetch.js';
 export {
   fromOpenAICompatible,

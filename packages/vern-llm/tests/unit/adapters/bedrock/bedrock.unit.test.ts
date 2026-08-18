@@ -152,76 +152,29 @@ describe('fromBedrock', () => {
     });
   });
 
-  it('emulates JSON mode via a system-prompt instruction, appended to any existing system message', async () => {
-    const { client, converse } = makeFakeBedrockClient('{}');
+  it('throws for json_object mode: Converse has no field that mechanically guarantees JSON output, so it is no longer emulated via a prompt instruction', async () => {
+    const { client } = makeFakeBedrockClient('{}');
     const adapted = fromBedrock(client);
 
-    await adapted.chat.completions.create(
-      {
-        model: 'm',
-        temperature: 0.2,
-        max_tokens: 10,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: 'be brief' },
-          { role: 'user', content: 'hi' },
-        ],
-      },
-      { signal: new AbortController().signal },
-    );
-
-    const system = at(converse.mock.calls, 0)[0].system as Array<{ text: string }>;
-    expect(at(system, 0).text).toBe('be brief');
-    expect(at(system, 1).text).toMatch(/valid JSON only/i);
-  });
-
-  it(
-    'sends real `tools` alongside the json_object prompt instruction, unmodified (regression: ' +
-      'these used to be built in a single if/else-if chain, so json_object silently dropped ' +
-      'tools instead of sending both)',
-    async () => {
-      const { client, converse } = makeFakeBedrockClient('{}');
-      const adapted = fromBedrock(client);
-
-      await adapted.chat.completions.create(
+    await expect(
+      adapted.chat.completions.create(
         {
           model: 'm',
+          temperature: 0.2,
           max_tokens: 10,
           response_format: { type: 'json_object' },
-          tools: [
-            {
-              type: 'function',
-              function: {
-                name: 'get_weather',
-                description: 'weather',
-                parameters: { type: 'object' },
-              },
-            },
+          messages: [
+            { role: 'system', content: 'be brief' },
+            { role: 'user', content: 'hi' },
           ],
-          tool_choice: 'auto',
-          messages: [{ role: 'user', content: 'hi' }],
         },
         { signal: new AbortController().signal },
-      );
-
-      const sentParams = at(converse.mock.calls, 0)[0];
-      const system = sentParams.system as Array<{ text: string }>;
-
-      expect(at(system, 0).text).toMatch(/valid JSON only/i);
-      expect(sentParams.toolConfig).toEqual({
-        tools: [
-          {
-            toolSpec: {
-              name: 'get_weather',
-              description: 'weather',
-              inputSchema: { json: { type: 'object' } },
-            },
-          },
-        ],
-        toolChoice: { auto: {} },
-      });
-    },
-  );
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      message: expect.stringMatching(/json_object.*not supported/i),
+    });
+  });
 
   it('forces tool-use via toolConfig for json_schema mode instead of a prompt instruction', async () => {
     const { client, converse } = makeFakeBedrockToolClient('Candidate', { name: 'Ada' });

@@ -17,6 +17,7 @@ export {
   fromGemini,
   type GeminiClient,
   fromBedrock,
+  fromBedrockClient,
   type BedrockConverseClient,
   fromFetch,
   type FetchAdapterConfig,

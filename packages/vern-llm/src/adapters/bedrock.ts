@@ -321,8 +321,19 @@ function buildBedrockRequest(
     );
   }
 
+  if (params.response_format?.type === 'json_object') {
+    throw new LLMError(
+      'response_format: "json_object" is not supported on Bedrock. Converse has no field that ' +
+        'mechanically guarantees valid JSON output for this mode, so it used to be emulated by ' +
+        'injecting a "respond with JSON only" instruction into the system prompt, a guarantee ' +
+        'this adapter can no longer make. Use `jsonSchema` instead, which maps to a real ' +
+        "constraint (Converse's native outputConfig.textFormat on covered models, or a forced " +
+        'tool call otherwise).',
+      'validation',
+    );
+  }
+
   let toolName: string | undefined;
-  let jsonInstruction: string | undefined;
   let toolConfig: NonNullable<BedrockRequest['toolConfig']> | undefined;
   let outputConfig: NonNullable<BedrockRequest['outputConfig']> | undefined;
 
@@ -358,12 +369,6 @@ function buildBedrockRequest(
       tools: [{ toolSpec: { name: toolName, description, inputSchema: { json: schema }, strict } }],
       toolChoice: { tool: { name: toolName } },
     };
-  } else if (params.response_format?.type === 'json_object') {
-    // No schema to build a tool from, fall back to a prompt instruction.
-    // This does not exclude real `tools`: `json_object` mode is just a
-    // system-prompt nudge, not a request field that could collide with
-    // `toolConfig`, so both are set independently below.
-    jsonInstruction = 'Respond with valid JSON only, no prose or markdown fences.';
   }
 
   // Runs after the branch chain, unified across every case that still
@@ -396,14 +401,10 @@ function buildBedrockRequest(
     }
   }
 
-  const systemParts = [systemMessage?.content, jsonInstruction].filter((s): s is string =>
-    Boolean(s),
-  );
-
   const request: BedrockRequest = {
     modelId: params.model,
     messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toBedrockMessage(m))),
-    system: systemParts.length ? systemParts.map((text) => ({ text })) : undefined,
+    system: systemMessage?.content ? [{ text: systemMessage.content }] : undefined,
     inferenceConfig: {
       ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
       maxTokens: params.max_tokens,
@@ -444,12 +445,11 @@ function buildBedrockRequest(
  * `BedrockAdapterOptions`), otherwise a `jsonSchema` call to an
  * unsupported model surfaces Bedrock's raw error unchanged.
  *
- * `response_format: json_object` (no schema to build a tool from) and
- * `reasoning_effort` (no Converse equivalent) fall back to a system-prompt
- * instruction and are dropped respectively. Unlike `jsonSchema`,
- * `json_object` combines with real `tools` freely on every model: it's a
- * prompt nudge, not a request field, so there's nothing for it to collide
- * with.
+ * `response_format: json_object` throws `LLMError('validation')`: Converse
+ * has no field that mechanically guarantees JSON output, and the only way
+ * to emulate it was an unenforced system-prompt instruction, a guarantee
+ * this adapter no longer pretends to make. Use `jsonSchema` instead.
+ * `reasoning_effort` (no Converse equivalent) is dropped.
  *
  * `tools` alone maps to Converse's native `toolConfig`/`toolUse`/
  * `toolResult`; `tool_choice` maps to `toolConfig.toolChoice`.
@@ -474,6 +474,10 @@ export function fromBedrock(
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
 
   return {
+    // json_object is not supported: see buildBedrockRequest's throw above,
+    // and LLMClient.supportsJsonObjectMode's docs. fromBedrockClient wraps
+    // this function, so it inherits the same flag automatically.
+    supportsJsonObjectMode: false,
     chat: {
       completions: {
         async create(params, requestOptions) {
@@ -775,4 +779,79 @@ function mergeConsecutiveToolResults(
   }
 
   return merged;
+}
+
+/**
+ * Minimal structural shape of an AWS SDK v3 client that exposes `.send()`,
+ * matching `BedrockRuntimeClient` (and its abort-signal-aware call
+ * convention) without importing `@aws-sdk/client-bedrock-runtime` for the
+ * type.
+ */
+interface AwsSendClient {
+  send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<unknown>;
+}
+
+/**
+ * Ergonomic alternative to `fromBedrock` for callers who already depend on
+ * `@aws-sdk/client-bedrock-runtime`: takes a real `BedrockRuntimeClient`
+ * directly, no hand-written `.converse()`/`.converseStream()` wrapper
+ * required. Internally does what that wrapper would: `client.send(new
+ * ConverseCommand(params))` / `client.send(new ConverseStreamCommand(params))`.
+ *
+ * `@aws-sdk/client-bedrock-runtime` is intentionally NOT a dependency (not
+ * even a peer dependency) of this package, since `vern-llm` otherwise has
+ * zero runtime dependencies and every other adapter works the same way
+ * (structural typing over whatever client the caller already has). Instead,
+ * `ConverseCommand`/`ConverseStreamCommand` are pulled in with a dynamic
+ * `import()` the first time this function actually runs, so:
+ *   - nothing is added to `package.json`, static or peer
+ *   - bundlers only pull the AWS SDK in for code paths that actually call
+ *     this function; `fromBedrock` and every other adapter stay unaffected
+ *   - if `@aws-sdk/client-bedrock-runtime` isn't installed, the failure is
+ *     a clear `LLMError` naming exactly what's missing, at the moment it's
+ *     needed, rather than a silent peer-dependency warning at install time
+ *     (or a raw "Cannot find module" a caller has to trace back themselves)
+ *
+ * If you'd rather avoid `@aws-sdk/client-bedrock-runtime` entirely (e.g. a
+ * hand-rolled HTTP client, or a different AWS SDK generation), use
+ * `fromBedrock` with your own `.converse()`/`.converseStream()` wrapper
+ * instead; this function is purely a convenience on top of it.
+ */
+export async function fromBedrockClient(
+  client: AwsSendClient,
+  options?: BedrockAdapterOptions,
+): Promise<LLMClient> {
+  let ConverseCommand: new (input: unknown) => unknown;
+  let ConverseStreamCommand: new (input: unknown) => unknown;
+
+  try {
+    const mod = (await import('@aws-sdk/client-bedrock-runtime')) as {
+      ConverseCommand: new (input: unknown) => unknown;
+      ConverseStreamCommand: new (input: unknown) => unknown;
+    };
+
+    ({ ConverseCommand, ConverseStreamCommand } = mod);
+  } catch (cause) {
+    throw new LLMError(
+      'fromBedrockClient requires "@aws-sdk/client-bedrock-runtime" to be installed (it is not a ' +
+        'dependency of vern-llm itself). Install it, or use fromBedrock(converseClient) with your ' +
+        'own .converse()/.converseStream() wrapper instead.',
+      'validation',
+      { cause },
+    );
+  }
+
+  const converseClient: BedrockConverseClient = {
+    converse: (params, requestOptions) =>
+      client.send(new ConverseCommand(params), {
+        abortSignal: requestOptions.signal,
+      }) as ReturnType<BedrockConverseClient['converse']>,
+
+    converseStream: (params, requestOptions) =>
+      client.send(new ConverseStreamCommand(params), {
+        abortSignal: requestOptions.signal,
+      }) as ReturnType<NonNullable<BedrockConverseClient['converseStream']>>,
+  };
+
+  return fromBedrock(converseClient, options);
 }
