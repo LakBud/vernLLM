@@ -45,6 +45,20 @@ export type WireToolChoice =
  * rather than importing the SDKs own params type
  */
 export interface LLMClient {
+  /**
+   * Whether this client supports OpenAI's `response_format: { type:
+   * 'json_object' }` as a real, API-level constraint. Defaults to `true`
+   * when omitted (every OpenAI-compatible client and `fromGemini` map it to
+   * a real field). `fromAnthropic` and `fromBedrock` set this to `false`:
+   * neither provider has a field that mechanically guarantees JSON output
+   * for this mode, so `RequestBuilder` downgrades a *default* (unset)
+   * `jsonMode` to plain text for these clients instead of requesting
+   * `json_object` and getting an unenforced, provider-side no-op back. An
+   * *explicit* `jsonMode: true` still throws for such clients, since that's
+   * a caller deliberately asking for a guarantee the client can't provide.
+   */
+  supportsJsonObjectMode?: boolean;
+
   chat: {
     completions: {
       create(

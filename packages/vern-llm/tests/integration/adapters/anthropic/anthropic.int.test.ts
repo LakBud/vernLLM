@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
-import { fromAnthropic } from '../../../../src/adapters/anthropic.js';
+import { fromAnthropic, type AnthropicClient } from '../../../../src/adapters/anthropic.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, makeFakeAnthropicClient } from '../../../helpers.js';
 
@@ -40,9 +41,6 @@ describe('Anthropic adapter integration', () => {
             content: 'hello',
           },
         ],
-        response_format: {
-          type: 'json_object',
-        },
       },
       {
         signal: new AbortController().signal,
@@ -209,6 +207,104 @@ describe('Anthropic adapter integration', () => {
         ],
       }),
       expect.anything(),
+    );
+  });
+
+  describe('json_object downgrade: a plain call (no jsonMode, no jsonSchema, no tools) still works on Anthropic', () => {
+    it('default jsonMode is silently downgraded to plain text, not sent as json_object and not thrown', async () => {
+      const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+        content: [{ type: 'text', text: 'plain answer, not JSON' }],
+        usage: { input_tokens: 5, output_tokens: 3 },
+      }));
+
+      const llm = new VernLLM({
+        client: fromAnthropic({ messages: { create } }),
+        model: 'claude-x',
+      });
+
+      const result = await llm.call<string>({ userContent: 'hi' });
+
+      expect(result).toBe('plain answer, not JSON');
+      // No response_format was sent at all: the client can't honor
+      // json_object, so RequestBuilder never asks for it.
+      expect(create.mock.calls[0]?.[0]).not.toHaveProperty('response_format');
+      expect(create.mock.calls[0]?.[0]).not.toHaveProperty('output_config');
+    });
+
+    it('an *explicit* jsonMode: true throws a clear invalid_params error instead of silently downgrading', async () => {
+      const create = vi.fn();
+
+      const llm = new VernLLM({
+        client: fromAnthropic({ messages: { create } } as never),
+        model: 'claude-x',
+      });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: true })).rejects.toMatchObject({
+        name: 'LLMError',
+        type: 'invalid_params',
+        message: expect.stringMatching(/jsonMode: true.*does not support/i),
+      });
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('jsonSchema still works normally, unaffected by the downgrade (real constraint, not json_object)', async () => {
+      const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+        content: [{ type: 'tool_use', id: 't1', name: 'answer', input: { ok: true } }],
+        usage: { input_tokens: 5, output_tokens: 3 },
+      }));
+
+      const llm = new VernLLM({
+        client: fromAnthropic({ messages: { create } }),
+        model: 'claude-x',
+      });
+
+      const result = await llm.call<{ ok: boolean }>({
+        userContent: 'hi',
+        jsonSchema: { name: 'answer', schema: { type: 'object' } },
+      });
+
+      expect(result).toEqual({ ok: true });
+
+      const sentParams = create.mock.calls[0]?.[0];
+      expect(sentParams).toMatchObject({
+        tools: [{ name: 'answer', input_schema: { type: 'object' } }],
+        tool_choice: { type: 'tool', name: 'answer' },
+      });
+    });
+
+    it('`schema` without `jsonSchema` still requires JSON parsing and throws if jsonMode: false is also set, same as before', async () => {
+      const create = vi.fn();
+
+      const llm = new VernLLM({
+        client: fromAnthropic({ messages: { create } } as never),
+        model: 'claude-x',
+      });
+
+      await expect(
+        llm.call({ userContent: 'hi', jsonMode: false, schema: z.object({}) }),
+      ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it(
+      '`schema` without `jsonSchema` and without an explicit `jsonMode` (the default) also throws, ' +
+        'naming the real cause, instead of being silently downgraded to plain text like a schema-less ' +
+        'call, which would skip validation entirely and blame a `jsonMode: false` the caller never set',
+      async () => {
+        const create = vi.fn();
+
+        const llm = new VernLLM({
+          client: fromAnthropic({ messages: { create } } as never),
+          model: 'claude-x',
+        });
+
+        await expect(llm.call({ userContent: 'hi', schema: z.object({}) })).rejects.toMatchObject({
+          name: 'LLMError',
+          type: 'invalid_params',
+          message: expect.stringMatching(/`schema` was provided.*does not support.*json_object/i),
+        });
+        expect(create).not.toHaveBeenCalled();
+      },
     );
   });
 });

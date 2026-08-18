@@ -36,16 +36,20 @@ describe('VernLLM.call(stream: true) through fromAnthropic, end to end', () => {
       if (params.stream) {
         return fakeAnthropicStream([
           { type: 'message_start', message: { usage: { input_tokens: 10 } } },
-          { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
           {
-            type: 'content_block_delta',
+            type: 'content_block_start',
             index: 0,
-            delta: { type: 'text_delta', text: '{"city":' },
+            content_block: { type: 'tool_use', id: 'toolu_1', name: 'location' },
           },
           {
             type: 'content_block_delta',
             index: 0,
-            delta: { type: 'text_delta', text: '"Denver"}' },
+            delta: { type: 'input_json_delta', partial_json: '{"city":' },
+          },
+          {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: '"Denver"}' },
           },
           { type: 'content_block_stop', index: 0 },
           { type: 'message_delta', usage: { output_tokens: 5 } },
@@ -60,9 +64,15 @@ describe('VernLLM.call(stream: true) through fromAnthropic, end to end', () => {
       model: 'claude-x',
     });
 
+    // json_object ("respond with JSON only" as a system-prompt instruction)
+    // is no longer supported on Anthropic (see fromAnthropic's docs): there
+    // is nothing in the Anthropic API that mechanically enforces it, unlike
+    // `jsonSchema`, which constrains generation for real (here, via the
+    // legacy forced-single-tool-call path, since this fake client has no
+    // native-structured-output override set).
     const { chunks, finalResult } = await llm.call<{ city: string }>({
       userContent: 'where?',
-      jsonMode: true,
+      jsonSchema: { name: 'location', schema: { type: 'object' } },
       stream: true,
     });
 
