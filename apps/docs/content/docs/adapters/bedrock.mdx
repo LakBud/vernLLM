@@ -171,7 +171,7 @@ const llm = new VernLLM({
 });
 ```
 
-There is no built-in default list, see [Structured Output → Combining with tools](/docs/core/structured-output#combining-with-tools) for why. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
+There is no built-in default list, see [Structured Output → Combining with tools](/docs/core/structured-output#combining-with-tools) for why, and for a link to Anthropic's current compatibility list. On Bedrock specifically, Anthropic's compatibility page documents native structured output as available for a narrower model subset than the Claude API's own list, so check the linked page rather than assuming parity with `fromAnthropic`. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
 tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
 while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with

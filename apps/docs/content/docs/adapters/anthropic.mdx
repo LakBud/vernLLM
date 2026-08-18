@@ -60,7 +60,10 @@ a forced single tool call, which occupies the same `tools`/`tool_choice` field r
 
 Anthropic also supports native, schema-constrained output, `output_config.format`, a request field
 independent of `tools`/`tool_choice`, so it composes with real `tools` on models that support it.
-This is opt-in, pass `nativeStructuredOutputModels` as the second argument to `fromAnthropic`:
+This is opt-in, pass `nativeStructuredOutputModels` as the second argument to `fromAnthropic`. See
+Anthropic's [Structured outputs → Compatibility](https://platform.claude.com/docs/en/build-with-claude/structured-outputs#compatibility)
+page for the current list of model families and platforms that support it; that list isn't
+hardcoded here since it varies by exact model and can change.
 
 ```ts title="anthropic-native-structured-output.ts"
 const llm = new VernLLM({

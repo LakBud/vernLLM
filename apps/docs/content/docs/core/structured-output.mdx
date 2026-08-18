@@ -102,6 +102,17 @@ This is opt-in and per-adapter, not automatic. Pass `nativeStructuredOutputModel
 second argument to `fromAnthropic`/`fromBedrock`, either a static list of model IDs you've
 verified support the mechanism, or a predicate function:
 
+<Callout>
+  Anthropic maintains an up to date list of which model families support `output_config.format`
+  (JSON outputs) and `strict: true` (strict tool use), and which platforms (Claude API, Bedrock,
+  Google Cloud, Microsoft Foundry) that support applies to, at [Structured outputs →
+  Compatibility](https://platform.claude.com/docs/en/build-with-claude/structured-outputs#compatibility).
+  This library doesn't hardcode that list into `nativeStructuredOutputModels`'s default, since
+  support varies by exact model and can change: check the linked page for the current set before
+  populating this option, rather than relying on a snapshot baked into a specific `vern-llm`
+  version.
+</Callout>
+
 ```ts title="native-structured-output.ts"
 import Anthropic from '@anthropic-ai/sdk';
 import { VernLLM, fromAnthropic } from 'vern-llm';
