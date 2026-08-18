@@ -21,8 +21,36 @@ const llm = new VernLLM({
   `tool_choice` forces the model to call that tool. `description` and `strict` are forwarded when
   provided. Tool input is converted back into JSON text for the standard `LLMClient` response shape.
   Plain JSON mode (`json_object`) is **not supported** as a real constraint: Anthropic has no field
-  that mechanically guarantees valid JSON output for this mode. `reasoning_effort` is dropped (no
-  direct Anthropic equivalent).
+  that mechanically guarantees valid JSON output for this mode.
+</Callout>
+
+<Callout type="info">
+  `reasoning_effort` has no literal Anthropic equivalent, but it's mapped rather than dropped:
+  Claude's extended thinking is controlled by a `budget_tokens` value, not a tier string, so
+  `'low'`/`'medium'`/`'high'` map onto default budgets of 1024/4096/16000 tokens respectively.
+  `'minimal'` (and an unset `reasoning_effort`) leaves thinking off. When thinking is enabled,
+  Anthropic requires `temperature` to be unset or exactly `1`, so `fromAnthropic` drops any
+  caller-supplied `temperature` for that call rather than sending a value Anthropic would reject.
+  `max_tokens` must be strictly greater than the mapped budget (there needs to be room left for the
+  actual response on top of the thinking spend); a call that doesn't leave that room throws
+  `LLMError('invalid_params')` naming the budget instead of silently truncating or guessing at a
+  larger `max_tokens`.
+
+Any of the three default budgets can be overridden per client via `fromAnthropic`'s second
+argument:
+
+```ts title="anthropic-reasoning-effort-budgets.ts"
+const llm = fromAnthropic(anthropicClient, {
+  reasoningEffortBudgets: { high: 32000 },
+});
+```
+
+Only the tiers you pass are overridden; any left unset keep the adapter's default. This lives on
+the adapter rather than the call because `reasoning_effort` is the one reasoning knob shared
+across every provider's `CallParams`: a `fromFallback` chain sends the same call params to every
+target, so a budget can't vary per call by which provider actually serves it, but each
+provider's own adapter instance can interpret `'high'` however fits its API.
+
 </Callout>
 
 Without `jsonSchema`, whether an unset `json_object` mode throws or is silently downgraded to plain

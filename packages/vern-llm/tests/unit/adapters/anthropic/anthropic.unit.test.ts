@@ -36,6 +36,102 @@ describe('fromAnthropic', () => {
     expect('temperature' in create.mock.calls[0]![0]).toBe(false);
   });
 
+  it('maps reasoning_effort onto extended thinking with a budget_tokens value, and drops temperature', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi there');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        temperature: 0.7,
+        max_tokens: 5000,
+        reasoning_effort: 'medium',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ thinking: { type: 'enabled', budget_tokens: 4096 } }),
+      expect.anything(),
+    );
+    expect('temperature' in create.mock.calls[0]![0]).toBe(false);
+  });
+
+  it('treats reasoning_effort: "minimal" as thinking disabled (no thinking field sent)', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi there');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 100,
+        reasoning_effort: 'minimal',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect('thinking' in create.mock.calls[0]![0]).toBe(false);
+  });
+
+  it('throws invalid_params when max_tokens is not comfortably above the mapped thinking budget', async () => {
+    const { client } = makeFakeAnthropicClient('hi there');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          max_tokens: 1024,
+          reasoning_effort: 'low',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ type: 'invalid_params' });
+  });
+
+  it('lets fromAnthropic override a reasoning_effort tier budget via reasoningEffortBudgets', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi there');
+    const adapted = fromAnthropic(client, { reasoningEffortBudgets: { high: 32000 } });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 40000,
+        reasoning_effort: 'high',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ thinking: { type: 'enabled', budget_tokens: 32000 } }),
+      expect.anything(),
+    );
+  });
+
+  it('leaves unoverridden reasoning_effort tiers at their default budget', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi there');
+    const adapted = fromAnthropic(client, { reasoningEffortBudgets: { high: 32000 } });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 5000,
+        reasoning_effort: 'medium',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ thinking: { type: 'enabled', budget_tokens: 4096 } }),
+      expect.anything(),
+    );
+  });
+
   it('maps system + user messages into Anthropic system/messages shape', async () => {
     const { client, create } = makeFakeAnthropicClient('hi there');
     const adapted = fromAnthropic(client);

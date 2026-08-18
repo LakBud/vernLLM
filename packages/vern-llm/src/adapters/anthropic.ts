@@ -72,6 +72,13 @@ export interface AnthropicClient {
             schema: Record<string, unknown>;
           };
         };
+        /**
+         * Anthropic's extended thinking control. Unlike OpenAI's tiered
+         * `reasoning_effort` string, Anthropic spends a concrete token
+         * budget on thinking. `reasoning_effort` is mapped onto this via
+         * `REASONING_EFFORT_THINKING_BUDGETS` below.
+         */
+        thinking?: { type: 'enabled'; budget_tokens: number } | { type: 'disabled' };
       },
       options: { signal: AbortSignal },
     ): Promise<{
@@ -171,6 +178,23 @@ type AnthropicStreamEvent =
 type AnthropicRequestBody = Parameters<AnthropicClient['messages']['create']>[0];
 
 /**
+ * Default mapping from VernLLM's OpenAI-shaped `reasoning_effort` tier onto
+ * an Anthropic extended-thinking `budget_tokens` value. Anthropic has no
+ * tiered concept of its own, thinking is controlled by a concrete token
+ * budget, so these numbers are this adapter's own approximation of
+ * "minimal" through "high" effort, not a value Anthropic defines.
+ * `minimal` maps to thinking disabled outright, since Anthropic's own
+ * minimum thinking budget (1024 tokens) is already well past what
+ * "minimal" implies. Per-tier overrides can be passed via `fromAnthropic`'s
+ * `reasoningEffortBudgets` option.
+ */
+const REASONING_EFFORT_THINKING_BUDGETS: Record<'low' | 'medium' | 'high', number> = {
+  low: 1024,
+  medium: 4096,
+  high: 16000,
+};
+
+/**
  * Maps VernLLM's OpenAI-shaped wire `tools`/`tool_choice` into Anthropic's
  * `tools`/`tool_choice` shape. Shared by the two call sites that build real
  * (non-schema-forced) tool definitions: the plain tools-only branch, and
@@ -217,6 +241,7 @@ function buildAnthropicTools(
 function buildAnthropicRequestBody(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
   nativeStructuredOutputModels?: ModelCapabilityOverride,
+  reasoningEffortBudgets?: AnthropicAdapterOptions['reasoningEffortBudgets'],
 ): { body: AnthropicRequestBody; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -308,20 +333,45 @@ function buildAnthropicRequestBody(
     ({ tools, toolChoice } = buildAnthropicTools(params.tools, params.tool_choice));
   }
 
-  // `reasoning_effort` (OpenAI o-series/gpt-5 style) has no direct Anthropic
-  // equivalent. Claude's extended thinking uses a token budget, not a tier
-  // string, so it's intentionally dropped here rather than guessed at.
+  // `reasoning_effort` (OpenAI o-series/gpt-5 style) has no literal
+  // Anthropic equivalent, so it's mapped onto extended thinking's
+  // `budget_tokens` via REASONING_EFFORT_THINKING_BUDGETS (overridable per
+  // tier via fromAnthropic's `reasoningEffortBudgets` option). `minimal`
+  // (and an unset `reasoning_effort`) leaves thinking off entirely.
+  let thinking: NonNullable<AnthropicRequestBody['thinking']> | undefined;
+  if (params.reasoning_effort && params.reasoning_effort !== 'minimal') {
+    const budgetTokens =
+      reasoningEffortBudgets?.[params.reasoning_effort] ??
+      REASONING_EFFORT_THINKING_BUDGETS[params.reasoning_effort];
+
+    if (params.max_tokens <= budgetTokens) {
+      throw new LLMError(
+        `reasoning_effort: "${params.reasoning_effort}" maps to a ${budgetTokens}-token thinking ` +
+          `budget on Anthropic, which must be strictly less than max_tokens (currently ` +
+          `${params.max_tokens}). Raise max_tokens above ${budgetTokens} to leave room for the ` +
+          "actual response on top of the thinking budget, or lower this tier's budget via " +
+          "fromAnthropic's `reasoningEffortBudgets` option.",
+        'invalid_params',
+      );
+    }
+
+    thinking = { type: 'enabled', budget_tokens: budgetTokens };
+  }
 
   const system = systemMessage?.content;
 
   const body: AnthropicRequestBody = {
     model: params.model,
     max_tokens: params.max_tokens,
-    ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+    // Anthropic requires temperature to be unset (or exactly 1) whenever
+    // extended thinking is enabled; a caller-supplied temperature is
+    // dropped in that case rather than sent and rejected by the API.
+    ...(params.temperature !== undefined && !thinking ? { temperature: params.temperature } : {}),
     system: system || undefined,
     messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toAnthropicMessage(m))),
     ...(tools ? { tools, tool_choice: toolChoice } : {}),
     ...(outputFormat ? { output_config: { format: outputFormat } } : {}),
+    ...(thinking ? { thinking } : {}),
   };
 
   return { body, toolName };
@@ -341,6 +391,27 @@ export interface AnthropicAdapterOptions {
    * exactly this adapter's behavior before native support was added.
    */
   nativeStructuredOutputModels?: ModelCapabilityOverride;
+
+  /**
+   * Overrides for how many tokens `reasoning_effort`'s `'low'`/`'medium'`/
+   * `'high'` tiers spend on Anthropic's extended thinking. Only the tiers
+   * you provide are overridden; any left unset keep the adapter's default
+   * (1024/4096/16000 respectively). `'minimal'` always leaves thinking
+   * disabled and isn't configurable here.
+   *
+   * Configuring this at the adapter level, rather than per call, is what
+   * keeps `reasoning_effort` fallback-safe: a `fromFallback` chain sends
+   * the same `CallParams` down every target, so a budget tied to one
+   * call's params can't vary by which provider actually serves it. This
+   * option lets each `fromAnthropic` in the chain interpret the same
+   * `'high'` differently (or not at all, if left unset) without the call
+   * site knowing or caring which provider is behind it.
+   *
+   * ```ts
+   * fromAnthropic(client, { reasoningEffortBudgets: { high: 32000 } });
+   * ```
+   */
+  reasoningEffortBudgets?: Partial<Record<'low' | 'medium' | 'high', number>>;
 }
 
 /**
@@ -378,6 +449,7 @@ export function fromAnthropic(
   options?: AnthropicAdapterOptions,
 ): LLMClient {
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
+  const reasoningEffortBudgets = options?.reasoningEffortBudgets;
   // The Anthropic SDK's `messages.create`, called with `stream: true`,
   // returns an AsyncIterable of `AnthropicStreamEvent` rather than
   // `AnthropicClient['messages']['create']`'s normal single-message return
@@ -404,6 +476,7 @@ export function fromAnthropic(
           const { body, toolName } = buildAnthropicRequestBody(
             params,
             nativeStructuredOutputModels,
+            reasoningEffortBudgets,
           );
 
           const response = await anthropicClient.messages.create(body, options);
@@ -470,6 +543,7 @@ export function fromAnthropic(
           const { body, toolName } = buildAnthropicRequestBody(
             params,
             nativeStructuredOutputModels,
+            reasoningEffortBudgets,
           );
 
           const stream = (await rawMessagesCreate(
