@@ -248,13 +248,13 @@ describe('Anthropic adapter integration', () => {
     });
 
     it('jsonSchema still works normally, unaffected by the downgrade (real constraint, not json_object)', async () => {
-      const create = vi.fn(async () => ({
+      const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
         content: [{ type: 'tool_use', id: 't1', name: 'answer', input: { ok: true } }],
         usage: { input_tokens: 5, output_tokens: 3 },
       }));
 
       const llm = new VernLLM({
-        client: fromAnthropic({ messages: { create } } as never),
+        client: fromAnthropic({ messages: { create } }),
         model: 'claude-x',
       });
 
@@ -264,6 +264,12 @@ describe('Anthropic adapter integration', () => {
       });
 
       expect(result).toEqual({ ok: true });
+
+      const sentParams = create.mock.calls[0]?.[0];
+      expect(sentParams).toMatchObject({
+        tools: [{ name: 'answer', input_schema: { type: 'object' } }],
+        tool_choice: { type: 'tool', name: 'answer' },
+      });
     });
 
     it('`schema` without `jsonSchema` still requires JSON parsing and throws if jsonMode: false is also set, same as before', async () => {
@@ -277,6 +283,28 @@ describe('Anthropic adapter integration', () => {
       await expect(
         llm.call({ userContent: 'hi', jsonMode: false, schema: z.object({}) }),
       ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
+      expect(create).not.toHaveBeenCalled();
     });
+
+    it(
+      '`schema` without `jsonSchema` and without an explicit `jsonMode` (the default) also throws, ' +
+        'naming the real cause, instead of being silently downgraded to plain text like a schema-less ' +
+        'call, which would skip validation entirely and blame a `jsonMode: false` the caller never set',
+      async () => {
+        const create = vi.fn();
+
+        const llm = new VernLLM({
+          client: fromAnthropic({ messages: { create } } as never),
+          model: 'claude-x',
+        });
+
+        await expect(llm.call({ userContent: 'hi', schema: z.object({}) })).rejects.toMatchObject({
+          name: 'LLMError',
+          type: 'invalid_params',
+          message: expect.stringMatching(/`schema` was provided.*does not support.*json_object/i),
+        });
+        expect(create).not.toHaveBeenCalled();
+      },
+    );
   });
 });

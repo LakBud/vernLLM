@@ -124,12 +124,6 @@ export class RequestBuilder {
     // still throws here, before the request ever reaches the client: the
     // caller asked for a guarantee this target can't provide, and staying
     // silent about that would be worse than the plain-text fallback below.
-    // A *default* (unset) `jsonMode`, which resolves to `true` on every
-    // plain call with no `tools`, is silently downgraded to plain text
-    // instead: this is what keeps `llm.call({ userContent })` working out
-    // of the box on Anthropic/Bedrock exactly as it did before
-    // `json_object` support was removed from those two adapters, for
-    // anyone not relying on JSON output they never actually asked for.
     if (!this.supportsJsonObjectMode && !jsonSchema && jsonModeExplicit === true) {
       throw new LLMError(
         'jsonMode: true was set explicitly, but this client does not support ' +
@@ -140,9 +134,41 @@ export class RequestBuilder {
       );
     }
 
+    // `schema` needs JSON parsing to run against something, so a *default*
+    // (unset) `jsonMode` here is a real, if implicit, request for JSON
+    // output, not a caller who's indifferent to it. Downgrading it to
+    // plain text the way a schema-less default call is downgraded below
+    // would silently skip validation instead of running it, and then blame
+    // it on a `jsonMode: false` the caller never actually set (see the
+    // `params.schema && !useJson` check further down, whose message
+    // assumes the caller chose `jsonMode: false`). Fail loudly instead,
+    // before the request is sent, naming the real cause.
+    if (
+      !this.supportsJsonObjectMode &&
+      !jsonSchema &&
+      jsonModeExplicit === undefined &&
+      params.schema
+    ) {
+      throw new LLMError(
+        '`schema` was provided, which requires JSON output to validate against, but this client ' +
+          'does not support `response_format: "json_object"` (see LLMClient.supportsJsonObjectMode) ' +
+          'and no `jsonSchema` was set. Neither Anthropic nor Bedrock has a field that mechanically ' +
+          'guarantees JSON output without one. Use `jsonSchema` instead, which maps to a real ' +
+          'constraint on both and still runs `schema` against its parsed result.',
+        'invalid_params',
+      );
+    }
+
+    // A *default* (unset) `jsonMode` with no `schema` to satisfy, which
+    // resolves to `true` on every plain call with no `tools`, is silently
+    // downgraded to plain text instead of throwing: this is what keeps
+    // `llm.call({ userContent })` working out of the box on
+    // Anthropic/Bedrock exactly as it did before `json_object` support was
+    // removed from those two adapters, for anyone not relying on JSON
+    // output they never actually asked for.
     const jsonModeEffective =
       !this.supportsJsonObjectMode && !jsonSchema && jsonModeExplicit === undefined
-        ? false // downgrade: default jsonMode on an unsupporting client, no jsonSchema either
+        ? false // downgrade: default jsonMode, no jsonSchema, no schema to validate either
         : jsonMode;
 
     const useJson = jsonModeEffective || Boolean(jsonSchema);

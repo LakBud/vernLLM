@@ -153,7 +153,7 @@ describe('fromBedrock', () => {
   });
 
   it('throws for json_object mode: Converse has no field that mechanically guarantees JSON output, so it is no longer emulated via a prompt instruction', async () => {
-    const { client } = makeFakeBedrockClient('{}');
+    const { client, converse } = makeFakeBedrockClient('{}');
     const adapted = fromBedrock(client);
 
     await expect(
@@ -174,6 +174,8 @@ describe('fromBedrock', () => {
       name: 'LLMError',
       message: expect.stringMatching(/json_object.*not supported/i),
     });
+
+    expect(converse).not.toHaveBeenCalled();
   });
 
   it('forces tool-use via toolConfig for json_schema mode instead of a prompt instruction', async () => {

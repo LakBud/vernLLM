@@ -20,9 +20,24 @@ const llm = new VernLLM({
   to Anthropic's native tool-use mechanism: the schema becomes the tool `input_schema`, and
   `tool_choice` forces the model to call that tool. `description` and `strict` are forwarded when
   provided. Tool input is converted back into JSON text for the standard `LLMClient` response shape.
-  Plain JSON mode (`json_object`) uses prompt-based JSON instructions. `reasoning_effort` is
-  dropped.
+  Plain JSON mode (`json_object`) is **not supported** as a real constraint: Anthropic has no field
+  that mechanically guarantees valid JSON output for this mode. `reasoning_effort` is dropped (no
+  direct Anthropic equivalent).
 </Callout>
+
+Without `jsonSchema`, whether an unset `json_object` mode throws or is silently downgraded to plain
+text depends on what else the call is asking for:
+
+- **A plain call** (`llm.call({ userContent })`, no `schema`, no explicit `jsonMode`) is silently
+  treated as plain text: `json_object` is never sent, and the response comes back unparsed. This
+  keeps the common, no-config case working exactly as before.
+- **An explicit `jsonMode: true`** throws `LLMError('invalid_params')` before the request is sent,
+  since that's a caller deliberately asking for a guarantee Anthropic can't provide.
+- **`schema` (Zod-style client-side validation) without `jsonSchema`**, whether or not `jsonMode`
+  is set explicitly, also throws `LLMError('invalid_params')`: `schema` needs JSON output to
+  validate against, so an implicit request for JSON is treated the same as an explicit one rather
+  than silently downgraded, which would skip validation instead of running it. Use `jsonSchema`
+  instead: it maps to a real constraint and still runs `schema` against its parsed result.
 
 ## Tool calling
 

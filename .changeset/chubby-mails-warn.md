@@ -20,14 +20,16 @@ set it to `false`, and `RequestBuilder`'s behavior branches on it:
   JSON directly) on a client with `supportsJsonObjectMode: false` now throws
   `LLMError('invalid_params')` before the request is ever sent, naming the client and pointing at
   `jsonSchema` as the real alternative.
-- **The _default_, unset `jsonMode`** — which resolves to `true` on any call with no `tools`, i.e.
-  the common case of a plain `llm.call({ userContent })`, is silently downgraded to plain text
-  instead of throwing. This is what keeps a bare `llm.call({ userContent })` working exactly as it
-  did before on Anthropic/Bedrock, for the (likely common) case of callers who never actually
-  wanted JSON in the first place and were just getting the library's default.
-- **`schema` without `jsonSchema`** still requires JSON parsing to run, so it still throws
-  `LLMError('invalid_params')` if it ends up paired with a downgraded/`false` `jsonMode`, same as
-  it always has when `jsonMode: false` disables parsing.
+- **The _default_, unset `jsonMode`, with no `schema` to validate against** — the common case of a
+  plain `llm.call({ userContent })` — is silently downgraded to plain text instead of throwing.
+  This is what keeps a bare `llm.call({ userContent })` working exactly as it did before on
+  Anthropic/Bedrock, for callers who never actually wanted JSON in the first place and were just
+  getting the library's default.
+- **`schema` without `jsonSchema`** always requires real JSON output to validate against, so it
+  always throws `LLMError('invalid_params')` on `supportsJsonObjectMode: false` clients, naming
+  the real cause, whether `jsonMode` was set explicitly or left at its default. An implicit request
+  for JSON (via `schema`) is deliberately _not_ silently downgraded the way a schema-less call is:
+  doing so would skip validation entirely while reporting success.
 - **`jsonSchema`** is completely unaffected either way: it was never routed through `json_object`,
   and maps to a real API-level constraint on both providers (native structured output or a forced
   single tool call).

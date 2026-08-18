@@ -7,7 +7,7 @@ Uses Bedrock's Converse API, which provides a unified request/response interface
 
 JSON handling depends on the requested format:
 
-- `json_object` uses prompt-based JSON instructions.
+- `json_object` is **not supported** as a real constraint. Converse has no field that mechanically guarantees valid JSON output for this mode. Whether an unset `json_object` request throws or is silently downgraded depends on what else the call asks for. A plain call (`llm.call({ userContent })`, no `schema`, no explicit `jsonMode`) is silently treated as plain text, keeping the common case working unchanged. An explicit `jsonMode: true` throws `LLMError('invalid_params')`. `schema` without `jsonSchema`, whether or not `jsonMode` is set explicitly, also throws `LLMError('invalid_params')`, since `schema` needs JSON output to validate against and shouldn't be silently downgraded into skipping validation. Use `jsonSchema` instead in every one of those throwing cases.
 - `json_schema` uses Bedrock Converse tool use. The adapter forwards the schema name, description, and strict setting into the tool spec. Strict enforcement depends on the selected Bedrock model's tool-use capabilities.
 
 `reasoning_effort` is not forwarded because Bedrock does not expose an equivalent option through Converse.
@@ -17,6 +17,34 @@ JSON handling depends on the requested format:
 Note: Tool-based structured output requires a Bedrock model that supports tool use. `fromBedrock` doesn't try to detect this from a failed call, AWS's error text for an unsupported model isn't a documented, stable contract, so guessing at it would be unreliable. By default, a `jsonSchema` call to a model without tool support surfaces Bedrock's raw error unchanged. If you want a clearer, earlier failure, pass `toolUseSupportedModels` (see below).
 
 ## Setup
+
+### Option 1: `fromBedrockClient` (recommended if you already depend on the AWS SDK)
+
+If `@aws-sdk/client-bedrock-runtime` is already installed, pass a real `BedrockRuntimeClient` directly, no wrapper needed:
+
+```ts title="bedrock-client-setup.ts"
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { VernLLM, fromBedrockClient } from 'vern-llm';
+
+const client = new BedrockRuntimeClient({ region: 'us-east-1' });
+
+const llm = new VernLLM({
+  client: await fromBedrockClient(client),
+  model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+});
+```
+
+<Callout>
+  `vern-llm` has zero runtime dependencies, including for this function:
+  `@aws-sdk/client-bedrock-runtime` is not a dependency or a peer dependency of `vern-llm`.
+  `fromBedrockClient` pulls in `ConverseCommand`/`ConverseStreamCommand` with a dynamic `import()`
+  the first time it's called, so nothing is added to your `package.json` resolution just by
+  importing `vern-llm`, and bundlers only reach the AWS SDK for code paths that actually call this
+  function. If the package isn't installed, it throws a clear `LLMError` naming exactly what's
+  missing, rather than a raw module-resolution error.
+</Callout>
+
+### Option 2: `fromBedrock` (zero-dependency, works with any AWS SDK generation)
 
 The AWS SDK v3 client exposes `.send(command)`, not a direct `.converse()` method, so wrap it to match `BedrockConverseClient` before passing it to `fromBedrock`:
 
@@ -52,7 +80,9 @@ const llm = new VernLLM({
   `fromBedrock` doesn't depend on `@aws-sdk/client-bedrock-runtime`'s types directly. It accepts
   anything matching `BedrockConverseClient`'s minimal `.converse()` shape. Use
   `BedrockConverseClient` from `VernLLM` to type your wrapper without pulling in the full AWS SDK
-  types.
+  types. Prefer this over `fromBedrockClient` if you'd rather not add
+  `@aws-sdk/client-bedrock-runtime` at all, or you're on a different AWS SDK generation or a
+  hand-rolled HTTP client.
 </Callout>
 
 ## Structured output via tool use
@@ -85,7 +115,7 @@ const result = await llm.call({
 });
 ```
 
-Without `jsonSchema`, setting `jsonMode: true` (the default) falls back to a `json_object`-style prompt instruction telling the model to respond with valid JSON only, since there's no schema to build a tool from.
+Without `jsonSchema`, behavior depends on whether the call is also asking for validated output. A plain call with no `schema` and no explicit `jsonMode` is silently treated as plain text: Converse can't enforce `json_object`, so it's never sent, and `fromBedrock`'s response is returned unparsed. Setting `jsonMode: true` _explicitly_, or passing `schema` on its own (with or without an explicit `jsonMode`), throws `LLMError('invalid_params')` instead: the former is a caller deliberately asking for a JSON guarantee this adapter can't provide, and the latter needs JSON output to validate `schema` against, so it isn't silently downgraded into skipping validation either. Use `jsonSchema` for anything that needs guaranteed-structured output.
 
 ## Preflighting tool-use support
 
@@ -116,7 +146,7 @@ const llm = new VernLLM({
 });
 ```
 
-This is opt-in and only affects calls that set `jsonSchema`; plain text and `json_object` calls are never preflight-checked, and by default (no `toolUseSupportedModels` configured) no preflight check runs at all.
+This is opt-in and only affects calls that set `jsonSchema`; plain text calls are never preflight-checked, and by default (no `toolUseSupportedModels` configured) no preflight check runs at all.
 
 The same preflight also runs when a `jsonSchema` call ends up sending `toolConfig` for any reason, including the native-structured-output path below when real `tools` are sent alongside `outputConfig`, since that still requires Converse tool-use support even though `outputConfig` itself doesn't.
 

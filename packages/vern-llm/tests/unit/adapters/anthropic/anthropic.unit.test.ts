@@ -467,7 +467,7 @@ describe('fromAnthropic', () => {
   });
 
   it('throws for json_object mode: no Anthropic field mechanically guarantees JSON output, so it is no longer emulated via a prompt instruction', async () => {
-    const { client } = makeFakeAnthropicClient('{}');
+    const { client, create } = makeFakeAnthropicClient('{}');
     const adapted = fromAnthropic(client);
 
     await expect(
@@ -485,6 +485,8 @@ describe('fromAnthropic', () => {
       name: 'LLMError',
       message: expect.stringMatching(/json_object.*not supported/i),
     });
+
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('works with no system message at all', async () => {

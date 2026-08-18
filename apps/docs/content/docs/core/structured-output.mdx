@@ -38,7 +38,11 @@ const result = await llm.call({
 <Callout type="info">
   `schema` only runs if the call actually parses JSON, which happens when `jsonMode` is `true` (the
   default) or `jsonSchema` is set. If you pass `jsonMode: false` alongside `schema` without also
-  setting `jsonSchema`, `call` throws `LLMError('validation')` immediately.
+  setting `jsonSchema`, `call` throws `LLMError('invalid_params')` immediately. On Anthropic and
+  Bedrock, which don't support `json_object` as a real constraint, `schema` without `jsonSchema`
+  throws the same way even without an explicit `jsonMode: false`: an implicit request for JSON (via
+  `schema`) isn't silently downgraded into skipping validation the way a schema-less call is. See
+  [Anthropic](/docs/adapters/anthropic) and [Bedrock](/docs/adapters/bedrock) for details.
 </Callout>
 
 ## Provider-native JSON Schema mode
