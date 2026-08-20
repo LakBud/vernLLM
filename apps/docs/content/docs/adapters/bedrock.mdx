@@ -81,7 +81,8 @@ const llm = new VernLLM({
 
 <Callout>
   `converseStream` is optional. Add it only if you plan to use `stream: true`. Omitting it makes
-  `fromBedrock`'s `createStream` throw a clear `LLMError('validation')` instead of failing silently.
+  `fromBedrock`'s `createStream` throw a clear `LLMError('invalid_params')` (code
+  `unsupported_capability`) instead of failing silently.
 </Callout>
 
 <Callout>
