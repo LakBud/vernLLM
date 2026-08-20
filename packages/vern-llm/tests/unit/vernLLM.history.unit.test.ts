@@ -188,9 +188,12 @@ describe('VernLLM.call, conversation history', () => {
       ],
     });
 
-    expect(at(calls, 0).messages[0]).toMatchObject({
+    expect(at(calls, 0).messages[0]).toEqual({
       role: 'assistant',
       content: JSON.stringify({ note: 'checking weather' }),
+      tool_calls: [
+        { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{}' } },
+      ],
     });
   });
 });

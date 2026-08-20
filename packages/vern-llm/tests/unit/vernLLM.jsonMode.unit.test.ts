@@ -1,4 +1,4 @@
-import { describe, it, expect, expectTypeOf, vi } from 'vitest';
+import { describe, it, expect, expectTypeOf, onTestFinished, vi } from 'vitest';
 
 import { VernLLM, type ConversationTurn, type JsonValue } from '../../src/index.js';
 import {
@@ -156,6 +156,7 @@ describe('VernLLM.cachedCall, jsonMode return type and runtime shape', () => {
     // never re-invoking `call()` or its JSON parsing, only the object stored
     // from the original miss is replayed.
     const parseSpy = vi.spyOn(JSON, 'parse');
+    onTestFinished(() => parseSpy.mockRestore());
 
     const second = await llm.cachedCall({
       cacheKey: 'k3',
@@ -167,8 +168,6 @@ describe('VernLLM.cachedCall, jsonMode return type and runtime shape', () => {
     expect(second).toEqual({ name: 'Ada' });
     expect(create).toHaveBeenCalledTimes(1);
     expect(parseSpy).not.toHaveBeenCalled();
-
-    parseSpy.mockRestore();
   });
 
   it('a schema call through cachedCall still infers T from the schema, not JsonValue', async () => {

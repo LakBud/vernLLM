@@ -67,9 +67,19 @@ export type StreamEnabledCallParams<T> = CallParams<T> & { stream: true };
 /**
  * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
  * `call()` overload whose `finalResult` resolves to a plain `string`.
+ *
+ * `jsonSchema` is explicitly `never` here for the same reason as
+ * `JsonModeDisabledCallParams`: a truthy `jsonSchema` forces JSON parsing
+ * in `RequestBuilder.build()` regardless of `jsonMode`, so a call setting
+ * both `jsonMode: false` and `jsonSchema` would otherwise still satisfy
+ * this overload's shape and incorrectly promise a plain `string`.
  */
-export type StreamJsonModeDisabledCallParams = StreamEnabledCallParams<unknown> & {
+export type StreamJsonModeDisabledCallParams = Omit<
+  StreamEnabledCallParams<unknown>,
+  'jsonSchema'
+> & {
   jsonMode: false;
+  jsonSchema?: never;
 };
 
 /**

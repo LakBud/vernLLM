@@ -200,8 +200,20 @@ export type ToolsDisabledCallParams<T> = CallParams<T> & {
 /**
  * `CallParams` with `jsonMode: false`. Selects the `call()` overload
  * that returns a plain `string`.
+ *
+ * `jsonSchema` is explicitly typed `never` here, not just omitted:
+ * `RequestBuilder.build()` treats a truthy `jsonSchema` as forcing JSON
+ * parsing (`useJson = jsonModeEffective || Boolean(jsonSchema)`)
+ * regardless of `jsonMode`, so a call that sets both `jsonMode: false`
+ * and `jsonSchema` still gets its response parsed as JSON at runtime.
+ * Forcing `jsonSchema?: never` makes any such call fail this overload's
+ * structural check, so it falls through to the generic `CallParams<T>`
+ * overload instead of incorrectly promising a plain `string`.
  */
-export type JsonModeDisabledCallParams = CallParams<unknown> & { jsonMode: false };
+export type JsonModeDisabledCallParams = Omit<CallParams<unknown>, 'jsonSchema'> & {
+  jsonMode: false;
+  jsonSchema?: never;
+};
 
 /**
  * `CallParams` with `jsonMode: true` and no `schema`. Selects the
