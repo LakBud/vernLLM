@@ -57,6 +57,19 @@ function wrapBedrockClient(client: BedrockRuntimeClient): BedrockConverseClient 
   };
 }
 
+/**
+ * `wrapAwsSendClient`'s `ConverseStreamCommandOutput.stream` optionality
+ * check (see `bedrock.ts`) is intentionally NOT exercised here against a
+ * real `BedrockRuntimeClient`: the real SDK always synthesizes a decoder
+ * stream object for any 200 response regardless of body shape. Verified
+ * directly, a plain `{}` JSON body still produces a real
+ * `SmithyMessageDecoderStream`), so a genuinely `undefined` `stream` isn't
+ * reachable through any wire response this mock server can construct.
+ * That's exactly why it's a defensive, type-level-only check: covered by
+ * the fabricated-response unit test in
+ * `tests/unit/adapters/bedrock/bedrock.awsSdkClient.unit.test.ts` instead,
+ * where the adapter boundary can be exercised directly.
+ */
 describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime client)', () => {
   let server: RealSdkServer | undefined;
 
@@ -448,5 +461,88 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
       name: 'LLMError',
       type: 'aborted',
     });
+  });
+
+  it('accepts a real BedrockRuntimeClient passed to fromBedrock directly, no wrapBedrockClient() required', async () => {
+    // fromBedrock detects a raw AWS SDK client (.send() only) structurally
+    // and drives it internally, no hand-written .converse()/
+    // .converseStream() wrapper required.
+    server = await startRealSdkServer([
+      {
+        body: {
+          output: {
+            message: { role: 'assistant', content: [{ text: 'Paris.' }] },
+          },
+          stopReason: 'end_turn',
+          usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 },
+        },
+      },
+    ]);
+
+    const llm = new VernLLM({
+      client: fromBedrock(makeClient()),
+      model: 'anthropic.claude-test',
+    });
+
+    const result = await llm.call({
+      userContent: "What's the capital of France?",
+      jsonMode: false,
+    });
+
+    expect(result).toBe('Paris.');
+
+    const sent = at(server.requests, 0);
+    expect(sent.method).toBe('POST');
+    expect(sent.url).toBe('/model/anthropic.claude-test/converse');
+  });
+
+  it('drops a real, wire-marshalled unrecognized ($unknown) stream event instead of misrouting or crashing on it', async () => {
+    // Exercises the ConverseStreamOutput union gap against the real SDK's
+    // own event-stream unmarshaller: 'someFutureEventType' isn't a member
+    // any version of the SDK models, so the real BedrockRuntimeClient
+    // itself resolves it to a genuine `{ $unknown: [...] }` event, the
+    // same shape a real newer-than-this-SDK event from AWS would produce.
+    server = await startRealSdkServer([
+      {
+        raw: await bedrockEventStreamRaw([
+          { eventType: 'messageStart', payload: { role: 'assistant' } },
+          { eventType: 'someFutureEventType', payload: { anything: 'here' } },
+          {
+            eventType: 'contentBlockDelta',
+            payload: { contentBlockIndex: 0, delta: { text: 'hi' } },
+          },
+          { eventType: 'messageStop', payload: { stopReason: 'end_turn' } },
+          {
+            eventType: 'metadata',
+            payload: { usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+          },
+        ]),
+      },
+    ]);
+
+    const llm = new VernLLM({
+      client: fromBedrock(makeClient()),
+      model: 'anthropic.claude-test',
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+
+    const collected = await drain(chunks);
+
+    // Only the recognized events produced chunks; the real, wire-decoded
+    // $unknown event contributed nothing (and didn't crash the stream).
+    expect(collected).toEqual([
+      { type: 'text-delta', delta: 'hi' },
+      {
+        type: 'usage',
+        usage: expect.objectContaining({ promptTokens: 1, completionTokens: 1, totalTokens: 2 }),
+      },
+    ]);
+
+    await expect(finalResult).resolves.toBe('hi');
   });
 });
