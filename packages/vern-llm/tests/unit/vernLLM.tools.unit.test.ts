@@ -5,9 +5,12 @@ import {
   type CallParams,
   type StreamCallResult,
   type ContentResult,
+  type CallWithToolsResult,
   isToolCallResult,
   isLLMError,
   hasIssues,
+  defineCallParams,
+  defineCachedCallParams,
 } from '../../src/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import {
@@ -736,5 +739,241 @@ describe('VernLLM.call, bug fixes / hardening', () => {
     const result = await llm.call({ userContent: 'hi', tools: [weatherTool] });
 
     expect(isToolCallResult(result)).toBe(false);
+  });
+});
+
+describe('VernLLM.call, conditionally-set tools', () => {
+  // Regression coverage for `ConditionalToolCallParams`: before it existed,
+  // `tools: ToolDefinition[] | undefined` (as opposed to a literal array)
+  // matched neither `ToolEnabledCallParams` nor `ToolsDisabledCallParams`,
+  // fell through to the final generic `CallParams<T>` overload, and typed
+  // the result as plain `T` even on a `tool_calls` response.
+
+  it('call(): a tool_calls response through conditional tools types as the union and narrows via isToolCallResult()', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Boston' } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const result = await llm.call({ userContent: 'weather?', tools });
+
+    expectTypeOf(result).toEqualTypeOf<unknown | ContentResult<unknown>>();
+    expect(isToolCallResult(result)).toBe(true);
+    if (isToolCallResult(result)) {
+      expect(result.toolCalls[0]!.name).toBe('get_weather');
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
+  });
+
+  it('call(): tools evaluating to undefined at runtime behaves exactly like the no-tools path, not a wrapped ContentResult', async () => {
+    // `tools` is `undefined` here both statically (the `ConditionalToolCallParams`
+    // overload types the result as `T | CallWithToolsResult<T>`) and at
+    // runtime (the executor branches on the actual `tools` value, same as
+    // if `tools` were never set at all), so the real result is the raw,
+    // unwrapped `T` — not `{ type: 'content', content: T }`. This is
+    // exactly why the type has to be the honest union instead of always
+    // promising `CallWithToolsResult<T>`: with `tools` genuinely absent at
+    // runtime, that promise would be false. `isToolCallResult()` still
+    // correctly reports `false` since the raw value isn't a `tool_calls`
+    // shape either.
+    const { client } = createMockClient([jsonResponse('sunny')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = false;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const result = await llm.call({ userContent: 'weather?', tools });
+
+    expect(isToolCallResult(result)).toBe(false);
+    expect(result).toBe('sunny');
+  });
+
+  it('call(): omitting tools entirely still resolves to plain T, not the union', async () => {
+    const { client } = createMockClient([jsonResponse('hi there')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const result = await llm.call({ userContent: 'hi' });
+
+    expectTypeOf(result).toEqualTypeOf<unknown>();
+    expect(result).toBe('hi there');
+  });
+
+  it('call(): stream: true with conditional tools resolves finalResult to the union', async () => {
+    const { client } = createMockStreamingClient([
+      [
+        {
+          type: 'tool_call_delta',
+          index: 0,
+          id: 'call_1',
+          name: 'get_weather',
+          argumentsDelta: '{"city":"Boston"}',
+          complete: true,
+        },
+      ],
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const { finalResult, chunks } = await llm.call({
+      userContent: 'weather?',
+      tools,
+      stream: true,
+    });
+    await drain(chunks);
+    const result = await finalResult;
+
+    expect(isToolCallResult(result)).toBe(true);
+    if (isToolCallResult(result)) {
+      expect(result.toolCalls[0]!.name).toBe('get_weather');
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
+  });
+
+  it('cachedCall(): a tool_calls response through conditional tools types as the union and narrows via isToolCallResult()', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Boston' } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const result = await llm.cachedCall({
+      cacheKey: 'conditional-tools-1',
+      ttl: 60,
+      call: { userContent: 'weather?', tools },
+    });
+
+    expect(isToolCallResult(result)).toBe(true);
+    if (isToolCallResult(result)) {
+      expect(result.toolCalls[0]!.name).toBe('get_weather');
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
+  });
+
+  it('cachedCall(): stream: true with conditional tools resolves finalResult to the union', async () => {
+    const { client } = createMockStreamingClient([
+      [
+        {
+          type: 'tool_call_delta',
+          index: 0,
+          id: 'call_1',
+          name: 'get_weather',
+          argumentsDelta: '{"city":"Boston"}',
+          complete: true,
+        },
+      ],
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const { finalResult, chunks } = await llm.cachedCall({
+      cacheKey: 'conditional-tools-2',
+      ttl: 60,
+      call: { userContent: 'weather?', tools, stream: true },
+    });
+    await drain(chunks);
+    const result = await finalResult;
+
+    expect(isToolCallResult(result)).toBe(true);
+    if (isToolCallResult(result)) {
+      expect(result.toolCalls[0]!.name).toBe('get_weather');
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
+  });
+});
+
+describe('defineCallParams / defineCachedCallParams', () => {
+  // These are pure identity functions at runtime; the coverage here is
+  // primarily type-level (see the `expectTypeOf` assertions), with a
+  // runtime check that the value really does pass through unchanged and
+  // still drives the same `call()`/`cachedCall()` behavior as passing the
+  // object inline would.
+
+  it('defineCallParams: a literal tools array is unaffected, still resolves CallWithToolsResult<T> directly', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Boston' } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const params = defineCallParams({ userContent: 'weather?', tools: [weatherTool] });
+
+    const result = await llm.call(params);
+    expectTypeOf(result).toEqualTypeOf<CallWithToolsResult<unknown>>();
+    expect(isToolCallResult(result)).toBe(true);
+  });
+
+  it('defineCallParams: preserves conditional tools through a named variable, resolving the union', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Boston' } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const params = defineCallParams({
+      userContent: 'weather?',
+      tools: useTool ? [weatherTool] : undefined,
+    });
+
+    const result = await llm.call(params);
+    expectTypeOf(result).toEqualTypeOf<unknown | CallWithToolsResult<unknown>>();
+    expect(isToolCallResult(result)).toBe(true);
+    if (isToolCallResult(result)) {
+      expect(result.toolCalls[0]!.name).toBe('get_weather');
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
+  });
+
+  it('defineCallParams: T is pinned at the call<T>() site, same as passing an object inline', async () => {
+    const { client } = createMockClient([jsonResponse({ name: 'Ada' })]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = false;
+    const params = defineCallParams({
+      userContent: 'hi',
+      tools: useTool ? [weatherTool] : undefined,
+    });
+
+    // defineCallParams itself has one type parameter, P (the whole params
+    // object), not T — T is pinned the normal way, via call<T>(), exactly
+    // as it would be for any other call() without a schema.
+    const result = await llm.call<{ name: string }>(params);
+    expectTypeOf(result).toEqualTypeOf<{ name: string } | CallWithToolsResult<{ name: string }>>();
+    expect(isToolCallResult(result)).toBe(false);
+  });
+
+  it('defineCachedCallParams: preserves conditional tools nested in `call`, resolving the union through cachedCall()', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Boston' } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const params = defineCachedCallParams({
+      cacheKey: 'define-cached-params-1',
+      ttl: 60,
+      call: { userContent: 'weather?', tools: useTool ? [weatherTool] : undefined },
+    });
+
+    const result = await llm.cachedCall(params);
+    expectTypeOf(result).toEqualTypeOf<unknown | CallWithToolsResult<unknown>>();
+    expect(isToolCallResult(result)).toBe(true);
+    if (isToolCallResult(result)) {
+      expect(result.toolCalls[0]!.name).toBe('get_weather');
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
   });
 });

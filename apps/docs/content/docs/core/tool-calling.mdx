@@ -87,20 +87,115 @@ if (result.type === 'tool_calls') {
 
 <Callout>
   Prefer the exported `isToolCallResult()` helper over relying on TypeScript's static narrowing
-  whenever `params` was not a literal with `tools` set inline, for example when it was built up on a
-  variable. See the overload note below.
+  whenever `result`'s type isn't statically `CallWithToolsResult<T>` alone, for example a
+  conditional-`tools` call typed as the `T | CallWithToolsResult<T>` union, or a call built from a
+  variable already widened to plain `CallParams<T>`. See the overload note below.
 </Callout>
 
 ## A note on the call() overload
 
-TypeScript only resolves `call()` to the tools aware overload when `tools` is visible as a
-required, present key at the call site, either an inline object literal with `tools: [...]`, or a
-variable typed as `CallParams<T> & { tools: ToolDefinition[] }`.
+TypeScript resolves `call()` to the tools aware overload when `tools` is visible as a required,
+present key at the call site: an inline object literal with `tools: [...]`, or a variable typed as
+`CallParams<T> & { tools: ToolDefinition[] }`.
 
-If you build `params` as a plain `CallParams<T>` and conditionally set `tools` on it, TypeScript
-picks the plain `Promise<T>` overload regardless of what `tools` turns out to be at runtime. The
-return value's actual shape still follows `tools` at runtime, so this mismatch is silent rather
-than a compile error.
+If `tools` is present but conditional, e.g. `tools: someCondition ? [weatherTool] : undefined`,
+TypeScript resolves to a third overload that returns the honest union `T | CallWithToolsResult<T>`
+instead of either shape alone, since the real value follows whatever `tools` actually is at
+runtime. This works automatically for an inline literal or any variable that keeps `tools`'s
+narrower, possibly-`undefined` type intact:
+
+```ts title="tool-calling-conditional-tools.ts"
+import { isToolCallResult } from 'vern-llm';
+
+const tools = someCondition ? [weatherTool] : undefined;
+
+const result = await llm.call({ userContent: 'What is the weather?', tools });
+// result: T | CallWithToolsResult<T>
+
+if (isToolCallResult(result)) {
+  // handled safely
+}
+```
+
+<Callout type="warn">
+  This only works when the object passed to `call()` still carries `tools`'s real, narrower type.
+  If you build `params` as a variable explicitly annotated `CallParams<T>` first, that annotation
+  widens `tools` away before it ever reaches `call()`, TypeScript has already discarded the
+  information that would let it pick the union overload, and `call()` falls back to the plain
+  `Promise<T>` overload regardless of what `tools` turns out to be at runtime. The return value's
+  actual shape still follows `tools` at runtime, so this mismatch is silent rather than a compile
+  error.
+</Callout>
+
+**Prefer passing the object literal straight to `call()`** (as in the example above), rather than
+building it up in a separately annotated variable first. If you do need a named variable, for
+example to reuse it across `call()` and `cachedCall()`, or to build it up conditionally before the
+call, use `defineCallParams()` instead of a `:` type annotation. It's an identity function that
+hands back exactly what you pass it, preserving `tools`'s real, possibly-`undefined` shape instead
+of widening it the way `:` would, so the union overload still resolves correctly:
+
+```ts title="tool-calling-define-call-params.ts"
+import { defineCallParams, isToolCallResult } from 'vern-llm';
+
+const params = defineCallParams({
+  userContent: 'What is the weather?',
+  tools: someCondition ? [weatherTool] : undefined,
+});
+
+const result = await llm.call(params);
+// result: unknown | CallWithToolsResult<unknown>, exactly as if params had
+// been passed inline.
+
+if (isToolCallResult(result)) {
+  // handled safely
+}
+```
+
+Pin the content type by passing an explicit type argument to `call<T>()` itself, the same as you
+would on a plain `call()` without a `schema` (`defineCallParams()` has one type parameter, the
+whole params object's own type, not `T`, so `T` is pinned at the `call()` site, not on
+`defineCallParams()`):
+
+```ts title="tool-calling-define-call-params-typed.ts"
+const params = defineCallParams({
+  userContent: 'What is the weather?',
+  tools: someCondition ? [weatherTool] : undefined,
+});
+
+const result = await llm.call<string>(params);
+// result: string | CallWithToolsResult<string>
+```
+
+`defineCachedCallParams()` is the same idea for `cachedCall()`, preserving the whole
+`{ cacheKey, ttl, call }` object, `call.tools` included, in one reusable named variable:
+
+```ts title="tool-calling-define-cached-call-params.ts"
+import { defineCachedCallParams } from 'vern-llm';
+
+const params = defineCachedCallParams({
+  cacheKey: 'weather-ny',
+  ttl: 60,
+  call: {
+    userContent: 'What is the weather?',
+    tools: someCondition ? [weatherTool] : undefined,
+  },
+});
+
+const result = await llm.cachedCall(params);
+// result: unknown | CallWithToolsResult<unknown>
+```
+
+<Callout type="info">
+  `satisfies CallParams<T>` also works as a lighter-weight alternative that needs no extra import,
+  it checks the object against `CallParams<T>` without replacing its inferred type. The trade-off:
+  `satisfies` alone doesn't pin `call()`'s generic `T` either, so it also needs an explicit
+  `call<T>()` to get anything more precise than `unknown`, same as `defineCallParams`.
+  `defineCallParams`/`defineCachedCallParams` exist mainly for the self-documenting name and to
+  avoid re-typing `satisfies CallParams<T>` at every call site.
+</Callout>
+
+If you're already committed to a `: CallParams<T>` annotation for another reason, `isToolCallResult()`
+is still the safe way to handle the resulting `Promise<T>` mistype:
 
 ```ts title="tool-calling-runtime-check.ts"
 import { isToolCallResult } from 'vern-llm';
@@ -116,6 +211,8 @@ if (isToolCallResult(result)) {
   // handled safely regardless of what TypeScript inferred
 }
 ```
+
+</Callout>
 
 ## Argument parsing and validation
 
