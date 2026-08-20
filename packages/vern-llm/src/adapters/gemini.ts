@@ -7,30 +7,80 @@ import {
 } from '../types/index.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 
-/** Gemini's native per-part content shape for a `contents` entry. */
+/**
+ * Gemini's native per-part content shape for a `contents` entry.
+ * `functionCall.args` and `functionResponse.response` are typed as
+ * `Record<string, unknown>` (not `unknown`) to match the real SDK's
+ * `FunctionCall.args` / `FunctionResponse.response`, see the doc comment
+ * on {@link GeminiClient}.
+ */
 type GeminiPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } }
-  | { functionCall: { name: string; args: unknown } }
-  | { functionResponse: { name: string; response: unknown } };
+  | { functionCall: { name: string; args: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: Record<string, unknown> } };
 
 /**
- * Structural type matching the real `@google/genai` SDK's `ai.models`
- * object: `generateContent`/`generateContentStream` both take a single
- * `{ model, contents, config }` argument (config carries
- * `systemInstruction`, `tools`, `toolConfig`, generation settings, and
- * `abortSignal` all together), matching the real SDK closely enough that
- * `fromGemini(ai.models)` works directly, e.g:
+ * Structural type matching the real `@google/genai` SDK, in either of the
+ * two shapes it's commonly held in: the callable model methods directly
+ * (what the real SDK exposes as `ai.models`), or the complete top-level
+ * client (`ai` itself, via the optional `models` field below). Both work
+ * with `fromGemini` directly, with no cast:
  *
  * ```ts
  * import { GoogleGenAI } from '@google/genai';
  * const ai = new GoogleGenAI({ apiKey: '...' });
  * const llm = new VernLLM({ client: fromGemini(ai.models), model: 'gemini-2.5-flash' });
+ * // or, equivalently:
+ * const llm2 = new VernLLM({ client: fromGemini(ai), model: 'gemini-2.5-flash' });
  * ```
+ *
+ * `generateContent` is optional here (unlike the real SDK, where it's
+ * always present) specifically so that a `{ models: ... }`-shaped value
+ * (no top-level `generateContent` of its own) is still a structural
+ * `GeminiClient`. `fromGemini` resolves `models` at runtime and throws if
+ * the result has no `generateContent`, see its own doc comment.
+ *
+ * Every field here is deliberately shaped to be *structurally* assignable
+ * from the real SDK's generated types (`GenerateContentParameters`,
+ * `GenerateContentResponse`, `GoogleGenAI`, etc.), without importing them,
+ * so provider SDKs stay optional:
+ * - `model` is required (not optional) on `generateContent`'s params,
+ *   matching the real SDK's `GenerateContentParameters.model`. VernLLM's
+ *   own request builder always sets it, so this costs nothing internally,
+ *   and it's required for real-SDK assignability: the real SDK's `model`
+ *   is non-optional, so a params type that allows omitting it isn't a
+ *   structural subtype of the real SDK's parameter type.
+ * - `functionCall.args` (request side, inside `GeminiPart`) and
+ *   `functionResponse.response` are typed as `Record<string, unknown>`,
+ *   matching the real SDK's `FunctionCall.args` and
+ *   `FunctionResponse.response`, both `Record<string, unknown> | undefined`
+ *   there rather than `unknown`.
+ * - `toolConfig.functionCallingConfig.mode` is typed as `any`. The real
+ *   SDK types this as its own `FunctionCallingConfigMode` string enum;
+ *   TypeScript never treats a plain string-literal union as assignable to
+ *   a string enum (even when the literal values match exactly), so no
+ *   independently-declared union type can satisfy it structurally. `any`
+ *   is the narrowest escape hatch available without importing the real
+ *   enum; it doesn't weaken anything at runtime since VernLLM only ever
+ *   writes one of `'AUTO' | 'ANY' | 'NONE'` here itself.
+ * - The response side's `functionCall.name` is optional (`name?: string`),
+ *   matching the real SDK's `FunctionCall.name?: string`, since the
+ *   response type only needs to be a supertype of whatever the real SDK
+ *   actually returns.
  */
 export interface GeminiClient {
-  generateContent(params: {
-    model?: string;
+  /**
+   * Present when this `GeminiClient` is actually the whole top-level SDK
+   * client (`ai`, not `ai.models`). `fromGemini` unwraps this at runtime;
+   * see its doc comment. Self-referencing rather than a separate type so
+   * one `GeminiClient` covers both shapes the real SDK is commonly held
+   * in, with nothing else to import or name.
+   */
+  models?: GeminiClient;
+
+  generateContent?(params: {
+    model: string;
     contents: Array<{ role: 'user' | 'model'; parts: GeminiPart[] }>;
     config?: {
       systemInstruction?: { parts: Array<{ text: string }> };
@@ -47,7 +97,8 @@ export interface GeminiClient {
       }>;
       toolConfig?: {
         functionCallingConfig: {
-          mode: 'AUTO' | 'ANY' | 'NONE';
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see class doc comment above
+          mode: any;
           allowedFunctionNames?: string[];
         };
       };
@@ -56,7 +107,7 @@ export interface GeminiClient {
   }): Promise<{
     candidates?: Array<{
       content?: {
-        parts?: Array<{ text?: string; functionCall?: { name: string; args: unknown } }>;
+        parts?: Array<{ text?: string; functionCall?: { name?: string; args?: unknown } }>;
       };
     }>;
     usageMetadata?: {
@@ -74,11 +125,13 @@ export interface GeminiClient {
    * holding the same `candidates[].content.parts[]` structure as
    * `generateContent`'s response, just incremental.
    */
-  generateContentStream?(params: Parameters<GeminiClient['generateContent']>[0]): Promise<
+  generateContentStream?(
+    params: Parameters<NonNullable<GeminiClient['generateContent']>>[0],
+  ): Promise<
     AsyncIterable<{
       candidates?: Array<{
         content?: {
-          parts?: Array<{ text?: string; functionCall?: { name: string; args: unknown } }>;
+          parts?: Array<{ text?: string; functionCall?: { name?: string; args?: unknown } }>;
         };
       }>;
       usageMetadata?: {
@@ -108,7 +161,7 @@ function toGeminiParts(blocks: ContentBlock[]): GeminiPart[] {
 function toGeminiToolConfig(
   toolChoice: Parameters<LLMClient['chat']['completions']['create']>[0]['tool_choice'],
 ): NonNullable<
-  NonNullable<Parameters<GeminiClient['generateContent']>[0]['config']>['toolConfig']
+  NonNullable<Parameters<NonNullable<GeminiClient['generateContent']>>[0]['config']>['toolConfig']
 > {
   if (!toolChoice || toolChoice === 'auto') {
     return { functionCallingConfig: { mode: 'AUTO' } };
@@ -202,12 +255,28 @@ function parseToolArguments(text: string, toolName: string): Record<string, unkn
   return parsed as Record<string, unknown>;
 }
 
-function parseToolResult(text: string): unknown {
+/**
+ * Parses a wire tool message's `content` into the object Gemini's
+ * `functionResponse.response` expects. Gemini (and the real SDK's
+ * `FunctionResponse.response` type) requires an object, so a result that
+ * parses to something other than a plain JSON object (a string, number,
+ * array, or unparseable text) is wrapped under an `output` key, mirroring
+ * Gemini's own documented convention for non-object function results.
+ */
+function parseToolResult(text: string): Record<string, unknown> {
+  let parsed: unknown;
+
   try {
-    return text.trim() ? JSON.parse(text) : '';
+    parsed = text.trim() ? JSON.parse(text) : '';
   } catch {
-    return text;
+    parsed = text;
   }
+
+  if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
+    return parsed as Record<string, unknown>;
+  }
+
+  return { output: parsed };
 }
 
 /**
@@ -242,7 +311,7 @@ function mergeConsecutiveFunctionResponses(
   return merged;
 }
 
-type GeminiRequest = Parameters<GeminiClient['generateContent']>[0];
+type GeminiRequest = Parameters<NonNullable<GeminiClient['generateContent']>>[0];
 type GeminiConfig = NonNullable<GeminiRequest['config']>;
 
 /**
@@ -336,8 +405,39 @@ function buildGeminiRequest(
  * own behavior) only reliably present on the last chunk, so the `usage`
  * `WireStreamChunk` is emitted once, after the stream completes, from
  * whichever chunk's `usageMetadata` was seen last.
+ *
+ * Accepts a `GeminiClient` in either of the two shapes it structurally
+ * covers: the callable model methods directly (what the real SDK exposes
+ * as `ai.models`), or the complete top-level client (`ai` itself, via its
+ * `models` field), unwrapping `.models` internally when given the latter.
+ * This means both of the following work, with no cast in either case:
+ *
+ * ```ts
+ * fromGemini(ai.models); // existing callers keep working
+ * fromGemini(ai);        // .models is Gemini-specific, and stays hidden in here
+ * ```
+ *
+ * Resolution is a plain runtime check: if `client.models` is set, that's
+ * used; otherwise `client` itself is used directly. Throws an
+ * `LLMError('invalid_params')` up front if neither the client nor its
+ * `.models` actually has a `generateContent` (which `GeminiClient` allows
+ * structurally, since that's what makes the `{ models: ... }` shape valid
+ * in the first place).
  */
-export function fromGemini(geminiClient: GeminiClient): LLMClient {
+export function fromGemini(client: GeminiClient): LLMClient {
+  const resolved = client.models ?? client;
+
+  if (!resolved.generateContent) {
+    throw new LLMError(
+      'fromGemini requires a client with generateContent: pass ai.models, or the whole ai client (fromGemini(ai)).',
+      'invalid_params',
+      { code: 'unsupported_capability', issues: { capability: 'generateContent' } },
+    );
+  }
+
+  const generateContent = resolved.generateContent;
+  const generateContentStream = resolved.generateContentStream;
+
   return {
     chat: {
       completions: {
@@ -345,7 +445,7 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
           const request = buildGeminiRequest(params);
           request.config = { ...request.config, abortSignal: options.signal };
 
-          const response = await geminiClient.generateContent(request);
+          const response = await generateContent(request);
 
           const parts = response.candidates?.[0]?.content?.parts ?? [];
           const text = parts.map((p) => p.text ?? '').join('');
@@ -361,10 +461,15 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
               // tool within one turn can't be told apart when results come
               // back, a real limitation of Gemini's own function-calling
               // API, not something VernLLM can paper over.
-              id: p.functionCall!.name,
+              // INVARIANT: `name` is typed optional (matching the real
+              // SDK's own `FunctionCall.name?: string`), but Gemini always
+              // populates it on an actual function call part in practice;
+              // the `!` here asserts that invariant, same rationale as the
+              // `complete: true` invariant on the streaming path below.
+              id: p.functionCall!.name!,
               type: 'function' as const,
               function: {
-                name: p.functionCall!.name,
+                name: p.functionCall!.name!,
                 arguments: JSON.stringify(p.functionCall!.args ?? {}),
               },
             }));
@@ -385,7 +490,7 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
         },
 
         async *createStream(params, options) {
-          if (!geminiClient.generateContentStream) {
+          if (!generateContentStream) {
             throw new LLMError(
               'stream: true requires a Gemini client with generateContentStream',
               'invalid_params',
@@ -396,11 +501,13 @@ export function fromGemini(geminiClient: GeminiClient): LLMClient {
           const request = buildGeminiRequest(params);
           request.config = { ...request.config, abortSignal: options.signal };
 
-          const stream = await geminiClient.generateContentStream(request);
+          const stream = await generateContentStream(request);
 
           let toolCallIndex = 0;
           let lastUsage:
-            | NonNullable<Awaited<ReturnType<GeminiClient['generateContent']>>['usageMetadata']>
+            | NonNullable<
+                Awaited<ReturnType<NonNullable<GeminiClient['generateContent']>>>['usageMetadata']
+              >
             | undefined;
 
           for await (const chunk of stream) {

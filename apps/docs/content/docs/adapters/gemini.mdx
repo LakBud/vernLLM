@@ -5,11 +5,11 @@ description: fromGemini adapter
 
 `fromGemini` wraps the raw Gemini client, not a pre-configured model instance, since the adapter passes `model` through on every call rather than baking it in up front.
 
-`GeminiClient` is the public client type exported by `VernLLM` and accepted by `fromGemini`. It allows TypeScript users to type their Gemini client without depending on adapter internals.
+`GeminiClient` is the public client type exported by `VernLLM` and accepted by `fromGemini`. It allows TypeScript users to type their Gemini client without depending on adapter internals. It covers both the callable model methods directly and the whole top-level SDK client (via an optional `models` field), so both of the forms below type-check with no cast.
 
 ## New SDK (`@google/genai`)
 
-The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it:
+The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it. Pass the whole client straight through, `fromGemini` unwraps `.models` internally:
 
 ```ts title="gemini-new-sdk-setup.ts"
 import { GoogleGenAI } from '@google/genai';
@@ -17,6 +17,15 @@ import { VernLLM, fromGemini } from 'vern-llm';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+const llm = new VernLLM({
+  client: fromGemini(ai),
+  model: 'gemini-2.5-flash',
+});
+```
+
+`fromGemini(ai.models)` still works exactly as before, if you'd rather pass the narrower client:
+
+```ts title="gemini-new-sdk-setup-models.ts"
 const llm = new VernLLM({
   client: fromGemini(ai.models),
   model: 'gemini-2.5-flash',

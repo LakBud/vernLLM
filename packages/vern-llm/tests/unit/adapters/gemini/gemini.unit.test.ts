@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import { fromGemini, type GeminiClient } from '../../../../src/adapters/index.js';
+import { LLMError } from '../../../../src/types/index.js';
 
 function makeFakeGeminiClient(text: string) {
-  const generateContent = vi.fn<GeminiClient['generateContent']>(async (_params) => ({
+  const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async (_params) => ({
     candidates: [{ content: { parts: [{ text }] } }],
     usageMetadata: {
       promptTokenCount: 4,
@@ -279,7 +280,7 @@ describe('fromGemini, tools', () => {
   });
 
   it('preserves text content when Gemini also returns a functionCall', async () => {
-    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
       candidates: [
         {
           content: {
@@ -368,7 +369,7 @@ describe('fromGemini, tools', () => {
   });
 
   it('maps a functionCall response part into a wire tool_calls entry', async () => {
-    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
       candidates: [
         {
           content: {
@@ -483,5 +484,124 @@ describe('fromGemini, tools', () => {
         { functionResponse: { name: 'get_time', response: { hour: 14 } } },
       ],
     });
+  });
+
+  it('wraps a non-object tool result (a plain string) under an "output" key for functionResponse.response', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('ok');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'get_weather',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
+              },
+            ],
+          },
+          // Content that parses as valid JSON but isn't a plain object
+          // (here, a bare string): Gemini's real `FunctionResponse.response`
+          // type requires a `Record<string, unknown>`, so this can't be
+          // sent as-is and must be wrapped.
+          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify('sunny, 21C') },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].contents.at(-1)).toEqual({
+      role: 'user',
+      parts: [{ functionResponse: { name: 'get_weather', response: { output: 'sunny, 21C' } } }],
+    });
+  });
+
+  it('wraps unparseable (non-JSON) tool result text under an "output" key', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('ok');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'get_weather',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'get_weather', content: 'not json at all' },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].contents.at(-1)).toEqual({
+      role: 'user',
+      parts: [
+        { functionResponse: { name: 'get_weather', response: { output: 'not json at all' } } },
+      ],
+    });
+  });
+});
+
+describe('fromGemini, accepting the full top-level client', () => {
+  it('accepts { models: GeminiClient } and unwraps it internally, calling models.generateContent', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const topLevelClient = { models: client };
+
+    const adapted = fromGemini(topLevelClient);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('still accepts a bare GeminiClient (no .models) exactly as before', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws LLMError(invalid_params) up front when neither the client nor .models has generateContent', () => {
+    // `{ models: {} }` is a structurally valid GeminiClient (models is
+    // itself a GeminiClient, and generateContent is optional), but there's
+    // nothing callable at the end of the chain. fromGemini should fail
+    // fast here rather than defer to a confusing runtime TypeError on the
+    // first actual `.create()` call.
+    expect(() => fromGemini({ models: {} })).toThrow(LLMError);
+    expect(() => fromGemini({ models: {} })).toThrow(/requires a client with generateContent/);
   });
 });

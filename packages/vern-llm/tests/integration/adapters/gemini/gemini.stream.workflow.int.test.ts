@@ -29,7 +29,7 @@ async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
 
 describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
   it('streams live text-delta chunks and resolves finalResult to the same parsed/validated shape a non-streaming call would return', async () => {
-    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => {
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => {
       throw new Error('non-streaming generateContent() should not be called for stream: true');
     });
     const generateContentStream = vi.fn((_params: unknown) =>
@@ -76,7 +76,7 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
   });
 
   it('streams a complete, one-shot functionCall part that accumulates into the same validated ToolCall[] a non-streaming call would return', async () => {
-    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
     const generateContentStream = vi.fn((_params: unknown) =>
       Promise.resolve(
         fakeGeminiStream([
@@ -126,7 +126,7 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
   });
 
   it('rejects finalResult with a normalized LLMError when the client has no generateContentStream, matching the createStream contract', async () => {
-    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
 
     const llm = new VernLLM({
       client: fromGemini({ generateContent } as unknown as GeminiClient),

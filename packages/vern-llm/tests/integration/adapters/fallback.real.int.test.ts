@@ -11,16 +11,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { fromAnthropic } from '../../../src/adapters/anthropic.js';
 import { type BedrockConverseClient, fromBedrock } from '../../../src/adapters/bedrock.js';
-import { fromGemini, type GeminiClient } from '../../../src/adapters/gemini.js';
+import { fromGemini } from '../../../src/adapters/gemini.js';
 import { fromOpenAICompatible } from '../../../src/adapters/openaiCompatible.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import { drain } from '../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../realSdkServer.js';
-
-/** Same bridging cast the Gemini real-SDK adapter tests use; see `gemini.real.int.test.ts`. */
-function asGeminiClient(models: GoogleGenAI['models']): GeminiClient {
-  return models as unknown as GeminiClient;
-}
 
 /** Same `.send(command)` -> `.converse()` bridge the Bedrock real-SDK adapter tests use. */
 function wrapBedrockClient(client: BedrockRuntimeClient): BedrockConverseClient {
@@ -139,7 +134,7 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
         fallback: [
           { client: fromAnthropic(anthropic), model: 'claude-test', name: 'anthropic' },
           {
-            client: fromGemini(asGeminiClient(gemini.models)),
+            client: fromGemini(gemini.models),
             model: 'gemini-test',
             name: 'gemini',
           },
@@ -347,7 +342,7 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
       fallback: [
         { client: fromAnthropic(anthropic), model: 'claude-test', name: 'anthropic' },
         {
-          client: fromGemini(asGeminiClient(gemini.models)),
+          client: fromGemini(gemini.models),
           model: 'gemini-test',
           name: 'gemini',
         },

@@ -33,7 +33,7 @@ function fakeGeminiStream(
 }
 
 function makeFakeStreamingGeminiClient(chunks: unknown[], onReturn?: () => void | Promise<void>) {
-  const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
+  const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
   const generateContentStream = vi.fn((_params: unknown) =>
     Promise.resolve(fakeGeminiStream(chunks, onReturn) as AsyncIterable<never>),
   );
@@ -135,7 +135,7 @@ describe('fromGemini().chat.completions.createStream', () => {
   });
 
   it('throws LLMError(validation) when the client has no generateContentStream', async () => {
-    const generateContent = vi.fn<GeminiClient['generateContent']>(async () => ({}));
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
     const adapted = fromGemini({ generateContent });
 
     await expect(

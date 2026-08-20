@@ -460,7 +460,11 @@ describe('VernLLM + adapter integration: conversation history', () => {
                 {
                   functionResponse: {
                     name: 'call_1',
-                    response: 'sunny',
+                    // Gemini's real functionResponse.response requires an
+                    // object; a plain-string tool result ("sunny", not
+                    // JSON) is wrapped under an "output" key by the
+                    // adapter's parseToolResult, see gemini.ts.
+                    response: { output: 'sunny' },
                   },
                 },
               ],

@@ -1,27 +1,21 @@
 import { GoogleGenAI } from '@google/genai';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fromGemini, type GeminiClient } from '../../../../src/adapters/gemini.js';
+import { fromGemini } from '../../../../src/adapters/gemini.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
 /**
- * `GeminiClient` now matches the real `@google/genai` SDK's `ai.models`
- * shape directly (single-argument `generateContent`/`generateContentStream`,
- * `config`-nested fields, `config.abortSignal`), so no bridging wrapper is
- * needed, just `fromGemini(ai.models)`. A cast is still needed to satisfy
- * TS: the real SDK's generated types are stricter than this adapter's own
- * hand-written structural type in a few spots (e.g. `functionCall.args` is
- * `Record<string, unknown> | undefined` there vs `unknown` here, `mode` is
- * a real enum not a string union), same rationale as the adapter's own
- * internal `as unknown as` casts elsewhere: the wire contract is what's
- * actually relied on, not either side's exact TS types.
+ * `GeminiClient` now matches the real `@google/genai` SDK's types precisely
+ * enough that no cast is needed at all: `fromGemini(ai.models)` and
+ * `fromGemini(ai)` both type-check directly against the real `GoogleGenAI`
+ * instance below, with no `as GeminiClient`/`as unknown as` anywhere in
+ * this file. `GeminiClient` covers both shapes itself (an optional
+ * self-referencing `models` field), so there's nothing else to import.
+ * That's the specific thing this test file exists to prove, see the
+ * `type-checks with no cast` test at the bottom.
  */
-function asGeminiClient(models: GoogleGenAI['models']): GeminiClient {
-  return models as unknown as GeminiClient;
-}
-
 describe('Gemini adapter integration (real @google/genai client)', () => {
   let server: RealSdkServer | undefined;
 
@@ -48,7 +42,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
 
     const llm = new VernLLM({
-      client: fromGemini(asGeminiClient(ai.models)),
+      client: fromGemini(ai.models),
       model: 'gemini-test',
     });
 
@@ -88,7 +82,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     ]);
 
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
-    const client = fromGemini(asGeminiClient(ai.models));
+    const client = fromGemini(ai.models);
 
     const result = await client.chat.completions.create(
       {
@@ -155,7 +149,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
 
     const llm = new VernLLM({
-      client: fromGemini(asGeminiClient(ai.models)),
+      client: fromGemini(ai.models),
       model: 'gemini-test',
       maxRetries: 1,
       baseDelayMs: 1,
@@ -189,7 +183,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
 
     const llm = new VernLLM({
-      client: fromGemini(asGeminiClient(ai.models)),
+      client: fromGemini(ai.models),
       model: 'gemini-test',
     });
 
@@ -222,7 +216,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     });
 
     const llm = new VernLLM({
-      client: fromGemini(asGeminiClient(ai.models)),
+      client: fromGemini(ai.models),
       model: 'gemini-test',
       maxRetries: 0,
     });
@@ -255,5 +249,60 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
       name: 'LLMError',
       type: 'aborted',
     });
+  });
+
+  it('drives a real Google GenAI client through VernLLM.call end to end when passed the whole client (fromGemini(ai))', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'Paris is the capital of France.' }] },
+              finishReason: 'STOP',
+            },
+          ],
+          usageMetadata: { promptTokenCount: 22, candidatesTokenCount: 9, totalTokenCount: 31 },
+        },
+      },
+    ]);
+
+    const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
+
+    // fromGemini(ai) here, NOT fromGemini(ai.models): the whole top-level
+    // client, unwrapped internally. No `.models` and no cast at the call
+    // site, which is the entire point of this test.
+    const llm = new VernLLM({
+      client: fromGemini(ai),
+      model: 'gemini-test',
+    });
+
+    const result = await llm.call({
+      systemPrompt: 'You are a helpful geography assistant.',
+      userContent: "What's the capital of France?",
+      jsonMode: false,
+    });
+
+    expect(result).toBe('Paris is the capital of France.');
+
+    const sent = at(server.requests, 0);
+    expect(sent.method).toBe('POST');
+    expect(sent.url).toBe('/v1beta/models/gemini-test:generateContent');
+  });
+
+  it('type-checks with no cast: fromGemini(ai.models) and fromGemini(ai) both accept the real GoogleGenAI client', () => {
+    // This test's value is entirely at compile time. If either call below
+    // needed `as GeminiClient` / `as unknown as GeminiClient` to satisfy
+    // TypeScript, `pnpm typecheck:test` would fail, which is exactly the
+    // signal this test exists to catch. There's nothing meaningful to
+    // assert at runtime beyond "these functions exist and return an
+    // LLMClient", so the assertions below are a formality; the compiler
+    // doing the checking is the actual test.
+    const ai = new GoogleGenAI({ apiKey: 'test-key' });
+
+    const fromModels = fromGemini(ai.models);
+    const fromTopLevel = fromGemini(ai);
+
+    expect(typeof fromModels.chat.completions.create).toBe('function');
+    expect(typeof fromTopLevel.chat.completions.create).toBe('function');
   });
 });
