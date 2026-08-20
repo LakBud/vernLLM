@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import { LLMError } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
-import { at, createMockClient, textResponse } from '../helpers.js';
+import { at, createMockClient, jsonResponse, textResponse } from '../helpers.js';
 
 describe('VernLLM.call, conversation history', () => {
   it('sends only system + current user turn when no history is given', async () => {
@@ -49,6 +49,94 @@ describe('VernLLM.call, conversation history', () => {
       { role: 'system', content: 's' },
       { role: 'user', content: 'u' },
     ]);
+  });
+  it('accepts a parsed JsonValue as assistant history content and serializes it on the wire', async () => {
+    const { client, calls } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await llm.call({
+      userContent: 'continue',
+      jsonMode: false,
+      history: [
+        { role: 'user', content: 'give me json' },
+        { role: 'assistant', content: { name: 'Ada', skills: ['ts', 'js'] } },
+      ],
+    });
+
+    expect(at(calls, 0).messages).toEqual([
+      { role: 'user', content: 'give me json' },
+      { role: 'assistant', content: JSON.stringify({ name: 'Ada', skills: ['ts', 'js'] }) },
+      { role: 'user', content: 'continue' },
+    ]);
+  });
+
+  it('serializes non-object JsonValue assistant content (array, number, boolean, null) the same way', async () => {
+    const { client, calls } = createMockClient([
+      textResponse('ok'),
+      textResponse('ok'),
+      textResponse('ok'),
+      textResponse('ok'),
+    ]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    for (const value of [[1, 2, 3], 42, true, null]) {
+      await llm.call({
+        userContent: 'continue',
+        jsonMode: false,
+        history: [
+          { role: 'user', content: 'q' },
+          { role: 'assistant', content: value },
+        ],
+      });
+    }
+
+    expect(at(calls, 0).messages[1]).toEqual({
+      role: 'assistant',
+      content: JSON.stringify([1, 2, 3]),
+    });
+    expect(at(calls, 1).messages[1]).toEqual({ role: 'assistant', content: JSON.stringify(42) });
+    expect(at(calls, 2).messages[1]).toEqual({ role: 'assistant', content: JSON.stringify(true) });
+    expect(at(calls, 3).messages[1]).toEqual({ role: 'assistant', content: JSON.stringify(null) });
+  });
+
+  it('still sends a plain string assistant content unchanged', async () => {
+    const { client, calls } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await llm.call({
+      userContent: 'continue',
+      jsonMode: false,
+      history: [
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: 'Paris.' },
+      ],
+    });
+
+    expect(at(calls, 0).messages[1]).toEqual({ role: 'assistant', content: 'Paris.' });
+  });
+
+  it('a jsonMode: true result can be pushed straight back into history and round-trips correctly', async () => {
+    const { client, calls } = createMockClient([
+      jsonResponse({ name: 'Ada', skills: ['ts'] }),
+      textResponse('ok'),
+    ]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const parsed = await llm.call({ userContent: 'extract json', jsonMode: true });
+
+    await llm.call({
+      userContent: 'follow up',
+      jsonMode: false,
+      history: [
+        { role: 'user', content: 'extract json' },
+        { role: 'assistant', content: parsed },
+      ],
+    });
+
+    expect(at(calls, 1).messages[1]).toEqual({
+      role: 'assistant',
+      content: JSON.stringify({ name: 'Ada', skills: ['ts'] }),
+    });
   });
 });
 

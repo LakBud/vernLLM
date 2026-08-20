@@ -6,9 +6,20 @@ import { createMockClient } from '../../../helpers.js';
 
 import type {
   CachedCallParams,
+  CachedJsonModeDisabledCallParams,
+  CachedJsonModeEnabledCallParams,
   CachedStreamCallParams,
   CachedStreamToolCallParams,
 } from '../../../../src/types/index.js';
+
+describe('CachedJsonModeDisabledCallParams/CachedJsonModeEnabledCallParams, reserveUsage/refundUsage exclusion', () => {
+  it('omits reserveUsage/refundUsage from `call`, same as the non-jsonMode aliases', () => {
+    expectTypeOf<CachedJsonModeDisabledCallParams['call']>().not.toHaveProperty('reserveUsage');
+    expectTypeOf<CachedJsonModeDisabledCallParams['call']>().not.toHaveProperty('refundUsage');
+    expectTypeOf<CachedJsonModeEnabledCallParams['call']>().not.toHaveProperty('reserveUsage');
+    expectTypeOf<CachedJsonModeEnabledCallParams['call']>().not.toHaveProperty('refundUsage');
+  });
+});
 
 describe('CachedStreamCallParams/CachedStreamToolCallParams, reserveUsage/refundUsage exclusion', () => {
   it('omits reserveUsage/refundUsage from `call`, same as the non-streaming aliases', () => {

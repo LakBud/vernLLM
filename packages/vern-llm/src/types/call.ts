@@ -4,6 +4,26 @@ import type { ToolCall, ToolChoice, ToolDefinition, ToolResult } from './tools.j
 import type { UsageHooks } from './usage.js';
 
 /**
+ * Any valid JSON value: a primitive, `null`, or a JSON array/object made
+ * of the same. This is what `call()` returns when `jsonMode: true`.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * Content for an `assistant` turn in `history`. Accepts a string or a
+ * parsed `JsonValue`, so a prior `jsonMode: true` response can be pushed
+ * straight back into history. Adapters stringify non-string content
+ * before sending it to the provider.
+ */
+export type AssistantContent = string | JsonValue;
+
+/**
  * A single prior turn in a multi-turn conversation, passed via `history`.
  *
  * Supports normal user/assistant messages and tool continuations: an assistant
@@ -18,7 +38,7 @@ export type ConversationTurn =
     }
   | {
       role: 'assistant';
-      content?: string;
+      content?: AssistantContent;
       toolCalls?: ToolCall[];
     }
   | {
@@ -177,6 +197,20 @@ export type ToolsDisabledCallParams<T> = CallParams<T> & {
   toolChoice: 'none';
 };
 
+/**
+ * `CallParams` with `jsonMode: false`. Selects the `call()` overload
+ * that returns a plain `string`.
+ */
+export type JsonModeDisabledCallParams = CallParams<unknown> & { jsonMode: false };
+
+/**
+ * `CallParams` with `jsonMode: true` and no `schema`. Selects the
+ * `call()` overload that returns a `JsonValue`. A call site that also
+ * sets `schema`/`jsonSchema` with an explicit type argument still uses
+ * the generic `CallParams<T>` overload instead.
+ */
+export type JsonModeEnabledCallParams = CallParams<JsonValue> & { jsonMode: true };
+
 /** Shared cache-configuration fields, minus the internal `fn` primitive. */
 export interface CachedCallInput extends UsageHooks {
   cacheKey: string;
@@ -218,4 +252,20 @@ export type CachedCallParams<T> = CachedCallInput & {
  */
 export type CachedToolCallParams<T> = CachedCallInput & {
   call: Omit<ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached LLM call with `jsonMode: false`. Selects the
+ * `cachedCall()` overload that returns a plain `string`.
+ */
+export type CachedJsonModeDisabledCallParams = CachedCallInput & {
+  call: Omit<JsonModeDisabledCallParams, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached LLM call with `jsonMode: true` and no `schema`.
+ * Selects the `cachedCall()` overload that returns a `JsonValue`.
+ */
+export type CachedJsonModeEnabledCallParams = CachedCallInput & {
+  call: Omit<JsonModeEnabledCallParams, 'reserveUsage' | 'refundUsage'>;
 };

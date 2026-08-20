@@ -2,11 +2,20 @@ import { LLMError } from '../../types/errors.js';
 import { toWireTools, toWireToolCalls } from './wire.utils.js';
 
 import type {
+  AssistantContent,
   CallParams,
   ConversationTurn,
   WireMessage,
   WireToolChoice,
 } from '../../types/index.js';
+
+/**
+ * Serializes `ConversationTurn` assistant content for the wire. Strings
+ * pass through unchanged. Parsed JSON values are `JSON.stringify`'d.
+ */
+function serializeAssistantContent(content: AssistantContent): string {
+  return typeof content === 'string' ? content : JSON.stringify(content);
+}
 
 /** Everything `RequestBuilder` needs beyond a single call's own `CallParams`. */
 export interface RequestBuilderOptions {
@@ -330,13 +339,24 @@ export class RequestBuilder {
       return [
         {
           role: 'assistant' as const,
-          ...(turn.content ? { content: turn.content } : {}),
+          ...(turn.content !== undefined
+            ? { content: serializeAssistantContent(turn.content) }
+            : {}),
           tool_calls: toWireToolCalls(turn.toolCalls),
         },
       ];
     }
 
-    return [{ role: turn.role as 'user' | 'assistant', content: turn.content ?? '' }];
+    if (turn.role === 'assistant') {
+      return [
+        {
+          role: 'assistant' as const,
+          content: serializeAssistantContent(turn.content === undefined ? '' : turn.content),
+        },
+      ];
+    }
+
+    return [{ role: turn.role as 'user', content: turn.content ?? '' }];
   }
 
   /**

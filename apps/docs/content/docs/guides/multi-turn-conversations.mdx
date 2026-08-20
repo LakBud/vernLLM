@@ -58,7 +58,7 @@ type ConversationTurn =
     }
   | {
       role: 'assistant';
-      content?: string;
+      content?: string | JsonValue;
       toolCalls?: ToolCall[];
     }
   | {
@@ -73,6 +73,24 @@ type ConversationTurn =
   before still works unchanged, this only adds the `tool` role and the optional `toolCalls` field on
   top.
 </Callout>
+
+Assistant `content` also accepts a parsed `JsonValue`, so a prior `jsonMode: true` result can be
+pushed back into `history` directly. This is common in chat apps, where `history` is declared once
+and grows as the conversation continues:
+
+```ts title="assistant-json-content.ts"
+const history: ConversationTurn[] = [];
+
+const parsed = await llm.call({ userContent: 'Give me a JSON summary.', jsonMode: true });
+
+history.push(
+  { role: 'user', content: 'Give me a JSON summary.' },
+  { role: 'assistant', content: parsed },
+);
+```
+
+Adapters stringify non-string assistant content before sending it to the provider, so no manual
+`JSON.stringify` call is needed.
 
 For plain conversations without tools, only the `user` and `assistant` cases apply:
 
@@ -98,27 +116,29 @@ const history = [
 
 ## Continuing a conversation
 
-A typical chat application stores previous messages and sends them with every new request:
+A typical chat application declares `history` once, typed as `ConversationTurn[]`, and pushes each
+turn as the conversation continues:
 
 ```ts title="continuing-conversation.ts"
-const history = [
-  {
-    role: 'user',
-    content: 'What is Rust?',
-  },
-  {
-    role: 'assistant',
-    content: 'Rust is a systems programming language focused on safety and performance.',
-  },
-];
+const history: ConversationTurn[] = [];
+
+const first = await llm.call({ userContent: 'What is Rust?', jsonMode: false });
+history.push({ role: 'user', content: 'What is Rust?' }, { role: 'assistant', content: first });
 
 const response = await llm.call({
   history,
   userContent: 'What makes it memory safe?',
+  jsonMode: false,
 });
+history.push(
+  { role: 'user', content: 'What makes it memory safe?' },
+  { role: 'assistant', content: response },
+);
 ```
 
-The model can answer the follow-up question because the previous conversation is included in the request.
+The model can answer each follow-up because the growing `history` array is sent with every
+request. Typing `history` as `ConversationTurn[]` up front also covers assistant content that's a
+parsed `JsonValue`, not just a string, so pushing a `jsonMode: true` result needs no extra casting.
 
 ## History validation
 
