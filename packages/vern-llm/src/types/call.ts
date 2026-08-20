@@ -121,23 +121,9 @@ export interface CallParams<T = unknown> extends UsageHooks {
   schema?: SchemaLike<T>;
 
   /**
-   * Tools the model may call. When set, `call()` always returns a
-   * `CallWithToolsResult<T>` discriminated union instead of `T` directly
-   * (see `CallWithToolsResult`), a breaking-change point: omitting `tools`
-   * keeps `call()`'s old `Promise<T>` behavior exactly.
-   *
-   * Can be combined with `jsonSchema` on Gemini and OpenAI-compatible
-   * clients unconditionally (neither ever restricted the combination:
-   * Gemini builds `responseSchema`/`tools` as independent fields, OpenAI-
-   * compatible clients pass both straight through). On Anthropic and
-   * Bedrock, combining the two is opt-in per call site, via each
-   * adapter's `nativeStructuredOutputModels` option: models not covered
-   * by it still throw `LLMError('validation')`, since `jsonSchema` falls
-   * back to a forced single-tool call there, which would collide with
-   * real tools. See `fromAnthropic`/`fromBedrock`.
-   *
-   * `schema` (client-side validation, distinct from `jsonSchema`) was
-   * never restricted from combining with `tools` on any provider.
+   * Tools the model may call. When set, `call()` returns a
+   * `CallWithToolsResult<T>` union instead of `T` directly. Combining with
+   * `jsonSchema` is provider-dependent; see the Tool Calling docs.
    */
   tools?: ToolDefinition[];
 
@@ -183,6 +169,21 @@ export type ToolEnabledCallParams<T> = CallParams<T> & {
 };
 
 /**
+ * A `CallParams` variant for tools set conditionally, e.g. `tools:
+ * someCondition ? [myTool] : undefined`. Selects the `call()` overload
+ * returning the honest union `T | CallWithToolsResult<T>` instead of
+ * falling through to plain `T` (which is what happened before this type
+ * existed, since `ToolDefinition[] | undefined` matched neither
+ * `ToolEnabledCallParams` nor `ToolsDisabledCallParams`). Forces an
+ * `isToolCallResult()` check before treating the result as plain
+ * content. Omitting `tools` entirely still resolves to plain `T`, since
+ * tools genuinely cannot have run there.
+ */
+export type ConditionalToolCallParams<T> = CallParams<T> & {
+  tools: ToolDefinition[] | undefined;
+};
+
+/**
  * A `CallParams` variant where tools are offered but the model is barred
  * from calling one. `toolChoice: 'none'` guarantees the response can never
  * be a `tool_calls` result, so `call()` can narrow straight to
@@ -199,16 +200,11 @@ export type ToolsDisabledCallParams<T> = CallParams<T> & {
 
 /**
  * `CallParams` with `jsonMode: false`. Selects the `call()` overload
- * that returns a plain `string`.
- *
- * `jsonSchema` is explicitly typed `never` here, not just omitted:
- * `RequestBuilder.build()` treats a truthy `jsonSchema` as forcing JSON
- * parsing (`useJson = jsonModeEffective || Boolean(jsonSchema)`)
- * regardless of `jsonMode`, so a call that sets both `jsonMode: false`
- * and `jsonSchema` still gets its response parsed as JSON at runtime.
- * Forcing `jsonSchema?: never` makes any such call fail this overload's
- * structural check, so it falls through to the generic `CallParams<T>`
- * overload instead of incorrectly promising a plain `string`.
+ * that returns a plain `string`. `jsonSchema` is typed `never` here: a
+ * truthy `jsonSchema` forces JSON parsing at runtime regardless of
+ * `jsonMode` (see `RequestBuilder.build()`), so `jsonMode: false` +
+ * `jsonSchema` together would otherwise still match this overload and
+ * falsely promise a `string`.
  */
 export type JsonModeDisabledCallParams = Omit<CallParams<unknown>, 'jsonSchema'> & {
   jsonMode: false;
@@ -241,22 +237,10 @@ export interface CachedCallInput extends UsageHooks {
 }
 
 /**
- * Parameters for a cached LLM call without tool calling.
- *
- * Combines the cache configuration with the `CallParams` passed to
- * `VernLLM.call()`. The cached value is the normal LLM response type `T`.
- *
- * `reserveUsage`/`refundUsage` are omitted from `call`'s type on purpose:
- * `CachedCallInput` already extends `UsageHooks`, so those two hooks
- * belong at the top level, alongside `cacheKey`/`ttl`, not nested inside
- * `call`. Both positions used to typecheck, which meant `cachedCall`
- * could only catch the mistake at runtime with a warning, after silently
- * ignoring the caller's usage hooks. Putting them inside `call` as an
- * inline object literal is now a compile error instead; TypeScript's
- * excess-property check only applies to object literals though, so a
- * preconstructed value carrying `reserveUsage`/`refundUsage` can still be
- * structurally assignable, which is why `cachedCall` also checks for and
- * rejects both hooks at runtime.
+ * Parameters for a cached LLM call without tool calling: cache config
+ * plus the `CallParams` passed to `call()`. `reserveUsage`/`refundUsage`
+ * belong at the top level (`CachedCallInput`), not nested in `call`; see
+ * the caching docs for why.
  */
 export type CachedCallParams<T> = CachedCallInput & {
   call: Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>;
@@ -274,6 +258,16 @@ export type CachedCallParams<T> = CachedCallInput & {
  */
 export type CachedToolCallParams<T> = CachedCallInput & {
   call: Omit<ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached LLM call with `call.tools` set conditionally.
+ * Selects the `cachedCall()` overload that returns the honest union
+ * `T | CallWithToolsResult<T>` instead of narrowing to plain `T`. See
+ * `ConditionalToolCallParams` for why this overload exists.
+ */
+export type CachedConditionalToolCallParams<T> = CachedCallInput & {
+  call: Omit<ConditionalToolCallParams<T>, 'reserveUsage' | 'refundUsage'>;
 };
 
 /**

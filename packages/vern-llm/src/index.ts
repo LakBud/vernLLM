@@ -1,4 +1,4 @@
-export { VernLLM } from './vernLLM.js';
+export { VernLLM, defineCallParams, defineCachedCallParams } from './vernLLM.js';
 export { CircuitBreaker, type CircuitBreakerOptions, type CircuitState } from './circuitBreaker.js';
 export {
   RateLimiter,
@@ -90,6 +90,7 @@ export {
   type CallParams,
   type ToolEnabledCallParams,
   type ToolsDisabledCallParams,
+  type ConditionalToolCallParams,
   type JsonModeDisabledCallParams,
   type JsonModeEnabledCallParams,
   type JsonValue,
@@ -102,6 +103,7 @@ export {
   type WireStreamChunk,
   type CachedStreamCallParams,
   type CachedStreamToolCallParams,
+  type CachedStreamConditionalToolCallParams,
   type CachedStreamJsonModeDisabledCallParams,
   type CachedStreamJsonModeEnabledCallParams,
   type ConversationTurn,
@@ -110,6 +112,7 @@ export {
   type ImageBlock,
   type CachedCallParams,
   type CachedToolCallParams,
+  type CachedConditionalToolCallParams,
   type CachedJsonModeDisabledCallParams,
   type CachedJsonModeEnabledCallParams,
   type ReserveUsage,

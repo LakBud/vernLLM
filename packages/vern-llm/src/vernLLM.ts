@@ -15,12 +15,15 @@ import {
   defaultFallbackOn,
   type CachedCallParams,
   type CachedStreamCallParams,
+  type CachedStreamConditionalToolCallParams,
   type CachedStreamToolCallParams,
+  type CachedConditionalToolCallParams,
   type CachedToolCallParams,
   type CachedJsonModeDisabledCallParams,
   type CachedJsonModeEnabledCallParams,
   type CallParams,
   type CallWithToolsResult,
+  type ConditionalToolCallParams,
   type ContentResult,
   type FallbackAttempt,
   type FallbackOn,
@@ -283,10 +286,16 @@ export class VernLLM {
    * continue via `history` (see `ConversationTurn`). Mutually exclusive
    * with `jsonSchema`/`schema`.
    *
-   * TypeScript only picks the tools-aware overload when `tools` is
-   * statically present on `params`. If set conditionally on a plain
-   * `CallParams<T>`, use `isToolCallResult()` to check the shape at
-   * runtime instead. See the Tool Calling docs for details.
+   * TypeScript picks the tools-aware overload (`CallWithToolsResult<T>`)
+   * when `tools` is a literal array on `params`, and the conditional-tools
+   * overload (`T | CallWithToolsResult<T>`, see `ConditionalToolCallParams`)
+   * when `tools` is present but statically `ToolDefinition[] | undefined`,
+   * e.g. `const tools = condition ? [myTool] : undefined`. Either way, use
+   * `isToolCallResult()` to narrow the result once `tools` isn't a literal
+   * array: TypeScript's static type can't know from the `ConditionalToolCallParams`
+   * shape alone whether tools actually ran on a given call. Only omitting
+   * `tools` entirely resolves to the plain `T` overload, since then tools
+   * genuinely cannot have run. See the Tool Calling docs for details.
    *
    * The same static-vs-dynamic caveat applies to `stream`: TypeScript only
    * selects the streaming overload (returning `StreamCallResult<...>`) when
@@ -314,6 +323,10 @@ export class VernLLM {
     params: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>,
   ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
 
+  async call<T = unknown>(
+    params: StreamEnabledCallParams<T> & ConditionalToolCallParams<T>,
+  ): Promise<StreamCallResult<T | CallWithToolsResult<T>>>;
+
   async call(params: StreamJsonModeDisabledCallParams): Promise<StreamCallResult<string>>;
 
   async call(params: StreamJsonModeEnabledCallParams): Promise<StreamCallResult<JsonValue>>;
@@ -323,6 +336,10 @@ export class VernLLM {
   async call<T = unknown>(params: ToolsDisabledCallParams<T>): Promise<ContentResult<T>>;
 
   async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
+
+  async call<T = unknown>(
+    params: ConditionalToolCallParams<T>,
+  ): Promise<T | CallWithToolsResult<T>>;
 
   async call(params: JsonModeDisabledCallParams): Promise<string>;
 
@@ -460,6 +477,10 @@ export class VernLLM {
     params: CachedStreamToolCallParams<T>,
   ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
 
+  async cachedCall<T>(
+    params: CachedStreamConditionalToolCallParams<T>,
+  ): Promise<StreamCallResult<T | CallWithToolsResult<T>>>;
+
   async cachedCall(
     params: CachedStreamJsonModeDisabledCallParams,
   ): Promise<StreamCallResult<string>>;
@@ -472,6 +493,10 @@ export class VernLLM {
 
   async cachedCall<T>(params: CachedToolCallParams<T>): Promise<CallWithToolsResult<T>>;
 
+  async cachedCall<T>(
+    params: CachedConditionalToolCallParams<T>,
+  ): Promise<T | CallWithToolsResult<T>>;
+
   async cachedCall(params: CachedJsonModeDisabledCallParams): Promise<string>;
 
   async cachedCall(params: CachedJsonModeEnabledCallParams): Promise<JsonValue>;
@@ -482,8 +507,10 @@ export class VernLLM {
     params:
       | CachedCallParams<T>
       | CachedToolCallParams<T>
+      | CachedConditionalToolCallParams<T>
       | CachedStreamCallParams<T>
       | CachedStreamToolCallParams<T>
+      | CachedStreamConditionalToolCallParams<T>
       | CachedJsonModeDisabledCallParams
       | CachedJsonModeEnabledCallParams
       | CachedStreamJsonModeDisabledCallParams
@@ -609,4 +636,45 @@ export class VernLLM {
       );
     }
   }
+}
+
+/**
+ * Identity function preserving `params`'s own precise type, unlike a `:
+ * CallParams<T>` annotation, which would widen `tools` away and break the
+ * `ConditionalToolCallParams<T>` overload for `tools: someCondition ?
+ * [tool] : undefined`. Use it when you need `call()` params in a named,
+ * reusable variable; skip it when you can pass the object inline.
+ *
+ * ```ts
+ * const params = defineCallParams({
+ *   userContent: 'What is the weather?',
+ *   tools: someCondition ? [weatherTool] : undefined,
+ * });
+ * const result = await llm.call(params);
+ * // result: unknown | CallWithToolsResult<unknown>, same as inline
+ * ```
+ *
+ * `T` isn't a parameter here; pin it via `llm.call<T>(params)` as usual.
+ * `defineCachedCallParams` is the `cachedCall()` counterpart.
+ */
+export function defineCallParams<P extends CallParams<unknown>>(params: P): P {
+  return params;
+}
+
+/**
+ * The `cachedCall()` counterpart to `defineCallParams`: preserves the
+ * whole `{ cacheKey, ttl, call }` object, `call.tools` included, in one
+ * named variable.
+ *
+ * ```ts
+ * const params = defineCachedCallParams({
+ *   cacheKey: 'weather-ny',
+ *   ttl: 60,
+ *   call: { userContent: 'What is the weather?', tools: someCondition ? [weatherTool] : undefined },
+ * });
+ * const result = await llm.cachedCall(params);
+ * ```
+ */
+export function defineCachedCallParams<P extends CachedCallParams<unknown>>(params: P): P {
+  return params;
 }
