@@ -417,12 +417,263 @@ function buildBedrockRequest(
 }
 
 /**
+ * Minimal structural shape of an AWS SDK v3 client that exposes `.send()`,
+ * matching `BedrockRuntimeClient` (and its abort-signal-aware call
+ * convention). Avoids importing `@aws-sdk/client-bedrock-runtime` for the
+ * type.
+ */
+interface AwsSendClient {
+  send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<unknown>;
+}
+
+/**
+ * Distinguishes a real AWS SDK v3 client (`.send(command)`) from a
+ * hand-written `BedrockConverseClient` (`.converse(params)`) purely
+ * structurally, so `fromBedrock` can accept either without the caller
+ * saying which one they're passing. The two shapes don't overlap: nothing
+ * implementing `.converse()` would also need `.send()`.
+ */
+function isAwsSendClient(client: BedrockConverseClient | AwsSendClient): client is AwsSendClient {
+  return typeof (client as AwsSendClient).send === 'function';
+}
+
+/**
+ * One raw event off an AWS SDK `ConverseStreamCommand` response's `stream`.
+ * Intentionally untyped (`Record<string, unknown>`, not AWS's own generated
+ * `ConverseStreamOutput`). Importing that type would mean importing
+ * `@aws-sdk/client-bedrock-runtime` statically, which `wrapAwsSendClient`
+ * avoids. Narrowing the raw event structurally, via
+ * `normalizeBedrockStreamEvent` below, gets the same safety without the
+ * static dependency.
+ */
+type RawBedrockStreamEvent = Record<string, unknown>;
+
+/**
+ * Narrows one raw AWS stream event down to VernLLM's intentionally minimal
+ * `BedrockConverseStreamEvent` union. Returns `undefined` if the event
+ * isn't one of the kinds this adapter models.
+ *
+ * AWS's real `ConverseStreamOutput` type is a strictly larger union than
+ * `BedrockConverseStreamEvent`. On top of every member modeled here, it
+ * also includes a generated `$unknown` member, AWS's forward-compatibility
+ * escape hatch for event kinds added to the service after this SDK version
+ * was generated. A blind type assertion from one union to the other would
+ * compile, but would let `$unknown` (or any other future member) reach
+ * `fromBedrock`'s event-handling loop unnarrowed, as if it were one of the
+ * kinds actually handled there.
+ *
+ * Returning `undefined` for anything unrecognized, filtered out by
+ * `normalizeBedrockEventStream` below, keeps two guarantees. AWS SDK
+ * generated types never leak into `fromBedrock`'s application code, only
+ * this module's own `BedrockConverseStreamEvent` shape does. An event kind
+ * this adapter doesn't yet know about is silently skipped, the same
+ * forward-compatible behavior AWS's own `$unknown` convention implies,
+ * rather than crashing the stream or being misrouted into a handler that
+ * doesn't actually match its shape.
+ */
+function normalizeBedrockStreamEvent(
+  raw: RawBedrockStreamEvent,
+): BedrockConverseStreamEvent | undefined {
+  if ('messageStart' in raw) return { messageStart: raw.messageStart as { role: 'assistant' } };
+
+  if ('contentBlockStart' in raw) {
+    return {
+      contentBlockStart: raw.contentBlockStart as BedrockConverseStreamEvent extends {
+        contentBlockStart: infer T;
+      }
+        ? T
+        : never,
+    };
+  }
+
+  if ('contentBlockDelta' in raw) {
+    return {
+      contentBlockDelta: raw.contentBlockDelta as BedrockConverseStreamEvent extends {
+        contentBlockDelta: infer T;
+      }
+        ? T
+        : never,
+    };
+  }
+
+  if ('contentBlockStop' in raw) {
+    return { contentBlockStop: raw.contentBlockStop as { contentBlockIndex: number } };
+  }
+
+  if ('messageStop' in raw) return { messageStop: raw.messageStop as { stopReason?: string } };
+
+  if ('metadata' in raw) {
+    return {
+      metadata: raw.metadata as {
+        usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+      },
+    };
+  }
+
+  if ('internalServerException' in raw) {
+    return { internalServerException: raw.internalServerException as { message?: string } };
+  }
+
+  if ('modelStreamErrorException' in raw) {
+    return {
+      modelStreamErrorException: raw.modelStreamErrorException as {
+        message?: string;
+        originalStatusCode?: number;
+      },
+    };
+  }
+
+  if ('validationException' in raw) {
+    return { validationException: raw.validationException as { message?: string } };
+  }
+
+  if ('throttlingException' in raw) {
+    return { throttlingException: raw.throttlingException as { message?: string } };
+  }
+
+  if ('serviceUnavailableException' in raw) {
+    return { serviceUnavailableException: raw.serviceUnavailableException as { message?: string } };
+  }
+
+  // Everything else, including AWS's generated `$unknown` member (and any
+  // event kind added to the real service after this adapter was written),
+  // is intentionally dropped here rather than forwarded.
+  return undefined;
+}
+
+/**
+ * Wraps a raw AWS event stream, narrowing each event through
+ * `normalizeBedrockStreamEvent` and filtering out anything that doesn't
+ * map onto `BedrockConverseStreamEvent`. `fromBedrock`'s event loop only
+ * ever sees the shapes it actually models.
+ */
+async function* normalizeBedrockEventStream(
+  rawStream: AsyncIterable<RawBedrockStreamEvent>,
+): AsyncGenerator<BedrockConverseStreamEvent> {
+  for await (const raw of rawStream) {
+    const event = normalizeBedrockStreamEvent(raw);
+
+    if (event) yield event;
+  }
+}
+
+/**
+ * Adapts a real AWS SDK v3 client (anything with `.send()`, matching
+ * `BedrockRuntimeClient`) into a `BedrockConverseClient`, so `fromBedrock`
+ * can accept either without a hand-written `.converse()`/`.converseStream()`
+ * wrapper. Internally does what that wrapper would: `client.send(new
+ * ConverseCommand(params))`, `client.send(new
+ * ConverseStreamCommand(params))`.
+ *
+ * `@aws-sdk/client-bedrock-runtime` is intentionally not a dependency (not
+ * even a peer dependency) of this package. `vern-llm` otherwise has zero
+ * runtime dependencies, and every other adapter works the same way:
+ * structural typing over whatever client the caller already has. Instead,
+ * `ConverseCommand`/`ConverseStreamCommand` are pulled in with a dynamic
+ * `import()` the first time either method actually runs, and memoized
+ * after that. Nothing is added to `package.json`, static or peer.
+ * Bundlers only pull the AWS SDK in for code paths that actually pass a
+ * raw AWS client to `fromBedrock`; a hand-written `BedrockConverseClient`
+ * stays unaffected. If `@aws-sdk/client-bedrock-runtime` isn't installed,
+ * the failure is a clear `LLMError` naming exactly what's missing, at the
+ * moment it's needed, rather than a silent peer-dependency warning at
+ * install time or a raw "Cannot find module" a caller has to trace back
+ * themselves.
+ *
+ * Also closes two structural gaps between AWS's generated types and
+ * `BedrockConverseClient`. AWS's `ConverseStreamCommandOutput.stream` is
+ * optional, a response may not include it. This throws a clear `LLMError`
+ * instead of letting `undefined` reach `fromBedrock`'s `for await` loop.
+ * AWS's `ConverseStreamOutput` union is larger than
+ * `BedrockConverseStreamEvent`, it includes a generated `$unknown` member.
+ * Every event is narrowed through `normalizeBedrockStreamEvent` before it
+ * reaches application code, instead of being asserted wholesale from one
+ * type to the other.
+ */
+function wrapAwsSendClient(client: AwsSendClient): BedrockConverseClient {
+  type BedrockRuntimeCommands = {
+    ConverseCommand: new (input: unknown) => unknown;
+    ConverseStreamCommand: new (input: unknown) => unknown;
+  };
+
+  let commandsPromise: Promise<BedrockRuntimeCommands> | undefined;
+
+  function loadCommands(): Promise<BedrockRuntimeCommands> {
+    commandsPromise ??= import('@aws-sdk/client-bedrock-runtime').then(
+      (mod) => mod as BedrockRuntimeCommands,
+      (cause) => {
+        commandsPromise = undefined;
+
+        throw new LLMError(
+          'fromBedrock requires "@aws-sdk/client-bedrock-runtime" to be installed to use a raw AWS ' +
+            'SDK client (it is not a dependency of vern-llm itself). Install it, or pass your own ' +
+            'object with .converse()/.converseStream() methods instead.',
+          'validation',
+          { cause },
+        );
+      },
+    );
+
+    return commandsPromise;
+  }
+
+  return {
+    converse: async (params, requestOptions) => {
+      const { ConverseCommand } = await loadCommands();
+
+      return client.send(new ConverseCommand(params), {
+        abortSignal: requestOptions.signal,
+      }) as ReturnType<BedrockConverseClient['converse']> extends Promise<infer R>
+        ? Promise<R>
+        : never;
+    },
+
+    converseStream: async (params, requestOptions) => {
+      const { ConverseStreamCommand } = await loadCommands();
+
+      const result = (await client.send(new ConverseStreamCommand(params), {
+        abortSignal: requestOptions.signal,
+      })) as { stream?: AsyncIterable<RawBedrockStreamEvent> };
+
+      // AWS marks `stream` optional on `ConverseStreamCommandOutput`
+      // because a response may not include it; VernLLM's own
+      // `BedrockConverseClient.converseStream` return shape requires it,
+      // since a `stream: true` call is meaningless without one. Fail
+      // loudly here, at the adapter boundary, instead of letting
+      // `undefined` reach `fromBedrock`'s `for await (const event of
+      // stream)` loop, where it would throw a much less specific
+      // "stream is not async iterable" error.
+      if (!result.stream) {
+        throw new LLMError(
+          'Bedrock ConverseStreamCommand response did not include a stream. This can happen if the ' +
+            "request or the model doesn't actually support Converse streaming.",
+          'api',
+          { code: 'server_error' },
+        );
+      }
+
+      return { stream: normalizeBedrockEventStream(result.stream) };
+    },
+  };
+}
+
+/**
  * Wraps a Bedrock Converse-API client so it satisfies the `LLMClient`
  * interface VernLLM uses for OpenAI/Groq. The Converse API is unified
  * across Bedrock's model families (Anthropic, Titan, Llama, Mistral, etc.),
  * so unlike raw per-model Bedrock invocation, this one adapter works
  * regardless of which underlying model `modelId` points at, as long as
  * that model supports Converse (most current-generation ones do)
+ *
+ * `bedrockClient` accepts either a hand-written `BedrockConverseClient`
+ * (a `.converse()`/`.converseStream()` wrapper you provide) or a real AWS
+ * SDK v3 client (anything with `.send()`, matching `BedrockRuntimeClient`)
+ * directly, detected structurally. Passing a raw AWS client skips the
+ * hand-written wrapper entirely, internally doing what it would
+ * (`send(new ConverseCommand(...))`, `send(new
+ * ConverseStreamCommand(...))`). See `wrapAwsSendClient` for how that path
+ * is implemented, including why `@aws-sdk/client-bedrock-runtime` stays
+ * out of this package's dependencies either way.
  *
  * `response_format: json_schema`, on a model covered by
  * `options.nativeStructuredOutputModels` (opt-in, unset by default), is
@@ -467,16 +718,19 @@ function buildBedrockRequest(
  * `create` branch above unwraps it.
  */
 export function fromBedrock(
-  bedrockClient: BedrockConverseClient,
+  bedrockClient: BedrockConverseClient | AwsSendClient,
   options?: BedrockAdapterOptions,
 ): LLMClient {
+  const client: BedrockConverseClient = isAwsSendClient(bedrockClient)
+    ? wrapAwsSendClient(bedrockClient)
+    : bedrockClient;
+
   const toolUseSupportedModels = options?.toolUseSupportedModels;
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
 
   return {
     // json_object is not supported: see buildBedrockRequest's throw above,
-    // and LLMClient.supportsJsonObjectMode's docs. fromBedrockClient wraps
-    // this function, so it inherits the same flag automatically.
+    // and LLMClient.supportsJsonObjectMode's docs.
     supportsJsonObjectMode: false,
     chat: {
       completions: {
@@ -487,7 +741,7 @@ export function fromBedrock(
             nativeStructuredOutputModels,
           );
 
-          const response = await bedrockClient.converse(request, requestOptions);
+          const response = await client.converse(request, requestOptions);
 
           let text: string;
           let wireToolCalls: WireToolCall[] | undefined;
@@ -552,7 +806,7 @@ export function fromBedrock(
         },
 
         async *createStream(params, requestOptions) {
-          if (!bedrockClient.converseStream) {
+          if (!client.converseStream) {
             throw new LLMError(
               'stream: true requires a Bedrock client with converseStream',
               'invalid_params',
@@ -566,7 +820,7 @@ export function fromBedrock(
             nativeStructuredOutputModels,
           );
 
-          const { stream } = await bedrockClient.converseStream(request, requestOptions);
+          const { stream } = await client.converseStream(request, requestOptions);
 
           const blockKinds = new Map<number, 'text' | 'tool_use' | 'json-tool'>();
 
@@ -779,79 +1033,4 @@ function mergeConsecutiveToolResults(
   }
 
   return merged;
-}
-
-/**
- * Minimal structural shape of an AWS SDK v3 client that exposes `.send()`,
- * matching `BedrockRuntimeClient` (and its abort-signal-aware call
- * convention) without importing `@aws-sdk/client-bedrock-runtime` for the
- * type.
- */
-interface AwsSendClient {
-  send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<unknown>;
-}
-
-/**
- * Ergonomic alternative to `fromBedrock` for callers who already depend on
- * `@aws-sdk/client-bedrock-runtime`: takes a real `BedrockRuntimeClient`
- * directly, no hand-written `.converse()`/`.converseStream()` wrapper
- * required. Internally does what that wrapper would: `client.send(new
- * ConverseCommand(params))` / `client.send(new ConverseStreamCommand(params))`.
- *
- * `@aws-sdk/client-bedrock-runtime` is intentionally NOT a dependency (not
- * even a peer dependency) of this package, since `vern-llm` otherwise has
- * zero runtime dependencies and every other adapter works the same way
- * (structural typing over whatever client the caller already has). Instead,
- * `ConverseCommand`/`ConverseStreamCommand` are pulled in with a dynamic
- * `import()` the first time this function actually runs, so:
- *   - nothing is added to `package.json`, static or peer
- *   - bundlers only pull the AWS SDK in for code paths that actually call
- *     this function; `fromBedrock` and every other adapter stay unaffected
- *   - if `@aws-sdk/client-bedrock-runtime` isn't installed, the failure is
- *     a clear `LLMError` naming exactly what's missing, at the moment it's
- *     needed, rather than a silent peer-dependency warning at install time
- *     (or a raw "Cannot find module" a caller has to trace back themselves)
- *
- * If you'd rather avoid `@aws-sdk/client-bedrock-runtime` entirely (e.g. a
- * hand-rolled HTTP client, or a different AWS SDK generation), use
- * `fromBedrock` with your own `.converse()`/`.converseStream()` wrapper
- * instead; this function is purely a convenience on top of it.
- */
-export async function fromBedrockClient(
-  client: AwsSendClient,
-  options?: BedrockAdapterOptions,
-): Promise<LLMClient> {
-  let ConverseCommand: new (input: unknown) => unknown;
-  let ConverseStreamCommand: new (input: unknown) => unknown;
-
-  try {
-    const mod = (await import('@aws-sdk/client-bedrock-runtime')) as {
-      ConverseCommand: new (input: unknown) => unknown;
-      ConverseStreamCommand: new (input: unknown) => unknown;
-    };
-
-    ({ ConverseCommand, ConverseStreamCommand } = mod);
-  } catch (cause) {
-    throw new LLMError(
-      'fromBedrockClient requires "@aws-sdk/client-bedrock-runtime" to be installed (it is not a ' +
-        'dependency of vern-llm itself). Install it, or use fromBedrock(converseClient) with your ' +
-        'own .converse()/.converseStream() wrapper instead.',
-      'validation',
-      { cause },
-    );
-  }
-
-  const converseClient: BedrockConverseClient = {
-    converse: (params, requestOptions) =>
-      client.send(new ConverseCommand(params), {
-        abortSignal: requestOptions.signal,
-      }) as ReturnType<BedrockConverseClient['converse']>,
-
-    converseStream: (params, requestOptions) =>
-      client.send(new ConverseStreamCommand(params), {
-        abortSignal: requestOptions.signal,
-      }) as ReturnType<NonNullable<BedrockConverseClient['converseStream']>>,
-  };
-
-  return fromBedrock(converseClient, options);
 }

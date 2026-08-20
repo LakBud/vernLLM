@@ -13,6 +13,7 @@
 - [ ] `pnpm run typecheck:test`
 - [ ] `pnpm run test` (or `pnpm run test:unit` / `pnpm run test:int` if scoping to one project)
 - [ ] Added or updated tests for the change
+- [ ] Added or updated docs for the change
 - [ ] Added a changeset (`pnpm run changeset`), if this affects `vern-llm` consumers
 
 ## Notes

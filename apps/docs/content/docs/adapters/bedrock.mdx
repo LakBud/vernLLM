@@ -18,35 +18,43 @@ Note: Tool-based structured output requires a Bedrock model that supports tool u
 
 ## Setup
 
-### Option 1: `fromBedrockClient` (recommended if you already depend on the AWS SDK)
+### Option 1: raw AWS SDK client (recommended)
 
-If `@aws-sdk/client-bedrock-runtime` is already installed, pass a real `BedrockRuntimeClient` directly, no wrapper needed:
+If `@aws-sdk/client-bedrock-runtime` is already installed, pass a `BedrockRuntimeClient` directly to `fromBedrock`. No wrapper needed. `fromBedrock` detects the raw AWS client and drives it internally via `client.send(new ConverseCommand(...))` and `client.send(new ConverseStreamCommand(...))`:
 
 ```ts title="bedrock-client-setup.ts"
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
-import { VernLLM, fromBedrockClient } from 'vern-llm';
+import { VernLLM, fromBedrock } from 'vern-llm';
 
 const client = new BedrockRuntimeClient({ region: 'us-east-1' });
 
 const llm = new VernLLM({
-  client: await fromBedrockClient(client),
+  client: fromBedrock(client),
   model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
 });
 ```
 
 <Callout>
-  `vern-llm` has zero runtime dependencies, including for this function:
-  `@aws-sdk/client-bedrock-runtime` is not a dependency or a peer dependency of `vern-llm`.
-  `fromBedrockClient` pulls in `ConverseCommand`/`ConverseStreamCommand` with a dynamic `import()`
-  the first time it's called, so nothing is added to your `package.json` resolution just by
-  importing `vern-llm`, and bundlers only reach the AWS SDK for code paths that actually call this
-  function. If the package isn't installed, it throws a clear `LLMError` naming exactly what's
-  missing, rather than a raw module-resolution error.
+  `vern-llm` has zero runtime dependencies, including for this path.
+  `@aws-sdk/client-bedrock-runtime` is not a dependency or a peer dependency. Passing a raw AWS
+  client pulls in `ConverseCommand`/`ConverseStreamCommand` with a dynamic `import()` on the first
+  real request, not when `fromBedrock` is called. Nothing is added to `package.json` just by
+  importing `vern-llm`, and bundlers only reach the AWS SDK for code paths that actually pass a raw
+  client. If the package isn't installed, the first request throws a clear `LLMError` naming what's
+  missing.
 </Callout>
 
-### Option 2: `fromBedrock` (zero-dependency, works with any AWS SDK generation)
+<Callout>
+  Two structural gaps between AWS's generated types and `BedrockConverseClient` are handled for you
+  on this path. A `ConverseStreamCommand` response missing `stream` (AWS types it as optional)
+  throws a clear `LLMError('api')` instead of crashing the internal `for await` loop. Any streaming
+  event VernLLM doesn't model, including AWS's generated `$unknown` member, is dropped before
+  reaching your code instead of being forwarded unnarrowed.
+</Callout>
 
-The AWS SDK v3 client exposes `.send(command)`, not a direct `.converse()` method, so wrap it to match `BedrockConverseClient` before passing it to `fromBedrock`:
+### Option 2: hand-written wrapper (zero-dependency)
+
+Skip `@aws-sdk/client-bedrock-runtime` entirely, or use a different AWS SDK generation or a hand-rolled HTTP client. Wrap it yourself to match `BedrockConverseClient`:
 
 ```ts title="bedrock-basic-setup.ts"
 import {
@@ -72,17 +80,16 @@ const llm = new VernLLM({
 ```
 
 <Callout>
-  `converseStream` is optional; only add it if you plan to use `stream: true`. Omitting it makes
-  `fromBedrock`'s `createStream` throw a clear `LLMError('validation')` instead of failing silently.
+  `converseStream` is optional. Add it only if you plan to use `stream: true`. Omitting it makes
+  `fromBedrock`'s `createStream` throw a clear `LLMError('invalid_params')` (code
+  `unsupported_capability`) instead of failing silently.
 </Callout>
 
 <Callout>
-  `fromBedrock` doesn't depend on `@aws-sdk/client-bedrock-runtime`'s types directly. It accepts
+  `fromBedrock` doesn't depend on `@aws-sdk/client-bedrock-runtime`'s types on this path. It accepts
   anything matching `BedrockConverseClient`'s minimal `.converse()` shape. Use
   `BedrockConverseClient` from `VernLLM` to type your wrapper without pulling in the full AWS SDK
-  types. Prefer this over `fromBedrockClient` if you'd rather not add
-  `@aws-sdk/client-bedrock-runtime` at all, or you're on a different AWS SDK generation or a
-  hand-rolled HTTP client.
+  types.
 </Callout>
 
 ## Structured output via tool use
