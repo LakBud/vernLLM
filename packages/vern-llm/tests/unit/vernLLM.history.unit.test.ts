@@ -138,6 +138,61 @@ describe('VernLLM.call, conversation history', () => {
       content: JSON.stringify({ name: 'Ada', skills: ['ts'] }),
     });
   });
+
+  it('preserves both content and toolCalls on an assistant turn that has both', async () => {
+    const { client, calls } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await llm.call({
+      userContent: 'continue',
+      jsonMode: false,
+      history: [
+        {
+          role: 'assistant',
+          content: 'Let me check the weather.',
+          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: {} }],
+        },
+        {
+          role: 'tool',
+          toolResults: [{ toolCallId: 'call_1', content: 'sunny' }],
+        },
+      ],
+    });
+
+    expect(at(calls, 0).messages[0]).toEqual({
+      role: 'assistant',
+      content: 'Let me check the weather.',
+      tool_calls: [
+        { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{}' } },
+      ],
+    });
+  });
+
+  it('serializes a JsonValue content alongside toolCalls on the same assistant turn', async () => {
+    const { client, calls } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    await llm.call({
+      userContent: 'continue',
+      jsonMode: false,
+      history: [
+        {
+          role: 'assistant',
+          content: { note: 'checking weather' },
+          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: {} }],
+        },
+        {
+          role: 'tool',
+          toolResults: [{ toolCallId: 'call_1', content: 'sunny' }],
+        },
+      ],
+    });
+
+    expect(at(calls, 0).messages[0]).toMatchObject({
+      role: 'assistant',
+      content: JSON.stringify({ note: 'checking weather' }),
+    });
+  });
 });
 
 describe('VernLLM.call, conversation history validation', () => {

@@ -1,7 +1,13 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 
 import { VernLLM, type ConversationTurn, type JsonValue } from '../../src/index.js';
-import { at, createMockClient, jsonResponse, textResponse } from '../helpers.js';
+import {
+  at,
+  createMockClient,
+  createMockStreamingClient,
+  jsonResponse,
+  textResponse,
+} from '../helpers.js';
 
 describe('VernLLM.call, jsonMode return type and runtime shape', () => {
   it('jsonMode: false returns the raw string, unparsed', async () => {
@@ -53,6 +59,33 @@ describe('VernLLM.call, jsonMode return type and runtime shape', () => {
     });
 
     expectTypeOf(result).toEqualTypeOf<{ name: string }>();
+  });
+
+  it('a schema call without an explicit type argument still infers T from the schema, not JsonValue', async () => {
+    // No explicit `<T>`, forcing overload resolution to pick between
+    // `JsonModeEnabledCallParams` (schema?: SchemaLike<JsonValue>) and the
+    // generic `CallParams<T>` fallback purely on the object literal's own
+    // shape. `Candidate` lacks an index signature, so `SchemaLike<Candidate>`
+    // is not structurally assignable to `SchemaLike<JsonValue>`, and the
+    // generic overload wins, as it should.
+    interface Candidate {
+      name: string;
+      skills: string[];
+    }
+
+    const { client } = createMockClient([jsonResponse({ name: 'Ada', skills: ['ts'] })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const result = await llm.call({
+      userContent: 'hi',
+      jsonMode: true,
+      schema: {
+        safeParse: (d) => ({ success: true, data: d as Candidate }),
+      } satisfies { safeParse(d: unknown): { success: true; data: Candidate } },
+    });
+
+    expectTypeOf(result).toEqualTypeOf<Candidate>();
+    expect(result.name).toBe('Ada');
   });
 });
 
@@ -120,6 +153,62 @@ describe('VernLLM.cachedCall, jsonMode return type and runtime shape', () => {
     });
 
     expectTypeOf(result).toEqualTypeOf<{ name: string }>();
+  });
+});
+
+describe('VernLLM.call, streaming + jsonMode return type', () => {
+  it('stream: true with jsonMode: false resolves finalResult to a string', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hello' }]]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    const result = await finalResult;
+
+    expect(result).toBe('hello');
+    expectTypeOf(result).toEqualTypeOf<string>();
+  });
+
+  it('stream: true with jsonMode: true resolves finalResult to a JsonValue', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: '{"a":1}' }]]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: true, stream: true });
+    const result = await finalResult;
+
+    expect(result).toEqual({ a: 1 });
+    expectTypeOf(result).toEqualTypeOf<JsonValue>();
+  });
+});
+
+describe('VernLLM.cachedCall, streaming + jsonMode return type', () => {
+  it('stream: true with jsonMode: false resolves finalResult to a string', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hello' }]]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const { finalResult } = await llm.cachedCall({
+      cacheKey: 'k5',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true },
+    });
+    const result = await finalResult;
+
+    expect(result).toBe('hello');
+    expectTypeOf(result).toEqualTypeOf<string>();
+  });
+
+  it('stream: true with jsonMode: true resolves finalResult to a JsonValue', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: '{"a":1}' }]]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const { finalResult } = await llm.cachedCall({
+      cacheKey: 'k6',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: true, stream: true },
+    });
+    const result = await finalResult;
+
+    expect(result).toEqual({ a: 1 });
+    expectTypeOf(result).toEqualTypeOf<JsonValue>();
   });
 });
 

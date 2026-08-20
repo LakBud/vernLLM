@@ -79,6 +79,8 @@ pushed back into `history` directly. This is common in chat apps, where `history
 and grows as the conversation continues:
 
 ```ts title="assistant-json-content.ts"
+import type { ConversationTurn } from 'vern-llm';
+
 const history: ConversationTurn[] = [];
 
 const parsed = await llm.call({ userContent: 'Give me a JSON summary.', jsonMode: true });
@@ -120,6 +122,8 @@ A typical chat application declares `history` once, typed as `ConversationTurn[]
 turn as the conversation continues:
 
 ```ts title="continuing-conversation.ts"
+import type { ConversationTurn } from 'vern-llm';
+
 const history: ConversationTurn[] = [];
 
 const first = await llm.call({ userContent: 'What is Rust?', jsonMode: false });

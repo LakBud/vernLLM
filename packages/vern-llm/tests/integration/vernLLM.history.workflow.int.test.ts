@@ -43,4 +43,44 @@ describe('VernLLM + adapter integration — conversation history', () => {
       expect.anything(),
     );
   });
+
+  it('serializes non-string assistant history content, including null, before it reaches a real adapter', async () => {
+    const anthropic = {
+      messages: {
+        create: vi.fn(async () => ({
+          content: [{ type: 'text', text: 'ok' }],
+          usage: { input_tokens: 10, output_tokens: 2 },
+        })),
+      },
+    };
+
+    const llm = new VernLLM({
+      client: fromAnthropic(anthropic),
+      model: 'claude-test',
+    });
+
+    await llm.call({
+      userContent: 'continue',
+      jsonMode: false,
+      history: [
+        { role: 'user', content: 'give me json' },
+        { role: 'assistant', content: { name: 'Ada', skills: ['ts'] } },
+        { role: 'user', content: 'and now nothing' },
+        { role: 'assistant', content: null },
+      ],
+    });
+
+    expect(anthropic.messages.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          { role: 'user', content: 'give me json' },
+          { role: 'assistant', content: JSON.stringify({ name: 'Ada', skills: ['ts'] }) },
+          { role: 'user', content: 'and now nothing' },
+          { role: 'assistant', content: JSON.stringify(null) },
+          { role: 'user', content: 'continue' },
+        ],
+      }),
+      expect.anything(),
+    );
+  });
 });

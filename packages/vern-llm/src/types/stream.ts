@@ -1,4 +1,4 @@
-import type { CachedCallInput, CallParams, ToolEnabledCallParams } from './call.js';
+import type { CachedCallInput, CallParams, JsonValue, ToolEnabledCallParams } from './call.js';
 import type { TokenUsage } from './usage.js';
 
 /** One incremental unit of a streaming response, as delivered to the caller. */
@@ -65,6 +65,23 @@ export interface StreamCallResult<R> {
 export type StreamEnabledCallParams<T> = CallParams<T> & { stream: true };
 
 /**
+ * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
+ * `call()` overload whose `finalResult` resolves to a plain `string`.
+ */
+export type StreamJsonModeDisabledCallParams = StreamEnabledCallParams<unknown> & {
+  jsonMode: false;
+};
+
+/**
+ * `StreamEnabledCallParams` with `jsonMode: true` and no `schema`. Selects
+ * the streaming `call()` overload whose `finalResult` resolves to a
+ * `JsonValue`.
+ */
+export type StreamJsonModeEnabledCallParams = StreamEnabledCallParams<JsonValue> & {
+  jsonMode: true;
+};
+
+/**
  * The adapter-facing, pre-normalization shape a `createStream` client
  * implementation emits, analogous to how `WireMessage`/`WireToolCall`
  * already sit between `CallParams` and each provider's own wire format.
@@ -119,4 +136,22 @@ export type CachedStreamCallParams<T> = CachedCallInput & {
  */
 export type CachedStreamToolCallParams<T> = CachedCallInput & {
   call: Omit<StreamEnabledCallParams<T> & ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached, streaming LLM call with `jsonMode: false`.
+ * Selects the `cachedCall()` overload whose `finalResult` (on a miss) or
+ * cached value (on a hit) is a plain `string`.
+ */
+export type CachedStreamJsonModeDisabledCallParams = CachedCallInput & {
+  call: Omit<StreamJsonModeDisabledCallParams, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached, streaming LLM call with `jsonMode: true` and no
+ * `schema`. Selects the `cachedCall()` overload whose `finalResult` (on a
+ * miss) or cached value (on a hit) is a `JsonValue`.
+ */
+export type CachedStreamJsonModeEnabledCallParams = CachedCallInput & {
+  call: Omit<StreamJsonModeEnabledCallParams, 'reserveUsage' | 'refundUsage'>;
 };

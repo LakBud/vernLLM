@@ -36,11 +36,13 @@ const parsed = await llm.call({
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 ```
 
-A call site that also sets `schema` still gets `T` inferred from the schema, exactly as before. This overload change only affects calls that don't use `schema`.
+A call site that also sets `schema` still gets `T` inferred from the schema, exactly as before. This overload change only affects calls that don't use `schema`. Streaming calls (`stream: true`) get the same treatment: `finalResult` now resolves to `string`/`JsonValue` instead of `unknown` for the same two `jsonMode` cases, for both `call()` and `cachedCall()`.
 
 `ConversationTurn` assistant `content` now also accepts a parsed `JsonValue`, so a `jsonMode: true` result can be pushed straight into `history` without stringifying it yourself:
 
 ```ts
+import type { ConversationTurn } from 'vern-llm';
+
 const history: ConversationTurn[] = [];
 
 const parsed = await llm.call({ userContent: 'Give me a JSON summary.', jsonMode: true });
@@ -51,4 +53,4 @@ history.push(
 );
 ```
 
-Adapters `JSON.stringify` non-string assistant content internally before sending it to the provider, so this is purely a type-level ergonomics change: the wire format is unaffected.
+VernLLM's request construction `JSON.stringify`s non-string assistant `content` before it's sent as part of the wire request, so no manual stringifying is needed on the caller's side.
