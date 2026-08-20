@@ -18,8 +18,8 @@ export type JsonValue =
 /**
  * Content for an `assistant` turn in `history`. Accepts a string or a
  * parsed `JsonValue`, so a prior `jsonMode: true` response can be pushed
- * straight back into history. Adapters stringify non-string content
- * before sending it to the provider.
+ * straight back into history. Request construction stringifies non-string
+ * content before it's sent to the provider.
  */
 export type AssistantContent = string | JsonValue;
 
@@ -205,11 +205,21 @@ export type JsonModeDisabledCallParams = CallParams<unknown> & { jsonMode: false
 
 /**
  * `CallParams` with `jsonMode: true` and no `schema`. Selects the
- * `call()` overload that returns a `JsonValue`. A call site that also
- * sets `schema`/`jsonSchema` with an explicit type argument still uses
- * the generic `CallParams<T>` overload instead.
+ * `call()` overload that returns a `JsonValue`.
+ *
+ * `schema` is explicitly typed `never` here, not just omitted: `CallParams<JsonValue>['schema']`
+ * would be `SchemaLike<JsonValue> | undefined`, and a schema whose inferred result type is
+ * itself structurally assignable to `JsonValue` (e.g. a schema for `string[]` or
+ * `Record<string, string>`) would still satisfy that shape, incorrectly selecting this
+ * overload over the schema-aware generic one and widening the result to `JsonValue`. Forcing
+ * `schema?: never` makes any call that sets `schema` fail this overload's structural check
+ * regardless of the schema's result type, so it always falls through to the generic
+ * `CallParams<T>` overload and infers `T` from the schema instead.
  */
-export type JsonModeEnabledCallParams = CallParams<JsonValue> & { jsonMode: true };
+export type JsonModeEnabledCallParams = Omit<CallParams<JsonValue>, 'schema'> & {
+  jsonMode: true;
+  schema?: never;
+};
 
 /** Shared cache-configuration fields, minus the internal `fn` primitive. */
 export interface CachedCallInput extends UsageHooks {

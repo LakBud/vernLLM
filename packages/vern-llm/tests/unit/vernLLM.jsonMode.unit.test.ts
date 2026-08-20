@@ -1,4 +1,4 @@
-import { describe, it, expect, expectTypeOf } from 'vitest';
+import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 
 import { VernLLM, type ConversationTurn, type JsonValue } from '../../src/index.js';
 import {
@@ -63,11 +63,11 @@ describe('VernLLM.call, jsonMode return type and runtime shape', () => {
 
   it('a schema call without an explicit type argument still infers T from the schema, not JsonValue', async () => {
     // No explicit `<T>`, forcing overload resolution to pick between
-    // `JsonModeEnabledCallParams` (schema?: SchemaLike<JsonValue>) and the
-    // generic `CallParams<T>` fallback purely on the object literal's own
-    // shape. `Candidate` lacks an index signature, so `SchemaLike<Candidate>`
-    // is not structurally assignable to `SchemaLike<JsonValue>`, and the
-    // generic overload wins, as it should.
+    // `JsonModeEnabledCallParams` and the generic `CallParams<T>` fallback
+    // purely on the object literal's own shape. `JsonModeEnabledCallParams`
+    // types `schema` as `never`, so any call that sets `schema` at all
+    // fails this overload's structural check and falls through to the
+    // generic overload, regardless of the schema's own result type.
     interface Candidate {
       name: string;
       skills: string[];
@@ -86,6 +86,28 @@ describe('VernLLM.call, jsonMode return type and runtime shape', () => {
 
     expectTypeOf(result).toEqualTypeOf<Candidate>();
     expect(result.name).toBe('Ada');
+  });
+
+  it('a schema whose result type is itself JsonValue-compatible (e.g. a string array) still infers the precise type, not JsonValue', async () => {
+    // Regression test: before `JsonModeEnabledCallParams` typed `schema` as
+    // `never`, a schema whose inferred result type happened to be
+    // structurally assignable to `JsonValue` (arrays and index-signature
+    // objects both qualify, since `JsonValue` includes `JsonValue[]` and
+    // `{ [key: string]: JsonValue }`) would incorrectly select the
+    // `JsonValue`-returning overload instead of the schema-aware one.
+    const { client } = createMockClient([jsonResponse(['ts', 'js'])]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const result = await llm.call({
+      userContent: 'hi',
+      jsonMode: true,
+      schema: {
+        safeParse: (d) => ({ success: true, data: d as string[] }),
+      } satisfies { safeParse(d: unknown): { success: true; data: string[] } },
+    });
+
+    expectTypeOf(result).toEqualTypeOf<string[]>();
+    expect(result).toEqual(['ts', 'js']);
   });
 });
 
@@ -127,6 +149,14 @@ describe('VernLLM.cachedCall, jsonMode return type and runtime shape', () => {
       ttl: 60,
       call: { userContent: 'hi', jsonMode: true },
     });
+
+    // The parse spy is installed only after the miss above, so its call
+    // count isolates exactly what the cache-hit path itself does: `runCached`
+    // returns `cached.value` directly on a hit (see `CacheOrchestrator.runCached`),
+    // never re-invoking `call()` or its JSON parsing, only the object stored
+    // from the original miss is replayed.
+    const parseSpy = vi.spyOn(JSON, 'parse');
+
     const second = await llm.cachedCall({
       cacheKey: 'k3',
       ttl: 60,
@@ -136,6 +166,9 @@ describe('VernLLM.cachedCall, jsonMode return type and runtime shape', () => {
     expect(first).toEqual({ name: 'Ada' });
     expect(second).toEqual({ name: 'Ada' });
     expect(create).toHaveBeenCalledTimes(1);
+    expect(parseSpy).not.toHaveBeenCalled();
+
+    parseSpy.mockRestore();
   });
 
   it('a schema call through cachedCall still infers T from the schema, not JsonValue', async () => {
@@ -153,6 +186,26 @@ describe('VernLLM.cachedCall, jsonMode return type and runtime shape', () => {
     });
 
     expectTypeOf(result).toEqualTypeOf<{ name: string }>();
+  });
+
+  it('a JsonValue-compatible schema (string array) through cachedCall without an explicit generic still infers the precise type', async () => {
+    const { client } = createMockClient([jsonResponse(['ts', 'js'])]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const result = await llm.cachedCall({
+      cacheKey: 'k4b',
+      ttl: 60,
+      call: {
+        userContent: 'hi',
+        jsonMode: true,
+        schema: {
+          safeParse: (d) => ({ success: true, data: d as string[] }),
+        } satisfies { safeParse(d: unknown): { success: true; data: string[] } },
+      },
+    });
+
+    expectTypeOf(result).toEqualTypeOf<string[]>();
+    expect(result).toEqual(['ts', 'js']);
   });
 });
 
@@ -177,6 +230,24 @@ describe('VernLLM.call, streaming + jsonMode return type', () => {
 
     expect(result).toEqual({ a: 1 });
     expectTypeOf(result).toEqualTypeOf<JsonValue>();
+  });
+
+  it('stream: true with a JsonValue-compatible schema still infers the precise type, not JsonValue', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: '["ts","js"]' }]]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const { finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: true,
+      stream: true,
+      schema: {
+        safeParse: (d) => ({ success: true, data: d as string[] }),
+      } satisfies { safeParse(d: unknown): { success: true; data: string[] } },
+    });
+    const result = await finalResult;
+
+    expectTypeOf(result).toEqualTypeOf<string[]>();
+    expect(result).toEqual(['ts', 'js']);
   });
 });
 

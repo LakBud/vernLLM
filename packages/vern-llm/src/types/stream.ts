@@ -76,9 +76,16 @@ export type StreamJsonModeDisabledCallParams = StreamEnabledCallParams<unknown> 
  * `StreamEnabledCallParams` with `jsonMode: true` and no `schema`. Selects
  * the streaming `call()` overload whose `finalResult` resolves to a
  * `JsonValue`.
+ *
+ * `schema` is explicitly `never` here for the same reason as
+ * `JsonModeEnabledCallParams`: a schema whose result type is itself
+ * structurally assignable to `JsonValue` would otherwise still satisfy this
+ * overload's shape and incorrectly widen the result to `JsonValue` instead
+ * of the schema's real type.
  */
-export type StreamJsonModeEnabledCallParams = StreamEnabledCallParams<JsonValue> & {
+export type StreamJsonModeEnabledCallParams = Omit<StreamEnabledCallParams<JsonValue>, 'schema'> & {
   jsonMode: true;
+  schema?: never;
 };
 
 /**
