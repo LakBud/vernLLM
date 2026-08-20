@@ -8,6 +8,7 @@ import {
   fromOpenAICompatible,
 } from '../../src/adapters/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
+import { at } from '../helpers.js';
 
 describe('VernLLM + adapter integration: conversation history', () => {
   describe('OpenAI-compatible', () => {
@@ -704,7 +705,7 @@ describe('VernLLM + adapter integration: conversation history', () => {
           headers: expect.objectContaining({
             'Content-Type': 'application/json',
           }),
-          body: JSON.stringify(mapRequest.mock.calls[0][0]),
+          body: JSON.stringify(at(mapRequest.mock.calls, 0)[0]),
         }),
       );
     });
