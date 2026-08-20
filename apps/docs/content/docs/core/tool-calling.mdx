@@ -94,7 +94,7 @@ if (result.type === 'tool_calls') {
 
 ## A note on the call() overload
 
-TypeScript resolves `call()` to the tools aware overload when `tools` is visible as a required,
+TypeScript resolves `call()` to the tools-aware overload when `tools` is visible as a required,
 present key at the call site: an inline object literal with `tools: [...]`, or a variable typed as
 `CallParams<T> & { tools: ToolDefinition[] }`.
 
@@ -143,8 +143,8 @@ const params = defineCallParams({
 });
 
 const result = await llm.call(params);
-// result: unknown | CallWithToolsResult<unknown>, exactly as if params had
-// been passed inline.
+// result: unknown | CallWithToolsResult<unknown> (T defaults to unknown,
+// same as if params had been passed to call() inline)
 
 if (isToolCallResult(result)) {
   // handled safely
@@ -167,7 +167,8 @@ const result = await llm.call<string>(params);
 ```
 
 `defineCachedCallParams()` is the same idea for `cachedCall()`, preserving the whole
-`{ cacheKey, ttl, call }` object, `call.tools` included, in one reusable named variable:
+`{ cacheKey, ttl, call }` object, `call.tools` included, in one reusable named variable. `T`
+defaults to `unknown` unless pinned via `call<T>()` or a `schema`, same as `defineCallParams`:
 
 ```ts title="tool-calling-define-cached-call-params.ts"
 import { defineCachedCallParams } from 'vern-llm';
@@ -178,11 +179,13 @@ const params = defineCachedCallParams({
   call: {
     userContent: 'What is the weather?',
     tools: someCondition ? [weatherTool] : undefined,
+    jsonMode: true,
+    schema: { safeParse: (d: unknown) => ({ success: true as const, data: String(d) }) },
   },
 });
 
 const result = await llm.cachedCall(params);
-// result: unknown | CallWithToolsResult<unknown>
+// result: string | CallWithToolsResult<string>
 ```
 
 <Callout type="info">

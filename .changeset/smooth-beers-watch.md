@@ -45,9 +45,9 @@ const params = defineCallParams({
   tools: someCondition ? [weatherTool] : undefined,
 });
 
-const result = await llm.call(params);
-// result: unknown | CallWithToolsResult<unknown>, exactly as if `params`
-// had been passed to call() inline.
+const result = await llm.call<string>(params);
+// result: string | CallWithToolsResult<string> (defaults to unknown if T
+// isn't pinned via call<T>() or schema)
 ```
 
 They work by giving `P` (the whole params object) a single, plain generic parameter — no `const`
