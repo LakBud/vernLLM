@@ -152,6 +152,35 @@ describe('fromGemini().chat.completions.createStream', () => {
     ).rejects.toMatchObject({ type: 'invalid_params' });
   });
 
+  it('throws LLMError(invalid_params), not a native TypeError, when generateContentStream is present but not a function', async () => {
+    // A truthy but non-callable value is a structurally valid GeminiClient
+    // (the interface can't enforce "must be callable" at the type level),
+    // so this exercises the runtime `typeof === 'function'` guard rather
+    // than the plain truthiness check it replaced.
+    const client = {
+      generateContent: vi.fn(async () => ({})),
+      generateContentStream: 'not a function',
+    } as unknown as GeminiClient;
+    const adapted = fromGemini(client);
+
+    await expect(
+      collect(
+        adapted.chat.completions.createStream!(
+          {
+            model: 'gemini-2.5-flash',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'unsupported_capability',
+      issues: { capability: 'generateContentStream' },
+    });
+  });
+
   it("propagates .return() on the outer generator down to the underlying SDK stream's own .return()", async () => {
     const onReturn = vi.fn();
     const { client } = makeFakeStreamingGeminiClient(

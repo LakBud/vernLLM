@@ -34,5 +34,6 @@ under an `output` key (e.g. `content: '"sunny"'` sends `{ output: 'sunny' }` ins
 string `'sunny'`). Tool results that are already JSON objects are unaffected.
 
 `fromGemini` now throws `LLMError('invalid_params')` immediately if the client it's given, and its
-`.models` if present, has no `generateContent`, instead of deferring to a confusing runtime error
-on the first actual call.
+`.models` if present, has no `generateContent` (or `generateContentStream`, for `stream: true`
+calls) that's actually a function, instead of deferring to a confusing native `TypeError` on the
+first real call.

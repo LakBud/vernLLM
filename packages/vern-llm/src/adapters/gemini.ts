@@ -21,62 +21,32 @@ type GeminiPart =
   | { functionResponse: { name: string; response: Record<string, unknown> } };
 
 /**
- * Structural type matching the real `@google/genai` SDK, in either of the
- * two shapes it's commonly held in: the callable model methods directly
- * (what the real SDK exposes as `ai.models`), or the complete top-level
- * client (`ai` itself, via the optional `models` field below). Both work
- * with `fromGemini` directly, with no cast:
+ * Structural type matching the real `@google/genai` SDK, in either shape
+ * it's commonly held in: the callable model methods directly (`ai.models`),
+ * or the complete top-level client (`ai`, via the optional `models` field
+ * below). Both work with `fromGemini` directly, with no cast:
  *
  * ```ts
  * import { GoogleGenAI } from '@google/genai';
  * const ai = new GoogleGenAI({ apiKey: '...' });
- * const llm = new VernLLM({ client: fromGemini(ai.models), model: 'gemini-2.5-flash' });
- * // or, equivalently:
- * const llm2 = new VernLLM({ client: fromGemini(ai), model: 'gemini-2.5-flash' });
+ * const llm = new VernLLM({ client: fromGemini(ai), model: 'gemini-2.5-flash' });
  * ```
  *
- * `generateContent` is optional here (unlike the real SDK, where it's
- * always present) specifically so that a `{ models: ... }`-shaped value
- * (no top-level `generateContent` of its own) is still a structural
- * `GeminiClient`. `fromGemini` resolves `models` at runtime and throws if
- * the result has no `generateContent`, see its own doc comment.
+ * `generateContent` is optional so a `{ models: ... }`-shaped value is
+ * still a structural `GeminiClient`; `fromGemini` resolves `models` at
+ * runtime and throws if nothing callable results.
  *
- * Every field here is deliberately shaped to be *structurally* assignable
- * from the real SDK's generated types (`GenerateContentParameters`,
- * `GenerateContentResponse`, `GoogleGenAI`, etc.), without importing them,
- * so provider SDKs stay optional:
- * - `model` is required (not optional) on `generateContent`'s params,
- *   matching the real SDK's `GenerateContentParameters.model`. VernLLM's
- *   own request builder always sets it, so this costs nothing internally,
- *   and it's required for real-SDK assignability: the real SDK's `model`
- *   is non-optional, so a params type that allows omitting it isn't a
- *   structural subtype of the real SDK's parameter type.
- * - `functionCall.args` (request side, inside `GeminiPart`) and
- *   `functionResponse.response` are typed as `Record<string, unknown>`,
- *   matching the real SDK's `FunctionCall.args` and
- *   `FunctionResponse.response`, both `Record<string, unknown> | undefined`
- *   there rather than `unknown`.
- * - `toolConfig.functionCallingConfig.mode` is typed as `any`. The real
- *   SDK types this as its own `FunctionCallingConfigMode` string enum;
- *   TypeScript never treats a plain string-literal union as assignable to
- *   a string enum (even when the literal values match exactly), so no
- *   independently-declared union type can satisfy it structurally. `any`
- *   is the narrowest escape hatch available without importing the real
- *   enum; it doesn't weaken anything at runtime since VernLLM only ever
- *   writes one of `'AUTO' | 'ANY' | 'NONE'` here itself.
- * - The response side's `functionCall.name` is optional (`name?: string`),
- *   matching the real SDK's `FunctionCall.name?: string`, since the
- *   response type only needs to be a supertype of whatever the real SDK
- *   actually returns.
+ * Every field is shaped to be structurally assignable from the real SDK's
+ * generated types without importing them, so provider SDKs stay optional:
+ * `model` is required (the real SDK requires it), `functionCall.args` /
+ * `functionResponse.response` are `Record<string, unknown>` (matching the
+ * real SDK, not `unknown`), `toolConfig...mode` is `any` (TypeScript never
+ * treats a string-literal union as assignable to the real SDK's string
+ * enum), and response-side `functionCall.name` is optional (matching the
+ * real SDK).
  */
 export interface GeminiClient {
-  /**
-   * Present when this `GeminiClient` is actually the whole top-level SDK
-   * client (`ai`, not `ai.models`). `fromGemini` unwraps this at runtime;
-   * see its doc comment. Self-referencing rather than a separate type so
-   * one `GeminiClient` covers both shapes the real SDK is commonly held
-   * in, with nothing else to import or name.
-   */
+  /** Present when this is the whole top-level SDK client, not `ai.models`. `fromGemini` unwraps it at runtime. */
   models?: GeminiClient;
 
   generateContent?(params: {
@@ -406,28 +376,17 @@ function buildGeminiRequest(
  * `WireStreamChunk` is emitted once, after the stream completes, from
  * whichever chunk's `usageMetadata` was seen last.
  *
- * Accepts a `GeminiClient` in either of the two shapes it structurally
- * covers: the callable model methods directly (what the real SDK exposes
- * as `ai.models`), or the complete top-level client (`ai` itself, via its
- * `models` field), unwrapping `.models` internally when given the latter.
- * This means both of the following work, with no cast in either case:
- *
- * ```ts
- * fromGemini(ai.models); // existing callers keep working
- * fromGemini(ai);        // .models is Gemini-specific, and stays hidden in here
- * ```
- *
- * Resolution is a plain runtime check: if `client.models` is set, that's
- * used; otherwise `client` itself is used directly. Throws an
- * `LLMError('invalid_params')` up front if neither the client nor its
- * `.models` actually has a `generateContent` (which `GeminiClient` allows
- * structurally, since that's what makes the `{ models: ... }` shape valid
- * in the first place).
+ * Accepts a `GeminiClient` in either shape it structurally covers: the
+ * callable model methods directly (`ai.models`), or the complete
+ * top-level client (`ai`), unwrapping `.models` internally when present.
+ * Both work with no cast: `fromGemini(ai.models)` and `fromGemini(ai)`.
+ * Throws `LLMError('invalid_params')` up front if nothing callable
+ * results.
  */
 export function fromGemini(client: GeminiClient): LLMClient {
   const resolved = client.models ?? client;
 
-  if (!resolved.generateContent) {
+  if (typeof resolved.generateContent !== 'function') {
     throw new LLMError(
       'fromGemini requires a client with generateContent: pass ai.models, or the whole ai client (fromGemini(ai)).',
       'invalid_params',
@@ -435,8 +394,11 @@ export function fromGemini(client: GeminiClient): LLMClient {
     );
   }
 
-  const generateContent = resolved.generateContent;
-  const generateContentStream = resolved.generateContentStream;
+  const generateContent = resolved.generateContent.bind(resolved);
+  const generateContentStream =
+    typeof resolved.generateContentStream === 'function'
+      ? resolved.generateContentStream.bind(resolved)
+      : undefined;
 
   return {
     chat: {

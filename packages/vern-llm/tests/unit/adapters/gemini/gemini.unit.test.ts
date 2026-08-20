@@ -603,5 +603,37 @@ describe('fromGemini, accepting the full top-level client', () => {
     // first actual `.create()` call.
     expect(() => fromGemini({ models: {} })).toThrow(LLMError);
     expect(() => fromGemini({ models: {} })).toThrow(/requires a client with generateContent/);
+
+    try {
+      fromGemini({ models: {} });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toMatchObject({
+        type: 'invalid_params',
+        code: 'unsupported_capability',
+        issues: { capability: 'generateContent' },
+      });
+    }
+  });
+
+  it('throws LLMError(invalid_params), not a native TypeError, when generateContent is present but not a function', () => {
+    // A truthy but non-callable value is a structurally valid GeminiClient
+    // (the interface can't enforce "must be callable" at the type level),
+    // so this exercises the runtime `typeof === 'function'` guard rather
+    // than the plain truthiness check it replaced.
+    expect(() =>
+      fromGemini({ generateContent: 'not a function' } as unknown as GeminiClient),
+    ).toThrow(LLMError);
+
+    try {
+      fromGemini({ generateContent: 'not a function' } as unknown as GeminiClient);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toMatchObject({
+        type: 'invalid_params',
+        code: 'unsupported_capability',
+        issues: { capability: 'generateContent' },
+      });
+    }
   });
 });
