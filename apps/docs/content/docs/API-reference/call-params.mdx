@@ -18,6 +18,8 @@ const result = await llm.call({
 <Callout>
   `cachedCall` uses the same `call` shape, except `reserveUsage` and `refundUsage` belong at the
   `cachedCall` top level. Its top-level `signal` controls that caller's cancellation lifecycle.
+  `jsonMode`/`schema` selection works the same way for `cachedCall`'s return type as it does for
+  `call`.
 </Callout>
 
 ## Content
@@ -113,7 +115,8 @@ overrides.
 <Cards>
   <Card title="jsonMode">
     `boolean`, default `true` (`false` when `tools` is set). Parses the response as JSON when
-    enabled. `jsonSchema` forces it back to `true`.
+    enabled. `jsonSchema` forces it back to `true`. `jsonMode: true` returns `JsonValue`; `jsonMode:
+    false` returns `string`.
   </Card>
   <Card title="jsonSchema">
     `JsonSchemaSpec`, optional. Enables provider-native JSON Schema structured output and implies
@@ -177,7 +180,9 @@ having them silently ignored.
 `call<T>()` is generic over the parsed result:
 
 - With `schema`, `T` is inferred from the schema.
-- Without `schema`, `T` defaults to `unknown`.
+- With `jsonMode: true` and no `schema`, `T` defaults to `JsonValue`.
+- With `jsonMode: false`, `T` defaults to `string`.
+- Without any of these, `T` defaults to `unknown`.
 
 ```ts title="generic-type-parameter.ts"
 // result: { name: string; skills: string[] }
@@ -186,8 +191,15 @@ const result = await llm.call({
   schema: CandidateSchema,
 });
 
-// result: unknown
+// result: JsonValue
+const parsed = await llm.call({
+  userContent: 'Hello',
+  jsonMode: true,
+});
+
+// result: string
 const raw = await llm.call({
   userContent: 'Hello',
+  jsonMode: false,
 });
 ```

@@ -1,4 +1,4 @@
-import type { CachedCallInput, CallParams, ToolEnabledCallParams } from './call.js';
+import type { CachedCallInput, CallParams, JsonValue, ToolEnabledCallParams } from './call.js';
 import type { TokenUsage } from './usage.js';
 
 /** One incremental unit of a streaming response, as delivered to the caller. */
@@ -65,6 +65,40 @@ export interface StreamCallResult<R> {
 export type StreamEnabledCallParams<T> = CallParams<T> & { stream: true };
 
 /**
+ * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
+ * `call()` overload whose `finalResult` resolves to a plain `string`.
+ *
+ * `jsonSchema` is explicitly `never` here for the same reason as
+ * `JsonModeDisabledCallParams`: a truthy `jsonSchema` forces JSON parsing
+ * in `RequestBuilder.build()` regardless of `jsonMode`, so a call setting
+ * both `jsonMode: false` and `jsonSchema` would otherwise still satisfy
+ * this overload's shape and incorrectly promise a plain `string`.
+ */
+export type StreamJsonModeDisabledCallParams = Omit<
+  StreamEnabledCallParams<unknown>,
+  'jsonSchema'
+> & {
+  jsonMode: false;
+  jsonSchema?: never;
+};
+
+/**
+ * `StreamEnabledCallParams` with `jsonMode: true` and no `schema`. Selects
+ * the streaming `call()` overload whose `finalResult` resolves to a
+ * `JsonValue`.
+ *
+ * `schema` is explicitly `never` here for the same reason as
+ * `JsonModeEnabledCallParams`: a schema whose result type is itself
+ * structurally assignable to `JsonValue` would otherwise still satisfy this
+ * overload's shape and incorrectly widen the result to `JsonValue` instead
+ * of the schema's real type.
+ */
+export type StreamJsonModeEnabledCallParams = Omit<StreamEnabledCallParams<JsonValue>, 'schema'> & {
+  jsonMode: true;
+  schema?: never;
+};
+
+/**
  * The adapter-facing, pre-normalization shape a `createStream` client
  * implementation emits, analogous to how `WireMessage`/`WireToolCall`
  * already sit between `CallParams` and each provider's own wire format.
@@ -119,4 +153,22 @@ export type CachedStreamCallParams<T> = CachedCallInput & {
  */
 export type CachedStreamToolCallParams<T> = CachedCallInput & {
   call: Omit<StreamEnabledCallParams<T> & ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached, streaming LLM call with `jsonMode: false`.
+ * Selects the `cachedCall()` overload whose `finalResult` (on a miss) or
+ * cached value (on a hit) is a plain `string`.
+ */
+export type CachedStreamJsonModeDisabledCallParams = CachedCallInput & {
+  call: Omit<StreamJsonModeDisabledCallParams, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached, streaming LLM call with `jsonMode: true` and no
+ * `schema`. Selects the `cachedCall()` overload whose `finalResult` (on a
+ * miss) or cached value (on a hit) is a `JsonValue`.
+ */
+export type CachedStreamJsonModeEnabledCallParams = CachedCallInput & {
+  call: Omit<StreamJsonModeEnabledCallParams, 'reserveUsage' | 'refundUsage'>;
 };

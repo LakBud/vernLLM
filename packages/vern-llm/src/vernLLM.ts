@@ -17,13 +17,22 @@ import {
   type CachedStreamCallParams,
   type CachedStreamToolCallParams,
   type CachedToolCallParams,
+  type CachedJsonModeDisabledCallParams,
+  type CachedJsonModeEnabledCallParams,
   type CallParams,
   type CallWithToolsResult,
   type ContentResult,
   type FallbackAttempt,
   type FallbackOn,
   type FallbackTarget,
+  type JsonModeDisabledCallParams,
+  type JsonModeEnabledCallParams,
+  type JsonValue,
   type StreamCallResult,
+  type StreamJsonModeDisabledCallParams,
+  type StreamJsonModeEnabledCallParams,
+  type CachedStreamJsonModeDisabledCallParams,
+  type CachedStreamJsonModeEnabledCallParams,
   type TargetCircuitState,
   type CircuitTarget,
   type StreamEnabledCallParams,
@@ -305,11 +314,19 @@ export class VernLLM {
     params: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>,
   ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
 
+  async call(params: StreamJsonModeDisabledCallParams): Promise<StreamCallResult<string>>;
+
+  async call(params: StreamJsonModeEnabledCallParams): Promise<StreamCallResult<JsonValue>>;
+
   async call<T = unknown>(params: StreamEnabledCallParams<T>): Promise<StreamCallResult<T>>;
 
   async call<T = unknown>(params: ToolsDisabledCallParams<T>): Promise<ContentResult<T>>;
 
   async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
+
+  async call(params: JsonModeDisabledCallParams): Promise<string>;
+
+  async call(params: JsonModeEnabledCallParams): Promise<JsonValue>;
 
   async call<T = unknown>(params: CallParams<T>): Promise<T>;
 
@@ -443,9 +460,21 @@ export class VernLLM {
     params: CachedStreamToolCallParams<T>,
   ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
 
+  async cachedCall(
+    params: CachedStreamJsonModeDisabledCallParams,
+  ): Promise<StreamCallResult<string>>;
+
+  async cachedCall(
+    params: CachedStreamJsonModeEnabledCallParams,
+  ): Promise<StreamCallResult<JsonValue>>;
+
   async cachedCall<T>(params: CachedStreamCallParams<T>): Promise<StreamCallResult<T>>;
 
   async cachedCall<T>(params: CachedToolCallParams<T>): Promise<CallWithToolsResult<T>>;
+
+  async cachedCall(params: CachedJsonModeDisabledCallParams): Promise<string>;
+
+  async cachedCall(params: CachedJsonModeEnabledCallParams): Promise<JsonValue>;
 
   async cachedCall<T>(params: CachedCallParams<T>): Promise<T>;
 
@@ -454,7 +483,11 @@ export class VernLLM {
       | CachedCallParams<T>
       | CachedToolCallParams<T>
       | CachedStreamCallParams<T>
-      | CachedStreamToolCallParams<T>,
+      | CachedStreamToolCallParams<T>
+      | CachedJsonModeDisabledCallParams
+      | CachedJsonModeEnabledCallParams
+      | CachedStreamJsonModeDisabledCallParams
+      | CachedStreamJsonModeEnabledCallParams,
   ): Promise<T | CallWithToolsResult<T> | StreamCallResult<T | CallWithToolsResult<T>>> {
     const { call: callParams, ...cacheParams } = params;
 

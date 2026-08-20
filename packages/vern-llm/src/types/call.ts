@@ -4,6 +4,26 @@ import type { ToolCall, ToolChoice, ToolDefinition, ToolResult } from './tools.j
 import type { UsageHooks } from './usage.js';
 
 /**
+ * Any valid JSON value: a primitive, `null`, or a JSON array/object made
+ * of the same. This is what `call()` returns when `jsonMode: true`.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * Content for an `assistant` turn in `history`. Accepts a string or a
+ * parsed `JsonValue`, so a prior `jsonMode: true` response can be pushed
+ * straight back into history. Request construction stringifies non-string
+ * content before it's sent to the provider.
+ */
+export type AssistantContent = string | JsonValue;
+
+/**
  * A single prior turn in a multi-turn conversation, passed via `history`.
  *
  * Supports normal user/assistant messages and tool continuations: an assistant
@@ -18,7 +38,7 @@ export type ConversationTurn =
     }
   | {
       role: 'assistant';
-      content?: string;
+      content?: AssistantContent;
       toolCalls?: ToolCall[];
     }
   | {
@@ -177,6 +197,42 @@ export type ToolsDisabledCallParams<T> = CallParams<T> & {
   toolChoice: 'none';
 };
 
+/**
+ * `CallParams` with `jsonMode: false`. Selects the `call()` overload
+ * that returns a plain `string`.
+ *
+ * `jsonSchema` is explicitly typed `never` here, not just omitted:
+ * `RequestBuilder.build()` treats a truthy `jsonSchema` as forcing JSON
+ * parsing (`useJson = jsonModeEffective || Boolean(jsonSchema)`)
+ * regardless of `jsonMode`, so a call that sets both `jsonMode: false`
+ * and `jsonSchema` still gets its response parsed as JSON at runtime.
+ * Forcing `jsonSchema?: never` makes any such call fail this overload's
+ * structural check, so it falls through to the generic `CallParams<T>`
+ * overload instead of incorrectly promising a plain `string`.
+ */
+export type JsonModeDisabledCallParams = Omit<CallParams<unknown>, 'jsonSchema'> & {
+  jsonMode: false;
+  jsonSchema?: never;
+};
+
+/**
+ * `CallParams` with `jsonMode: true` and no `schema`. Selects the
+ * `call()` overload that returns a `JsonValue`.
+ *
+ * `schema` is explicitly typed `never` here, not just omitted: `CallParams<JsonValue>['schema']`
+ * would be `SchemaLike<JsonValue> | undefined`, and a schema whose inferred result type is
+ * itself structurally assignable to `JsonValue` (e.g. a schema for `string[]` or
+ * `Record<string, string>`) would still satisfy that shape, incorrectly selecting this
+ * overload over the schema-aware generic one and widening the result to `JsonValue`. Forcing
+ * `schema?: never` makes any call that sets `schema` fail this overload's structural check
+ * regardless of the schema's result type, so it always falls through to the generic
+ * `CallParams<T>` overload and infers `T` from the schema instead.
+ */
+export type JsonModeEnabledCallParams = Omit<CallParams<JsonValue>, 'schema'> & {
+  jsonMode: true;
+  schema?: never;
+};
+
 /** Shared cache-configuration fields, minus the internal `fn` primitive. */
 export interface CachedCallInput extends UsageHooks {
   cacheKey: string;
@@ -218,4 +274,20 @@ export type CachedCallParams<T> = CachedCallInput & {
  */
 export type CachedToolCallParams<T> = CachedCallInput & {
   call: Omit<ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached LLM call with `jsonMode: false`. Selects the
+ * `cachedCall()` overload that returns a plain `string`.
+ */
+export type CachedJsonModeDisabledCallParams = CachedCallInput & {
+  call: Omit<JsonModeDisabledCallParams, 'reserveUsage' | 'refundUsage'>;
+};
+
+/**
+ * Parameters for a cached LLM call with `jsonMode: true` and no `schema`.
+ * Selects the `cachedCall()` overload that returns a `JsonValue`.
+ */
+export type CachedJsonModeEnabledCallParams = CachedCallInput & {
+  call: Omit<JsonModeEnabledCallParams, 'reserveUsage' | 'refundUsage'>;
 };
