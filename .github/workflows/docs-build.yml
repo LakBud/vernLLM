@@ -1,0 +1,47 @@
+name: Docs Build
+
+on:
+  pull_request:
+    paths:
+      - 'apps/docs/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/docs-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/docs/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/docs-build.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint docs
+        run: pnpm --filter vern-llm-docs run lint
+
+      - name: Typecheck docs (fumadocs-mdx + next typegen + tsc)
+        run: pnpm --filter vern-llm-docs run types:check
+
+      - name: Build docs
+        run: pnpm --filter vern-llm-docs run build
