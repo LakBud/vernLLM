@@ -87,7 +87,7 @@ export interface AnthropicClient {
       usage?: {
         input_tokens?: number;
         output_tokens?: number;
-        output_tokens_details?: { thinking_tokens?: number };
+        output_tokens_details?: { thinking_tokens?: number } | null;
       };
     }>;
   };
@@ -176,7 +176,10 @@ type AnthropicStreamEvent =
   | { type: 'content_block_stop'; index: number }
   | {
       type: 'message_delta';
-      usage?: { output_tokens?: number; output_tokens_details?: { thinking_tokens?: number } };
+      usage?: {
+        output_tokens?: number;
+        output_tokens_details?: { thinking_tokens?: number } | null;
+      };
     }
   | { type: 'message_stop' }
   // Keep-alive event during long streams (e.g. extended thinking). Modeled
