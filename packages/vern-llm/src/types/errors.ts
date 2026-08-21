@@ -181,8 +181,12 @@ const MAX_ATTEMPTS_DEPTH = 20;
  * circular one after the snapshot was created, and `attempts` is a
  * public constructor option, so a caller can hand build a `RetryAttempt`
  * (or a whole `LLMErrorSnapshot`) with a circular `issues` and pass it
- * in directly, never touching `toSnapshot()` at all. Extra fields on an
- * attempt (e.g. `FallbackAttempt`'s `provider`/`model`) are preserved.
+ * in directly, never touching `toSnapshot()` at all. The same applies to
+ * `request`: its `body` is re-checked through `safeBody`, and its
+ * `headers` are re-stripped through `stripAuthHeaders`, so a hand built
+ * `RetryAttempt.request` can't smuggle an auth header past `toSnapshot()`
+ * either. Extra fields on an attempt (e.g. `FallbackAttempt`'s
+ * `provider`/`model`) are preserved.
  */
 function safeAttempts(attempts: RetryAttempt[] | undefined, depth = 0): RetryAttempt[] | undefined {
   if (attempts === undefined) return undefined;
@@ -195,7 +199,11 @@ function safeAttempts(attempts: RetryAttempt[] | undefined, depth = 0): RetryAtt
       issues: safeIssues(attempt.error.issues),
       attempts: safeAttempts(attempt.error.attempts, depth + 1),
     },
-    request: attempt.request && { ...attempt.request, body: safeBody(attempt.request.body) },
+    request: attempt.request && {
+      ...attempt.request,
+      body: safeBody(attempt.request.body),
+      headers: stripAuthHeaders(attempt.request.headers),
+    },
   }));
 }
 

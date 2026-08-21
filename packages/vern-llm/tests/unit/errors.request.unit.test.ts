@@ -52,6 +52,34 @@ describe('toRequestSnapshot', () => {
 });
 
 describe('LLMError request snapshots on attempts', () => {
+  it('safeAttempts strips auth headers on a hand built nested attempt request', () => {
+    // Bypasses toRequestSnapshot entirely, the same way the existing
+    // hand built circular-issues test bypasses toSnapshot(): attempts is a
+    // public constructor option, so a caller can construct a RetryAttempt
+    // directly with unstripped headers.
+    const err = new LLMError('boom', 'api', {
+      attempts: [
+        {
+          index: 0,
+          error: new LLMError('down', 'network').toSnapshot(),
+          request: {
+            provider: 'openai',
+            model: 'gpt-4o',
+            body: { ok: true },
+            headers: { Authorization: 'Bearer secret', 'content-type': 'application/json' },
+            startedAt: Date.now(),
+          },
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(JSON.stringify(err));
+    expect(parsed.attempts[0].request.headers).toEqual({ 'content-type': 'application/json' });
+    expect(err.toSnapshot().attempts?.[0]?.request?.headers).toEqual({
+      'content-type': 'application/json',
+    });
+  });
+
   it('safeAttempts maps request.body through safeBody, recursively', () => {
     const circularBody: Record<string, unknown> = { messages: [] };
     circularBody.self = circularBody;
