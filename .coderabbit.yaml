@@ -7,18 +7,6 @@ reviews:
     enabled: false
   high_level_summary: true
 
-  tools:
-    trivy:
-      enabled: false
-    gitleaks:
-      enabled: false
-    checkov:
-      enabled: false
-    skillspector:
-      enabled: false
-    osvScanner:
-      enabled: false
-
   path_instructions:
     - path: '**/*'
       instructions: |

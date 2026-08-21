@@ -80,6 +80,21 @@ describe('LLMError request snapshots on attempts', () => {
     });
   });
 
+  it('clones the body, so mutating the original object after the snapshot is taken does not change it', () => {
+    const original: { messages: unknown[]; config?: { extra?: string } } = { messages: ['hi'] };
+
+    const snapshot = toRequestSnapshot('gemini', 'gemini-2.5-flash', original);
+
+    // Same kind of mutation `fromGemini` performs on the live request
+    // object during dispatch (`request.config = {...}`), simulated here
+    // after the snapshot was already taken.
+    original.config = { extra: 'added after dispatch' };
+    (original.messages as unknown[]).push('mutated');
+
+    expect(snapshot.body).toEqual({ messages: ['hi'] });
+    expect((snapshot.body as { config?: unknown }).config).toBeUndefined();
+  });
+
   it('safeAttempts maps request.body through safeBody, recursively', () => {
     const circularBody: Record<string, unknown> = { messages: [] };
     circularBody.self = circularBody;

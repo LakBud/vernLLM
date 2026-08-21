@@ -133,18 +133,24 @@ function safeIssues(issues: unknown): unknown {
 }
 
 /**
- * Returns `body` unchanged when it can survive `JSON.stringify`, same
- * contract as `safeIssues`. A request body built from adapter-transformed
- * messages is normally always plain data, but tool call arguments or a
- * caller supplied `cause`-adjacent value could in principle carry a
- * circular reference, so this guards the same way `safeIssues` does
- * rather than assuming it can't happen.
+ * Returns a JSON safe, independent copy of `body`, or a marker string if
+ * `body` can't survive `JSON.stringify` (e.g. a circular reference). A
+ * request body built from adapter-transformed messages is normally
+ * always plain data, but tool call arguments or a caller supplied
+ * `cause`-adjacent value could in principle carry a circular reference,
+ * so this guards the same way `safeIssues` does rather than assuming it
+ * can't happen. Unlike `safeIssues`, this clones rather than returning
+ * the same reference: the object backing a request body can still be
+ * mutated by adapter code between when a request is dispatched and when
+ * an attempt is later recorded as failed (e.g. `fromGemini` sets
+ * `request.config` in place), so returning the same reference here could
+ * make a stored snapshot silently reflect a later, different state than
+ * what was actually sent.
  */
 function safeBody(body: unknown): unknown {
   if (body === undefined) return undefined;
   try {
-    JSON.stringify(body);
-    return body;
+    return JSON.parse(JSON.stringify(body)) as unknown;
   } catch {
     return '[Unserializable: request body contained a circular reference]';
   }

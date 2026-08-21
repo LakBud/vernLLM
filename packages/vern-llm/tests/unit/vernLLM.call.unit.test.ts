@@ -521,6 +521,35 @@ describe('VernLLM.call, retry & backoff', () => {
     expect(entry?.request?.startedAt).toBeGreaterThan(0);
   });
 
+  it('is not affected by the client mutating the dispatched request object during the call, e.g. as fromGemini does', async () => {
+    // The mock's script function receives the exact same `params` object
+    // CallExecutor dispatched, the same reference a real LLMClient
+    // implementation (like fromGemini, which does `request.config = {...}`
+    // in place) would receive and could mutate. Mutating it here, then
+    // rejecting, reproduces that scenario without needing a real adapter.
+    const first = (params: Record<string, unknown>) => {
+      (params as { mutated?: boolean }).mutated = true;
+      (params.messages as unknown[]).push({ role: 'user', content: 'sneaked in' });
+      return Promise.reject(new LLMError('server hiccup', 'api', { status: 500 }));
+    };
+    const final = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, final]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    const body = thrown.attempts?.[0]?.request?.body as { mutated?: boolean; messages: unknown[] };
+    expect(body.mutated).toBeUndefined();
+    expect(body.messages).toEqual([
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'u' },
+    ]);
+  });
+
   it('never populates request when attempts itself never gets populated (no retry configured)', async () => {
     const { client } = createMockClient([new FakeApiError('unauthorized', 401)]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
