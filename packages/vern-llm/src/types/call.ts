@@ -110,6 +110,18 @@ export interface CallParams<T = unknown> extends UsageHooks {
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 
   /**
+   * Token budget for internal reasoning, for models with a native numeric
+   * budget (Anthropic's `budget_tokens`, Gemini's `thinkingBudget`). On a
+   * provider that only understands `reasoningEffort` tiers (OpenAI-
+   * compatible), this is converted to the nearest tier instead of sent as
+   * a raw number. When both `budgetTokens` and `reasoningEffort` are set,
+   * each adapter prefers whichever field it natively understands and
+   * ignores the other. See the reasoning budget docs for the conversion
+   * table used in each direction.
+   */
+  budgetTokens?: number;
+
+  /**
    * Provider-native JSON Schema output constraint. Implies jsonMode: true.
    */
   jsonSchema?: JsonSchemaSpec;

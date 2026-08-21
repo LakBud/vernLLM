@@ -30,6 +30,8 @@ export interface CallExecutorOptions {
   baseDelayMs: number;
   defaultMaxTokens: number;
   defaultTemperature: number | null;
+  defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  defaultBudgetTokens?: number;
   nonRetryableStatus: number[];
   parseJson?: (content: string) => unknown;
   logger: Logger;
@@ -91,6 +93,8 @@ export class CallExecutor {
       model,
       defaultMaxTokens: options.defaultMaxTokens,
       defaultTemperature: options.defaultTemperature,
+      defaultReasoningEffort: options.defaultReasoningEffort,
+      defaultBudgetTokens: options.defaultBudgetTokens,
       supportsJsonObjectMode: client.supportsJsonObjectMode ?? true,
     });
   }
@@ -694,10 +698,13 @@ export class CallExecutor {
   ): TokenUsage | undefined {
     if (!response.usage) return undefined;
 
+    const reasoningTokens = response.usage.completion_tokens_details?.reasoning_tokens;
+
     return {
       promptTokens: response.usage.prompt_tokens ?? 0,
       completionTokens: response.usage.completion_tokens ?? 0,
       totalTokens: response.usage.total_tokens ?? 0,
+      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
       requestId,
       model,
       provider: this.providerName,

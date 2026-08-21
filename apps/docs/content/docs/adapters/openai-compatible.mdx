@@ -119,6 +119,11 @@ const llm = new VernLLM({
 });
 ```
 
+`fromOpenAICompatible`'s second argument also accepts `reasoningEffortTokens`, an override for the
+token counts `budgetTokens` buckets into when `reasoningEffort` isn't set directly. See the
+[Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the full table and
+how it works across every adapter.
+
 See [Streaming](/docs/core/streaming) for the full `stream: true` contract.
 
 ## Multimodal input

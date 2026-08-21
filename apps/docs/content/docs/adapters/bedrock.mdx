@@ -212,6 +212,11 @@ legacy path), which takes a parsed object and does have `strict`.
 
 </Callout>
 
+`fromBedrock`'s second argument also accepts `reasoningEffortTokens`, an override for the token
+counts `reasoningEffort` tiers map onto for Claude models on Bedrock. See the
+[Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the full table and
+how it works across every adapter.
+
 ## Streaming
 
 `fromBedrock` implements `createStream` on top of `ConverseStreamCommand`. `contentBlockDelta`

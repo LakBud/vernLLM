@@ -79,6 +79,13 @@ export interface LLMClient {
               };
           /** OpenAI reasoning-model param (o-series, gpt-5), ignored by providers that don't support it */
           reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
+          /**
+           * Numeric reasoning token budget, for providers with a native
+           * budget field (Anthropic, Gemini). Ignored by clients that only
+           * understand `reasoning_effort` tiers, use that field instead for
+           * those.
+           */
+          budget_tokens?: number;
           /** Tools the model may call, OpenAI's `function`-wrapped shape. */
           tools?: Array<{
             type: 'function';
@@ -105,6 +112,7 @@ export interface LLMClient {
           prompt_tokens?: number;
           completion_tokens?: number;
           total_tokens?: number;
+          completion_tokens_details?: { reasoning_tokens?: number };
         };
       }>;
 

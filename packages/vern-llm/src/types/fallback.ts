@@ -30,6 +30,8 @@ export interface FallbackTarget {
   baseDelayMs?: number;
   defaultMaxTokens?: number;
   defaultTemperature?: number | null;
+  defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  defaultBudgetTokens?: number;
   nonRetryableStatus?: number[];
   /** This target's own circuit breaker, independent of every other target's. Not inherited from the parent's `circuitBreaker`. */
   circuitBreaker?: boolean | CircuitBreakerOptions;

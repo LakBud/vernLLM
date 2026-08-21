@@ -22,10 +22,7 @@ type CreateResult = Awaited<ReturnType<LLMClient['chat']['completions']['create'
 type CreateParams = Parameters<LLMClient['chat']['completions']['create']>[0];
 
 /** Builds a successful chat-completion response with the given JSON-serializable body. */
-export function jsonResponse(
-  body: unknown,
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number },
-): CreateResult {
+export function jsonResponse(body: unknown, usage?: CreateResult['usage']): CreateResult {
   return {
     choices: [{ message: { content: JSON.stringify(body) } }],
     usage,

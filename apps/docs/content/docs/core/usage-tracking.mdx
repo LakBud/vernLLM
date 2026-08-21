@@ -20,6 +20,7 @@ interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  reasoningTokens?: number;
   requestId: string;
   model: string;
   provider?: string;
@@ -36,6 +37,10 @@ interface TokenUsage {
 - **`provider`** is the configured `VernLLMOptions.name` instance label, default `'primary'`,
   assigned by VernLLM to usage records. It is a label for the instance that produced the usage
   data, not a signal of request routing or provider selection.
+- **`reasoningTokens`** is a subset of `completionTokens`, never added on top of it. Present when
+  the provider reports a separate figure for internal reasoning. See the `budgetTokens` row in the
+  [Call Params reference](/docs/API-reference/call-params) for how to set a limit and per provider
+  notes on when this field is populated.
 
 The same instance label is included in usage callbacks for both successful and failed responses:
 
