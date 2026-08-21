@@ -10,7 +10,11 @@ import {
   supportsNativeStructuredOutput,
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
-import { effortToBudgetTokens } from './internal/reasoningBudget.utils.js';
+import {
+  effortToBudgetTokens,
+  resolveEffortTokenTable,
+  type EffortTokenTable,
+} from './internal/reasoningBudget.utils.js';
 
 /**
  * Default heuristic for whether a Bedrock model id is a Claude model,
@@ -259,6 +263,16 @@ export interface BedrockAdapterOptions {
    * added.
    */
   nativeStructuredOutputModels?: ModelCapabilityOverride;
+
+  /**
+   * Overrides the token count `reasoningEffort` tiers map onto when the
+   * caller sets `reasoningEffort` but not `budgetTokens` (Converse has no
+   * tier string of its own, see `adapters/internal/reasoningBudget.utils.ts`).
+   * Only the tiers listed are changed; any omitted tier keeps the
+   * built-in default. Has no effect when `budgetTokens` is set directly,
+   * or when the target model isn't a Claude model.
+   */
+  reasoningEffortTokens?: Partial<EffortTokenTable>;
 }
 
 type BedrockRequest = Parameters<BedrockConverseClient['converse']>[0];
@@ -309,6 +323,7 @@ function buildBedrockRequest(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
   toolUseSupportedModels: BedrockAdapterOptions['toolUseSupportedModels'],
   nativeStructuredOutputModels: BedrockAdapterOptions['nativeStructuredOutputModels'],
+  effortTokenTable?: EffortTokenTable,
 ): { request: BedrockRequest; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -433,7 +448,9 @@ function buildBedrockRequest(
   // budget first, same table the Anthropic and Gemini adapters use.
   const budgetTokens =
     params.budget_tokens ??
-    (params.reasoning_effort ? effortToBudgetTokens(params.reasoning_effort) : undefined);
+    (params.reasoning_effort
+      ? effortToBudgetTokens(params.reasoning_effort, effortTokenTable)
+      : undefined);
 
   const additionalModelRequestFields =
     budgetTokens !== undefined && isClaudeModel(params.model)
@@ -771,6 +788,7 @@ export function fromBedrock(
 
   const toolUseSupportedModels = options?.toolUseSupportedModels;
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
+  const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
 
   return {
     // json_object is not supported: see buildBedrockRequest's throw above,
@@ -783,6 +801,7 @@ export function fromBedrock(
             params,
             toolUseSupportedModels,
             nativeStructuredOutputModels,
+            effortTokenTable,
           );
 
           const response = await client.converse(request, requestOptions);
@@ -862,6 +881,7 @@ export function fromBedrock(
             params,
             toolUseSupportedModels,
             nativeStructuredOutputModels,
+            effortTokenTable,
           );
 
           const { stream } = await client.converseStream(request, requestOptions);

@@ -35,8 +35,11 @@ const llm = new VernLLM({
 <Callout>
   `jsonSchema` uses Gemini's native `responseSchema` + `responseMimeType: 'application/json'`.
   Gemini supports only its own JSON Schema subset rather than the full JSON Schema specification.
-  Use the client-side schema option when validation guarantees are required. `reasoning_effort` is
-  dropped (Gemini's thinking models use a token budget instead).
+  Use the client-side schema option when validation guarantees are required. `budgetTokens` maps
+  directly onto Gemini's native `thinkingConfig.thinkingBudget`; `reasoningEffort` alone is
+  converted into a token budget, since Gemini has no tier string of its own. See the [Call Params
+  reference](/docs/API-reference/call-params#reasoning-budget) for the conversion table, and
+  `fromGemini`'s second argument for `reasoningEffortTokens` to override it.
 </Callout>
 
 ## Tool calling

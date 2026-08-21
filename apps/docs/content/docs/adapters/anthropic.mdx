@@ -89,6 +89,11 @@ present. On a model not covered by `nativeStructuredOutputModels`, combining `to
   particular request at all.
 </Callout>
 
+`fromAnthropic`'s second argument also accepts `reasoningEffortTokens`, an override for the token
+counts `reasoningEffort` tiers map onto when `budgetTokens` isn't set directly. See the
+[Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the full table and
+how it works across every adapter.
+
 ## Streaming
 
 `fromAnthropic` implements `createStream` on top of the Messages API's own streaming mode. Anthropic's

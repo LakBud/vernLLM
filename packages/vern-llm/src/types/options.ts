@@ -40,6 +40,20 @@ export interface VernLLMOptions {
    */
   defaultTemperature?: number | null;
   /**
+   * Default reasoning effort for calls that don't override it. Not sent
+   * when omitted, same as leaving `reasoningEffort` unset on a call. See
+   * `budgetTokens`/`reasoningEffort` on `CallParams` for how the two
+   * relate and how each adapter converts between them.
+   */
+  defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  /**
+   * Default reasoning token budget for calls that don't override it. Not
+   * sent when omitted. If both this and `defaultReasoningEffort` are set,
+   * each adapter still prefers whichever field it natively understands,
+   * same as at the per-call level.
+   */
+  defaultBudgetTokens?: number;
+  /**
    * Enables debug logging of raw model output (logs up to 800 chars of each
    * response) and provider errors. Off by default. Only controls the
    * default `ConsoleLogger`: when a custom `logger` is supplied instead,

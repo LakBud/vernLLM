@@ -22,6 +22,8 @@ export interface RequestBuilderOptions {
   model: string;
   defaultMaxTokens: number;
   defaultTemperature: number | null;
+  defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  defaultBudgetTokens?: number;
   /**
    * Whether the target client honors `response_format: { type: 'json_object' }`
    * as a real constraint (see `LLMClient.supportsJsonObjectMode`'s docs).
@@ -48,12 +50,16 @@ export class RequestBuilder {
   private readonly model: string;
   private readonly defaultMaxTokens: number;
   private readonly defaultTemperature: number | null;
+  private readonly defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  private readonly defaultBudgetTokens?: number;
   private readonly supportsJsonObjectMode: boolean;
 
   constructor(options: RequestBuilderOptions) {
     this.model = options.model;
     this.defaultMaxTokens = options.defaultMaxTokens;
     this.defaultTemperature = options.defaultTemperature;
+    this.defaultReasoningEffort = options.defaultReasoningEffort;
+    this.defaultBudgetTokens = options.defaultBudgetTokens;
     this.supportsJsonObjectMode = options.supportsJsonObjectMode;
   }
 
@@ -65,8 +71,6 @@ export class RequestBuilder {
       history = [],
       maxTokens = this.defaultMaxTokens,
       model = this.model,
-      reasoningEffort,
-      budgetTokens,
       jsonSchema,
       tools,
       toolChoice,
@@ -74,6 +78,10 @@ export class RequestBuilder {
 
     const temperature =
       params.temperature === undefined ? this.defaultTemperature : params.temperature;
+    const reasoningEffort =
+      params.reasoningEffort === undefined ? this.defaultReasoningEffort : params.reasoningEffort;
+    const budgetTokens =
+      params.budgetTokens === undefined ? this.defaultBudgetTokens : params.budgetTokens;
 
     if (tools && tools.length === 0) {
       throw new LLMError(

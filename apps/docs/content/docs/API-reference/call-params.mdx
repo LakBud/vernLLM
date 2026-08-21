@@ -125,6 +125,21 @@ guarantee. Set `budgetTokens` directly for a precise number on a specific model.
 On Gemini, `0` disables thinking and `-1` requests automatic budgeting. Both are passed through
 unchanged rather than run through the conversion table above.
 
+The conversion table itself is overridable per adapter instance, not just per call. Pass
+`reasoningEffortTokens` as part of the second argument to `fromAnthropic`, `fromGemini`,
+`fromOpenAICompatible`, or `fromBedrock`:
+
+```ts title="reasoning-effort-tokens-override.ts"
+const client = fromAnthropic(anthropic, {
+  reasoningEffortTokens: { high: 64000 }, // only `high` changes, other tiers keep the default
+});
+```
+
+Only the tiers you list are changed, any tier left out keeps its built-in value. This affects every
+call through that adapter instance, in whichever conversion direction that adapter actually needs
+(Anthropic and Gemini convert `reasoningEffort` into a budget; OpenAI compatible clients convert
+`budgetTokens` into a tier; Bedrock converts `reasoningEffort` into a budget for Claude models).
+
 See [Per-call Overrides](/docs/guides/per-call-overrides) for model and generation
 overrides.
 

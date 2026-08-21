@@ -1,5 +1,9 @@
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
-import { budgetTokensToEffort } from './internal/reasoningBudget.utils.js';
+import {
+  budgetTokensToEffort,
+  resolveEffortTokenTable,
+  type EffortTokenTable,
+} from './internal/reasoningBudget.utils.js';
 
 import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/index.js';
 
@@ -13,14 +17,14 @@ import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/index.js
  */
 function applyReasoningBudget<
   P extends { reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high'; budget_tokens?: number },
->(params: P): P {
+>(params: P, effortTokenTable?: EffortTokenTable): P {
   if (params.budget_tokens === undefined) return params;
 
   const { budget_tokens, ...rest } = params;
 
   return rest.reasoning_effort !== undefined
     ? (rest as P)
-    : ({ ...rest, reasoning_effort: budgetTokensToEffort(budget_tokens) } as P);
+    : ({ ...rest, reasoning_effort: budgetTokensToEffort(budget_tokens, effortTokenTable) } as P);
 }
 
 /** OpenAI's native per-part content shape for a user message. */
@@ -168,6 +172,15 @@ export interface OpenAICompatibleAdapterOptions {
    * with such a provider won't get one.
    */
   supportsStreamUsage?: boolean;
+  /**
+   * Overrides the token count `budgetTokens` buckets into when the caller
+   * sets `budgetTokens` but not `reasoningEffort` (OpenAI-compatible
+   * clients have no numeric budget field of their own, see
+   * `adapters/internal/reasoningBudget.utils.ts`). Only the tiers listed
+   * are changed; any omitted tier keeps the built-in default. Has no
+   * effect when `reasoningEffort` is set directly.
+   */
+  reasoningEffortTokens?: Partial<EffortTokenTable>;
 }
 
 export function fromOpenAICompatible(
@@ -176,6 +189,7 @@ export function fromOpenAICompatible(
 ): LLMClient {
   const raw = client as LLMClient;
   const { supportsStreamUsage = true } = options;
+  const effortTokenTable = resolveEffortTokenTable(options.reasoningEffortTokens);
 
   // The underlying client's `create`, called with `stream: true`, returns
   // an AsyncIterable of `OpenAIStreamChunk` rather than
@@ -195,7 +209,7 @@ export function fromOpenAICompatible(
           const messages = toOpenAIMessages(params);
 
           return raw.chat.completions.create(
-            applyReasoningBudget({ ...params, messages }) as Parameters<
+            applyReasoningBudget({ ...params, messages }, effortTokenTable) as Parameters<
               LLMClient['chat']['completions']['create']
             >[0],
             options,
@@ -206,12 +220,15 @@ export function fromOpenAICompatible(
           const messages = toOpenAIMessages(params);
 
           const stream = (await rawCreate(
-            applyReasoningBudget({
-              ...params,
-              messages,
-              stream: true,
-              ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
-            }),
+            applyReasoningBudget(
+              {
+                ...params,
+                messages,
+                stream: true,
+                ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+              },
+              effortTokenTable,
+            ),
             options,
           )) as AsyncIterable<OpenAIStreamChunk>;
 

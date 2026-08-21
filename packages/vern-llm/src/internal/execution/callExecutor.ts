@@ -30,6 +30,8 @@ export interface CallExecutorOptions {
   baseDelayMs: number;
   defaultMaxTokens: number;
   defaultTemperature: number | null;
+  defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  defaultBudgetTokens?: number;
   nonRetryableStatus: number[];
   parseJson?: (content: string) => unknown;
   logger: Logger;
@@ -91,6 +93,8 @@ export class CallExecutor {
       model,
       defaultMaxTokens: options.defaultMaxTokens,
       defaultTemperature: options.defaultTemperature,
+      defaultReasoningEffort: options.defaultReasoningEffort,
+      defaultBudgetTokens: options.defaultBudgetTokens,
       supportsJsonObjectMode: client.supportsJsonObjectMode ?? true,
     });
   }

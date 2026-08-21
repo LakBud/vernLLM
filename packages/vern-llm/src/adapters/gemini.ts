@@ -6,7 +6,11 @@ import {
   type WireToolCall,
 } from '../types/index.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
-import { effortToBudgetTokens } from './internal/reasoningBudget.utils.js';
+import {
+  effortToBudgetTokens,
+  resolveEffortTokenTable,
+  type EffortTokenTable,
+} from './internal/reasoningBudget.utils.js';
 
 /**
  * Gemini's native per-part content shape for a `contents` entry.
@@ -305,6 +309,7 @@ type GeminiConfig = NonNullable<GeminiRequest['config']>;
  */
 function buildGeminiRequest(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
+  effortTokenTable?: EffortTokenTable,
 ): GeminiRequest {
   const systemMessage = params.messages.find((m) => m.role === 'system');
   // Keep user, assistant, and tool turns, in order.
@@ -356,7 +361,9 @@ function buildGeminiRequest(
   // budget, since Gemini has no tier string of its own.
   const thinkingBudget =
     params.budget_tokens ??
-    (params.reasoning_effort ? effortToBudgetTokens(params.reasoning_effort) : undefined);
+    (params.reasoning_effort
+      ? effortToBudgetTokens(params.reasoning_effort, effortTokenTable)
+      : undefined);
 
   if (thinkingBudget !== undefined) {
     config.thinkingConfig = { thinkingBudget };
@@ -409,7 +416,19 @@ function buildGeminiRequest(
  * Throws `LLMError('invalid_params')` up front if nothing callable
  * results.
  */
-export function fromGemini(client: GeminiClient): LLMClient {
+export interface GeminiAdapterOptions {
+  /**
+   * Overrides the token count `reasoningEffort` tiers map onto when the
+   * caller sets `reasoningEffort` but not `budgetTokens` (Gemini has no
+   * tier string of its own, see `adapters/internal/reasoningBudget.utils.ts`).
+   * Only the tiers listed are changed; any omitted tier keeps the
+   * built-in default. Has no effect when `budgetTokens` is set directly.
+   */
+  reasoningEffortTokens?: Partial<EffortTokenTable>;
+}
+
+export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions): LLMClient {
+  const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
   const resolved = client.models ?? client;
 
   if (typeof resolved.generateContent !== 'function') {
@@ -430,7 +449,7 @@ export function fromGemini(client: GeminiClient): LLMClient {
     chat: {
       completions: {
         async create(params, options) {
-          const request = buildGeminiRequest(params);
+          const request = buildGeminiRequest(params, effortTokenTable);
           request.config = { ...request.config, abortSignal: options.signal };
 
           const response = await generateContent(request);
@@ -493,7 +512,7 @@ export function fromGemini(client: GeminiClient): LLMClient {
             );
           }
 
-          const request = buildGeminiRequest(params);
+          const request = buildGeminiRequest(params, effortTokenTable);
           request.config = { ...request.config, abortSignal: options.signal };
 
           const stream = await generateContentStream(request);

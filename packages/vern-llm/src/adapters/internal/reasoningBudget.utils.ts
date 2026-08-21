@@ -8,29 +8,55 @@
  * The numbers here are a guess, not a provider guarantee, callers who
  * need a precise budget on a specific model should set `budgetTokens`
  * directly rather than relying on this table's `reasoningEffort` mapping.
+ *
+ * The table itself is overridable per adapter instance, via
+ * `reasoningEffortTokens` on each `from*` adapter's options (see
+ * `AnthropicAdapterOptions`, `GeminiAdapterOptions`,
+ * `OpenAICompatibleAdapterOptions`, `BedrockAdapterOptions`), for callers
+ * who want `reasoningEffort` tiers to map onto different token counts
+ * than the defaults below, e.g. a model whose useful reasoning range
+ * doesn't match these numbers.
  */
 
-const EFFORT_TO_BUDGET_TOKENS: Record<'minimal' | 'low' | 'medium' | 'high', number> = {
+export type EffortTokenTable = Record<'minimal' | 'low' | 'medium' | 'high', number>;
+
+export const DEFAULT_EFFORT_TOKENS: EffortTokenTable = {
   minimal: 1024,
   low: 4096,
   medium: 16000,
   high: 32000,
 };
 
+/**
+ * Merges a caller-supplied partial override over `DEFAULT_EFFORT_TOKENS`.
+ * Called once per adapter instance (not per request), so a per-instance
+ * override only needs to specify the tiers it actually wants to change.
+ */
+export function resolveEffortTokenTable(override?: Partial<EffortTokenTable>): EffortTokenTable {
+  return override ? { ...DEFAULT_EFFORT_TOKENS, ...override } : DEFAULT_EFFORT_TOKENS;
+}
+
 /** Converts a `reasoningEffort` tier into the nearest `budgetTokens` value. */
-export function effortToBudgetTokens(effort: 'minimal' | 'low' | 'medium' | 'high'): number {
-  return EFFORT_TO_BUDGET_TOKENS[effort];
+export function effortToBudgetTokens(
+  effort: 'minimal' | 'low' | 'medium' | 'high',
+  table: EffortTokenTable = DEFAULT_EFFORT_TOKENS,
+): number {
+  return table[effort];
 }
 
 /**
  * Converts a raw `budgetTokens` value into the nearest `reasoningEffort`
  * tier, for providers that only understand tiers. Buckets by the same
- * thresholds `effortToBudgetTokens` produces, so the two functions agree
- * with each other at the boundary values.
+ * `table` `effortToBudgetTokens` produces its values from, so the two
+ * functions agree with each other at the boundary values, as long as the
+ * same (possibly overridden) table is passed to both.
  */
-export function budgetTokensToEffort(budgetTokens: number): 'minimal' | 'low' | 'medium' | 'high' {
-  if (budgetTokens <= EFFORT_TO_BUDGET_TOKENS.minimal) return 'minimal';
-  if (budgetTokens <= EFFORT_TO_BUDGET_TOKENS.low) return 'low';
-  if (budgetTokens <= EFFORT_TO_BUDGET_TOKENS.medium) return 'medium';
+export function budgetTokensToEffort(
+  budgetTokens: number,
+  table: EffortTokenTable = DEFAULT_EFFORT_TOKENS,
+): 'minimal' | 'low' | 'medium' | 'high' {
+  if (budgetTokens <= table.minimal) return 'minimal';
+  if (budgetTokens <= table.low) return 'low';
+  if (budgetTokens <= table.medium) return 'medium';
   return 'high';
 }

@@ -106,6 +106,8 @@ export class VernLLM {
     // (possibly-undefined) option.
     const primaryDefaultTemperature =
       options.defaultTemperature === undefined ? 0.2 : options.defaultTemperature;
+    const primaryDefaultReasoningEffort = options.defaultReasoningEffort;
+    const primaryDefaultBudgetTokens = options.defaultBudgetTokens;
 
     // The primary, shaped like a `FallbackTarget` so it walks the same
     // build loop as every declared fallback target below. Its own
@@ -123,6 +125,8 @@ export class VernLLM {
       baseDelayMs: options.baseDelayMs,
       defaultMaxTokens: options.defaultMaxTokens,
       defaultTemperature: primaryDefaultTemperature,
+      defaultReasoningEffort: primaryDefaultReasoningEffort,
+      defaultBudgetTokens: primaryDefaultBudgetTokens,
       nonRetryableStatus: options.nonRetryableStatus,
       circuitBreaker: options.circuitBreaker,
       rateLimit: options.rateLimit,
@@ -161,6 +165,14 @@ export class VernLLM {
           target.defaultTemperature === undefined
             ? primaryDefaultTemperature
             : target.defaultTemperature,
+        defaultReasoningEffort:
+          target.defaultReasoningEffort === undefined
+            ? primaryDefaultReasoningEffort
+            : target.defaultReasoningEffort,
+        defaultBudgetTokens:
+          target.defaultBudgetTokens === undefined
+            ? primaryDefaultBudgetTokens
+            : target.defaultBudgetTokens,
         nonRetryableStatus: target.nonRetryableStatus ??
           options.nonRetryableStatus ?? [400, 401, 403, 404, 422],
         parseJson: options.parseJson,

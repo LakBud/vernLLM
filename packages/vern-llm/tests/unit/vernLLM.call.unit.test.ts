@@ -146,6 +146,79 @@ describe('VernLLM.call, temperature', () => {
     await llmWithZeroDefault.call({ userContent: 'u' });
     expect(at(calls, 1).temperature).toBe(0);
   });
+
+  it('falls back to an instance-level defaultReasoningEffort when no per-call value is set', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm', defaultReasoningEffort: 'high' });
+
+    await llm.call({ userContent: 'u' });
+    expect(at(calls, 0).reasoning_effort).toBe('high');
+  });
+
+  it('falls back to an instance-level defaultBudgetTokens when no per-call value is set', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm', defaultBudgetTokens: 12000 });
+
+    await llm.call({ userContent: 'u' });
+    expect(at(calls, 0).budget_tokens).toBe(12000);
+  });
+
+  it('a per-call reasoningEffort/budgetTokens always wins over its instance-level default', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      defaultReasoningEffort: 'low',
+      defaultBudgetTokens: 4096,
+    });
+
+    await llm.call({ userContent: 'u', reasoningEffort: 'high', budgetTokens: 32000 });
+    expect(at(calls, 0).reasoning_effort).toBe('high');
+    expect(at(calls, 0).budget_tokens).toBe(32000);
+  });
+
+  it('a fallback target without its own reasoning defaults inherits the primary-resolved ones', async () => {
+    const { client: primaryClient } = createMockClient([new Error('primary down')]);
+    const { client: fallbackClient, calls: fallbackCalls } = createMockClient([
+      jsonResponse({ ok: true }),
+    ]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      defaultReasoningEffort: 'medium',
+      defaultBudgetTokens: 16000,
+      fallback: { client: fallbackClient, model: 'fallback-model' },
+    });
+
+    await llm.call({ userContent: 'u' });
+    expect(at(fallbackCalls, 0).reasoning_effort).toBe('medium');
+    expect(at(fallbackCalls, 0).budget_tokens).toBe(16000);
+  });
+
+  it("a fallback target's own reasoning defaults override the primary's, same as defaultTemperature does", async () => {
+    const { client: primaryClient } = createMockClient([new Error('primary down')]);
+    const { client: fallbackClient, calls: fallbackCalls } = createMockClient([
+      jsonResponse({ ok: true }),
+    ]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      defaultReasoningEffort: 'medium',
+      defaultBudgetTokens: 16000,
+      fallback: {
+        client: fallbackClient,
+        model: 'fallback-model',
+        defaultReasoningEffort: 'minimal',
+        defaultBudgetTokens: 1024,
+      },
+    });
+
+    await llm.call({ userContent: 'u' });
+    expect(at(fallbackCalls, 0).reasoning_effort).toBe('minimal');
+    expect(at(fallbackCalls, 0).budget_tokens).toBe(1024);
+  });
 });
 
 describe('VernLLM.call, retry & backoff', () => {

@@ -13,7 +13,11 @@ import {
   supportsNativeStructuredOutput,
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
-import { effortToBudgetTokens } from './internal/reasoningBudget.utils.js';
+import {
+  effortToBudgetTokens,
+  resolveEffortTokenTable,
+  type EffortTokenTable,
+} from './internal/reasoningBudget.utils.js';
 
 /** Anthropic's native per-block content shape for a message. */
 type AnthropicContentBlock =
@@ -235,6 +239,7 @@ function buildAnthropicTools(
 function buildAnthropicRequestBody(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
   nativeStructuredOutputModels?: ModelCapabilityOverride,
+  effortTokenTable?: EffortTokenTable,
 ): { body: AnthropicRequestBody; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -332,7 +337,9 @@ function buildAnthropicRequestBody(
   // since Anthropic has no tier string of its own to pass it through as.
   const budgetTokens =
     params.budget_tokens ??
-    (params.reasoning_effort ? effortToBudgetTokens(params.reasoning_effort) : undefined);
+    (params.reasoning_effort
+      ? effortToBudgetTokens(params.reasoning_effort, effortTokenTable)
+      : undefined);
 
   const system = systemMessage?.content;
 
@@ -366,6 +373,14 @@ export interface AnthropicAdapterOptions {
    * exactly this adapter's behavior before native support was added.
    */
   nativeStructuredOutputModels?: ModelCapabilityOverride;
+  /**
+   * Overrides the token count `reasoningEffort` tiers map onto when the
+   * caller sets `reasoningEffort` but not `budgetTokens` (Claude has no
+   * tier concept of its own, see `adapters/internal/reasoningBudget.utils.ts`).
+   * Only the tiers listed are changed; any omitted tier keeps the
+   * built-in default. Has no effect when `budgetTokens` is set directly.
+   */
+  reasoningEffortTokens?: Partial<EffortTokenTable>;
 }
 
 /**
@@ -403,6 +418,7 @@ export function fromAnthropic(
   options?: AnthropicAdapterOptions,
 ): LLMClient {
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
+  const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
   // The Anthropic SDK's `messages.create`, called with `stream: true`,
   // returns an AsyncIterable of `AnthropicStreamEvent` rather than
   // `AnthropicClient['messages']['create']`'s normal single-message return
@@ -429,6 +445,7 @@ export function fromAnthropic(
           const { body, toolName } = buildAnthropicRequestBody(
             params,
             nativeStructuredOutputModels,
+            effortTokenTable,
           );
 
           const response = await anthropicClient.messages.create(body, options);
@@ -502,6 +519,7 @@ export function fromAnthropic(
           const { body, toolName } = buildAnthropicRequestBody(
             params,
             nativeStructuredOutputModels,
+            effortTokenTable,
           );
 
           const stream = (await rawMessagesCreate(
