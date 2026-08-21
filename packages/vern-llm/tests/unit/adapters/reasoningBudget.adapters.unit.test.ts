@@ -59,7 +59,7 @@ describe('fromAnthropic reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'claude-x',
-        max_tokens: 100,
+        max_tokens: 100000,
         budget_tokens: 8000,
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -76,7 +76,7 @@ describe('fromAnthropic reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'claude-x',
-        max_tokens: 100,
+        max_tokens: 100000,
         reasoning_effort: 'high',
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -93,7 +93,7 @@ describe('fromAnthropic reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'claude-x',
-        max_tokens: 100,
+        max_tokens: 100000,
         reasoning_effort: 'high',
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -110,7 +110,7 @@ describe('fromAnthropic reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'claude-x',
-        max_tokens: 100,
+        max_tokens: 100000,
         budget_tokens: 5000,
         reasoning_effort: 'minimal',
         messages: [{ role: 'user', content: 'hi' }],
@@ -128,7 +128,7 @@ describe('fromAnthropic reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'claude-x',
-        max_tokens: 100,
+        max_tokens: 100000,
         messages: [{ role: 'user', content: 'hi' }],
       },
       { signal: new AbortController().signal },
@@ -151,7 +151,7 @@ describe('fromAnthropic reasoning budget', () => {
     const response = await adapted.chat.completions.create(
       {
         model: 'claude-x',
-        max_tokens: 100,
+        max_tokens: 100000,
         messages: [{ role: 'user', content: 'hi' }],
       },
       { signal: new AbortController().signal },
@@ -167,13 +167,259 @@ describe('fromAnthropic reasoning budget', () => {
     const response = await adapted.chat.completions.create(
       {
         model: 'claude-x',
-        max_tokens: 100,
+        max_tokens: 100000,
         messages: [{ role: 'user', content: 'hi' }],
       },
       { signal: new AbortController().signal },
     );
 
     expect(response.usage?.completion_tokens_details).toBeUndefined();
+  });
+
+  it('omits temperature when manual thinking (budget_tokens) is set, even the instance default', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 100000,
+        temperature: 0.2, // simulates VernLLM's own instance/call default
+        budget_tokens: 8000,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect('temperature' in create.mock.calls[0]![0]).toBe(false);
+  });
+
+  it('keeps temperature when neither budget_tokens nor reasoning_effort is set', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 100000,
+        temperature: 0.5,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create.mock.calls[0]![0].temperature).toBe(0.5);
+  });
+
+  it("throws invalid_params when budget_tokens is below Anthropic's 1024 minimum", async () => {
+    const { client } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          max_tokens: 100000,
+          budget_tokens: 500,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toThrow(/below Anthropic's minimum of 1024/);
+  });
+
+  it('throws invalid_params when budget_tokens is not strictly less than max_tokens', async () => {
+    const { client } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          max_tokens: 1000, // VernLLM's own default
+          budget_tokens: 1024, // the default "minimal" tier, invalid against this max_tokens
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toThrow(/must be less than maxTokens/);
+  });
+
+  describe('adaptive-only models (Claude Opus 4.7 and later, every Claude 5 model)', () => {
+    it('sends adaptive thinking plus output_config.effort instead of budget_tokens', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-sonnet-5',
+          max_tokens: 100000,
+          reasoning_effort: 'high',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sent = create.mock.calls[0]![0];
+      expect(sent.thinking).toEqual({ type: 'adaptive' });
+      expect(sent.output_config).toEqual({ effort: 'high' });
+      expect('budget_tokens' in (sent.thinking as object)).toBe(false);
+    });
+
+    it('converts an explicit budget_tokens into the nearest effort tier on an adaptive-only model', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-opus-5',
+          max_tokens: 100000,
+          budget_tokens: 20000, // buckets to 'high' against the default table
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sent = create.mock.calls[0]![0];
+      expect(sent.thinking).toEqual({ type: 'adaptive' });
+      expect(sent.output_config).toEqual({ effort: 'high' });
+    });
+
+    it("maps VernLLM's 'minimal' tier onto Anthropic's 'low', the nearest available tier", async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-opus-4-8',
+          max_tokens: 100000,
+          reasoning_effort: 'minimal',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create.mock.calls[0]![0].output_config).toEqual({ effort: 'low' });
+    });
+
+    it('omits temperature on the adaptive path too, not just the manual budget_tokens path', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-sonnet-5',
+          max_tokens: 100000,
+          temperature: 0.2,
+          reasoning_effort: 'medium',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect('temperature' in create.mock.calls[0]![0]).toBe(false);
+    });
+
+    it('never applies the 1024/max_tokens budget_tokens validation on the adaptive path', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client);
+
+      // max_tokens: 1000 would fail assertValidClaudeBudgetTokens on the
+      // manual path (see the throwing test above); on an adaptive-only
+      // model it must not, since no budget_tokens is ever sent.
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-sonnet-5',
+          max_tokens: 1000,
+          reasoning_effort: 'low',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create.mock.calls[0]![0].thinking).toEqual({ type: 'adaptive' });
+    });
+
+    it('merges effort into output_config alongside format when jsonSchema and reasoning are both set', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client, {
+        nativeStructuredOutputModels: ['claude-sonnet-5'],
+      });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-sonnet-5',
+          max_tokens: 100000,
+          reasoning_effort: 'high',
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'x', schema: { type: 'object', properties: {} } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create.mock.calls[0]![0].output_config).toEqual({
+        format: { type: 'json_schema', schema: { type: 'object', properties: {} } },
+        effort: 'high',
+      });
+    });
+
+    it('adaptiveOnlyModels lets a caller mark an additional model as adaptive-only', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client, { adaptiveOnlyModels: ['claude-nova-1'] });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-nova-1',
+          max_tokens: 100000,
+          budget_tokens: 8000,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sent = create.mock.calls[0]![0];
+      expect(sent.thinking).toEqual({ type: 'adaptive' });
+      expect('budget_tokens' in (sent.thinking as object)).toBe(false);
+    });
+
+    it('adaptiveOnlyModels has no effect on a model not in the override', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      const adapted = fromAnthropic(client, { adaptiveOnlyModels: ['claude-nova-1'] });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-x', // not covered by the override, not covered by the built-in rule either
+          max_tokens: 100000,
+          budget_tokens: 8000,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create.mock.calls[0]![0].thinking).toEqual({ type: 'enabled', budget_tokens: 8000 });
+    });
+
+    it('adaptiveOnlyModels cannot un-mark a model the built-in rule already caught', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi');
+      // An override that only lists an unrelated model must not somehow
+      // exempt claude-sonnet-5 from the built-in rule.
+      const adapted = fromAnthropic(client, { adaptiveOnlyModels: ['claude-nova-1'] });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-sonnet-5',
+          max_tokens: 100000,
+          budget_tokens: 8000,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create.mock.calls[0]![0].thinking).toEqual({ type: 'adaptive' });
+    });
   });
 });
 
@@ -408,7 +654,7 @@ describe('fromBedrock reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-        max_tokens: 300,
+        max_tokens: 100000,
         budget_tokens: 9000,
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -427,7 +673,7 @@ describe('fromBedrock reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-        max_tokens: 300,
+        max_tokens: 100000,
         reasoning_effort: 'medium',
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -446,7 +692,7 @@ describe('fromBedrock reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-        max_tokens: 300,
+        max_tokens: 100000,
         reasoning_effort: 'medium',
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -465,7 +711,7 @@ describe('fromBedrock reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'amazon.titan-text-premier-v1:0',
-        max_tokens: 300,
+        max_tokens: 100000,
         budget_tokens: 9000,
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -482,12 +728,165 @@ describe('fromBedrock reasoning budget', () => {
     await adapted.chat.completions.create(
       {
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-        max_tokens: 300,
+        max_tokens: 100000,
         messages: [{ role: 'user', content: 'hi' }],
       },
       { signal: new AbortController().signal },
     );
 
     expect('additionalModelRequestFields' in converse.mock.calls[0]![0]).toBe(false);
+  });
+
+  it('omits temperature when manual thinking (budget_tokens) is set on a Claude model', async () => {
+    const { client, converse } = makeFakeBedrockClient('hi');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        max_tokens: 100000,
+        temperature: 0.2,
+        budget_tokens: 8000,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect('temperature' in converse.mock.calls[0]![0].inferenceConfig!).toBe(false);
+  });
+
+  it('keeps temperature for a non-Claude model, budgetTokens has no effect on it there', async () => {
+    const { client, converse } = makeFakeBedrockClient('hi');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'amazon.titan-text-premier-v1:0',
+        max_tokens: 100000,
+        temperature: 0.7,
+        budget_tokens: 8000,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(converse.mock.calls[0]![0].inferenceConfig!.temperature).toBe(0.7);
+  });
+
+  it('throws invalid_params when budget_tokens is not strictly less than max_tokens for a Claude model', async () => {
+    const { client } = makeFakeBedrockClient('hi');
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+          max_tokens: 1000,
+          budget_tokens: 1024,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toThrow(/must be less than maxTokens/);
+  });
+
+  describe('adaptive-only Claude models on Bedrock (Opus 4.7 and later, every Claude 5 model)', () => {
+    it('sends adaptive thinking plus outputConfig.effort instead of budget_tokens', async () => {
+      const { client, converse } = makeFakeBedrockClient('hi');
+      const adapted = fromBedrock(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-sonnet-5-20260101-v1:0',
+          max_tokens: 100000,
+          reasoning_effort: 'high',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sent = converse.mock.calls[0]![0];
+      expect(sent.additionalModelRequestFields).toEqual({ thinking: { type: 'adaptive' } });
+      expect(sent.outputConfig).toEqual({ effort: 'high' });
+    });
+
+    it('never applies the 1024/max_tokens budget_tokens validation on the adaptive path', async () => {
+      const { client, converse } = makeFakeBedrockClient('hi');
+      const adapted = fromBedrock(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-opus-5-20260101-v1:0',
+          max_tokens: 1000, // would fail assertValidClaudeBudgetTokens on the manual path
+          reasoning_effort: 'low',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(converse.mock.calls[0]![0].additionalModelRequestFields).toEqual({
+        thinking: { type: 'adaptive' },
+      });
+    });
+
+    it('omits temperature on the adaptive path too', async () => {
+      const { client, converse } = makeFakeBedrockClient('hi');
+      const adapted = fromBedrock(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-sonnet-5-20260101-v1:0',
+          max_tokens: 100000,
+          temperature: 0.2,
+          reasoning_effort: 'medium',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect('temperature' in converse.mock.calls[0]![0].inferenceConfig!).toBe(false);
+    });
+
+    it('adaptiveOnlyModels lets a caller mark an additional Claude model as adaptive-only', async () => {
+      const { client, converse } = makeFakeBedrockClient('hi');
+      const adapted = fromBedrock(client, {
+        adaptiveOnlyModels: ['anthropic.claude-nova-1-v1:0'],
+      });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-nova-1-v1:0',
+          max_tokens: 100000,
+          budget_tokens: 8000,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(converse.mock.calls[0]![0].additionalModelRequestFields).toEqual({
+        thinking: { type: 'adaptive' },
+      });
+    });
+
+    it('adaptiveOnlyModels cannot un-mark a Claude model the built-in rule already caught', async () => {
+      const { client, converse } = makeFakeBedrockClient('hi');
+      const adapted = fromBedrock(client, {
+        adaptiveOnlyModels: ['anthropic.claude-nova-1-v1:0'],
+      });
+
+      await adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-sonnet-5-20260101-v1:0',
+          max_tokens: 100000,
+          budget_tokens: 8000,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(converse.mock.calls[0]![0].additionalModelRequestFields).toEqual({
+        thinking: { type: 'adaptive' },
+      });
+    });
   });
 });

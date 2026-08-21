@@ -1,3 +1,7 @@
+import { LLMError } from '../../types/errors.js';
+
+import type { ModelCapabilityOverride } from './nativeStructuredOutput.js';
+
 /**
  * Shared conversion between the two reasoning controls VernLLM exposes:
  * `reasoningEffort` (a tier string, OpenAI's native shape) and
@@ -31,9 +35,30 @@ export const DEFAULT_EFFORT_TOKENS: EffortTokenTable = {
  * Merges a caller-supplied partial override over `DEFAULT_EFFORT_TOKENS`.
  * Called once per adapter instance (not per request), so a per-instance
  * override only needs to specify the tiers it actually wants to change.
+ *
+ * Throws `LLMError('invalid_params')` if the override doesn't keep the
+ * tiers in strictly ascending order (`minimal < low < medium < high`).
+ * `budgetTokensToEffort` buckets by walking the tiers low to high and
+ * returning on the first one a value is `<=`, so an unordered table (e.g.
+ * `low` above `medium`) wouldn't just produce a "wrong" bucket, it would
+ * make some tiers unreachable outright, silently, with no signal to the
+ * caller that their override doesn't do what they think it does.
  */
 export function resolveEffortTokenTable(override?: Partial<EffortTokenTable>): EffortTokenTable {
-  return override ? { ...DEFAULT_EFFORT_TOKENS, ...override } : DEFAULT_EFFORT_TOKENS;
+  if (!override) return DEFAULT_EFFORT_TOKENS;
+
+  const table = { ...DEFAULT_EFFORT_TOKENS, ...override };
+
+  if (!(table.minimal < table.low && table.low < table.medium && table.medium < table.high)) {
+    throw new LLMError(
+      `reasoningEffortTokens must keep tiers in strictly ascending order ` +
+        `(minimal < low < medium < high), got ${JSON.stringify(table)}. An out-of-order ` +
+        `override doesn't just misrank tiers, it can make some of them unreachable.`,
+      'invalid_params',
+    );
+  }
+
+  return table;
 }
 
 /** Converts a `reasoningEffort` tier into the nearest `budgetTokens` value. */
@@ -49,7 +74,9 @@ export function effortToBudgetTokens(
  * tier, for providers that only understand tiers. Buckets by the same
  * `table` `effortToBudgetTokens` produces its values from, so the two
  * functions agree with each other at the boundary values, as long as the
- * same (possibly overridden) table is passed to both.
+ * same (possibly overridden) table is passed to both. A value strictly
+ * between two tiers (e.g. 4097, one above the default `low`) rounds up to
+ * the next tier it's still `<=`, i.e. `medium` here, not down to `low`.
  */
 export function budgetTokensToEffort(
   budgetTokens: number,
@@ -59,4 +86,122 @@ export function budgetTokensToEffort(
   if (budgetTokens <= table.low) return 'low';
   if (budgetTokens <= table.medium) return 'medium';
   return 'high';
+}
+
+/**
+ * Parses an Opus model id's generation and minor version, e.g.
+ * `"claude-opus-4-7-20260101"` -> `[4, 7]`, `"anthropic.claude-opus-5-x"` ->
+ * `[5, 0]`. Not anchored, so it matches equally inside a bare Anthropic id
+ * or a Bedrock id carrying a provider prefix. Returns `null` for a
+ * non-Opus model id.
+ */
+function parseOpusVersion(model: string): [major: number, minor: number] | null {
+  const match = /opus-(\d+)(?:-(\d+))?/.exec(model);
+  if (!match) return null;
+
+  return [Number(match[1]), match[2] === undefined ? 0 : Number(match[2])];
+}
+
+/**
+ * Default rule for whether `model` only supports adaptive thinking
+ * (`thinking: { type: 'adaptive' }`) and returns a 400 for manual,
+ * budget-based thinking (`thinking: { type: 'enabled', budget_tokens }`):
+ * Claude Opus 4.7 and later (matched as a version threshold, so 4.8, 4.9,
+ * 5, and every future Opus point release are covered automatically,
+ * without a new list entry per release), and every Claude 5 tier model
+ * outside the Opus family (Sonnet 5, Fable 5, Mythos 5, Mythos Preview).
+ * `mythos` alone is enough to catch both Mythos names without listing
+ * each separately.
+ *
+ * Necessarily best-effort: a new model family with its own name (not
+ * `opus-*`, not `sonnet-5`/`fable-5`/`mythos-*`) still needs a code
+ * update here, or a caller-supplied `adaptiveOnlyModels` override (see
+ * `isAdaptiveOnlyModel`) covering it in the meantime.
+ */
+function isDefaultAdaptiveOnly(model: string): boolean {
+  const opusVersion = parseOpusVersion(model);
+
+  if (opusVersion) {
+    const [major, minor] = opusVersion;
+    return major > 4 || (major === 4 && minor >= 7);
+  }
+
+  return ['sonnet-5', 'fable-5', 'mythos'].some((s) => model.includes(s));
+}
+
+/**
+ * Whether `model` is adaptive-only, per the built-in rule above, or per a
+ * caller-supplied `adaptiveOnlyModels` override. The override is
+ * additive, not a replacement: it can mark an *additional* model as
+ * adaptive-only (useful for a model family this package doesn't know
+ * about yet), but it can't un-mark one the built-in rule already caught,
+ * since a caller correcting a false negative is the only direction that
+ * needs covering, a false positive here would mean this package is
+ * simply wrong and needs its own fix, not a per-caller workaround.
+ */
+export function isAdaptiveOnlyModel(model: string, override?: ModelCapabilityOverride): boolean {
+  if (isDefaultAdaptiveOnly(model)) return true;
+  if (!override) return false;
+
+  return Array.isArray(override) ? override.includes(model) : override(model);
+}
+
+/** Whether `model` is known to support manual, budget-based thinking. */
+export function supportsManualThinkingBudget(
+  model: string,
+  override?: ModelCapabilityOverride,
+): boolean {
+  return !isAdaptiveOnlyModel(model, override);
+}
+
+/**
+ * Anthropic (and Claude models on Bedrock) require `budget_tokens` to be
+ * at least 1024 and strictly less than `max_tokens`, since the thinking
+ * budget and the reply share the same `max_tokens` ceiling. VernLLM's own
+ * default `maxTokens` is 1000 (see `RequestBuilder`'s `defaultMaxTokens`),
+ * below the 1024 floor, so the *default* `minimal` tier (1024 tokens) is
+ * silently invalid against the *default* `max_tokens` unless a caller
+ * happens to raise one or the other. Checked here, once, right before a
+ * `thinking` block would be built, rather than left for Anthropic's own
+ * 400 to explain after a real network round trip.
+ */
+export function assertValidClaudeBudgetTokens(budgetTokens: number, maxTokens: number): void {
+  if (budgetTokens < 1024) {
+    throw new LLMError(
+      `budgetTokens (${budgetTokens}) is below Anthropic's minimum of 1024. Raise budgetTokens, ` +
+        `or use a reasoningEffort tier of 'low' or above with the default conversion table.`,
+      'invalid_params',
+    );
+  }
+
+  if (budgetTokens >= maxTokens) {
+    throw new LLMError(
+      `budgetTokens (${budgetTokens}) must be less than maxTokens (${maxTokens}); the thinking ` +
+        `budget and the reply share the same max_tokens ceiling on Anthropic. Raise maxTokens, ` +
+        `or lower budgetTokens/reasoningEffort.`,
+      'invalid_params',
+    );
+  }
+}
+
+/**
+ * Anthropic's own effort levels for adaptive thinking, `output_config.effort`
+ * (or Bedrock's typed `outputConfig.effort`), five tiers: `low`, `medium`,
+ * `high`, `xhigh`, `max`. This is a different control than VernLLM's own
+ * `reasoningEffort`/`budgetTokens`, not a token count, so it needs its own
+ * mapping rather than reusing `EffortTokenTable`.
+ */
+export type ClaudeAdaptiveEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/**
+ * Maps VernLLM's four-tier `reasoningEffort` onto Anthropic's five-tier
+ * adaptive effort. `xhigh` and `max` have no VernLLM-side equivalent and
+ * are unreachable through this mapping; a caller who wants either has to
+ * target Anthropic/Bedrock-specific behavior already, so there's no gap
+ * the shared `CallParams` surface needs to cover for a first pass.
+ */
+export function toClaudeAdaptiveEffort(
+  effort: 'minimal' | 'low' | 'medium' | 'high',
+): ClaudeAdaptiveEffort {
+  return effort === 'minimal' ? 'low' : effort;
 }

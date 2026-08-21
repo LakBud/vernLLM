@@ -11,8 +11,13 @@ import {
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
 import {
+  assertValidClaudeBudgetTokens,
+  budgetTokensToEffort,
   effortToBudgetTokens,
   resolveEffortTokenTable,
+  supportsManualThinkingBudget,
+  toClaudeAdaptiveEffort,
+  type ClaudeAdaptiveEffort,
   type EffortTokenTable,
 } from './internal/reasoningBudget.utils.js';
 
@@ -100,7 +105,7 @@ export interface BedrockConverseClient {
        * included). There is no `strict` field here, unlike `toolSpec`.
        */
       outputConfig?: {
-        textFormat: {
+        textFormat?: {
           type: 'json_schema';
           structure: {
             jsonSchema: {
@@ -110,6 +115,14 @@ export interface BedrockConverseClient {
             };
           };
         };
+        /**
+         * Effort control for adaptive thinking, on Claude models where
+         * manual `budget_tokens` thinking is no longer accepted (see
+         * `supportsManualThinkingBudget` in
+         * `adapters/internal/reasoningBudget.utils.ts`). Sibling to
+         * `textFormat`, either or both may be present independently.
+         */
+        effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
       };
       /**
        * Model-specific passthrough. Converse has no reasoning-budget field
@@ -273,6 +286,17 @@ export interface BedrockAdapterOptions {
    * or when the target model isn't a Claude model.
    */
   reasoningEffortTokens?: Partial<EffortTokenTable>;
+  /**
+   * Marks additional models as adaptive-only, on top of this package's
+   * own built-in rule (Claude Opus 4.7 and later, every Claude 5 tier
+   * model, see `isAdaptiveOnlyModel` in
+   * `adapters/internal/reasoningBudget.utils.ts`). Additive, not a
+   * replacement: it can correct a false negative (a newer model this
+   * package doesn't know about yet), it can't un-mark a model the
+   * built-in rule already caught. Pass a static list of model IDs or a
+   * predicate.
+   */
+  adaptiveOnlyModels?: ModelCapabilityOverride;
 }
 
 type BedrockRequest = Parameters<BedrockConverseClient['converse']>[0];
@@ -324,6 +348,7 @@ function buildBedrockRequest(
   toolUseSupportedModels: BedrockAdapterOptions['toolUseSupportedModels'],
   nativeStructuredOutputModels: BedrockAdapterOptions['nativeStructuredOutputModels'],
   effortTokenTable?: EffortTokenTable,
+  adaptiveOnlyModels?: ModelCapabilityOverride,
 ): { request: BedrockRequest; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -439,34 +464,64 @@ function buildBedrockRequest(
     }
   }
 
-  // Converse has no reasoning-budget field of its own. A token budget is
-  // only forwarded when the target is a Claude model on Bedrock, since
-  // `additionalModelRequestFields` is passed straight through to the
-  // underlying model unchanged, and Anthropic's own `thinking` key is
-  // meaningless to any other model family. Native `budget_tokens` is used
-  // directly; `reasoning_effort` alone is converted to the nearest token
-  // budget first, same table the Anthropic and Gemini adapters use.
-  const budgetTokens =
-    params.budget_tokens ??
-    (params.reasoning_effort
-      ? effortToBudgetTokens(params.reasoning_effort, effortTokenTable)
-      : undefined);
+  // Converse has no reasoning-budget field of its own; both `thinking`
+  // shapes below are forwarded through `additionalModelRequestFields`,
+  // passed straight through to the underlying model unchanged, and
+  // meaningless to any non-Claude model family, hence the `isClaudeModel`
+  // gate. Within Claude models, `budget_tokens` (manual thinking) returns
+  // a 400 on Claude Opus 4.7 and later and every Claude 5 tier model, see
+  // `supportsManualThinkingBudget`'s docs, so those get adaptive thinking
+  // plus `outputConfig.effort` instead, same fallback `fromAnthropic`
+  // uses. Native `budget_tokens`/`reasoning_effort` are each used
+  // directly when the model natively accepts them; the other is
+  // converted through the same table the other adapters share.
+  let additionalModelRequestFields: BedrockRequest['additionalModelRequestFields'];
+  let effort: ClaudeAdaptiveEffort | undefined;
 
-  const additionalModelRequestFields =
-    budgetTokens !== undefined && isClaudeModel(params.model)
-      ? { thinking: { type: 'enabled', budget_tokens: budgetTokens } }
-      : undefined;
+  if (
+    isClaudeModel(params.model) &&
+    (params.budget_tokens !== undefined || params.reasoning_effort !== undefined)
+  ) {
+    if (supportsManualThinkingBudget(params.model, adaptiveOnlyModels)) {
+      const budgetTokens =
+        params.budget_tokens ?? effortToBudgetTokens(params.reasoning_effort!, effortTokenTable);
+
+      // Same constraint as the Claude API itself: `budget_tokens` must be
+      // at least 1024 and strictly less than `max_tokens`.
+      assertValidClaudeBudgetTokens(budgetTokens, params.max_tokens);
+
+      additionalModelRequestFields = { thinking: { type: 'enabled', budget_tokens: budgetTokens } };
+    } else {
+      const effortTier =
+        params.reasoning_effort ?? budgetTokensToEffort(params.budget_tokens!, effortTokenTable);
+
+      additionalModelRequestFields = { thinking: { type: 'adaptive' } };
+      effort = toClaudeAdaptiveEffort(effortTier);
+    }
+  }
+
+  // Same constraint as the Claude API itself: temperature (and top_p/
+  // top_k) must not be sent alongside any thinking mode, manual or
+  // adaptive. See the matching comment in `adapters/anthropic.ts`.
+  const temperature = additionalModelRequestFields ? undefined : params.temperature;
 
   const request: BedrockRequest = {
     modelId: params.model,
     messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toBedrockMessage(m))),
     system: systemMessage?.content ? [{ text: systemMessage.content }] : undefined,
     inferenceConfig: {
-      ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
       maxTokens: params.max_tokens,
     },
     ...(toolConfig ? { toolConfig } : {}),
-    ...(outputConfig ? { outputConfig } : {}),
+    ...(outputConfig || effort
+      ? {
+          outputConfig: {
+            ...(outputConfig ?? {}),
+            ...(effort ? { effort } : {}),
+          },
+        }
+      : {}),
     ...(additionalModelRequestFields ? { additionalModelRequestFields } : {}),
   };
 
@@ -789,6 +844,7 @@ export function fromBedrock(
   const toolUseSupportedModels = options?.toolUseSupportedModels;
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
+  const adaptiveOnlyModels = options?.adaptiveOnlyModels;
 
   return {
     // json_object is not supported: see buildBedrockRequest's throw above,
@@ -802,6 +858,7 @@ export function fromBedrock(
             toolUseSupportedModels,
             nativeStructuredOutputModels,
             effortTokenTable,
+            adaptiveOnlyModels,
           );
 
           const response = await client.converse(request, requestOptions);
@@ -882,6 +939,7 @@ export function fromBedrock(
             toolUseSupportedModels,
             nativeStructuredOutputModels,
             effortTokenTable,
+            adaptiveOnlyModels,
           );
 
           const { stream } = await client.converseStream(request, requestOptions);

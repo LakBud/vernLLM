@@ -54,7 +54,11 @@ describe('fromGemini().chat.completions.createStream', () => {
 
     const chunks = await collect(
       adapted.chat.completions.createStream!(
-        { model: 'gemini-2.5-flash', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        {
+          model: 'gemini-3.1-flash-lite',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
         { signal: new AbortController().signal },
       ),
     );
@@ -80,7 +84,7 @@ describe('fromGemini().chat.completions.createStream', () => {
     const chunks = await collect(
       adapted.chat.completions.createStream!(
         {
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.1-flash-lite',
           max_tokens: 100,
           messages: [{ role: 'user', content: 'weather?' }],
           tools: [
@@ -121,7 +125,11 @@ describe('fromGemini().chat.completions.createStream', () => {
 
     const chunks = await collect(
       adapted.chat.completions.createStream!(
-        { model: 'gemini-2.5-flash', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        {
+          model: 'gemini-3.1-flash-lite',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
         { signal: new AbortController().signal },
       ),
     );
@@ -142,7 +150,7 @@ describe('fromGemini().chat.completions.createStream', () => {
       collect(
         adapted.chat.completions.createStream!(
           {
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3.1-flash-lite',
             max_tokens: 100,
             messages: [{ role: 'user', content: 'hi' }],
           },
@@ -161,7 +169,11 @@ describe('fromGemini().chat.completions.createStream', () => {
     const adapted = fromGemini(client);
 
     const stream = adapted.chat.completions.createStream!(
-      { model: 'gemini-2.5-flash', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
       { signal: new AbortController().signal },
     );
     const iterator = stream[Symbol.asyncIterator]();

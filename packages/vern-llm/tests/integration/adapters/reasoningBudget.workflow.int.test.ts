@@ -69,7 +69,7 @@ describe('Reasoning budget integration', () => {
       onUsage,
     });
 
-    await llm.call({ userContent: 'hello', budgetTokens: 9000, jsonMode: false });
+    await llm.call({ userContent: 'hello', budgetTokens: 9000, maxTokens: 12000, jsonMode: false });
 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ thinking: { type: 'enabled', budget_tokens: 9000 } }),
@@ -96,7 +96,7 @@ describe('Reasoning budget integration', () => {
 
     const llm = new VernLLM({
       client: fromGemini({ generateContent }),
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-flash-lite',
       onUsage,
     });
 
@@ -127,7 +127,12 @@ describe('Reasoning budget integration', () => {
       onUsage,
     });
 
-    await llm.call({ userContent: 'hello', budgetTokens: 12000, jsonMode: false });
+    await llm.call({
+      userContent: 'hello',
+      budgetTokens: 12000,
+      maxTokens: 16000,
+      jsonMode: false,
+    });
 
     expect(converse).toHaveBeenCalledWith(
       expect.objectContaining({

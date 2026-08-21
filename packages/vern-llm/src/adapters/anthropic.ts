@@ -14,8 +14,13 @@ import {
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
 import {
+  assertValidClaudeBudgetTokens,
+  budgetTokensToEffort,
   effortToBudgetTokens,
   resolveEffortTokenTable,
+  supportsManualThinkingBudget,
+  toClaudeAdaptiveEffort,
+  type ClaudeAdaptiveEffort,
   type EffortTokenTable,
 } from './internal/reasoningBudget.utils.js';
 
@@ -72,18 +77,29 @@ export interface AnthropicClient {
          * output endpoint has no equivalent for any of them.
          */
         output_config?: {
-          format: {
+          format?: {
             type: 'json_schema';
             schema: Record<string, unknown>;
           };
+          /**
+           * Effort control for adaptive thinking, on models where manual
+           * `budget_tokens` thinking is no longer accepted (see
+           * `supportsManualThinkingBudget` in
+           * `adapters/internal/reasoningBudget.utils.ts`). Sibling to
+           * `format`, either or both may be present independently.
+           */
+          effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
         };
         /**
-         * Native token budget for internal reasoning. Built from
-         * `CallParams.budgetTokens` directly when set, or converted from
-         * `reasoningEffort` when only that was set. See
+         * Native reasoning control. `{ type: 'enabled', budget_tokens }`
+         * is built directly from `CallParams.budgetTokens`, or converted
+         * from `reasoningEffort`, on models that still accept a manual
+         * token budget. `{ type: 'adaptive' }` is sent instead, paired
+         * with `output_config.effort`, on models that only support
+         * adaptive thinking. See
          * `adapters/internal/reasoningBudget.utils.ts`.
          */
-        thinking?: { type: 'enabled'; budget_tokens: number };
+        thinking?: { type: 'enabled'; budget_tokens: number } | { type: 'adaptive' };
       },
       options: { signal: AbortSignal },
     ): Promise<{
@@ -240,6 +256,7 @@ function buildAnthropicRequestBody(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
   nativeStructuredOutputModels?: ModelCapabilityOverride,
   effortTokenTable?: EffortTokenTable,
+  adaptiveOnlyModels?: ModelCapabilityOverride,
 ): { body: AnthropicRequestBody; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -331,29 +348,68 @@ function buildAnthropicRequestBody(
     ({ tools, toolChoice } = buildAnthropicTools(params.tools, params.tool_choice));
   }
 
-  // `budget_tokens` is Claude's native reasoning control. Used directly
-  // when the caller set it. When only `reasoning_effort` (OpenAI o-series/
-  // gpt-5 style) was set, it's converted to the nearest token budget,
-  // since Anthropic has no tier string of its own to pass it through as.
-  const budgetTokens =
-    params.budget_tokens ??
-    (params.reasoning_effort
-      ? effortToBudgetTokens(params.reasoning_effort, effortTokenTable)
-      : undefined);
+  // On models that only support adaptive thinking (Claude Opus 4.7 and
+  // later, every Claude 5 tier model, see `supportsManualThinkingBudget`'s
+  // docs), manual `budget_tokens` thinking returns a 400. Those models
+  // still get a real reasoning control, adaptive thinking's own `effort`
+  // parameter, converted from whichever of `reasoningEffort`/`budgetTokens`
+  // the caller set, rather than either silently building a request that
+  // will fail, or dropping the caller's intent to reason at all.
+  let thinking: AnthropicRequestBody['thinking'];
+  let effort: ClaudeAdaptiveEffort | undefined;
+
+  if (params.budget_tokens !== undefined || params.reasoning_effort !== undefined) {
+    if (supportsManualThinkingBudget(params.model, adaptiveOnlyModels)) {
+      const budgetTokens =
+        params.budget_tokens ?? effortToBudgetTokens(params.reasoning_effort!, effortTokenTable);
+
+      // Anthropic requires `budget_tokens` to be at least 1024 and
+      // strictly less than `max_tokens`. Checked here, once, so a bad
+      // combination (e.g. VernLLM's own default `maxTokens: 1000`, below
+      // the 1024 floor) surfaces as a clear local error instead of a 400
+      // after a real network round trip.
+      assertValidClaudeBudgetTokens(budgetTokens, params.max_tokens);
+
+      thinking = { type: 'enabled', budget_tokens: budgetTokens };
+    } else {
+      const effortTier =
+        params.reasoning_effort ?? budgetTokensToEffort(params.budget_tokens!, effortTokenTable);
+
+      thinking = { type: 'adaptive' };
+      effort = toClaudeAdaptiveEffort(effortTier);
+    }
+  }
 
   const system = systemMessage?.content;
+
+  // Anthropic rejects a non-default `temperature` (or `top_p`/`top_k`)
+  // alongside *any* thinking mode, manual or adaptive, on every model
+  // that supports thinking at all, not just the adaptive-only ones above.
+  // VernLLM's own instance/call default is 0.2, not "unset", so without
+  // this a `budgetTokens`/`reasoningEffort` call would silently attach
+  // that default and get a 400 from Anthropic. Once `thinking` is going
+  // out, `temperature` is dropped entirely so the provider applies its
+  // own default, regardless of whether the 0.2 came from VernLLM's own
+  // default or a caller-supplied value; Anthropic has no field that lets
+  // a caller keep a custom temperature and thinking at the same time.
+  const temperature = thinking ? undefined : params.temperature;
 
   const body: AnthropicRequestBody = {
     model: params.model,
     max_tokens: params.max_tokens,
-    ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
     system: system || undefined,
     messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toAnthropicMessage(m))),
     ...(tools ? { tools, tool_choice: toolChoice } : {}),
-    ...(outputFormat ? { output_config: { format: outputFormat } } : {}),
-    ...(budgetTokens !== undefined
-      ? { thinking: { type: 'enabled', budget_tokens: budgetTokens } }
+    ...(outputFormat || effort
+      ? {
+          output_config: {
+            ...(outputFormat ? { format: outputFormat } : {}),
+            ...(effort ? { effort } : {}),
+          },
+        }
       : {}),
+    ...(thinking ? { thinking } : {}),
   };
 
   return { body, toolName };
@@ -381,6 +437,17 @@ export interface AnthropicAdapterOptions {
    * built-in default. Has no effect when `budgetTokens` is set directly.
    */
   reasoningEffortTokens?: Partial<EffortTokenTable>;
+  /**
+   * Marks additional models as adaptive-only, on top of this package's
+   * own built-in rule (Claude Opus 4.7 and later, every Claude 5 tier
+   * model, see `isAdaptiveOnlyModel` in
+   * `adapters/internal/reasoningBudget.utils.ts`). Additive, not a
+   * replacement: it can correct a false negative (a newer model this
+   * package doesn't know about yet), it can't un-mark a model the
+   * built-in rule already caught. Pass a static list of model IDs or a
+   * predicate.
+   */
+  adaptiveOnlyModels?: ModelCapabilityOverride;
 }
 
 /**
@@ -419,6 +486,7 @@ export function fromAnthropic(
 ): LLMClient {
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
+  const adaptiveOnlyModels = options?.adaptiveOnlyModels;
   // The Anthropic SDK's `messages.create`, called with `stream: true`,
   // returns an AsyncIterable of `AnthropicStreamEvent` rather than
   // `AnthropicClient['messages']['create']`'s normal single-message return
@@ -446,6 +514,7 @@ export function fromAnthropic(
             params,
             nativeStructuredOutputModels,
             effortTokenTable,
+            adaptiveOnlyModels,
           );
 
           const response = await anthropicClient.messages.create(body, options);
@@ -520,6 +589,7 @@ export function fromAnthropic(
             params,
             nativeStructuredOutputModels,
             effortTokenTable,
+            adaptiveOnlyModels,
           );
 
           const stream = (await rawMessagesCreate(

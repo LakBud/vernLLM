@@ -23,7 +23,7 @@ describe('fromGemini', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         max_tokens: 200,
         messages: [{ role: 'user', content: 'hello' }],
       },
@@ -40,7 +40,7 @@ describe('fromGemini', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         temperature: 0.3,
         max_tokens: 200,
         messages: [
@@ -53,7 +53,7 @@ describe('fromGemini', () => {
 
     expect(generateContent).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
         config: expect.objectContaining({
           systemInstruction: { parts: [{ text: 'be terse' }] },
@@ -149,7 +149,7 @@ describe('fromGemini', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         temperature: 0.2,
         max_tokens: 100,
         messages: [
@@ -183,7 +183,7 @@ describe('fromGemini', () => {
     await expect(
       adapted.chat.completions.create(
         {
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.1-flash-lite',
           temperature: 0.2,
           max_tokens: 100,
           messages: [
@@ -253,7 +253,7 @@ describe('fromGemini, tools', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         temperature: 0.2,
         max_tokens: 100,
         tools: [weatherTool],
@@ -332,7 +332,7 @@ describe('fromGemini, tools', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         temperature: 0.2,
         max_tokens: 100,
         tools: [weatherTool],
@@ -353,7 +353,7 @@ describe('fromGemini, tools', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         temperature: 0.2,
         max_tokens: 100,
         tools: [weatherTool],
@@ -568,7 +568,7 @@ describe('fromGemini, accepting the full top-level client', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         max_tokens: 200,
         messages: [{ role: 'user', content: 'hello' }],
       },
@@ -585,7 +585,7 @@ describe('fromGemini, accepting the full top-level client', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         max_tokens: 200,
         messages: [{ role: 'user', content: 'hello' }],
       },

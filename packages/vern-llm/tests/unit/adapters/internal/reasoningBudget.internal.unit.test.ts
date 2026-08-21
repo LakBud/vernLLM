@@ -5,6 +5,8 @@ import {
   budgetTokensToEffort,
   resolveEffortTokenTable,
   DEFAULT_EFFORT_TOKENS,
+  isAdaptiveOnlyModel,
+  supportsManualThinkingBudget,
 } from '../../../../src/adapters/internal/reasoningBudget.utils.js';
 
 describe('reasoningBudget.utils', () => {
@@ -51,8 +53,26 @@ describe('reasoningBudget.utils', () => {
       expect(table).toEqual({ minimal: 100, low: 200, medium: 300, high: 400 });
     });
 
+    it('rejects an override that puts low above medium', () => {
+      expect(() => resolveEffortTokenTable({ low: 20000 })).toThrow(/ascending order/);
+    });
+
+    it('rejects an override that puts medium above high', () => {
+      expect(() => resolveEffortTokenTable({ medium: 40000 })).toThrow(/ascending order/);
+    });
+
+    it('rejects an override that puts minimal above low', () => {
+      expect(() => resolveEffortTokenTable({ minimal: 5000 })).toThrow(/ascending order/);
+    });
+
+    it('rejects two tiers set to the same value, ascending order must be strict', () => {
+      expect(() => resolveEffortTokenTable({ medium: 32000, high: 32000 })).toThrow(
+        /ascending order/,
+      );
+    });
+
     it('does not mutate DEFAULT_EFFORT_TOKENS when building an override', () => {
-      resolveEffortTokenTable({ high: 999 });
+      resolveEffortTokenTable({ high: 99999 });
 
       expect(DEFAULT_EFFORT_TOKENS).toEqual({
         minimal: 1024,
@@ -72,13 +92,14 @@ describe('reasoningBudget.utils', () => {
     });
 
     it('budgetTokensToEffort buckets against the given table instead of the built-in default', () => {
-      const table = resolveEffortTokenTable({ low: 20000 });
+      // low: 8000 keeps ascending order (1024 < 8000 < 16000 < 32000)
+      // while still raising the threshold above the built-in 4096, so a
+      // value that would default-bucket into "medium" now buckets into
+      // "low" against the overridden table instead.
+      const table = resolveEffortTokenTable({ low: 8000 });
 
-      // 20000 is above the built-in "low" threshold (4096) but below the
-      // overridden one, so it should now land in "low", not its built-in
-      // bucket of "high" (20000 > the default "medium" cap of 16000).
-      expect(budgetTokensToEffort(20000, table)).toBe('low');
-      expect(budgetTokensToEffort(20000)).toBe('high'); // built-in default is unaffected
+      expect(budgetTokensToEffort(8000, table)).toBe('low');
+      expect(budgetTokensToEffort(8000)).toBe('medium'); // built-in default is unaffected
     });
 
     it('a fully custom table still agrees with itself at its own boundary values', () => {
@@ -93,6 +114,78 @@ describe('reasoningBudget.utils', () => {
         const budget = effortToBudgetTokens(effort, table);
         expect(budgetTokensToEffort(budget, table)).toBe(effort);
       }
+    });
+  });
+
+  describe('isAdaptiveOnlyModel / supportsManualThinkingBudget', () => {
+    it('treats pre-4.7 Opus models as still supporting manual thinking', () => {
+      expect(isAdaptiveOnlyModel('claude-opus-4-6')).toBe(false);
+      expect(isAdaptiveOnlyModel('claude-opus-4-5')).toBe(false);
+      expect(isAdaptiveOnlyModel('claude-opus-4')).toBe(false);
+      expect(supportsManualThinkingBudget('claude-opus-4-6')).toBe(true);
+    });
+
+    it('treats Opus 4.7 and 4.8 as adaptive-only, the documented threshold', () => {
+      expect(isAdaptiveOnlyModel('claude-opus-4-7')).toBe(true);
+      expect(isAdaptiveOnlyModel('claude-opus-4-8')).toBe(true);
+      expect(supportsManualThinkingBudget('claude-opus-4-8')).toBe(false);
+    });
+
+    it('treats Opus 5 and every future Opus point release as adaptive-only via the version threshold, not a fixed list', () => {
+      expect(isAdaptiveOnlyModel('claude-opus-5')).toBe(true);
+      // These specific ids were never listed anywhere; the threshold
+      // check catches them automatically, which is the entire point of
+      // replacing the old flat substring list with a version comparison.
+      expect(isAdaptiveOnlyModel('claude-opus-4-9')).toBe(true);
+      expect(isAdaptiveOnlyModel('claude-opus-4-20')).toBe(true);
+      expect(isAdaptiveOnlyModel('claude-opus-6')).toBe(true);
+    });
+
+    it('treats every non-Opus Claude 5 tier model as adaptive-only', () => {
+      expect(isAdaptiveOnlyModel('claude-sonnet-5')).toBe(true);
+      expect(isAdaptiveOnlyModel('claude-fable-5')).toBe(true);
+      expect(isAdaptiveOnlyModel('claude-mythos-5')).toBe(true);
+      expect(isAdaptiveOnlyModel('claude-mythos-preview')).toBe(true);
+    });
+
+    it('treats unrelated models, including older Sonnet/Haiku generations, as supporting manual thinking', () => {
+      expect(isAdaptiveOnlyModel('claude-sonnet-4-6')).toBe(false);
+      expect(isAdaptiveOnlyModel('claude-haiku-4-5')).toBe(false);
+      expect(isAdaptiveOnlyModel('gpt-4o')).toBe(false);
+    });
+
+    it('parses the version threshold correctly inside a Bedrock-prefixed model id', () => {
+      expect(isAdaptiveOnlyModel('anthropic.claude-opus-4-7-20260101-v1:0')).toBe(true);
+      expect(isAdaptiveOnlyModel('anthropic.claude-opus-4-6-20250115-v1:0')).toBe(false);
+      expect(isAdaptiveOnlyModel('anthropic.claude-sonnet-5-20260101-v1:0')).toBe(true);
+    });
+
+    it('lets an array override mark an additional model as adaptive-only', () => {
+      expect(isAdaptiveOnlyModel('claude-nova-1')).toBe(false);
+      expect(isAdaptiveOnlyModel('claude-nova-1', ['claude-nova-1'])).toBe(true);
+      // An unrelated model in the override list has no effect on this one.
+      expect(isAdaptiveOnlyModel('claude-nova-1', ['some-other-model'])).toBe(false);
+    });
+
+    it('lets a predicate override mark an additional model as adaptive-only', () => {
+      const override = (model: string) => model.startsWith('claude-nova');
+
+      expect(isAdaptiveOnlyModel('claude-nova-2', override)).toBe(true);
+      expect(isAdaptiveOnlyModel('claude-haiku-4-5', override)).toBe(false);
+    });
+
+    it('is additive: an override cannot un-mark a model the built-in rule already caught', () => {
+      // An empty override list still leaves the built-in rule in charge.
+      expect(isAdaptiveOnlyModel('claude-opus-5', [])).toBe(true);
+      // A predicate that always returns false doesn't override the
+      // built-in "true" either, only ever adds coverage, never removes it.
+      expect(isAdaptiveOnlyModel('claude-opus-5', () => false)).toBe(true);
+    });
+
+    it('supportsManualThinkingBudget is exactly the inverse of isAdaptiveOnlyModel, override included', () => {
+      expect(supportsManualThinkingBudget('claude-nova-1', ['claude-nova-1'])).toBe(false);
+      expect(supportsManualThinkingBudget('claude-opus-4-6', ['claude-opus-4-6'])).toBe(false);
+      expect(supportsManualThinkingBudget('claude-opus-4-6')).toBe(true);
     });
   });
 });

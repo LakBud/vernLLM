@@ -52,7 +52,7 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
         generateContent,
         generateContentStream,
       } as unknown as GeminiClient),
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-flash-lite',
     });
 
     const { chunks, finalResult } = await llm.call<{ city: string }>({
@@ -98,7 +98,7 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
         generateContent,
         generateContentStream,
       } as unknown as GeminiClient),
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-flash-lite',
     });
 
     const { chunks, finalResult } = await llm.call({
@@ -130,7 +130,7 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
 
     const llm = new VernLLM({
       client: fromGemini({ generateContent } as unknown as GeminiClient),
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-flash-lite',
     });
 
     await expect(

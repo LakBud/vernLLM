@@ -100,18 +100,26 @@ See [Tool Calling](/docs/core/tool-calling) for the complete workflow and [Error
 
 ## Model & generation
 
-| Field             | Type                                       | Default                                        | Notes                                                             |
-| ----------------- | ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------- |
-| `model`           | `string`                                   | Instance `model`                               | Overrides the model for this call.                                |
-| `temperature`     | `number \| null`                           | Instance `defaultTemperature`, otherwise `0.2` | Pass `null` to omit `temperature` and use the provider's default. |
-| `maxTokens`       | `number`                                   | Instance `defaultMaxTokens`, otherwise `1000`  | Maximum response length.                                          |
-| `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Not sent                                       | Passed through when set.                                          |
-| `budgetTokens`    | `number`                                   | Not sent                                       | Native on Anthropic and Gemini. See below.                        |
+| Field             | Type                                       | Default                                               | Notes                                                             |
+| ----------------- | ------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------- |
+| `model`           | `string`                                   | Instance `model`                                      | Overrides the model for this call.                                |
+| `temperature`     | `number \| null`                           | Instance `defaultTemperature`, otherwise `0.2`        | Pass `null` to omit `temperature` and use the provider's default. |
+| `maxTokens`       | `number`                                   | Instance `defaultMaxTokens`, otherwise `1000`         | Maximum response length.                                          |
+| `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Instance `defaultReasoningEffort`, otherwise not sent | Passed through when set.                                          |
+| `budgetTokens`    | `number`                                   | Instance `defaultBudgetTokens`, otherwise not sent    | Native on Anthropic and Gemini. See below.                        |
 
 <Callout type="warn">
-  Claude Opus 4.7 and later, including Opus 5, reject `temperature` (and `top_p`/`top_k`) on a
-  non-default value with a 400 error. Omit `temperature` entirely for those models, or pass `null`,
-  and describe the desired behavior in the prompt instead.
+  Claude Opus 4.7 and later, Claude Opus 5, and every Claude 5 tier model (Sonnet 5, Fable 5,
+  Mythos 5) reject `temperature` (and `top_p`/`top_k`) on a non-default value with a 400 error.
+  Omit `temperature` entirely for those models, or pass `null`, and describe the desired behavior
+  in the prompt instead.
+
+Separately, Anthropic rejects `temperature` alongside _any_ thinking mode, manual or adaptive,
+on every model that supports thinking at all, not just the models above. `fromAnthropic` and
+`fromBedrock` both drop `temperature` from the request automatically whenever `budgetTokens` or
+`reasoningEffort` is set, so you don't need to handle this yourself, it's called out here so the
+omission isn't a surprise if you're inspecting the request.
+
 </Callout>
 
 Each adapter reads its own native field first. Anthropic and Gemini use `budgetTokens` directly.
@@ -119,8 +127,19 @@ OpenAI compatible clients use `reasoningEffort` directly. Bedrock forwards a bud
 models, other Bedrock models get neither.
 
 When only the other field is set, it is converted using a shared table: `minimal` is 1024,
-`low` is 4096, `medium` is 16000, `high` is 32000. This is a reasonable guess, not a provider
-guarantee. Set `budgetTokens` directly for a precise number on a specific model.
+`low` is 4096, `medium` is 16000, `high` is 32000. A value strictly between two tiers rounds up to
+the next tier it's still `<=`, e.g. 4097 lands in `medium`, not `low`. This is a reasonable guess,
+not a provider guarantee. Set `budgetTokens` directly for a precise number on a specific model.
+
+<Callout type="info">
+  Claude Opus 4.7 and later, and every Claude 5 tier model, also reject *manual*, budget-based
+  thinking (`thinking: { type: 'enabled', budget_tokens }`) outright, with a 400 error, separate
+  from the temperature restriction above. `fromAnthropic` and `fromBedrock` detect these models and
+  send adaptive thinking plus Anthropic's own `effort` parameter (`low`/`medium`/`high`/`xhigh`/
+  `max`) instead, converting `reasoningEffort`/`budgetTokens` onto the nearest `effort` level
+  automatically. `xhigh` and `max` have no equivalent in VernLLM's four-tier `reasoningEffort` and
+  aren't reachable through this conversion.
+</Callout>
 
 On Gemini, `0` disables thinking and `-1` requests automatic budgeting. Both are passed through
 unchanged rather than run through the conversion table above.

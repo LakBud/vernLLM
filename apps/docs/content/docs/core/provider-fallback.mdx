@@ -62,6 +62,8 @@ interface FallbackTarget {
   baseDelayMs?: number;
   defaultMaxTokens?: number;
   defaultTemperature?: number | null;
+  defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  defaultBudgetTokens?: number;
   nonRetryableStatus?: number[];
   circuitBreaker?: boolean | CircuitBreakerOptions;
   rateLimit?: RateLimitOptions;
@@ -85,6 +87,8 @@ const llm = new VernLLM({
     // maxRetries and timeoutMs inherit the primary's: 2 and 15000.
     // Only what's different needs stating.
     timeoutMs: 30_000,
+    defaultReasoningEffort: 'low', // this target's own default, independent of the primary's
+    defaultBudgetTokens: 4096,
   },
 });
 ```
