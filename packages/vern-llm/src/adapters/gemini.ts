@@ -388,7 +388,7 @@ function buildGeminiRequest(
         : undefined);
 
     if (effortTier !== undefined) {
-      config.thinkingConfig = { thinkingLevel: toGeminiThinkingLevel(effortTier) };
+      config.thinkingConfig = { thinkingLevel: toGeminiThinkingLevel(effortTier, params.model) };
     }
   } else {
     // `thinkingBudget` is Gemini's native reasoning control on 2.5 and

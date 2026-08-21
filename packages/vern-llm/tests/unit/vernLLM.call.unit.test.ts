@@ -188,6 +188,7 @@ describe('VernLLM.call, reasoning defaults', () => {
     const llm = new VernLLM({
       client: primaryClient,
       model: 'primary-model',
+      maxRetries: 0,
       defaultReasoningEffort: 'medium',
       defaultBudgetTokens: 16000,
       fallback: { client: fallbackClient, model: 'fallback-model' },
@@ -207,6 +208,7 @@ describe('VernLLM.call, reasoning defaults', () => {
     const llm = new VernLLM({
       client: primaryClient,
       model: 'primary-model',
+      maxRetries: 0,
       defaultReasoningEffort: 'medium',
       defaultBudgetTokens: 16000,
       fallback: {

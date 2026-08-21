@@ -35,6 +35,18 @@ function fakeAsyncIterable(events: unknown[]): AsyncIterable<unknown> {
   };
 }
 
+function makeFakeStreamingGeminiClient(chunks: unknown[]) {
+  const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
+  const generateContentStream = vi.fn((_params: unknown) =>
+    Promise.resolve(fakeAsyncIterable(chunks)),
+  );
+
+  return {
+    client: { generateContent, generateContentStream } as unknown as GeminiClient,
+    generateContentStream,
+  };
+}
+
 describe('fromAnthropic().chat.completions.createStream reasoning budget', () => {
   function makeFakeStreamingAnthropicClient(events: unknown[]) {
     const create = vi.fn(async (_params: unknown, _options: unknown) => fakeAsyncIterable(events));
@@ -178,18 +190,6 @@ describe('fromAnthropic().chat.completions.createStream reasoning budget', () =>
 });
 
 describe('fromGemini().chat.completions.createStream reasoning budget (Gemini 2.5, thinkingBudget)', () => {
-  function makeFakeStreamingGeminiClient(chunks: unknown[]) {
-    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
-    const generateContentStream = vi.fn((_params: unknown) =>
-      Promise.resolve(fakeAsyncIterable(chunks)),
-    );
-
-    return {
-      client: { generateContent, generateContentStream } as unknown as GeminiClient,
-      generateContentStream,
-    };
-  }
-
   it('sends budget_tokens directly onto config.thinkingConfig.thinkingBudget', async () => {
     const { client, generateContentStream } = makeFakeStreamingGeminiClient([{}]);
     const adapted = fromGemini(client);
@@ -288,18 +288,6 @@ describe('fromGemini().chat.completions.createStream reasoning budget (Gemini 2.
 });
 
 describe('fromGemini().chat.completions.createStream reasoning budget (Gemini 3, thinkingLevel)', () => {
-  function makeFakeStreamingGeminiClient(chunks: unknown[]) {
-    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
-    const generateContentStream = vi.fn((_params: unknown) =>
-      Promise.resolve(fakeAsyncIterable(chunks)),
-    );
-
-    return {
-      client: { generateContent, generateContentStream } as unknown as GeminiClient,
-      generateContentStream,
-    };
-  }
-
   it('maps reasoning_effort directly onto thinkingLevel', async () => {
     const { client, generateContentStream } = makeFakeStreamingGeminiClient([{}]);
     const adapted = fromGemini(client);

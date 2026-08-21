@@ -238,8 +238,57 @@ export type GeminiThinkingLevel = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH';
 /** Converts VernLLM's `reasoningEffort` directly into Gemini's `ThinkingLevel` enum value. */
 export function toGeminiThinkingLevel(
   effort: 'minimal' | 'low' | 'medium' | 'high',
+  model: string,
 ): GeminiThinkingLevel {
-  return effort.toUpperCase() as GeminiThinkingLevel;
+  return clampGeminiThinkingLevel(model, effort.toUpperCase() as GeminiThinkingLevel);
+}
+
+/**
+ * Parses a Gemini model id's minor version, e.g. `"gemini-3.1-pro"` -> `1`,
+ * `"gemini-3-pro"` -> `0` (no explicit minor). Only meaningful alongside
+ * `parseGeminiMajorVersion`.
+ */
+function parseGeminiMinorVersion(model: string): number {
+  const match = /gemini-\d+\.(\d+)/.exec(model);
+  return match ? Number(match[1]) : 0;
+}
+
+/**
+ * Some Gemini 3 "Pro" tier models accept a narrower set of `thinkingLevel`
+ * values than VernLLM's four tiers map onto, confirmed against real API
+ * 400s and Google's own migration guidance, not assumed:
+ * - Gemini 3 Pro (major 3, minor 0, e.g. `"gemini-3-pro-preview"`): only
+ *   `LOW` and `HIGH`; `MEDIUM` returns a 400 ("Thinking level MEDIUM is
+ *   not supported for this model").
+ * - Gemini 3.1 Pro (major 3, minor >= 1): `LOW`/`MEDIUM`/`HIGH`, no
+ *   `MINIMAL`, Google's own docs point users toward a Flash-tier model
+ *   instead for the lowest setting.
+ * - Every Flash-tier Gemini 3+ model accepts the full four levels, no
+ *   clamping needed, matched by this function simply not applying to
+ *   anything without `"pro"` in the model id.
+ *
+ * Clamped automatically rather than left to error, since `reasoningEffort`
+ * is a per-call value, a caller hitting this isn't misconfiguring an
+ * instance once, they're getting an intermittent-looking failure on
+ * whichever specific call happened to pick an unsupported tier. Necessarily
+ * best-effort: a future Pro-tier release could add back a level this rule
+ * still clamps, or clamp one this rule doesn't yet know to touch.
+ */
+function clampGeminiThinkingLevel(model: string, level: GeminiThinkingLevel): GeminiThinkingLevel {
+  if (!model.includes('pro')) return level;
+
+  const major = parseGeminiMajorVersion(model);
+  if (major === null || major < 3) return level;
+
+  const minor = parseGeminiMinorVersion(model);
+
+  if (minor === 0) {
+    // Gemini 3 Pro: only LOW and HIGH are accepted.
+    return level === 'HIGH' ? 'HIGH' : 'LOW';
+  }
+
+  // Gemini 3.1 Pro and later: LOW/MEDIUM/HIGH accepted, no MINIMAL.
+  return level === 'MINIMAL' ? 'LOW' : level;
 }
 
 /**

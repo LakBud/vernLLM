@@ -7,6 +7,7 @@ import {
   DEFAULT_EFFORT_TOKENS,
   isAdaptiveOnlyModel,
   supportsManualThinkingBudget,
+  toGeminiThinkingLevel,
 } from '../../../../src/adapters/internal/reasoningBudget.utils.js';
 
 describe('reasoningBudget.utils', () => {
@@ -203,6 +204,42 @@ describe('reasoningBudget.utils', () => {
       expect(supportsManualThinkingBudget('claude-nova-1', ['claude-nova-1'])).toBe(false);
       expect(supportsManualThinkingBudget('claude-opus-4-6', ['claude-opus-4-6'])).toBe(false);
       expect(supportsManualThinkingBudget('claude-opus-4-6')).toBe(true);
+    });
+  });
+
+  describe('toGeminiThinkingLevel, Pro-tier clamping', () => {
+    it('maps every tier through unchanged on a non-Pro Gemini 3 model (Flash)', () => {
+      expect(toGeminiThinkingLevel('minimal', 'gemini-3-flash')).toBe('MINIMAL');
+      expect(toGeminiThinkingLevel('low', 'gemini-3-flash')).toBe('LOW');
+      expect(toGeminiThinkingLevel('medium', 'gemini-3-flash')).toBe('MEDIUM');
+      expect(toGeminiThinkingLevel('high', 'gemini-3-flash')).toBe('HIGH');
+    });
+
+    it('clamps gemini-3-pro to only LOW and HIGH, MEDIUM is a real 400 on this model', () => {
+      expect(toGeminiThinkingLevel('minimal', 'gemini-3-pro-preview')).toBe('LOW');
+      expect(toGeminiThinkingLevel('low', 'gemini-3-pro-preview')).toBe('LOW');
+      expect(toGeminiThinkingLevel('medium', 'gemini-3-pro-preview')).toBe('LOW');
+      expect(toGeminiThinkingLevel('high', 'gemini-3-pro-preview')).toBe('HIGH');
+    });
+
+    it('clamps gemini-3.1-pro to LOW/MEDIUM/HIGH, no MINIMAL on this tier', () => {
+      expect(toGeminiThinkingLevel('minimal', 'gemini-3.1-pro-preview')).toBe('LOW');
+      expect(toGeminiThinkingLevel('low', 'gemini-3.1-pro-preview')).toBe('LOW');
+      expect(toGeminiThinkingLevel('medium', 'gemini-3.1-pro-preview')).toBe('MEDIUM');
+      expect(toGeminiThinkingLevel('high', 'gemini-3.1-pro-preview')).toBe('HIGH');
+    });
+
+    it('does not clamp a Pro-tier model below Gemini 3', () => {
+      // "pro" appears in the id but the major version is below the
+      // threshold this rule applies to at all.
+      expect(toGeminiThinkingLevel('medium', 'gemini-2.5-pro')).toBe('MEDIUM');
+    });
+
+    it('does not clamp a future Gemini 3.x Pro minor version below 3.1 the same way as 3.0', () => {
+      // gemini-3.5-pro (hypothetical) should be treated like 3.1+, not
+      // like the original 3.0 Pro's narrower LOW/HIGH-only set.
+      expect(toGeminiThinkingLevel('medium', 'gemini-3.5-pro-preview')).toBe('MEDIUM');
+      expect(toGeminiThinkingLevel('minimal', 'gemini-3.5-pro-preview')).toBe('LOW');
     });
   });
 });

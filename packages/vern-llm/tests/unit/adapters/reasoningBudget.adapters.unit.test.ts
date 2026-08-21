@@ -829,6 +829,44 @@ describe('fromGemini reasoning budget (Gemini 3 and later, thinkingLevel)', () =
 
     expect(response.usage?.completion_tokens_details).toEqual({ reasoning_tokens: 15 });
   });
+
+  it('clamps gemini-3-pro to LOW/HIGH in the real request, MEDIUM is not sent', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3-pro-preview',
+        max_tokens: 200,
+        reasoning_effort: 'medium',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'LOW',
+    });
+  });
+
+  it('clamps gemini-3.1-pro to LOW/MEDIUM/HIGH in the real request, MINIMAL is not sent', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-pro-preview',
+        max_tokens: 200,
+        reasoning_effort: 'minimal',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'LOW',
+    });
+  });
 });
 
 describe('fromBedrock reasoning budget', () => {
