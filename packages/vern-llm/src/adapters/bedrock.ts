@@ -10,6 +10,21 @@ import {
   supportsNativeStructuredOutput,
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
+import { effortToBudgetTokens } from './internal/reasoningBudget.utils.js';
+
+/**
+ * Default heuristic for whether a Bedrock model id is a Claude model,
+ * matching AWS's own `anthropic.claude-*`/`us.anthropic.claude-*` naming.
+ * Only used to decide whether a reasoning token budget is worth forwarding
+ * through `additionalModelRequestFields`, not a general capability check,
+ * so a plain substring match is enough, no override hook needed the way
+ * `nativeStructuredOutputModels`/`toolUseSupportedModels` have one: a
+ * false positive here just sends an inert extra field, not a request that
+ * fails outright.
+ */
+function isClaudeModel(model: string): boolean {
+  return model.includes('claude');
+}
 
 /** Bedrock Converse's supported inline image formats. */
 type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
@@ -92,6 +107,14 @@ export interface BedrockConverseClient {
           };
         };
       };
+      /**
+       * Model-specific passthrough. Converse has no reasoning-budget field
+       * of its own, so a token budget for a Claude model on Bedrock is
+       * forwarded here under Anthropic's own key, `{ thinking: { type:
+       * 'enabled', budget_tokens } }`. Non-Claude models get nothing here,
+       * there is no equivalent field to reach for.
+       */
+      additionalModelRequestFields?: Record<string, unknown>;
     },
     options: { signal: AbortSignal },
   ): Promise<{
@@ -401,6 +424,22 @@ function buildBedrockRequest(
     }
   }
 
+  // Converse has no reasoning-budget field of its own. A token budget is
+  // only forwarded when the target is a Claude model on Bedrock, since
+  // `additionalModelRequestFields` is passed straight through to the
+  // underlying model unchanged, and Anthropic's own `thinking` key is
+  // meaningless to any other model family. Native `budget_tokens` is used
+  // directly; `reasoning_effort` alone is converted to the nearest token
+  // budget first, same table the Anthropic and Gemini adapters use.
+  const budgetTokens =
+    params.budget_tokens ??
+    (params.reasoning_effort ? effortToBudgetTokens(params.reasoning_effort) : undefined);
+
+  const additionalModelRequestFields =
+    budgetTokens !== undefined && isClaudeModel(params.model)
+      ? { thinking: { type: 'enabled', budget_tokens: budgetTokens } }
+      : undefined;
+
   const request: BedrockRequest = {
     modelId: params.model,
     messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toBedrockMessage(m))),
@@ -411,6 +450,7 @@ function buildBedrockRequest(
     },
     ...(toolConfig ? { toolConfig } : {}),
     ...(outputConfig ? { outputConfig } : {}),
+    ...(additionalModelRequestFields ? { additionalModelRequestFields } : {}),
   };
 
   return { request, toolName };
@@ -700,7 +740,11 @@ function wrapAwsSendClient(client: AwsSendClient): BedrockConverseClient {
  * has no field that mechanically guarantees JSON output, and the only way
  * to emulate it was an unenforced system-prompt instruction, a guarantee
  * this adapter no longer pretends to make. Use `jsonSchema` instead.
- * `reasoning_effort` (no Converse equivalent) is dropped.
+ * `reasoning_effort` (no Converse equivalent) is converted to a token
+ * budget and forwarded via `additionalModelRequestFields` for Claude
+ * models only; `budget_tokens` is forwarded the same way directly. Both
+ * are silently dropped for non-Claude models, which have no equivalent
+ * field to reach for. See `adapters/internal/reasoningBudget.utils.ts`.
  *
  * `tools` alone maps to Converse's native `toolConfig`/`toolUse`/
  * `toolResult`; `tool_choice` maps to `toolConfig.toolChoice`.

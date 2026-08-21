@@ -13,6 +13,7 @@ import {
   supportsNativeStructuredOutput,
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
+import { effortToBudgetTokens } from './internal/reasoningBudget.utils.js';
 
 /** Anthropic's native per-block content shape for a message. */
 type AnthropicContentBlock =
@@ -72,11 +73,22 @@ export interface AnthropicClient {
             schema: Record<string, unknown>;
           };
         };
+        /**
+         * Native token budget for internal reasoning. Built from
+         * `CallParams.budgetTokens` directly when set, or converted from
+         * `reasoningEffort` when only that was set. See
+         * `adapters/internal/reasoningBudget.utils.ts`.
+         */
+        thinking?: { type: 'enabled'; budget_tokens: number };
       },
       options: { signal: AbortSignal },
     ): Promise<{
       content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
-      usage?: { input_tokens?: number; output_tokens?: number };
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        output_tokens_details?: { thinking_tokens?: number };
+      };
     }>;
   };
 }
@@ -162,7 +174,10 @@ type AnthropicStreamEvent =
         | { type: 'input_json_delta'; partial_json: string };
     }
   | { type: 'content_block_stop'; index: number }
-  | { type: 'message_delta'; usage?: { output_tokens?: number } }
+  | {
+      type: 'message_delta';
+      usage?: { output_tokens?: number; output_tokens_details?: { thinking_tokens?: number } };
+    }
   | { type: 'message_stop' }
   // Keep-alive event during long streams (e.g. extended thinking). Modeled
   // so the event switch has somewhere to route it. See createStream.
@@ -308,9 +323,13 @@ function buildAnthropicRequestBody(
     ({ tools, toolChoice } = buildAnthropicTools(params.tools, params.tool_choice));
   }
 
-  // `reasoning_effort` (OpenAI o-series/gpt-5 style) has no direct Anthropic
-  // equivalent. Claude's extended thinking uses a token budget, not a tier
-  // string, so it's intentionally dropped here rather than guessed at.
+  // `budget_tokens` is Claude's native reasoning control. Used directly
+  // when the caller set it. When only `reasoning_effort` (OpenAI o-series/
+  // gpt-5 style) was set, it's converted to the nearest token budget,
+  // since Anthropic has no tier string of its own to pass it through as.
+  const budgetTokens =
+    params.budget_tokens ??
+    (params.reasoning_effort ? effortToBudgetTokens(params.reasoning_effort) : undefined);
 
   const system = systemMessage?.content;
 
@@ -322,6 +341,9 @@ function buildAnthropicRequestBody(
     messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toAnthropicMessage(m))),
     ...(tools ? { tools, tool_choice: toolChoice } : {}),
     ...(outputFormat ? { output_config: { format: outputFormat } } : {}),
+    ...(budgetTokens !== undefined
+      ? { thinking: { type: 'enabled', budget_tokens: budgetTokens } }
+      : {}),
   };
 
   return { body, toolName };
@@ -462,6 +484,13 @@ export function fromAnthropic(
               completion_tokens: response.usage?.output_tokens,
               total_tokens:
                 (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
+              ...(response.usage?.output_tokens_details?.thinking_tokens !== undefined
+                ? {
+                    completion_tokens_details: {
+                      reasoning_tokens: response.usage.output_tokens_details.thinking_tokens,
+                    },
+                  }
+                : {}),
             },
           };
         },
@@ -550,6 +579,7 @@ export function fromAnthropic(
               }
             } else if (event.type === 'message_delta') {
               const outputTokens = event.usage?.output_tokens ?? 0;
+              const thinkingTokens = event.usage?.output_tokens_details?.thinking_tokens;
 
               yield {
                 type: 'usage',
@@ -557,6 +587,9 @@ export function fromAnthropic(
                   prompt_tokens: inputTokens,
                   completion_tokens: outputTokens,
                   total_tokens: inputTokens + outputTokens,
+                  ...(thinkingTokens !== undefined
+                    ? { completion_tokens_details: { reasoning_tokens: thinkingTokens } }
+                    : {}),
                 },
               } satisfies WireStreamChunk;
             } else if (event.type === 'ping') {

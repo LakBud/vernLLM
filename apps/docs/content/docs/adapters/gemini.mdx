@@ -19,7 +19,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const llm = new VernLLM({
   client: fromGemini(ai),
-  model: 'gemini-2.5-flash',
+  model: 'gemini-3.1-flash-lite',
 });
 ```
 
@@ -28,7 +28,7 @@ const llm = new VernLLM({
 ```ts title="gemini-new-sdk-setup-models.ts"
 const llm = new VernLLM({
   client: fromGemini(ai.models),
-  model: 'gemini-2.5-flash',
+  model: 'gemini-3.1-flash-lite',
 });
 ```
 

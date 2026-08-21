@@ -225,10 +225,13 @@ export function buildStreamResult<T>(
             complete: wireChunk.complete,
           });
         } else if (wireChunk.type === 'usage') {
+          const reasoningTokens = wireChunk.usage.completion_tokens_details?.reasoning_tokens;
+
           usage = {
             promptTokens: wireChunk.usage.prompt_tokens ?? 0,
             completionTokens: wireChunk.usage.completion_tokens ?? 0,
             totalTokens: wireChunk.usage.total_tokens ?? 0,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
             requestId,
             model,
             provider: providerName,

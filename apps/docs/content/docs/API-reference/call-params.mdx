@@ -106,6 +106,24 @@ See [Tool Calling](/docs/core/tool-calling) for the complete workflow and [Error
 | `temperature`     | `number \| null`                           | Instance `defaultTemperature`, otherwise `0.2` | Pass `null` to omit `temperature` and use the provider's default. |
 | `maxTokens`       | `number`                                   | Instance `defaultMaxTokens`, otherwise `1000`  | Maximum response length.                                          |
 | `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Not sent                                       | Passed through when set.                                          |
+| `budgetTokens`    | `number`                                   | Not sent                                       | Native on Anthropic and Gemini. See below.                        |
+
+<Callout type="warn">
+  Claude Opus 4.7 and later, including Opus 5, reject `temperature` (and `top_p`/`top_k`) on a
+  non-default value with a 400 error. Omit `temperature` entirely for those models, or pass `null`,
+  and describe the desired behavior in the prompt instead.
+</Callout>
+
+Each adapter reads its own native field first. Anthropic and Gemini use `budgetTokens` directly.
+OpenAI compatible clients use `reasoningEffort` directly. Bedrock forwards a budget only for Claude
+models, other Bedrock models get neither.
+
+When only the other field is set, it is converted using a shared table: `minimal` is 1024,
+`low` is 4096, `medium` is 16000, `high` is 32000. This is a reasonable guess, not a provider
+guarantee. Set `budgetTokens` directly for a precise number on a specific model.
+
+On Gemini, `0` disables thinking and `-1` requests automatic budgeting. Both are passed through
+unchanged rather than run through the conversion table above.
 
 See [Per-call Overrides](/docs/guides/per-call-overrides) for model and generation
 overrides.

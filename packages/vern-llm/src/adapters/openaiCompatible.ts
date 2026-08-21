@@ -1,6 +1,27 @@
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
+import { budgetTokensToEffort } from './internal/reasoningBudget.utils.js';
 
 import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/index.js';
+
+/**
+ * OpenAI's wire format only understands `reasoning_effort`, not a raw
+ * token budget. When the caller set `reasoningEffort`, it's already on
+ * `params` and passed through unchanged, this function does nothing.
+ * When only `budgetTokens` was set, it's converted to the nearest tier
+ * and `budget_tokens` is dropped, since OpenAI's API would otherwise
+ * silently ignore an unrecognized field.
+ */
+function applyReasoningBudget<
+  P extends { reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high'; budget_tokens?: number },
+>(params: P): P {
+  if (params.budget_tokens === undefined) return params;
+
+  const { budget_tokens, ...rest } = params;
+
+  return rest.reasoning_effort !== undefined
+    ? (rest as P)
+    : ({ ...rest, reasoning_effort: budgetTokensToEffort(budget_tokens) } as P);
+}
 
 /** OpenAI's native per-part content shape for a user message. */
 type OpenAIContentPart =
@@ -174,7 +195,9 @@ export function fromOpenAICompatible(
           const messages = toOpenAIMessages(params);
 
           return raw.chat.completions.create(
-            { ...params, messages } as Parameters<LLMClient['chat']['completions']['create']>[0],
+            applyReasoningBudget({ ...params, messages }) as Parameters<
+              LLMClient['chat']['completions']['create']
+            >[0],
             options,
           );
         },
@@ -183,12 +206,12 @@ export function fromOpenAICompatible(
           const messages = toOpenAIMessages(params);
 
           const stream = (await rawCreate(
-            {
+            applyReasoningBudget({
               ...params,
               messages,
               stream: true,
               ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
-            },
+            }),
             options,
           )) as AsyncIterable<OpenAIStreamChunk>;
 

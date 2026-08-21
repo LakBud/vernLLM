@@ -694,10 +694,13 @@ export class CallExecutor {
   ): TokenUsage | undefined {
     if (!response.usage) return undefined;
 
+    const reasoningTokens = response.usage.completion_tokens_details?.reasoning_tokens;
+
     return {
       promptTokens: response.usage.prompt_tokens ?? 0,
       completionTokens: response.usage.completion_tokens ?? 0,
       totalTokens: response.usage.total_tokens ?? 0,
+      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
       requestId,
       model,
       provider: this.providerName,

@@ -71,11 +71,11 @@ pipelines.
 
 ## Request defaults
 
-| Option               | Default            | Notes                                                                                                   |
-| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------- |
-| `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                 |
-| `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` by default. |
-| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure, not throw.           |
+| Option               | Default            | Notes                                                                                                                                                                                                                                                     |
+| -------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `defaultMaxTokens`   | `1000`             | Used for any call that does not set `maxTokens` itself.                                                                                                                                                                                                   |
+| `defaultTemperature` | `0.2`              | Used for any call that does not set `temperature` itself. Pass `null` to omit `temperature` by default. Claude Opus 4.7 and later reject a non-default `temperature` with a 400 error; set this to `null` for an instance pointed at one of those models. |
+| `parseJson`          | `defaultParseJson` | Custom parser for non-standard JSON responses. Must return `undefined` on failure, not throw.                                                                                                                                                             |
 
 ## Caching
 
@@ -169,12 +169,12 @@ from each attempted target in declaration order. See [FallbackExhaustedError](/d
 A handful of options are set per `call()` rather than on the instance. The following options have
 their own defaults worth knowing:
 
-| Option         | Default                                       | Notes                                                                                                             |
-| -------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `temperature`  | `0.2`, or the instance's `defaultTemperature` | Low by design. Override per call as needed. Pass `null` to omit `temperature` and use the provider's own default. |
-| `jsonMode`     | `true`, except `false` if `tools` is set      | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back.                        |
-| `systemPrompt` | none                                          | Optional. Omitting it skips the system message entirely.                                                          |
-| `toolChoice`   | `'auto'` when `tools` is set                  | Controls whether and which tool the model must call. See [Tool Calling](/docs/core/tool-calling).                 |
+| Option         | Default                                       | Notes                                                                                                                                                                                    |
+| -------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `temperature`  | `0.2`, or the instance's `defaultTemperature` | Low by design. Override per call as needed. Pass `null` to omit `temperature` and use the provider's own default. Claude Opus 4.7 and later reject a non-default value with a 400 error. |
+| `jsonMode`     | `true`, except `false` if `tools` is set      | Responses are parsed as JSON by default. Set `jsonMode: false` to get the raw string back.                                                                                               |
+| `systemPrompt` | none                                          | Optional. Omitting it skips the system message entirely.                                                                                                                                 |
+| `toolChoice`   | `'auto'` when `tools` is set                  | Controls whether and which tool the model must call. See [Tool Calling](/docs/core/tool-calling).                                                                                        |
 
 ## Usage metering
 

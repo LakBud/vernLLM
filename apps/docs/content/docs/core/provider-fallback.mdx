@@ -81,7 +81,7 @@ const llm = new VernLLM({
 
   fallback: {
     client: fromGemini(gemini),
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3.1-flash-lite',
     // maxRetries and timeoutMs inherit the primary's: 2 and 15000.
     // Only what's different needs stating.
     timeoutMs: 30_000,

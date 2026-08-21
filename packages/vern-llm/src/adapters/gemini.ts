@@ -6,6 +6,7 @@ import {
   type WireToolCall,
 } from '../types/index.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
+import { effortToBudgetTokens } from './internal/reasoningBudget.utils.js';
 
 /**
  * Gemini's native per-part content shape for a `contents` entry.
@@ -72,6 +73,14 @@ export interface GeminiClient {
           allowedFunctionNames?: string[];
         };
       };
+      /**
+       * Native reasoning token budget. Built from `CallParams.budgetTokens`
+       * directly when set (0 disables thinking, -1 requests automatic
+       * budgeting, both passed through unchanged), or converted from
+       * `reasoningEffort` when only that was set. See
+       * `adapters/internal/reasoningBudget.utils.ts`.
+       */
+      thinkingConfig?: { thinkingBudget?: number };
       abortSignal?: AbortSignal;
     };
   }): Promise<{
@@ -84,6 +93,7 @@ export interface GeminiClient {
       promptTokenCount?: number;
       candidatesTokenCount?: number;
       totalTokenCount?: number;
+      thoughtsTokenCount?: number;
     };
   }>;
 
@@ -108,6 +118,7 @@ export interface GeminiClient {
         promptTokenCount?: number;
         candidatesTokenCount?: number;
         totalTokenCount?: number;
+        thoughtsTokenCount?: number;
       };
     }>
   >;
@@ -337,6 +348,20 @@ function buildGeminiRequest(
     config.toolConfig = toGeminiToolConfig(params.tool_choice);
   }
 
+  // `thinkingBudget` is Gemini's native reasoning control, 0 disables
+  // thinking and -1 requests automatic budgeting, both passed through
+  // unchanged rather than run through the effort table below. Used
+  // directly when the caller set `budget_tokens`. When only
+  // `reasoning_effort` was set, it's converted to the nearest token
+  // budget, since Gemini has no tier string of its own.
+  const thinkingBudget =
+    params.budget_tokens ??
+    (params.reasoning_effort ? effortToBudgetTokens(params.reasoning_effort) : undefined);
+
+  if (thinkingBudget !== undefined) {
+    config.thinkingConfig = { thinkingBudget };
+  }
+
   return {
     model: params.model,
     contents: mergeConsecutiveFunctionResponses(
@@ -353,9 +378,10 @@ function buildGeminiRequest(
  * `systemInstruction` field instead of a `system` role message,
  * `generationConfig` instead of top-level `temperature`/`max_tokens`, and
  * native JSON Schema support via `responseMimeType: 'application/json'` +
- * `responseSchema`. `reasoning_effort` has no equivalent. Gemini's thinking
- * models use a token budget, not an effort tier, so it's dropped, same as
- * Anthropic.
+ * `responseSchema`. `reasoning_effort` has no native Gemini equivalent, so
+ * it's converted to a `thinkingConfig.thinkingBudget` token count; `budget_tokens`
+ * maps to `thinkingBudget` directly, Gemini's native reasoning control. See
+ * `adapters/internal/reasoningBudget.utils.ts`.
  *
  * `tools` maps to Gemini's native `functionDeclarations`/`functionCall`;
  * `tool_choice` maps to `toolConfig.functionCallingConfig`. Gemini accepts
@@ -447,6 +473,13 @@ export function fromGemini(client: GeminiClient): LLMClient {
               prompt_tokens: response.usageMetadata?.promptTokenCount,
               completion_tokens: response.usageMetadata?.candidatesTokenCount,
               total_tokens: response.usageMetadata?.totalTokenCount,
+              ...(response.usageMetadata?.thoughtsTokenCount !== undefined
+                ? {
+                    completion_tokens_details: {
+                      reasoning_tokens: response.usageMetadata.thoughtsTokenCount,
+                    },
+                  }
+                : {}),
             },
           };
         },
@@ -514,6 +547,11 @@ export function fromGemini(client: GeminiClient): LLMClient {
                 prompt_tokens: lastUsage.promptTokenCount,
                 completion_tokens: lastUsage.candidatesTokenCount,
                 total_tokens: lastUsage.totalTokenCount,
+                ...(lastUsage.thoughtsTokenCount !== undefined
+                  ? {
+                      completion_tokens_details: { reasoning_tokens: lastUsage.thoughtsTokenCount },
+                    }
+                  : {}),
               },
             };
           }

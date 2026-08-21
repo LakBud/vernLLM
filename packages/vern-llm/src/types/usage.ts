@@ -30,6 +30,13 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /**
+   * Tokens spent on internal reasoning, a subset of `completionTokens`,
+   * never added on top of it. Undefined when the provider's response
+   * doesn't report a separate reasoning figure, e.g. Bedrock Converse
+   * without an explicit `additionalModelResponseFieldPaths` request.
+   */
+  reasoningTokens?: number;
   requestId: string;
   model: string;
   /**

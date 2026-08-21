@@ -42,6 +42,12 @@ const analysis = await llm.call({
   `temperature` from the request entirely and let the provider apply its own default instead.
 </Callout>
 
+<Callout type="warn">
+  Claude Opus 4.7 and later, including Opus 5, reject `temperature` on a non-default value with a
+  400 error. Use `temperature: null` for those models, or `defaultTemperature: null` on the instance
+  if you route calls to one, and describe the desired behavior in the prompt instead.
+</Callout>
+
 `reasoningEffort`, `jsonMode`, `jsonSchema`, and `schema` aren't instance-level
 options at all &mdash; they only ever exist per call, so there's nothing to "override" at the
 instance level, you just set them on the calls that need them.

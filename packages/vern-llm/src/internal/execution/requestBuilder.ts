@@ -66,6 +66,7 @@ export class RequestBuilder {
       maxTokens = this.defaultMaxTokens,
       model = this.model,
       reasoningEffort,
+      budgetTokens,
       jsonSchema,
       tools,
       toolChoice,
@@ -199,6 +200,7 @@ export class RequestBuilder {
       max_tokens: maxTokens,
       ...(responseFormat ? { response_format: responseFormat } : {}),
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+      ...(budgetTokens !== undefined ? { budget_tokens: budgetTokens } : {}),
       ...(tools ? { tools: toWireTools(tools) } : {}),
       ...(tools ? { tool_choice: this.buildWireToolChoice(toolChoice) } : {}),
       messages: [
