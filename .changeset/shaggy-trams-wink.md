@@ -15,7 +15,15 @@ the provider reports a separate figure for internal reasoning. Undefined for Bed
 Converse only returns that figure if the request explicitly asks for it, a separate feature outside
 this change.
 
-Neither field is required. Existing calls that set nothing here are unaffected.
+Added `defaultReasoningEffort` and `defaultBudgetTokens` on `VernLLMOptions` and `FallbackTarget`,
+matching the existing `defaultTemperature` pattern. Resolution order is per call value, then the
+fallback target's own default, then the instance default.
+
+Added `reasoningEffortTokens` as an option on `fromAnthropic`, `fromGemini`,
+`fromOpenAICompatible`, and `fromBedrock`, letting the conversion table itself be overridden per
+adapter instance. Only the tiers listed are changed, any tier left out keeps the built in default.
+
+Neither field is required. Existing calls and instances that set nothing here are unaffected.
 
 See the `budgetTokens` row in the
 [Call Params reference](https://vernllm.vercel.app/docs/API-reference/call-params) for full per
