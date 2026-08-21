@@ -49,7 +49,7 @@ import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/cache.utils.js';
 
 /**
- * A resilient layer around an LLM chat completions client. This is VernLLM!
+ * A LLM call framework for resilience, observability and control. This is VernLLM!
  *
  * Adds retry with backoff and jitter, per-attempt timeouts, an optional
  * circuit breaker, JSON parsing with optional schema validation, usage

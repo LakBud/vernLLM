@@ -1,0 +1,67 @@
+---
+title: Overview
+description: The seams VernLLM lets you plug your own implementation into
+---
+
+VernLLM is built around a handful of small interfaces rather than one monolithic config object.
+Anywhere behavior is opinionated (how logs are written, how a cache is stored, how tokens are
+estimated), there's a matching interface you can implement instead of accepting the default.
+
+<Cards>
+  <Card title="Logging" href="/docs/customization/logging">
+    Swap the default console logger for pino, winston, or any structured logger, and redact
+    sensitive fields from debug output.
+  </Card>
+  <Card title="Provider" href="/docs/customization/provider">
+    Implement `LLMClient` (or use `fromFetch`) to talk to a provider with no existing adapter.
+  </Card>
+  <Card title="Caching" href="/docs/customization/caching">
+    Bring your own `CacheAdapter` backed by Redis, Upstash, or anything else, on top of the built-in
+    in-memory, normalized, and tiered adapters.
+  </Card>
+  <Card title="Tokenizer" href="/docs/customization/tokenizer">
+    Replace the default chars/4 heuristic with a real tokenizer for accurate `tokensPerMinute` rate
+    limiting.
+  </Card>
+  <Card title="Schema" href="/docs/customization/schema">
+    Validate structured output with Zod or any validator exposing `safeParse`.
+  </Card>
+</Cards>
+
+<Callout type="info">
+  These are all optional. Every one of them has a working default, `logger` falls back to `console`,
+  `cache` is simply unused until you call `cachedCall`, `estimateTokens` falls back to a chars/4
+  heuristic, and `schema` is only checked when you provide one. Customize the ones that matter for
+  your setup and leave the rest alone.
+</Callout>
+
+## Where each option lives
+
+All of these are passed into the `VernLLM` constructor, alongside `client` and `model`:
+
+```ts title="customization-surface.ts"
+const llm = new VernLLM({
+  client: openai, // provider: an LLMClient (adapter or fromFetch)
+  model: 'gpt-4o',
+  logger: myLogger, // logging: a Logger
+  cache: myCacheAdapter, // caching: a CacheAdapter
+  rateLimit: {
+    tokensPerMinute: 200_000,
+    estimateTokens: myTokenizer, // tokenizer: an estimateTokens function
+  },
+});
+
+const result = await llm.call({
+  systemPrompt,
+  userContent,
+  schema: MySchema, // schema: anything exposing safeParse
+});
+```
+
+<Callout type="warn">
+  Tokenizer and schema aren't standalone options, they're parameters of two other features:
+  `estimateTokens` configures [rate limiting](/docs/core/rate-limiting), and `schema` configures
+  [structured output](/docs/core/structured-output). The pages under this section describe the same
+  options from the "how do I plug in my own implementation" angle; the Core pages describe the full
+  behavior of the feature they belong to.
+</Callout>

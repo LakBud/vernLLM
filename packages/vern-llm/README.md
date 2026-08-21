@@ -23,9 +23,9 @@
   <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
 </p>
 
-<p align="center">Production-ready resilience for LLM calls</p>
+<p align="center">The LLM call framework. Resilience, observability, and control for every call.</p>
 
-Retries, timeouts, caching, circuit breaking, provider fallback, and client-side rate limiting behind one typed interface, with adapters for OpenAI-compatible APIs (OpenAI, Groq, and more), Anthropic, Gemini, and Bedrock.
+Retries, timeouts, caching, circuit breaking, provider fallback, and client-side rate limiting behind one typed interface, with adapters for OpenAI-compatible APIs, Anthropic, Gemini, and Bedrock.
 
 **Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** — installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
 

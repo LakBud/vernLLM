@@ -1,0 +1,57 @@
+---
+title: Logging
+description: Plug in your own logger
+---
+
+Pass a `logger` implementing the `Logger` interface to route VernLLM's internal logs through your
+own stack instead of the default console logger:
+
+```ts
+interface Logger {
+  debug(message: string): void;
+  warn(message: string): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+```
+
+```ts title="pluggable-logger.ts"
+import pino from 'pino';
+import type { Logger } from 'vern-llm';
+
+const pinoInstance = pino();
+
+const pinoLogger: Logger = {
+  debug: (msg) => pinoInstance.debug(msg),
+  warn: (msg) => pinoInstance.warn(msg),
+  error: (msg, meta) => pinoInstance.error(meta, msg),
+};
+
+const llm = new VernLLM({ client: openai, model: 'gpt-4o', logger: pinoLogger });
+```
+
+Note `debug` and `warn` only ever receive a single `message` string, `meta` is `error`-only. A
+wrapper that expects a `meta` argument on every level (many structured loggers do) needs to
+default it itself, as `pinoLogger.error` does above.
+
+<Callout type="info">
+  Whatever you pass in is wrapped so a throwing (or promise-rejecting) implementation can never
+  break the call it's describing, the failure is caught and dropped, at most that one log line is
+  lost.
+</Callout>
+
+Debug-level output can also be scrubbed with `redact` before it reaches your logger:
+
+```ts title="redact-debug-output.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  debug: true,
+  redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED]'),
+});
+```
+
+<Callout>
+  See [Pluggable Logger](/docs/core/logging) for the full behavior: exactly what gets logged at each
+  level (with a table of every internal log site), how `debug` interacts with a custom logger, and
+  where `redact` does and doesn't apply.
+</Callout>

@@ -3,12 +3,25 @@ title: Pluggable Logger
 description: Swap in your own logger implementation
 ---
 
-`VernLLM` accepts a custom logger through the `logger` option. The logger must implement the `Logger` interface.
+`VernLLM` accepts a custom logger through the `logger` option. The logger must implement the `Logger` interface:
+
+```ts
+interface Logger {
+  debug(message: string): void;
+  warn(message: string): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+```
+
+Note `debug` and `warn` only ever receive a single `message` string, `meta` is `error`-only.
 
 <Callout type="info">
   A logger you pass in is wrapped internally so a throwing implementation can never break the call
   it's describing. If your `debug`, `warn`, or `error` throws, the error is caught and dropped, and
-  the operation it was logging still completes normally.
+  the operation it was logging still completes normally. An async logger (one that returns a
+  `Promise`, e.g. shipping to a remote log sink) is also supported: a rejected promise is caught and
+  dropped the same way a synchronous throw is. VernLLM never awaits your logger, so a slow logger
+  can't add latency to the call it's describing, at most, that one log line is lost.
 </Callout>
 
 ```ts title="pluggable-logger-setup.ts"
@@ -29,6 +42,31 @@ const llm = new VernLLM({
   logger: pinoLogger,
 });
 ```
+
+## What gets logged, at each level
+
+Every internal log line is prefixed `[VernLLM]` or `[VernLLM:<requestId>]` so multiple concurrent
+calls (and multiple `VernLLM` instances) stay distinguishable in one log stream:
+
+| Level   | When                                                                                                 | Example                                                                        |
+| ------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `debug` | A call succeeds (output, truncated to 800 chars)                                                     | `[VernLLM:req_abc] output:\n{"name": "..."}`                                   |
+| `debug` | A call attempt fails                                                                                 | `[VernLLM:req_abc] error:\n<provider error>`                                   |
+| `debug` | A stream fails to open                                                                               | `[VernLLM:req_abc] stream-open error:\n<provider error>`                       |
+| `warn`  | A retry is about to happen                                                                           | `[VernLLM:req_abc] recovery attempt 2/3, waiting 840ms (honoring Retry-After)` |
+| `warn`  | Usage was spent on an attempt that then failed                                                       | `[VernLLM:req_abc] usage failure, attempt 2/3: type=timeout tokens=412`        |
+| `warn`  | A cache adapter's `get` throws (treated as a miss)                                                   | `[VernLLM] cache read failed: <message>`                                       |
+| `warn`  | A cache adapter's `set` throws (swallowed)                                                           | `[VernLLM] cache write failed: <message>`                                      |
+| `warn`  | A cache adapter's `delete` throws (swallowed)                                                        | `[VernLLM] cache delete failed: <message>`                                     |
+| `warn`  | `model` was passed but has no effect (`isolateByModel` off)                                          | ``[VernLLM] call: `model: 'x'` has no effect here...``                         |
+| `error` | A user-supplied hook throws (`onUsage`, `onUsageFailure`, `onEvent`, `circuitBreaker.onStateChange`) | `[VernLLM] onUsage failed` with `meta: { message }`                            |
+
+<Callout type="info">
+  `error` calls always pass `meta` as `{ message: string }`, the caught error's `.message` (or
+  `'unknown'` if it wasn't an `Error`), never the original error object itself. If you need the
+  original error/stack for these hook-failure logs, capture it at the hook boundary yourself,
+  VernLLM only forwards the message string here.
+</Callout>
 
 ## Default logger behavior
 
@@ -67,12 +105,18 @@ const llm = new VernLLM({
 });
 ```
 
-`redact` applies to every internal debug log line, both the raw output logged on success and the
-provider error logged on failure (including a stream-open failure), the one place an app has no
-other way to intercept: they're direct `logger.debug` calls, not something routed through a
-callback. Everything else that could carry the same content, `onEvent` payloads, `LLMError.cause`,
-`onUsageFailure`, already goes straight to a callback your own code controls, so redacting it
-there needs no help from VernLLM.
+`redact` is applied at exactly two call sites internally, both debug-level:
+
+- The success path: the response content is passed through `redact` (or, for a tool-call-only
+  turn with no text, a placeholder like `[2 tool call(s)]` is, since there's no text to redact)
+  before being truncated to 800 characters and logged.
+- The failure paths: the stringified provider error is passed through `redact`, for both a normal
+  call failure and a stream-open failure.
+
+These are the one place an app has no other way to intercept: they're direct `logger.debug` calls,
+not something routed through a callback. Everything else that could carry the same content,
+`onEvent` payloads, `LLMError.cause`, `onUsageFailure`, already goes straight to a callback your
+own code controls, so redacting it there needs no help from VernLLM.
 
 <Callout type="info">
   `redact` runs before every internal `logger.debug()` call, regardless of whether that call ends up

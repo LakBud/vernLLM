@@ -1,0 +1,136 @@
+---
+title: Tokenizer
+description: Plug in a real tokenizer for rate limiting
+---
+
+<Callout type="info">
+  This isn't a standalone config option, it's `estimateTokens`, a parameter of `rateLimit`. It's
+  listed here because it's a common customization point; see [Rate
+  Limiting](/docs/core/rate-limiting) for everything else `rateLimit` controls.
+</Callout>
+
+`tokensPerMinute` needs a token count before a request is sent, before the real usage is known. By
+default VernLLM uses a rough `chars / 4` heuristic plus the requested `max_tokens`, and
+self-corrects by reconciling against the real reported usage after each call.
+
+Pass `estimateTokens` to use a real tokenizer instead:
+
+```ts title="custom-tokenizer.ts"
+import { encode } from 'gpt-tokenizer';
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: {
+    tokensPerMinute: 200_000,
+    estimateTokens: (request) => {
+      const promptTokens = request.messages.reduce(
+        (sum, m) => sum + encode(typeof m.content === 'string' ? m.content : '').length,
+        0,
+      );
+      return promptTokens + (request.max_tokens ?? 0);
+    },
+  },
+});
+```
+
+Any heuristic works here, a real tokenizer for your model family, a cheaper approximation tuned to
+your traffic, or a static overestimate if you'd rather rate-limit conservatively. Since the
+estimate is only used to reserve capacity ahead of the call and is reconciled afterward, an
+imperfect estimator degrades gracefully rather than causing lasting drift.
+
+<Callout>
+  See [Estimating tokens](/docs/core/rate-limiting#estimating-tokens) for the default heuristic in
+  full, and [Tuning rate limits](/docs/guides/tuning-rate-limits) for a worked guide on when a
+  custom estimator is worth adding.
+</Callout>
+
+## Using other tokenizers
+
+`estimateTokens` is just `(request: WireRequest) => number`, VernLLM doesn't depend on any
+particular tokenizer library, so the right choice depends on which provider/model you're calling
+and how exact you need the count to be.
+
+### `gpt-tokenizer` (OpenAI models, pure JS)
+
+Encodes locally with no native bindings, good default for OpenAI-shaped models:
+
+```ts title="gpt-tokenizer-estimate.ts"
+import { encode } from 'gpt-tokenizer';
+
+const estimateTokens = (request: WireRequest) => {
+  const promptTokens = request.messages.reduce(
+    (sum, m) => sum + encode(typeof m.content === 'string' ? m.content : '').length,
+    0,
+  );
+  return promptTokens + (request.max_tokens ?? 0);
+};
+```
+
+### `tiktoken` (OpenAI models, WASM, model-specific encodings)
+
+The official OpenAI tokenizer, more model-accurate than `gpt-tokenizer` for edge cases, at the
+cost of a WASM init step. `encoding_for_model` picks the right encoding (e.g. `cl100k_base` vs
+`o200k_base`) for you:
+
+```ts title="tiktoken-estimate.ts"
+import { encoding_for_model } from 'tiktoken';
+
+const encoder = encoding_for_model('gpt-4o');
+
+const estimateTokens = (request: WireRequest) => {
+  const promptTokens = request.messages.reduce(
+    (sum, m) => sum + encoder.encode(typeof m.content === 'string' ? m.content : '').length,
+    0,
+  );
+  return promptTokens + (request.max_tokens ?? 0);
+};
+```
+
+<Callout type="warn">
+  `tiktoken`'s encoder holds native/WASM resources and should be created once and reused, not
+  constructed inside `estimateTokens` itself, which runs on every attempt. Call `encoder.free()` at
+  process shutdown if you're managing its lifecycle explicitly.
+</Callout>
+
+### `@anthropic-ai/tokenizer` (Claude models)
+
+For Anthropic models, where OpenAI's encodings don't reflect real token counts:
+
+```ts title="anthropic-tokenizer-estimate.ts"
+import { countTokens } from '@anthropic-ai/tokenizer';
+
+const estimateTokens = (request: WireRequest) => {
+  const promptTokens = request.messages.reduce(
+    (sum, m) => sum + countTokens(typeof m.content === 'string' ? m.content : ''),
+    0,
+  );
+  return promptTokens + (request.max_tokens ?? 0);
+};
+```
+
+### Mixed providers/models behind one `VernLLM` instance
+
+`estimateTokens` receives the full `request`, including `model`, so a single estimator can branch
+per model if you route different calls to different providers:
+
+```ts title="mixed-model-estimate.ts"
+import { encode } from 'gpt-tokenizer';
+import { countTokens } from '@anthropic-ai/tokenizer';
+
+const estimateTokens = (request: WireRequest) => {
+  const text = request.messages
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .join('\n');
+  const promptTokens = request.model.startsWith('claude') ? countTokens(text) : encode(text).length;
+  return promptTokens + (request.max_tokens ?? 0);
+};
+```
+
+<Callout type="info">
+  None of these need to be exact. The estimate only gates pre-flight capacity reservation and is
+  reconciled against the provider's real reported usage after each call, so pick whichever tokenizer
+  matches your model closely enough, and cheaply enough, for your traffic volume. A chars/4
+  heuristic (the default) is often good enough; reach for a real tokenizer mainly when you're
+  running close to your `tokensPerMinute` ceiling and the estimate's slack matters.
+</Callout>

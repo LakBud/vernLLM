@@ -53,7 +53,7 @@ const result = await llm.call<string>(params);
 They work by giving `P` (the whole params object) a single, plain generic parameter, no `const`
 type parameter needed. TypeScript 5.0's `const` type parameters would also solve this, but they'd
 silently raise this package's effective minimum TypeScript version (this package declares none
-today, and the whole package's `.d.ts` would fail to parse on TypeScript <5.0, not just these two
+today, and the whole package's `.d.ts` would fail to parse on TypeScript `<5.0`, not just these two
 functions), and turned out to be unnecessary here anyway: `tools: someCondition ? [tool] :
 undefined`'s type is already the union the ternary computes, not a literal that needs `const` to
 avoid being widened. `T` isn't a parameter of `defineCallParams()` itself; pin it the normal way,

@@ -16,8 +16,7 @@ const inter = Inter({
 export const metadata: Metadata = {
   metadataBase: baseUrl,
   title: 'VernLLM',
-  description:
-    'The resilience layer for LLM chat completions; retries, timeouts, circuit breaking, caching, structured output, usage metering, usage tracking and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.',
+  description: 'The LLM call framework. Resilience, observability, and control for every call.',
   icons: {
     icon: '/favicon.ico',
   },
@@ -26,8 +25,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: 'VernLLM',
-    description:
-      'The resilience layer for LLM chat completions; retries, timeouts, circuit breaking, caching, structured output, usage metering, usage tracking and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.',
+    description: 'The LLM call framework. Resilience, observability, and control for every call.',
     url: baseUrl,
     siteName: 'VernLLM',
     images: [

@@ -4,8 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: 'VernLLM Documentation',
     short_name: 'VernLLM',
-    description:
-      'A lightweight resilience layer for OpenAI-compatible chat completion calls; retries, timeouts, circuit breaking, caching, structured output, and usage tracking, with one interface across providers.',
+    description: 'The LLM call framework. Resilience, observability, and control for every call.',
     start_url: '/',
     display: 'standalone',
     background_color: '#ffffff',

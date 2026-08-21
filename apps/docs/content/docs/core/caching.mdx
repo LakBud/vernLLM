@@ -251,55 +251,7 @@ const cacheKey = `cv:${cvId}:${model}:v2`; // bump version when prompt/schema ch
 
 ## Custom cache adapter
 
-```ts title="upstash-cache-adapter.ts"
-import type { CacheAdapter } from 'vern-llm';
-
-class UpstashCacheAdapter implements CacheAdapter {
-  async get(key: string) {
-    const raw = await redis.get(key);
-
-    if (raw === null) {
-      return { hit: false, value: null };
-    }
-
-    return { hit: true, value: JSON.parse(raw) };
-  }
-
-  async set(key: string, value: unknown, ttl: number) {
-    await redis.set(key, JSON.stringify(value), { ex: ttl });
-  }
-
-  async delete(key: string) {
-    await redis.del(key);
-  }
-}
-```
-
-<Callout>
-  The key thing to get right when migrating: `hit` should be `true` whenever the key existed in your
-  underlying store, even if the stored value itself is `null`. `hit` should only be `false` when
-  nothing was found for that key.
-</Callout>
-
-<Callout>
-  This adapter matches `cacheKey` exactly, same as `InMemoryCacheAdapter`. If you want lookups based
-  on something other than exact string equality, implement `resolveKey` as well, see [Non-exact
-  matching with `resolveKey`](#non-exact-matching-with-resolvekey) above.
-</Callout>
-
-<Callout>
-  The built-in `InMemoryCacheAdapter` treats `ttl` as seconds, supports deletion, and accepts an
-  optional `maxSize` limit to prevent unbounded memory growth. When the limit is reached, the oldest
-  entries are removed first.
-
-Custom adapters should keep the same `ttl` convention (seconds, not milliseconds) so behavior
-stays consistent across adapters.
-
-</Callout>
-
-<Callout type="warn">
-  If `get`, `set`, or `delete` throws (a Redis connection drop, for example), VernLLM does not fail
-  the call: a broken `get` is treated as a miss and falls through to a real provider call, and a
-  broken `set`/`delete` is swallowed. Either way the failure is reported via `logger.warn`, not
-  silently ignored, so configure a `logger` if you want visibility into a misbehaving adapter.
-</Callout>
+Bringing your own `CacheAdapter` (Redis, Upstash, or anything else) — including the specific
+things to get right when implementing one (`hit` semantics, `resolveKey`, `ttl` convention, and
+how a broken adapter is handled) — is covered as a customization topic, with a full worked
+example, over on [Caching → Customization](/docs/customization/caching).

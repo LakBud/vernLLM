@@ -1,0 +1,116 @@
+---
+title: Schema
+description: Plug in a validator for structured output
+---
+
+<Callout type="info">
+  This isn't a standalone config option, it's `schema`, a parameter of `call()` for structured
+  output. It's listed here because it's a common customization point; see [Structured
+  Output](/docs/core/structured-output) for the full behavior.
+</Callout>
+
+Pass `schema` and get a typed, validated result back. VernLLM doesn't depend on Zod directly, it
+works with any validator exposing a `safeParse` method that matches Zod's convention (Zod v3/v4
+included):
+
+```ts
+interface SchemaLike<T> {
+  safeParse(data: unknown): { success: true; data: T } | { success: false; error: unknown };
+}
+```
+
+```ts title="candidate-schema-zod.ts"
+import { z } from 'zod';
+
+const CandidateSchema = z.object({
+  name: z.string(),
+  yearsExperience: z.number(),
+});
+
+const result = await llm.call({
+  systemPrompt,
+  userContent,
+  schema: CandidateSchema,
+});
+```
+
+On a mismatch, `call` throws `LLMError('validation')` with `.issues` set to whatever your
+validator's `safeParse` returned in its `error` field, so validators other than Zod still surface
+their own error shape rather than being forced into Zod's.
+
+<Callout type="warn">
+  `schema` only runs against parsed JSON, which requires `jsonMode: true` (the default) or
+  `jsonSchema` to be set. On Anthropic and Bedrock, which have no native `json_object`-style
+  constraint, `schema` without `jsonSchema` still validates client-side but with no provider-level
+  guarantee the output is valid JSON in the first place.
+</Callout>
+
+<Callout>
+  See [Structured Output](/docs/core/structured-output) for provider-native JSON Schema mode
+  (`jsonSchema`), combining `schema` with tool calling, and per-provider differences in how `strict`
+  and `description` are forwarded.
+</Callout>
+
+## Using other validators
+
+Zod exposes `safeParse` as a method directly on the schema object, which is exactly what
+`SchemaLike` expects. Some other popular validators shape their API differently, they validate
+through a standalone function rather than a schema method, so they need a one-line wrapper before
+they satisfy `SchemaLike`.
+
+### Valibot
+
+Valibot's `safeParse` is a function that takes the schema as an argument
+(`safeParse(schema, data)`), not a method on the schema itself. Wrap it:
+
+```ts title="valibot-adapter.ts"
+import * as v from 'valibot';
+
+const CandidateSchema = v.object({
+  name: v.string(),
+  yearsExperience: v.number(),
+});
+
+const schema = {
+  safeParse: (data: unknown) => {
+    const result = v.safeParse(CandidateSchema, data);
+    return result.success
+      ? { success: true as const, data: result.output }
+      : { success: false as const, error: result.issues };
+  },
+};
+
+const result = await llm.call({ systemPrompt, userContent, schema });
+```
+
+### TypeBox
+
+TypeBox schemas are plain JSON Schema objects; validation goes through the separate `Value`
+module rather than a method on the schema:
+
+```ts title="typebox-adapter.ts"
+import { Type, type Static } from '@sinclair/typebox';
+import { Value } from '@sinclair/typebox/value';
+
+const CandidateSchema = Type.Object({
+  name: Type.String(),
+  yearsExperience: Type.Number(),
+});
+
+const schema = {
+  safeParse: (data: unknown) => {
+    if (Value.Check(CandidateSchema, data)) {
+      return { success: true as const, data: data as Static<typeof CandidateSchema> };
+    }
+    return { success: false as const, error: [...Value.Errors(CandidateSchema, data)] };
+  },
+};
+
+const result = await llm.call({ systemPrompt, userContent, schema });
+```
+
+<Callout type="info">
+  In both cases, `.issues` on a thrown `LLMError('validation')` is whatever you put in `error`
+  above, Valibot's `issues` array or TypeBox's iterated `Errors`, not a Zod-shaped error object.
+  Shape your wrapper's `error` field however is most useful for your own error handling.
+</Callout>

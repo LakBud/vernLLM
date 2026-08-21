@@ -25,7 +25,7 @@ export default function HomePage() {
         data={generateSoftwareApplication({
           name: 'VernLLM',
           description:
-            'A lightweight resilience layer for LLM chat completion calls. Retries, timeouts, circuit breaking, provider fallback, rate limiting, caching, structured output, observability events, and usage tracking, with one interface across providers.',
+            'The LLM call framework. Resilience, observability, and control for every call.',
           url: 'https://vernllm.vercel.app',
         })}
       />
@@ -43,8 +43,9 @@ export default function HomePage() {
             </h1>
 
             <p className="mt-6 max-w-xl text-base text-fd-muted-foreground lg:text-lg">
-              A lightweight resilience layer for LLM calls. Retries, timeouts, provider fallback,
-              rate limiting, and circuit breaking, dependency-light and typed from the start.
+              The LLM call framework. Resilience, observability, and control for every call.
+              Retries, timeouts, provider fallback, rate limiting, and circuit breaking,
+              dependency-light and typed from the start.
             </p>
           </div>
 
@@ -182,7 +183,7 @@ export default function HomePage() {
       <section className="border-t border-fd-border">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-6 py-16 text-center lg:px-16">
           <h2 className="max-w-xl text-xl font-bold text-fd-foreground sm:text-3xl">
-            Stop reinventing the resilience layer.
+            Stop reinventing the call layer.
           </h2>
 
           <div className={buttonGroupClass}>

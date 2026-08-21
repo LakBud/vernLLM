@@ -1,0 +1,103 @@
+---
+title: Provider
+description: Implement your own LLMClient
+---
+
+`VernLLM` doesn't call any provider SDK directly, it calls whatever `client` you pass in, as long
+as it satisfies the `LLMClient` interface (modeled loosely on OpenAI's
+`chat.completions.create`). Every built-in adapter (`fromAnthropic`, `fromGemini`, `fromBedrock`,
+plus every OpenAI-compatible provider) is just an implementation of this interface.
+
+There are two ways to bring your own provider, depending on how much of the wire protocol you
+want to handle yourself.
+
+## Option 1: `fromFetch`
+
+For a provider with no SDK, `fromFetch` is a raw HTTP escape hatch. Supply a URL, headers, and two
+small mapping functions, retries, timeouts, the circuit breaker, and JSON handling all still
+apply on top:
+
+```ts title="fromfetch-provider.ts"
+import { VernLLM, fromFetch } from 'vern-llm';
+
+const llm = new VernLLM({
+  client: fromFetch({
+    url: 'https://api.example.com/v1/generate',
+    headers: () => ({ Authorization: `Bearer ${process.env.EXAMPLE_API_KEY}` }),
+    mapRequest: (params) => ({
+      model: params.model,
+      prompt: params.messages.map((m) => m.content).join('\n\n'),
+      max_tokens: params.max_tokens,
+    }),
+    mapResponse: (json) => ({
+      content: json.output,
+      usage: { promptTokens: json.usage?.input, completionTokens: json.usage?.output },
+    }),
+  }),
+  model: 'example-model-v1',
+});
+```
+
+This is the right starting point for most custom providers. It also supports tool calling and
+streaming (via `mapStreamEvent`), and lets you swap the underlying HTTP transport with `request`
+and `requestStream` if you'd rather use `axios` or another client than native `fetch`.
+
+<Callout>
+  See [Custom Providers - fromFetch](/docs/adapters/custom-fetch) for the full set of options,
+  including tool calling, streaming, and non-SSE stream framing.
+</Callout>
+
+## Option 2: Implement `LLMClient` directly
+
+If you already have an SDK instance shaped close to OpenAI's, or you want full control with no
+`fromFetch` mapping layer in between, implement `LLMClient` yourself:
+
+```ts
+interface LLMClient {
+  /** Defaults to true; set false if this provider can't guarantee JSON output mode. */
+  supportsJsonObjectMode?: boolean;
+  chat: {
+    completions: {
+      create(params: {
+        model: string;
+        temperature?: number;
+        max_tokens: number;
+        response_format?:
+          | { type: 'json_object' }
+          | {
+              type: 'json_schema';
+              json_schema: {
+                name: string;
+                schema: Record<string, unknown>;
+                strict?: boolean;
+                description?: string;
+              };
+            };
+        tools?: Array<{
+          type: 'function';
+          function: { name: string; description?: string; parameters: Record<string, unknown> };
+        }>;
+        tool_choice?:
+          'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
+        messages: WireMessage[];
+        // ...see src/types/client.ts for the full param and stream shape
+      }): Promise<{
+        content?: string;
+        toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+        usage?: { promptTokens?: number; completionTokens?: number };
+      }>;
+    };
+  };
+}
+```
+
+This is what `fromFetch`, `fromAnthropic`, `fromGemini`, and `fromBedrock` each compile down to
+internally. Implementing it directly is more work than `fromFetch`, but avoids the intermediate
+`mapRequest`/`mapResponse` translation if your SDK already speaks something close to this shape.
+
+<Callout type="info">
+  `WireMessage` is VernLLM's own message union (`system` / `user` / `assistant` / `tool`), not an
+  OpenAI SDK type, it's structurally compatible so most OpenAI-shaped SDKs need little to no
+  translation. See the [Adapters Overview](/docs/adapters) for how the built-in adapters approach
+  this translation for their respective providers.
+</Callout>
