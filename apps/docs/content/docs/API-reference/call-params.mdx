@@ -100,13 +100,13 @@ See [Tool Calling](/docs/core/tool-calling) for the complete workflow and [Error
 
 ## Model & generation
 
-| Field             | Type                                       | Default                                               | Notes                                                             |
-| ----------------- | ------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------- |
-| `model`           | `string`                                   | Instance `model`                                      | Overrides the model for this call.                                |
-| `temperature`     | `number \| null`                           | Instance `defaultTemperature`, otherwise `0.2`        | Pass `null` to omit `temperature` and use the provider's default. |
-| `maxTokens`       | `number`                                   | Instance `defaultMaxTokens`, otherwise `1000`         | Maximum response length.                                          |
-| `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Instance `defaultReasoningEffort`, otherwise not sent | Passed through when set.                                          |
-| `budgetTokens`    | `number`                                   | Instance `defaultBudgetTokens`, otherwise not sent    | Native on Anthropic and Gemini. See below.                        |
+| Field             | Type                                       | Default                                               | Notes                                                                                                                           |
+| ----------------- | ------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `model`           | `string`                                   | Instance `model`                                      | Overrides the model for this call.                                                                                              |
+| `temperature`     | `number \| null`                           | Instance `defaultTemperature`, otherwise `0.2`        | Pass `null` to omit `temperature` and use the provider's default.                                                               |
+| `maxTokens`       | `number`                                   | Instance `defaultMaxTokens`, otherwise `1000`         | Maximum response length.                                                                                                        |
+| `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high'` | Instance `defaultReasoningEffort`, otherwise not sent | Native on OpenAI compatible clients, converted on others. See below.                                                            |
+| `budgetTokens`    | `number`                                   | Instance `defaultBudgetTokens`, otherwise not sent    | Native on Anthropic and Gemini, converted on OpenAI compatible clients, forwarded only for Claude models on Bedrock. See below. |
 
 <Callout type="warn">
   Claude Opus 4.7 and later, Claude Opus 5, and every Claude 5 tier model (Sonnet 5, Fable 5,
@@ -141,8 +141,24 @@ not a provider guarantee. Set `budgetTokens` directly for a precise number on a 
   aren't reachable through this conversion.
 </Callout>
 
-On Gemini, `0` disables thinking and `-1` requests automatic budgeting. Both are passed through
-unchanged rather than run through the conversion table above.
+On Gemini 2.5 series models, `0` disables thinking and `-1` requests automatic budgeting via
+`thinkingConfig.thinkingBudget`. Both are passed through unchanged rather than run through the
+conversion table above.
+
+<Callout type="info">
+  Gemini 3 series models use a different control, `thinkingConfig.thinkingLevel`
+  (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), not `thinkingBudget`. `fromGemini` detects Gemini 3 and later
+  models (a version threshold, so 3.1, 3.5, and every future 3.x release are covered automatically)
+  and sends `thinkingLevel` there instead. `reasoningEffort` maps onto it directly, no conversion
+  table needed, VernLLM's four tiers line up exactly with Gemini's own four levels. `budgetTokens`
+  alone is converted to the nearest tier first, through the same table used everywhere else, then
+  mapped onto `thinkingLevel`. `0` and `-1` have no `thinkingLevel` equivalent and both collapse to
+  `MINIMAL`, the closest available approximation of "off", which several Gemini 3 models can't be
+  fully disabled on anyway, `MINIMAL` still requires thought signatures rather than genuinely
+  turning thinking off, unlike `thinkingBudget: 0` on Gemini 2.5. Pass `thinkingLevelModels` as part
+  of `fromGemini`'s second argument to mark an additional model as using `thinkingLevel`, additive
+  over the built-in threshold, same shape as `reasoningEffortTokens` above.
+</Callout>
 
 The conversion table itself is overridable per adapter instance, not just per call. Pass
 `reasoningEffortTokens` as part of the second argument to `fromAnthropic`, `fromGemini`,

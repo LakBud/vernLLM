@@ -245,6 +245,23 @@ describe('fromAnthropic reasoning budget', () => {
     ).rejects.toThrow(/must be less than maxTokens/);
   });
 
+  it('sends manual budget_tokens, not adaptive thinking, for a real snapshot-dated base Opus 4 model', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-opus-4-20250514', // real base Opus 4 id, no ".7"-style minor
+        max_tokens: 100000,
+        budget_tokens: 8000,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create.mock.calls[0]![0].thinking).toEqual({ type: 'enabled', budget_tokens: 8000 });
+  });
+
   describe('adaptive-only models (Claude Opus 4.7 and later, every Claude 5 model)', () => {
     it('sends adaptive thinking plus output_config.effort instead of budget_tokens', async () => {
       const { client, create } = makeFakeAnthropicClient('hi');
@@ -517,14 +534,14 @@ describe('fromOpenAICompatible reasoning budget', () => {
   });
 });
 
-describe('fromGemini reasoning budget', () => {
+describe('fromGemini reasoning budget (Gemini 2.5 and earlier, thinkingBudget)', () => {
   it('sends budget_tokens directly onto config.thinkingConfig.thinkingBudget', async () => {
     const { client, generateContent } = makeFakeGeminiClient('hi');
     const adapted = fromGemini(client);
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         max_tokens: 200,
         budget_tokens: 12000,
         messages: [{ role: 'user', content: 'hi' }],
@@ -543,7 +560,7 @@ describe('fromGemini reasoning budget', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         max_tokens: 200,
         budget_tokens: 0,
         messages: [{ role: 'user', content: 'hi' }],
@@ -557,7 +574,7 @@ describe('fromGemini reasoning budget', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         max_tokens: 200,
         budget_tokens: -1,
         messages: [{ role: 'user', content: 'hi' }],
@@ -576,7 +593,7 @@ describe('fromGemini reasoning budget', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         max_tokens: 200,
         reasoning_effort: 'low',
         messages: [{ role: 'user', content: 'hi' }],
@@ -595,7 +612,7 @@ describe('fromGemini reasoning budget', () => {
 
     await adapted.chat.completions.create(
       {
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         max_tokens: 200,
         reasoning_effort: 'low',
         messages: [{ role: 'user', content: 'hi' }],
@@ -619,7 +636,7 @@ describe('fromGemini reasoning budget', () => {
 
     const response = await adapted.chat.completions.create(
       {
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         max_tokens: 200,
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -635,7 +652,7 @@ describe('fromGemini reasoning budget', () => {
 
     const response = await adapted.chat.completions.create(
       {
-        model: 'gemini-3.1-flash-lite',
+        model: 'gemini-2.5-flash',
         max_tokens: 200,
         messages: [{ role: 'user', content: 'hi' }],
       },
@@ -643,6 +660,174 @@ describe('fromGemini reasoning budget', () => {
     );
 
     expect(response.usage?.completion_tokens_details).toBeUndefined();
+  });
+});
+
+describe('fromGemini reasoning budget (Gemini 3 and later, thinkingLevel)', () => {
+  it('maps reasoning_effort directly onto thinkingLevel, no conversion table needed', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 200,
+        reasoning_effort: 'low',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'LOW',
+    });
+  });
+
+  it('converts budget_tokens to the nearest effort tier, then maps that tier onto thinkingLevel', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 200,
+        budget_tokens: 20000, // buckets to 'high' against the default table
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'HIGH',
+    });
+  });
+
+  it('prefers reasoning_effort over budget_tokens when both are set, matching the adaptive-only Anthropic precedent', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 200,
+        reasoning_effort: 'minimal',
+        budget_tokens: 32000, // would bucket to 'high' if used instead
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'MINIMAL',
+    });
+  });
+
+  it("collapses 0 and -1 to 'minimal', the closest available approximation, instead of using them literally", async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 200,
+        budget_tokens: 0,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'MINIMAL',
+    });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 200,
+        budget_tokens: -1,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[1]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'MINIMAL',
+    });
+  });
+
+  it('omits thinkingConfig entirely when neither budget_tokens nor reasoning_effort is set', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toBeUndefined();
+  });
+
+  it('lets thinkingLevelModels mark an additional model as using thinkingLevel', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client, { thinkingLevelModels: ['gemini-nova-1'] });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-nova-1',
+        max_tokens: 200,
+        reasoning_effort: 'high',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'HIGH',
+    });
+  });
+
+  it('thinkingLevelModels cannot un-mark a model the built-in threshold already caught', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client, { thinkingLevelModels: ['gemini-nova-1'] });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite', // not in the override, but still Gemini 3+
+        max_tokens: 200,
+        reasoning_effort: 'high',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'HIGH',
+    });
+  });
+
+  it('maps usageMetadata.thoughtsTokenCount the same way as on Gemini 2.5', async () => {
+    const { client } = makeFakeGeminiClient('hi', {
+      promptTokenCount: 4,
+      candidatesTokenCount: 20,
+      totalTokenCount: 24,
+      thoughtsTokenCount: 15,
+    });
+    const adapted = fromGemini(client);
+
+    const response = await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(response.usage?.completion_tokens_details).toEqual({ reasoning_tokens: 15 });
   });
 });
 
@@ -788,6 +973,25 @@ describe('fromBedrock reasoning budget', () => {
         { signal: new AbortController().signal },
       ),
     ).rejects.toThrow(/must be less than maxTokens/);
+  });
+
+  it('sends manual budget_tokens, not adaptive thinking, for a real snapshot-dated base Opus 4 model on Bedrock', async () => {
+    const { client, converse } = makeFakeBedrockClient('hi');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'anthropic.claude-opus-4-20250514-v1:0', // real base Opus 4 id, no ".7"-style minor
+        max_tokens: 100000,
+        budget_tokens: 8000,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(converse.mock.calls[0]![0].additionalModelRequestFields).toEqual({
+      thinking: { type: 'enabled', budget_tokens: 8000 },
+    });
   });
 
   describe('adaptive-only Claude models on Bedrock (Opus 4.7 and later, every Claude 5 model)', () => {

@@ -81,7 +81,7 @@ describe('Reasoning budget integration', () => {
     );
   });
 
-  it('Gemini: reasoningEffort converts to thinkingConfig.thinkingBudget, thoughtsTokenCount comes back as reasoningTokens', async () => {
+  it('Gemini 3: reasoningEffort maps directly onto thinkingConfig.thinkingLevel, thoughtsTokenCount comes back as reasoningTokens', async () => {
     const onUsage = vi.fn();
 
     const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
@@ -97,6 +97,38 @@ describe('Reasoning budget integration', () => {
     const llm = new VernLLM({
       client: fromGemini({ generateContent }),
       model: 'gemini-3.1-flash-lite',
+      onUsage,
+    });
+
+    await llm.call({ userContent: 'hello', reasoningEffort: 'low', jsonMode: false });
+
+    expect(generateContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ thinkingConfig: { thinkingLevel: 'LOW' } }),
+      }),
+    );
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ completionTokens: 35, reasoningTokens: 18 }),
+    );
+  });
+
+  it('Gemini 2.5: reasoningEffort still converts to thinkingConfig.thinkingBudget, unchanged', async () => {
+    const onUsage = vi.fn();
+
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+      candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+      usageMetadata: {
+        promptTokenCount: 5,
+        candidatesTokenCount: 35,
+        totalTokenCount: 40,
+        thoughtsTokenCount: 18,
+      },
+    }));
+
+    const llm = new VernLLM({
+      client: fromGemini({ generateContent }),
+      model: 'gemini-2.5-flash',
       onUsage,
     });
 

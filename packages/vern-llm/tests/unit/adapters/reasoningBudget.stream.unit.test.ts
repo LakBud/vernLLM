@@ -177,7 +177,7 @@ describe('fromAnthropic().chat.completions.createStream reasoning budget', () =>
   });
 });
 
-describe('fromGemini().chat.completions.createStream reasoning budget', () => {
+describe('fromGemini().chat.completions.createStream reasoning budget (Gemini 2.5, thinkingBudget)', () => {
   function makeFakeStreamingGeminiClient(chunks: unknown[]) {
     const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
     const generateContentStream = vi.fn((_params: unknown) =>
@@ -197,7 +197,7 @@ describe('fromGemini().chat.completions.createStream reasoning budget', () => {
     await collect(
       adapted.chat.completions.createStream!(
         {
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-2.5-flash',
           max_tokens: 200,
           budget_tokens: 12000,
           messages: [{ role: 'user', content: 'hi' }],
@@ -218,7 +218,7 @@ describe('fromGemini().chat.completions.createStream reasoning budget', () => {
     await collect(
       adapted.chat.completions.createStream!(
         {
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-2.5-flash',
           max_tokens: 200,
           reasoning_effort: 'low',
           messages: [{ role: 'user', content: 'hi' }],
@@ -239,7 +239,7 @@ describe('fromGemini().chat.completions.createStream reasoning budget', () => {
     await collect(
       adapted.chat.completions.createStream!(
         {
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-2.5-flash',
           max_tokens: 200,
           budget_tokens: 500,
           reasoning_effort: 'high',
@@ -271,7 +271,7 @@ describe('fromGemini().chat.completions.createStream reasoning budget', () => {
     const chunks = await collect(
       adapted.chat.completions.createStream!(
         {
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-2.5-flash',
           max_tokens: 200,
           budget_tokens: 12000,
           messages: [{ role: 'user', content: 'hi' }],
@@ -283,6 +283,62 @@ describe('fromGemini().chat.completions.createStream reasoning budget', () => {
     const usageChunk = chunks.find((c) => c.type === 'usage');
     expect(usageChunk).toMatchObject({
       usage: { completion_tokens_details: { reasoning_tokens: 15 } },
+    });
+  });
+});
+
+describe('fromGemini().chat.completions.createStream reasoning budget (Gemini 3, thinkingLevel)', () => {
+  function makeFakeStreamingGeminiClient(chunks: unknown[]) {
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
+    const generateContentStream = vi.fn((_params: unknown) =>
+      Promise.resolve(fakeAsyncIterable(chunks)),
+    );
+
+    return {
+      client: { generateContent, generateContentStream } as unknown as GeminiClient,
+      generateContentStream,
+    };
+  }
+
+  it('maps reasoning_effort directly onto thinkingLevel', async () => {
+    const { client, generateContentStream } = makeFakeStreamingGeminiClient([{}]);
+    const adapted = fromGemini(client);
+
+    await collect(
+      adapted.chat.completions.createStream!(
+        {
+          model: 'gemini-3.1-flash-lite',
+          max_tokens: 200,
+          reasoning_effort: 'medium',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(generateContentStream.mock.calls[0]![0]).toMatchObject({
+      config: { thinkingConfig: { thinkingLevel: 'MEDIUM' } },
+    });
+  });
+
+  it('converts budget_tokens to the nearest effort tier, then maps onto thinkingLevel', async () => {
+    const { client, generateContentStream } = makeFakeStreamingGeminiClient([{}]);
+    const adapted = fromGemini(client);
+
+    await collect(
+      adapted.chat.completions.createStream!(
+        {
+          model: 'gemini-3.1-flash-lite',
+          max_tokens: 200,
+          budget_tokens: 500, // buckets to 'minimal' against the default table
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(generateContentStream.mock.calls[0]![0]).toMatchObject({
+      config: { thinkingConfig: { thinkingLevel: 'MINIMAL' } },
     });
   });
 });

@@ -35,11 +35,15 @@ const llm = new VernLLM({
 <Callout>
   `jsonSchema` uses Gemini's native `responseSchema` + `responseMimeType: 'application/json'`.
   Gemini supports only its own JSON Schema subset rather than the full JSON Schema specification.
-  Use the client-side schema option when validation guarantees are required. `budgetTokens` maps
-  directly onto Gemini's native `thinkingConfig.thinkingBudget`; `reasoningEffort` alone is
-  converted into a token budget, since Gemini has no tier string of its own. See the [Call Params
-  reference](/docs/API-reference/call-params#reasoning-budget) for the conversion table, and
-  `fromGemini`'s second argument for `reasoningEffortTokens` to override it.
+  Use the client-side schema option when validation guarantees are required. On Gemini 3 series
+  models and later, `reasoningEffort`/`budgetTokens` map onto Gemini's native
+  `thinkingConfig.thinkingLevel`; on Gemini 2.5 and earlier, they map onto
+  `thinkingConfig.thinkingBudget` instead. `fromGemini` detects which path a model needs. See the
+  [Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the full behavior,
+  `fromGemini`'s second argument for `reasoningEffortTokens`/`thinkingLevelModels` to override
+  either. `thinkingConfig.thinkingLevel` on `GeminiClient` is typed `any`, not a string literal
+  union, since `@google/genai`'s real `ThinkingLevel` is a TypeScript `enum` a matching string type
+  can't satisfy; VernLLM builds the value internally through typed helpers regardless.
 </Callout>
 
 ## Tool calling

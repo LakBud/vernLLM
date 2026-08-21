@@ -95,11 +95,30 @@ export function budgetTokensToEffort(
  * or a Bedrock id carrying a provider prefix. Returns `null` for a
  * non-Opus model id.
  */
+/**
+ * Parses an Opus model id's generation and minor version, e.g.
+ * `"claude-opus-4-7-20260101"` -> `[4, 7]`, `"anthropic.claude-opus-5-x"` ->
+ * `[5, 0]`. Not anchored, so it matches equally inside a bare Anthropic id
+ * or a Bedrock id carrying a provider prefix. Returns `null` for a
+ * non-Opus model id.
+ *
+ * Anthropic model ids sometimes carry a trailing snapshot date instead of
+ * (or in addition to) an explicit minor version, e.g. the real, still-
+ * supported base `"claude-opus-4-20250514"` (no `.7`-style minor at all,
+ * just a date suffix directly after the major version). Read naively,
+ * `20250514` looks like a minor version far above any real threshold and
+ * would misclassify this pre-4.6 model as adaptive-only. Snapshot dates
+ * are always 8 digits (`YYYYMMDD`); a real minor version never is, so an
+ * 8+ digit second segment is treated as a date, not a minor version.
+ */
 function parseOpusVersion(model: string): [major: number, minor: number] | null {
   const match = /opus-(\d+)(?:-(\d+))?/.exec(model);
   if (!match) return null;
 
-  return [Number(match[1]), match[2] === undefined ? 0 : Number(match[2])];
+  const minorStr = match[2];
+  const minor = minorStr === undefined || minorStr.length >= 8 ? 0 : Number(minorStr);
+
+  return [Number(match[1]), minor];
 }
 
 /**
@@ -204,4 +223,68 @@ export function toClaudeAdaptiveEffort(
   effort: 'minimal' | 'low' | 'medium' | 'high',
 ): ClaudeAdaptiveEffort {
   return effort === 'minimal' ? 'low' : effort;
+}
+
+/**
+ * Gemini's own thinking-level control, `thinkingConfig.thinkingLevel`,
+ * used by Gemini 3 series models instead of the numeric `thinkingBudget`
+ * every earlier Gemini generation uses. Unlike Anthropic's five-tier
+ * adaptive effort, this lines up exactly with VernLLM's own four-tier
+ * `reasoningEffort`, so no lossy mapping table is needed, just a literal
+ * case change.
+ */
+export type GeminiThinkingLevel = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH';
+
+/** Converts VernLLM's `reasoningEffort` directly into Gemini's `ThinkingLevel` enum value. */
+export function toGeminiThinkingLevel(
+  effort: 'minimal' | 'low' | 'medium' | 'high',
+): GeminiThinkingLevel {
+  return effort.toUpperCase() as GeminiThinkingLevel;
+}
+
+/**
+ * Parses a Gemini model id's major generation number, e.g.
+ * `"gemini-3.1-flash-lite"` -> `3`, `"gemini-2.5-flash"` -> `2`. Not
+ * anchored, so a Vertex-prefixed or otherwise decorated id still matches.
+ * Returns `null` for a non-Gemini model id.
+ */
+function parseGeminiMajorVersion(model: string): number | null {
+  const match = /gemini-(\d+)/.exec(model);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Default rule for whether `model` uses `thinkingLevel` instead of
+ * `thinkingBudget`: every Gemini 3 series model and later, matched as a
+ * version threshold so 3.1, 3.5, 3.6, and every future Gemini 3.x or
+ * later release are covered automatically, without a new entry per
+ * release, same reasoning as `isDefaultAdaptiveOnly`'s Opus threshold.
+ * Gemini 2.5 and earlier still use `thinkingBudget`.
+ *
+ * `thinkingBudget` is still *accepted* on Gemini 3 for backward
+ * compatibility, per Google's own docs, but "may result in unexpected
+ * performance" there, so this rule switches VernLLM's own default
+ * behavior over rather than leaving it on the old field indefinitely.
+ */
+function isDefaultThinkingLevelModel(model: string): boolean {
+  const major = parseGeminiMajorVersion(model);
+  return major !== null && major >= 3;
+}
+
+/**
+ * Whether `model` uses `thinkingLevel`, per the built-in version
+ * threshold above, or per a caller-supplied `thinkingLevelModels`
+ * override. Additive, not a replacement, same reasoning as
+ * `isAdaptiveOnlyModel`: an override can mark an *additional* model as
+ * using `thinkingLevel` (a model family this package doesn't recognize
+ * yet), it can't un-mark one the built-in threshold already caught.
+ */
+export function usesGeminiThinkingLevel(
+  model: string,
+  override?: ModelCapabilityOverride,
+): boolean {
+  if (isDefaultThinkingLevelModel(model)) return true;
+  if (!override) return false;
+
+  return Array.isArray(override) ? override.includes(model) : override(model);
 }

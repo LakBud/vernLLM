@@ -28,14 +28,14 @@ const analysis = await llm.call({
 
 ## What can be overridden per call
 
-| Field                | Falls back to                                                                                                                                               |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`              | The instance's `model` option                                                                                                                               |
-| `maxTokens`          | The instance's `defaultMaxTokens` (`1000`)                                                                                                                  |
-| `temperature`        | `0.2`, used only when both the per-call value and `defaultTemperature` are `undefined`. Either one set to `null` omits `temperature` instead.               |
-| `reasoningEffort`    | The instance's `defaultReasoningEffort`, otherwise omitted from the request entirely and the provider's own default applies.                                |
-| `budgetTokens`       | The instance's `defaultBudgetTokens`, otherwise omitted from the request entirely.                                                                          |
-| `chunkIdleTimeoutMs` | The instance's `chunkIdleTimeoutMs` (`30000`). Only applies when `stream: true`. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout). |
+| Field                | Falls back to                                                                                                                                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`              | The instance's `model` option                                                                                                                                                                                                                                                   |
+| `maxTokens`          | The instance's `defaultMaxTokens` (`1000`)                                                                                                                                                                                                                                      |
+| `temperature`        | `0.2`, used only when both the per-call value and `defaultTemperature` are `undefined`. Either one set to `null` omits `temperature` instead.                                                                                                                                   |
+| `reasoningEffort`    | The per-call value, then the fallback target's own `defaultReasoningEffort` (if this call lands on a fallback target), then the instance's `defaultReasoningEffort`. Omitted from the request only when none of those is set, in which case the provider's own default applies. |
+| `budgetTokens`       | The per-call value, then the fallback target's own `defaultBudgetTokens` (if this call lands on a fallback target), then the instance's `defaultBudgetTokens`. Omitted from the request only when none of those is set.                                                         |
+| `chunkIdleTimeoutMs` | The instance's `chunkIdleTimeoutMs` (`30000`). Only applies when `stream: true`. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).                                                                                                                     |
 
 <Callout type="warn">
   `temperature` isn't left unset when you don't pass it &mdash; VernLLM defaults it to `0.2` itself.

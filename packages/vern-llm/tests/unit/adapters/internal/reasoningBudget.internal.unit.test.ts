@@ -160,6 +160,23 @@ describe('reasoningBudget.utils', () => {
       expect(isAdaptiveOnlyModel('anthropic.claude-sonnet-5-20260101-v1:0')).toBe(true);
     });
 
+    it('does not mistake a snapshot-date suffix for a huge minor version', () => {
+      // "claude-opus-4-20250514" is the real, still-supported base Opus 4
+      // model id, no explicit ".7"-style minor at all, just an 8-digit
+      // YYYYMMDD date directly after the major version. Read naively,
+      // 20250514 looks like a minor version far past any real threshold
+      // and would wrongly classify this pre-4.6 model as adaptive-only.
+      expect(isAdaptiveOnlyModel('claude-opus-4-20250514')).toBe(false);
+      expect(isAdaptiveOnlyModel('anthropic.claude-opus-4-20250514-v1:0')).toBe(false);
+      expect(supportsManualThinkingBudget('claude-opus-4-20250514')).toBe(true);
+
+      // A real, dated 4.7+ release must still be caught correctly, the
+      // fix only special-cases the *undated-minor* shape, not every
+      // three-segment id.
+      expect(isAdaptiveOnlyModel('claude-opus-4-7-20260315')).toBe(true);
+      expect(isAdaptiveOnlyModel('anthropic.claude-opus-5-20260724-v1:0')).toBe(true);
+    });
+
     it('lets an array override mark an additional model as adaptive-only', () => {
       expect(isAdaptiveOnlyModel('claude-nova-1')).toBe(false);
       expect(isAdaptiveOnlyModel('claude-nova-1', ['claude-nova-1'])).toBe(true);

@@ -194,6 +194,40 @@ describe('VernLLM.call, usage tracking', () => {
     );
   });
 
+  it('invokes onUsage with reasoningTokens when the provider reports a reasoning breakdown', async () => {
+    const onUsage = vi.fn();
+    const { client } = createMockClient([
+      jsonResponse(
+        { ok: true },
+        {
+          prompt_tokens: 10,
+          completion_tokens: 50,
+          total_tokens: 60,
+          completion_tokens_details: { reasoning_tokens: 30 },
+        },
+      ),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', onUsage });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' });
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ completionTokens: 50, reasoningTokens: 30 }),
+    );
+  });
+
+  it('omits reasoningTokens from onUsage when the provider reports no reasoning breakdown', async () => {
+    const onUsage = vi.fn();
+    const { client } = createMockClient([
+      jsonResponse({ ok: true }, { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', onUsage });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' });
+
+    expect(onUsage.mock.calls[0]![0].reasoningTokens).toBeUndefined();
+  });
+
   it('does not call onUsage when the provider reports no usage', async () => {
     const onUsage = vi.fn();
     const { client } = createMockClient([jsonResponse({ ok: true })]);
@@ -254,6 +288,37 @@ describe('VernLLM.call, onUsageFailure', () => {
     expect(onUsageFailure).toHaveBeenCalledTimes(1);
     expect(onUsageFailure).toHaveBeenCalledWith(
       expect.objectContaining({ promptTokens: 12, completionTokens: 8, totalTokens: 20 }),
+      expect.objectContaining({ type: 'validation' }),
+    );
+  });
+
+  it('fires onUsageFailure with reasoningTokens carried through, not just completionTokens', async () => {
+    const onUsage = vi.fn();
+    const onUsageFailure = vi.fn();
+    const { client } = createMockClient([
+      jsonResponse(
+        { wrong: 'shape' },
+        {
+          prompt_tokens: 12,
+          completion_tokens: 50,
+          total_tokens: 62,
+          completion_tokens_details: { reasoning_tokens: 30 },
+        },
+      ),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', onUsage, onUsageFailure });
+
+    await llm
+      .call({
+        systemPrompt: 's',
+        userContent: 'u',
+        schema: z.object({ name: z.string() }),
+      })
+      .catch(() => {});
+
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ completionTokens: 50, reasoningTokens: 30 }),
       expect.objectContaining({ type: 'validation' }),
     );
   });

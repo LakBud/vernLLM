@@ -7,10 +7,15 @@ import {
 } from '../types/index.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 import {
+  budgetTokensToEffort,
   effortToBudgetTokens,
   resolveEffortTokenTable,
+  toGeminiThinkingLevel,
+  usesGeminiThinkingLevel,
   type EffortTokenTable,
 } from './internal/reasoningBudget.utils.js';
+
+import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.js';
 
 /**
  * Gemini's native per-part content shape for a `contents` entry.
@@ -78,13 +83,21 @@ export interface GeminiClient {
         };
       };
       /**
-       * Native reasoning token budget. Built from `CallParams.budgetTokens`
-       * directly when set (0 disables thinking, -1 requests automatic
-       * budgeting, both passed through unchanged), or converted from
-       * `reasoningEffort` when only that was set. See
+       * Native reasoning control. `thinkingBudget` is built from
+       * `CallParams.budgetTokens` directly when set (0 disables thinking,
+       * -1 requests automatic budgeting, both passed through unchanged),
+       * or converted from `reasoningEffort`, on Gemini 2.5 and earlier
+       * models. `thinkingLevel` is used instead on Gemini 3 and later,
+       * which use a level-based control rather than a numeric budget.
+       * `any`, same reason as `toolConfig...mode` above, see class doc
+       * comment. See `usesGeminiThinkingLevel` in
        * `adapters/internal/reasoningBudget.utils.ts`.
        */
-      thinkingConfig?: { thinkingBudget?: number };
+      thinkingConfig?: {
+        thinkingBudget?: number;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see class doc comment above
+        thinkingLevel?: any;
+      };
       abortSignal?: AbortSignal;
     };
   }): Promise<{
@@ -310,6 +323,7 @@ type GeminiConfig = NonNullable<GeminiRequest['config']>;
 function buildGeminiRequest(
   params: Parameters<LLMClient['chat']['completions']['create']>[0],
   effortTokenTable?: EffortTokenTable,
+  thinkingLevelModels?: ModelCapabilityOverride,
 ): GeminiRequest {
   const systemMessage = params.messages.find((m) => m.role === 'system');
   // Keep user, assistant, and tool turns, in order.
@@ -353,20 +367,46 @@ function buildGeminiRequest(
     config.toolConfig = toGeminiToolConfig(params.tool_choice);
   }
 
-  // `thinkingBudget` is Gemini's native reasoning control, 0 disables
-  // thinking and -1 requests automatic budgeting, both passed through
-  // unchanged rather than run through the effort table below. Used
-  // directly when the caller set `budget_tokens`. When only
-  // `reasoning_effort` was set, it's converted to the nearest token
-  // budget, since Gemini has no tier string of its own.
-  const thinkingBudget =
-    params.budget_tokens ??
-    (params.reasoning_effort
-      ? effortToBudgetTokens(params.reasoning_effort, effortTokenTable)
-      : undefined);
+  // On Gemini 3 and later, `thinkingConfig.thinkingLevel` is the native
+  // reasoning control, not `thinkingBudget`. `reasoning_effort` maps onto
+  // it directly (VernLLM's own four tiers line up exactly with Gemini's
+  // level enum). When only `budget_tokens` was set, it's converted to
+  // the nearest tier first, same table used elsewhere. Sending
+  // `thinkingBudget` there instead still works for backward
+  // compatibility, per Google's own docs, but "may result in unexpected
+  // performance", so VernLLM switches over rather than keeping every
+  // Gemini generation on the older field indefinitely. Note that 0
+  // (disabled) and -1 (automatic) have no `thinkingLevel` equivalent:
+  // both collapse to `minimal` through the same conversion table,
+  // `MINIMAL` being the closest available approximation of "off", which
+  // several Gemini 3 models can't be fully disabled on anyway.
+  if (usesGeminiThinkingLevel(params.model, thinkingLevelModels)) {
+    const effortTier =
+      params.reasoning_effort ??
+      (params.budget_tokens !== undefined
+        ? budgetTokensToEffort(params.budget_tokens, effortTokenTable)
+        : undefined);
 
-  if (thinkingBudget !== undefined) {
-    config.thinkingConfig = { thinkingBudget };
+    if (effortTier !== undefined) {
+      config.thinkingConfig = { thinkingLevel: toGeminiThinkingLevel(effortTier) };
+    }
+  } else {
+    // `thinkingBudget` is Gemini's native reasoning control on 2.5 and
+    // earlier, 0 disables thinking and -1 requests automatic budgeting,
+    // both passed through unchanged rather than run through the effort
+    // table below. Used directly when the caller set `budget_tokens`.
+    // When only `reasoning_effort` was set, it's converted to the
+    // nearest token budget, since these models have no tier string of
+    // their own.
+    const thinkingBudget =
+      params.budget_tokens ??
+      (params.reasoning_effort
+        ? effortToBudgetTokens(params.reasoning_effort, effortTokenTable)
+        : undefined);
+
+    if (thinkingBudget !== undefined) {
+      config.thinkingConfig = { thinkingBudget };
+    }
   }
 
   return {
@@ -425,10 +465,22 @@ export interface GeminiAdapterOptions {
    * built-in default. Has no effect when `budgetTokens` is set directly.
    */
   reasoningEffortTokens?: Partial<EffortTokenTable>;
+  /**
+   * Marks additional models as using `thinkingLevel` instead of
+   * `thinkingBudget`, on top of this package's own built-in rule (every
+   * Gemini 3 series model and later, see `usesGeminiThinkingLevel` in
+   * `adapters/internal/reasoningBudget.utils.ts`). Additive, not a
+   * replacement: it can correct a false negative (a newer model this
+   * package doesn't know about yet), it can't un-mark a model the
+   * built-in rule already caught. Pass a static list of model IDs or a
+   * predicate.
+   */
+  thinkingLevelModels?: ModelCapabilityOverride;
 }
 
 export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions): LLMClient {
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
+  const thinkingLevelModels = options?.thinkingLevelModels;
   const resolved = client.models ?? client;
 
   if (typeof resolved.generateContent !== 'function') {
@@ -449,7 +501,7 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
     chat: {
       completions: {
         async create(params, options) {
-          const request = buildGeminiRequest(params, effortTokenTable);
+          const request = buildGeminiRequest(params, effortTokenTable, thinkingLevelModels);
           request.config = { ...request.config, abortSignal: options.signal };
 
           const response = await generateContent(request);
@@ -512,7 +564,7 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
             );
           }
 
-          const request = buildGeminiRequest(params, effortTokenTable);
+          const request = buildGeminiRequest(params, effortTokenTable, thinkingLevelModels);
           request.config = { ...request.config, abortSignal: options.signal };
 
           const stream = await generateContentStream(request);

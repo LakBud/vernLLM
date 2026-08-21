@@ -146,7 +146,9 @@ describe('VernLLM.call, temperature', () => {
     await llmWithZeroDefault.call({ userContent: 'u' });
     expect(at(calls, 1).temperature).toBe(0);
   });
+});
 
+describe('VernLLM.call, reasoning defaults', () => {
   it('falls back to an instance-level defaultReasoningEffort when no per-call value is set', async () => {
     const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm', defaultReasoningEffort: 'high' });
