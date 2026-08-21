@@ -1,5 +1,5 @@
 import { CircuitBreaker } from '../../circuitBreaker.js';
-import { LLMError } from '../../types/errors.js';
+import { LLMError, toRequestSnapshot } from '../../types/errors.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
 import { describeError, extractStatus, normalizeError } from './errors.utils.js';
 import { defaultParseJson } from './parse.utils.js';
@@ -21,6 +21,19 @@ import type {
   VernLLMEvent,
   WireToolCall,
 } from '../../types/index.js';
+
+/**
+ * What `executeCall`/`executeStreamCall` hand back to `retryWithBackoff`
+ * via `onRequest`, right after the outgoing payload is built and before
+ * dispatch. Turned into an `LLMRequestSnapshot` (via `toRequestSnapshot`)
+ * only if that attempt goes on to fail and get recorded.
+ */
+interface LastRequestForAttempt {
+  provider: string;
+  model: string;
+  body: unknown;
+  headers?: Record<string, string>;
+}
 
 /** Everything one `CallExecutor` needs beyond the client and model. */
 export interface CallExecutorOptions {
@@ -148,7 +161,7 @@ export class CallExecutor {
 
     try {
       return await this.retryWithBackoff(
-        (attempt) => this.executeCall(params, requestId, attempt),
+        (attempt, onRequest) => this.executeCall(params, requestId, attempt, onRequest),
         requestId,
         model,
         params.signal,
@@ -189,7 +202,7 @@ export class CallExecutor {
 
     try {
       return await this.retryWithBackoff(
-        (attempt) => this.executeStreamCall(params, requestId, attempt),
+        (attempt, onRequest) => this.executeStreamCall(params, requestId, attempt, onRequest),
         requestId,
         model,
         params.signal,
@@ -227,8 +240,11 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
+    onRequest?: (req: LastRequestForAttempt) => void,
   ): Promise<T | CallWithToolsResult<T>> {
     const { useJson, model, request } = this.requestBuilder.build(params);
+
+    onRequest?.({ provider: this.providerName, model, body: request });
 
     // A retry is a real request, so capacity is acquired per attempt
     // (inside the retry loop, via `executeCall` being re-invoked), not
@@ -434,11 +450,14 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
+    onRequest?: (req: LastRequestForAttempt) => void,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
     const { useJson, model, request } = this.requestBuilder.build(params);
+
+    onRequest?.({ provider: this.providerName, model, body: request });
 
     const completions = this.client.chat.completions;
 
@@ -655,7 +674,7 @@ export class CallExecutor {
    * not the live `LLMError`, per `RetryAttempt`'s contract.
    */
   private async retryWithBackoff<T>(
-    fn: (attempt: number) => Promise<T>,
+    fn: (attempt: number, onRequest: (req: LastRequestForAttempt) => void) => Promise<T>,
     requestId: string,
     model: string,
     signal?: AbortSignal,
@@ -663,6 +682,7 @@ export class CallExecutor {
     attempts?: RetryAttempt[],
   ): Promise<T> {
     let lastError: unknown;
+    let lastRequestForAttempt: LastRequestForAttempt | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
@@ -671,14 +691,27 @@ export class CallExecutor {
         }
 
         onAttempt?.();
-        return await fn(attempt);
+        return await fn(attempt, (req) => {
+          lastRequestForAttempt = req;
+        });
       } catch (error) {
         lastError = error;
 
         const willRetry = attempt < this.maxRetries && this.shouldRetry(error, signal);
         if (!willRetry) break;
 
-        attempts?.push({ index: attempt, error: normalizeError(error, signal).toSnapshot() });
+        attempts?.push({
+          index: attempt,
+          error: normalizeError(error, signal).toSnapshot(),
+          request:
+            lastRequestForAttempt &&
+            toRequestSnapshot(
+              lastRequestForAttempt.provider,
+              lastRequestForAttempt.model,
+              lastRequestForAttempt.body,
+              lastRequestForAttempt.headers,
+            ),
+        });
       }
     }
 

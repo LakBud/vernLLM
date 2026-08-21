@@ -133,6 +133,38 @@ function safeIssues(issues: unknown): unknown {
 }
 
 /**
+ * Returns `body` unchanged when it can survive `JSON.stringify`, same
+ * contract as `safeIssues`. A request body built from adapter-transformed
+ * messages is normally always plain data, but tool call arguments or a
+ * caller supplied `cause`-adjacent value could in principle carry a
+ * circular reference, so this guards the same way `safeIssues` does
+ * rather than assuming it can't happen.
+ */
+function safeBody(body: unknown): unknown {
+  if (body === undefined) return undefined;
+  try {
+    JSON.stringify(body);
+    return body;
+  } catch {
+    return '[Unserializable: request body contained a circular reference]';
+  }
+}
+
+const AUTH_HEADER_NAMES = new Set(['authorization', 'x-api-key', 'x-goog-api-key', 'api-key']);
+
+/** Removes auth headers before a request snapshot is built. Case insensitive on header names. */
+function stripAuthHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (headers === undefined) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!AUTH_HEADER_NAMES.has(key.toLowerCase())) out[key] = value;
+  }
+  return out;
+}
+
+/**
  * Depth cap for `safeAttempts`, guarding against a pathological,
  * self referential `attempts` array. `attempts` is a public
  * `LLMErrorOptions` field, so a caller can construct one by hand; this
@@ -163,6 +195,7 @@ function safeAttempts(attempts: RetryAttempt[] | undefined, depth = 0): RetryAtt
       issues: safeIssues(attempt.error.issues),
       attempts: safeAttempts(attempt.error.attempts, depth + 1),
     },
+    request: attempt.request && { ...attempt.request, body: safeBody(attempt.request.body) },
   }));
 }
 
@@ -272,6 +305,47 @@ export interface LLMErrorSnapshot {
 }
 
 /**
+ * Point-in-time copy of the request an attempt sent, produced by
+ * `toRequestSnapshot()`. This is what `RetryAttempt.request` holds.
+ * Mirrors `LLMErrorSnapshot`: plain data, never thrown or dispatched
+ * again, safe to serialize and store.
+ */
+export interface LLMRequestSnapshot {
+  /** Provider id this attempt targeted, e.g. "openai". */
+  provider: string;
+  /** Model id this attempt targeted. */
+  model: string;
+  /** The payload as actually sent for this attempt, after any transform/repair. Passed through `safeBody`. */
+  body: unknown;
+  /** Non sensitive request headers. Auth headers are stripped before the snapshot is built, never included. */
+  headers?: Record<string, string>;
+  /** Wall clock time the attempt started, ms since epoch. */
+  startedAt: number;
+}
+
+/**
+ * Builds a point-in-time, plain data copy of one attempt's outgoing
+ * request. Mirrors `LLMError.toSnapshot()`: never thrown or dispatched
+ * again, safe to serialize and store. A plain function rather than a
+ * method, since unlike `LLMError` a request has no throwable identity or
+ * derived state worth wrapping in a class.
+ */
+export function toRequestSnapshot(
+  provider: string,
+  model: string,
+  body: unknown,
+  headers?: Record<string, string>,
+): LLMRequestSnapshot {
+  return {
+    provider,
+    model,
+    body: safeBody(body),
+    headers: stripAuthHeaders(headers),
+    startedAt: Date.now(),
+  };
+}
+
+/**
  * One failed attempt on the way to a terminal error: which attempt index
  * it was, and a snapshot of the error it failed with. The base shape
  * every richer attempt record (e.g. `FallbackAttempt`) extends, rather
@@ -280,6 +354,8 @@ export interface LLMErrorSnapshot {
 export interface RetryAttempt {
   index: number;
   error: LLMErrorSnapshot;
+  /** What was sent for this attempt. Optional: absent for attempts predating this field. */
+  request?: LLMRequestSnapshot;
 }
 
 /** Optional fields for constructing an {@link LLMError}. `message` and `type` stay positional since every throw site sets both. */

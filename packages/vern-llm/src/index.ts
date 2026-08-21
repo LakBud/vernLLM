@@ -75,6 +75,7 @@ export {
   type LLMErrorType,
   type LLMErrorCode,
   type LLMErrorSnapshot,
+  type LLMRequestSnapshot,
   type ToolIssue,
   type LLMErrorIssuesByCode,
   type DuplicateToolNamesIssue,
