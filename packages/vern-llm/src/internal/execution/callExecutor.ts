@@ -1,5 +1,5 @@
 import { CircuitBreaker } from '../../circuitBreaker.js';
-import { LLMError } from '../../types/errors.js';
+import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
 import { describeError, extractStatus, normalizeError } from './errors.utils.js';
 import { defaultParseJson } from './parse.utils.js';
@@ -21,6 +21,33 @@ import type {
   VernLLMEvent,
   WireToolCall,
 } from '../../types/index.js';
+
+/**
+ * `executeCall`/`executeStreamCall` call `onRequest` with a fully built
+ * `LLMRequestSnapshot`, right after the outgoing payload is built and
+ * before dispatch (rate limiting, `client.chat.completions.create`, etc).
+ * Building the complete, cloned snapshot at this point, not later once an
+ * attempt has failed, matters for two reasons: `startedAt` should mean
+ * "when the attempt started", not "when the failure was handled", and
+ * some adapters mutate the outgoing request object during dispatch itself
+ * (e.g. `fromGemini` sets `request.config` in place inside `create()`),
+ * so waiting until the catch block to snapshot could capture a payload
+ * that had already changed since it was actually sent.
+ */
+type OnRequest = (snapshot: LLMRequestSnapshot) => void;
+
+/**
+ * Identity function with its own parameter, used only to sidestep a TS
+ * quirk: a `let` reassigned solely inside a nested closure (like
+ * `retryWithBackoff`'s `onRequest`) gets narrowed to `undefined` at the
+ * point it was last synchronously assigned, which would otherwise make
+ * `lastRequestForAttempt` read as `never` at the point it's used below.
+ */
+function passThroughRequestSnapshot(
+  snapshot: LLMRequestSnapshot | undefined,
+): LLMRequestSnapshot | undefined {
+  return snapshot;
+}
 
 /** Everything one `CallExecutor` needs beyond the client and model. */
 export interface CallExecutorOptions {
@@ -148,7 +175,7 @@ export class CallExecutor {
 
     try {
       return await this.retryWithBackoff(
-        (attempt) => this.executeCall(params, requestId, attempt),
+        (attempt, onRequest) => this.executeCall(params, requestId, attempt, onRequest),
         requestId,
         model,
         params.signal,
@@ -189,7 +216,7 @@ export class CallExecutor {
 
     try {
       return await this.retryWithBackoff(
-        (attempt) => this.executeStreamCall(params, requestId, attempt),
+        (attempt, onRequest) => this.executeStreamCall(params, requestId, attempt, onRequest),
         requestId,
         model,
         params.signal,
@@ -227,8 +254,11 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
+    onRequest?: OnRequest,
   ): Promise<T | CallWithToolsResult<T>> {
     const { useJson, model, request } = this.requestBuilder.build(params);
+
+    onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
 
     // A retry is a real request, so capacity is acquired per attempt
     // (inside the retry loop, via `executeCall` being re-invoked), not
@@ -434,11 +464,14 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
+    onRequest?: OnRequest,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
     const { useJson, model, request } = this.requestBuilder.build(params);
+
+    onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
 
     const completions = this.client.chat.completions;
 
@@ -655,7 +688,7 @@ export class CallExecutor {
    * not the live `LLMError`, per `RetryAttempt`'s contract.
    */
   private async retryWithBackoff<T>(
-    fn: (attempt: number) => Promise<T>,
+    fn: (attempt: number, onRequest: OnRequest) => Promise<T>,
     requestId: string,
     model: string,
     signal?: AbortSignal,
@@ -663,22 +696,36 @@ export class CallExecutor {
     attempts?: RetryAttempt[],
   ): Promise<T> {
     let lastError: unknown;
+    let lastRequestForAttempt: LLMRequestSnapshot | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // Reset before this iteration's own onRequest can run. If this
+      // attempt fails before onRequest is ever called (e.g. thrown by
+      // recoverDelay or onAttempt, before fn/onRequest runs), the
+      // previous attempt's request must not be misattributed to this
+      // attempt's index below.
+      lastRequestForAttempt = undefined;
+
       try {
         if (attempt > 0) {
           await this.recoverDelay(requestId, model, attempt, lastError, signal);
         }
 
         onAttempt?.();
-        return await fn(attempt);
+        return await fn(attempt, (req) => {
+          lastRequestForAttempt = req;
+        });
       } catch (error) {
         lastError = error;
 
         const willRetry = attempt < this.maxRetries && this.shouldRetry(error, signal);
         if (!willRetry) break;
 
-        attempts?.push({ index: attempt, error: normalizeError(error, signal).toSnapshot() });
+        attempts?.push({
+          index: attempt,
+          error: normalizeError(error, signal).toSnapshot(),
+          request: passThroughRequestSnapshot(lastRequestForAttempt),
+        });
       }
     }
 

@@ -273,6 +273,7 @@ interface FallbackAttempt {
   provider: string;
   model: string;
   error: LLMErrorSnapshot;
+  request?: LLMRequestSnapshot;
 }
 ```
 
@@ -412,3 +413,35 @@ It also adds `message` and `retryable`, since a plain `Error` subclass without t
 either: `message` is non-enumerable on `Error`, and `retryable` is a getter, not an own property.
 `err.attempts` works the same way and never carries
 `cause`.
+
+## Request snapshots
+
+Each recorded attempt carries both sides of the story: `attempt.error` is what came back, and
+`attempt.request` is what was sent. `attempt.request` is an `LLMRequestSnapshot`, holding the
+provider, the model, the request body as actually sent for that attempt, and the wall clock time
+the attempt started:
+
+```ts title="request-snapshot-shape.ts"
+interface LLMRequestSnapshot {
+  provider: string;
+  model: string;
+  body: unknown;
+  headers?: Record<string, string>;
+  startedAt: number;
+}
+```
+
+Auth headers are always removed before a snapshot is built, so `headers` never includes an API
+key or bearer token. Use `err.attempts[i].request` alongside `err.attempts[i].error` to see the
+exact payload that produced a given failure:
+
+```ts title="request-snapshot-usage.ts"
+if (isLLMError(err)) {
+  for (const attempt of err.attempts ?? []) {
+    console.log(attempt.error.message, attempt.request?.body);
+  }
+}
+```
+
+`request` is optional on `RetryAttempt`, so it is absent on attempts recorded before this field
+existed.

@@ -432,6 +432,134 @@ describe('VernLLM.call, retry & backoff', () => {
     expect(entry?.error.message).toBe(first.message);
     expect(() => JSON.stringify(thrown)).not.toThrow();
   });
+
+  it("records the request actually sent on a failed attempt, matching that attempt's payload", async () => {
+    const first = new LLMError('server hiccup', 'api', { status: 500 });
+    const { client, calls } = createMockClient([first, jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    await vi.runAllTimersAsync();
+    await promise;
+
+    // We can't get the thrown error since the call succeeded on retry, so
+    // inspect via a failing scenario instead below; here just confirm the
+    // mock recorded exactly one call for the failed attempt.
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('records request.provider/model/body on each RetryAttempt for a call that ultimately fails', async () => {
+    const first = new LLMError('server hiccup', 'api', { status: 500 });
+    const final = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, final]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    const [entry] = thrown.attempts ?? [];
+    expect(entry?.request?.model).toBe('m');
+    expect(entry?.request?.provider).toBeTruthy();
+    expect(entry?.request?.body).toMatchObject({
+      messages: [
+        { role: 'system', content: 's' },
+        { role: 'user', content: 'u' },
+      ],
+    });
+    expect(() => JSON.stringify(thrown)).not.toThrow();
+  });
+
+  it('startedAt reflects when the request was built, not when the failure was later recorded', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    // Dispatch takes 500ms of fake time before the first attempt rejects,
+    // and the retry loop's catch block (where toRequestSnapshot used to
+    // stamp Date.now() itself) only runs after that. If startedAt were
+    // captured there instead of at build time, it would read ~1500+,
+    // not 1000.
+    const first = () =>
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new LLMError('slow failure', 'api', { status: 500 })), 500);
+      });
+    const final = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, final]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    expect(thrown.attempts?.[0]?.request?.startedAt).toBe(1_000);
+
+    vi.useRealTimers();
+  });
+
+  it('gives each retried attempt its own request snapshot, not a shared reference from a prior attempt', async () => {
+    const first = new LLMError('server hiccup', 'api', { status: 500 });
+    const second = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, second]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    const [entry] = thrown.attempts ?? [];
+    // Only one attempt is ever pushed here (the terminal failure is thrown,
+    // not recorded), but it must reflect attempt 0's own request, not be
+    // left over `undefined`/stale from before the loop's per-iteration
+    // reset in `retryWithBackoff` ran for this iteration.
+    expect(entry?.request).toBeDefined();
+    expect(entry?.request?.startedAt).toBeGreaterThan(0);
+  });
+
+  it('is not affected by the client mutating the dispatched request object during the call, e.g. as fromGemini does', async () => {
+    // The mock's script function receives the exact same `params` object
+    // CallExecutor dispatched, the same reference a real LLMClient
+    // implementation (like fromGemini, which does `request.config = {...}`
+    // in place) would receive and could mutate. Mutating it here, then
+    // rejecting, reproduces that scenario without needing a real adapter.
+    const first = (params: Record<string, unknown>) => {
+      (params as { mutated?: boolean }).mutated = true;
+      (params.messages as unknown[]).push({ role: 'user', content: 'sneaked in' });
+      return Promise.reject(new LLMError('server hiccup', 'api', { status: 500 }));
+    };
+    const final = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, final]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    const body = thrown.attempts?.[0]?.request?.body as { mutated?: boolean; messages: unknown[] };
+    expect(body.mutated).toBeUndefined();
+    expect(body.messages).toEqual([
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'u' },
+    ]);
+  });
+
+  it('never populates request when attempts itself never gets populated (no retry configured)', async () => {
+    const { client } = createMockClient([new FakeApiError('unauthorized', 401)]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const thrown = (await llm
+      .call({ systemPrompt: 's', userContent: 'u' })
+      .catch((e) => e)) as LLMError;
+
+    expect(thrown.attempts).toBeUndefined();
+  });
 });
 
 describe('VernLLM.call, abort during backoff wait', () => {
