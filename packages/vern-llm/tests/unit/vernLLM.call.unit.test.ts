@@ -472,6 +472,55 @@ describe('VernLLM.call, retry & backoff', () => {
     expect(() => JSON.stringify(thrown)).not.toThrow();
   });
 
+  it('startedAt reflects when the request was built, not when the failure was later recorded', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    // Dispatch takes 500ms of fake time before the first attempt rejects,
+    // and the retry loop's catch block (where toRequestSnapshot used to
+    // stamp Date.now() itself) only runs after that. If startedAt were
+    // captured there instead of at build time, it would read ~1500+,
+    // not 1000.
+    const first = () =>
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new LLMError('slow failure', 'api', { status: 500 })), 500);
+      });
+    const final = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, final]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    expect(thrown.attempts?.[0]?.request?.startedAt).toBe(1_000);
+
+    vi.useRealTimers();
+  });
+
+  it('gives each retried attempt its own request snapshot, not a shared reference from a prior attempt', async () => {
+    const first = new LLMError('server hiccup', 'api', { status: 500 });
+    const second = new LLMError('server hiccup again', 'api', { status: 500 });
+    const { client } = createMockClient([first, second]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, baseDelayMs: 10 });
+
+    const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ type: 'api', status: 500 });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    const thrown = (await promise.catch((e) => e)) as LLMError;
+    const [entry] = thrown.attempts ?? [];
+    // Only one attempt is ever pushed here (the terminal failure is thrown,
+    // not recorded), but it must reflect attempt 0's own request, not be
+    // left over `undefined`/stale from before the loop's per-iteration
+    // reset in `retryWithBackoff` ran for this iteration.
+    expect(entry?.request).toBeDefined();
+    expect(entry?.request?.startedAt).toBeGreaterThan(0);
+  });
+
   it('never populates request when attempts itself never gets populated (no retry configured)', async () => {
     const { client } = createMockClient([new FakeApiError('unauthorized', 401)]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });

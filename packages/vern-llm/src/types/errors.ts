@@ -337,19 +337,27 @@ export interface LLMRequestSnapshot {
  * again, safe to serialize and store. A plain function rather than a
  * method, since unlike `LLMError` a request has no throwable identity or
  * derived state worth wrapping in a class.
+ *
+ * `startedAt` is optional so existing call sites (and tests) that don't
+ * care about exact timing keep working, but a caller that has a real
+ * capture time should always pass it: this function may run well after
+ * the request was actually dispatched (e.g. `callExecutor` only builds
+ * the snapshot once an attempt has failed), so defaulting to `Date.now()`
+ * here would record failure-handling time, not request-start time.
  */
 export function toRequestSnapshot(
   provider: string,
   model: string,
   body: unknown,
   headers?: Record<string, string>,
+  startedAt: number = Date.now(),
 ): LLMRequestSnapshot {
   return {
     provider,
     model,
     body: safeBody(body),
     headers: stripAuthHeaders(headers),
-    startedAt: Date.now(),
+    startedAt,
   };
 }
 

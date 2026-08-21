@@ -1,5 +1,5 @@
 import { CircuitBreaker } from '../../circuitBreaker.js';
-import { LLMError, toRequestSnapshot } from '../../types/errors.js';
+import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
 import { describeError, extractStatus, normalizeError } from './errors.utils.js';
 import { defaultParseJson } from './parse.utils.js';
@@ -25,14 +25,35 @@ import type {
 /**
  * What `executeCall`/`executeStreamCall` hand back to `retryWithBackoff`
  * via `onRequest`, right after the outgoing payload is built and before
- * dispatch. Turned into an `LLMRequestSnapshot` (via `toRequestSnapshot`)
- * only if that attempt goes on to fail and get recorded.
+ * dispatch. `startedAt` is stamped by the `onRequest` caller at that same
+ * moment, not later: `toRequestSnapshot` only runs once an attempt has
+ * failed and is being recorded, which can be well after dispatch, so
+ * capturing the timestamp here is what makes `startedAt` actually mean
+ * "when the attempt started" rather than "when the failure was handled".
+ * Turned into an `LLMRequestSnapshot` (via `toRequestSnapshot`) only if
+ * that attempt goes on to fail and get recorded.
  */
 interface LastRequestForAttempt {
   provider: string;
   model: string;
   body: unknown;
   headers?: Record<string, string>;
+  startedAt: number;
+}
+
+/**
+ * Turns a captured `LastRequestForAttempt` into an `LLMRequestSnapshot`,
+ * or `undefined` if no request was captured for this attempt. A plain
+ * function with its own parameter, not inlined at the call site: TS
+ * narrows a `let` that's reassigned only inside a nested closure (like
+ * `retryWithBackoff`'s `onRequest`) to `undefined` at the point it's last
+ * synchronously assigned, which turns `req && ...` into a `never` branch.
+ * Passing it as a fresh parameter sidesteps that over-narrowing.
+ */
+function buildRetryRequestSnapshot(
+  req: LastRequestForAttempt | undefined,
+): LLMRequestSnapshot | undefined {
+  return req && toRequestSnapshot(req.provider, req.model, req.body, req.headers, req.startedAt);
 }
 
 /** Everything one `CallExecutor` needs beyond the client and model. */
@@ -244,7 +265,7 @@ export class CallExecutor {
   ): Promise<T | CallWithToolsResult<T>> {
     const { useJson, model, request } = this.requestBuilder.build(params);
 
-    onRequest?.({ provider: this.providerName, model, body: request });
+    onRequest?.({ provider: this.providerName, model, body: request, startedAt: Date.now() });
 
     // A retry is a real request, so capacity is acquired per attempt
     // (inside the retry loop, via `executeCall` being re-invoked), not
@@ -457,7 +478,7 @@ export class CallExecutor {
   }> {
     const { useJson, model, request } = this.requestBuilder.build(params);
 
-    onRequest?.({ provider: this.providerName, model, body: request });
+    onRequest?.({ provider: this.providerName, model, body: request, startedAt: Date.now() });
 
     const completions = this.client.chat.completions;
 
@@ -685,6 +706,13 @@ export class CallExecutor {
     let lastRequestForAttempt: LastRequestForAttempt | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // Reset before this iteration's own onRequest can run. If this
+      // attempt fails before onRequest is ever called (e.g. thrown by
+      // recoverDelay or onAttempt, before fn/onRequest runs), the
+      // previous attempt's request must not be misattributed to this
+      // attempt's index below.
+      lastRequestForAttempt = undefined;
+
       try {
         if (attempt > 0) {
           await this.recoverDelay(requestId, model, attempt, lastError, signal);
@@ -703,14 +731,7 @@ export class CallExecutor {
         attempts?.push({
           index: attempt,
           error: normalizeError(error, signal).toSnapshot(),
-          request:
-            lastRequestForAttempt &&
-            toRequestSnapshot(
-              lastRequestForAttempt.provider,
-              lastRequestForAttempt.model,
-              lastRequestForAttempt.body,
-              lastRequestForAttempt.headers,
-            ),
+          request: buildRetryRequestSnapshot(lastRequestForAttempt),
         });
       }
     }
