@@ -223,6 +223,43 @@ describe('VernLLM.call, reasoning defaults', () => {
     expect(at(fallbackCalls, 0).reasoning_effort).toBe('minimal');
     expect(at(fallbackCalls, 0).budget_tokens).toBe(1024);
   });
+
+  it('reasoningEffort: null opts a call out of an instance-level defaultReasoningEffort, mirroring temperature: null', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm', defaultReasoningEffort: 'high' });
+
+    await llm.call({ userContent: 'u', reasoningEffort: null });
+    expect('reasoning_effort' in at(calls, 0)).toBe(false);
+  });
+
+  it('budgetTokens: null opts a call out of an instance-level defaultBudgetTokens, mirroring temperature: null', async () => {
+    const { client, calls } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm', defaultBudgetTokens: 12000 });
+
+    await llm.call({ userContent: 'u', budgetTokens: null });
+    expect('budget_tokens' in at(calls, 0)).toBe(false);
+  });
+
+  it('reasoningEffort/budgetTokens: null only affects the one call they are passed to, not later calls on the same instance', async () => {
+    const { client, calls } = createMockClient([
+      jsonResponse({ ok: true }),
+      jsonResponse({ ok: true }),
+    ]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      defaultReasoningEffort: 'high',
+      defaultBudgetTokens: 12000,
+    });
+
+    await llm.call({ userContent: 'u', reasoningEffort: null, budgetTokens: null });
+    expect('reasoning_effort' in at(calls, 0)).toBe(false);
+    expect('budget_tokens' in at(calls, 0)).toBe(false);
+
+    await llm.call({ userContent: 'u' });
+    expect(at(calls, 1).reasoning_effort).toBe('high');
+    expect(at(calls, 1).budget_tokens).toBe(12000);
+  });
 });
 
 describe('VernLLM.call, retry & backoff', () => {

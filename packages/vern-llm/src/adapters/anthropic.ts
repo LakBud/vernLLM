@@ -14,6 +14,7 @@ import {
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
 import {
+  assertNoForcedToolChoiceWithThinking,
   assertValidClaudeBudgetTokens,
   budgetTokensToEffort,
   effortToBudgetTokens,
@@ -359,6 +360,19 @@ function buildAnthropicRequestBody(
   let effort: ClaudeAdaptiveEffort | undefined;
 
   if (params.budget_tokens !== undefined || params.reasoning_effort !== undefined) {
+    // Checked once here, right before any thinking block is built, so a
+    // caller who set budgetTokens/reasoningEffort alongside a forced
+    // toolChoice (or a jsonSchema call that silently forces one to emulate
+    // structured output on a non-native model, see toolChoice above) gets
+    // a clear local error instead of a 400 after a real network round trip.
+    assertNoForcedToolChoiceWithThinking(
+      toolChoice?.type === 'tool'
+        ? `toolChoice forcing the "${toolChoice.name}" tool`
+        : toolChoice?.type === 'any'
+          ? "toolChoice: 'required' (Anthropic's \"any\" tool_choice)"
+          : undefined,
+    );
+
     if (supportsManualThinkingBudget(params.model, adaptiveOnlyModels)) {
       const budgetTokens =
         params.budget_tokens ?? effortToBudgetTokens(params.reasoning_effort!, effortTokenTable);

@@ -112,6 +112,65 @@ describe('normalizeError', () => {
     expect(result.status).toBe(429);
   });
 
+  it('folds a provider error payload into .message instead of the generic fallback', () => {
+    const result = normalizeError({
+      status: 400,
+      error: { type: 'invalid_request_error', message: 'model does not support tools' },
+    });
+
+    expect(result.type).toBe('api');
+    expect(result.message).toContain('invalid_request_error');
+    expect(result.message).toContain('model does not support tools');
+    expect(result.message).not.toBe('LLM request failed');
+  });
+
+  it('folds a plain .message onto .message when there is no .error payload', () => {
+    const result = normalizeError({ status: 404, message: 'thing not found' });
+
+    expect(result.message).toBe('LLM request failed: thing not found');
+  });
+
+  it('gives a specific, actionable message for a status with no error detail at all (empty body)', () => {
+    const result = normalizeError({ status: 400, message: '400 status code (no body)' });
+
+    expect(result.type).toBe('api');
+    expect(result.status).toBe(400);
+    expect(result.message).toContain('no error detail from the provider');
+    expect(result.message).toContain('400');
+    expect(result.message).not.toBe('LLM request failed');
+  });
+
+  it('gives the same "no detail" message when the error has an empty .message and no .error payload', () => {
+    const result = normalizeError({ status: 500, message: '' });
+
+    expect(result.message).toContain('no error detail from the provider');
+  });
+
+  it('does not treat a status-only object with no message/error as "no detail" (still stringifies something useful)', () => {
+    const result = normalizeError({ status: 500 });
+
+    expect(result.message).not.toContain('no error detail from the provider');
+    expect(result.message).toContain('500');
+  });
+
+  it('does not treat a real, non-"(no body)" message as having no detail', () => {
+    const result = normalizeError({ status: 400, message: 'invalid API key' });
+
+    expect(result.message).toBe('LLM request failed: invalid API key');
+    expect(result.message).not.toContain('no error detail from the provider');
+  });
+
+  it('prefers a present .error payload over the "(no body)" pattern, even if .message also matches it', () => {
+    const result = normalizeError({
+      status: 400,
+      message: '400 status code (no body)',
+      error: { type: 'invalid_request_error', message: 'bad field' },
+    });
+
+    expect(result.message).not.toContain('no error detail from the provider');
+    expect(result.message).toContain('bad field');
+  });
+
   it('carries a Retry-After value through onto the normalized error', () => {
     const err = {
       status: 429,

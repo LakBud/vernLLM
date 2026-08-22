@@ -1166,4 +1166,109 @@ describe('fromBedrock, native structured output', () => {
       ]);
     },
   );
+
+  describe('thinking + forced tool_choice (Claude models)', () => {
+    it('throws invalid_params locally, without calling the client, when budget_tokens is set alongside a forced single-tool choice', async () => {
+      const { client, converse } = makeFakeBedrockClient('unused');
+      const adapted = fromBedrock(client);
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'anthropic.claude-test',
+            max_tokens: 2000,
+            budget_tokens: 1024,
+            tools: [
+              {
+                type: 'function',
+                function: { name: 'summarize', description: 'x', parameters: { type: 'object' } },
+              },
+            ],
+            tool_choice: { type: 'function', function: { name: 'summarize' } },
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ type: 'invalid_params' });
+
+      expect(converse).not.toHaveBeenCalled();
+    });
+
+    it('throws invalid_params when reasoning_effort is set alongside tool_choice: "required"', async () => {
+      const { client, converse } = makeFakeBedrockClient('unused');
+      const adapted = fromBedrock(client);
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'anthropic.claude-test',
+            max_tokens: 2000,
+            reasoning_effort: 'low',
+            tools: [
+              {
+                type: 'function',
+                function: { name: 'summarize', description: 'x', parameters: { type: 'object' } },
+              },
+            ],
+            tool_choice: 'required',
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ type: 'invalid_params' });
+
+      expect(converse).not.toHaveBeenCalled();
+    });
+
+    it('does not throw, and sends thinking, when tool_choice is left at auto', async () => {
+      const { client, converse } = makeFakeBedrockClient('ok');
+      const adapted = fromBedrock(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 2000,
+          budget_tokens: 1024,
+          tools: [
+            {
+              type: 'function',
+              function: { name: 'summarize', description: 'x', parameters: { type: 'object' } },
+            },
+          ],
+          tool_choice: 'auto',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const [sentParams] = at(converse.mock.calls, 0) as [Record<string, unknown>, unknown];
+      expect(sentParams.additionalModelRequestFields).toEqual({
+        thinking: { type: 'enabled', budget_tokens: 1024 },
+      });
+    });
+
+    it('is unaffected on a non-Claude model (thinking never applies there in the first place)', async () => {
+      const { client, converse } = makeFakeBedrockClient('ok');
+      const adapted = fromBedrock(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'eu.amazon.nova-lite-v1:0',
+          max_tokens: 2000,
+          budget_tokens: 1024,
+          tools: [
+            {
+              type: 'function',
+              function: { name: 'summarize', description: 'x', parameters: { type: 'object' } },
+            },
+          ],
+          tool_choice: { type: 'function', function: { name: 'summarize' } },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(converse).toHaveBeenCalledOnce();
+    });
+  });
 });

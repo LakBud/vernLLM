@@ -151,6 +151,34 @@ function codeForStatus(status: number): LLMErrorCode | undefined {
 }
 
 /**
+ * Whether a provider's error response, given how `describeError` rendered
+ * it, actually contains anything a person could act on. Some providers
+ * return a non-2xx status with **no body at all** for certain
+ * field-validation failures (Mistral's OpenAI-compatible endpoint does
+ * this, for example, when a request includes a field the target model
+ * doesn't support). SDKs built on top of `openai` render that specific
+ * case as a message like `"400 status code (no body)"`, describeError's
+ * other source, `error.error` (the provider's raw structured error body),
+ * is genuine diagnostic content whenever it's present, regardless of how
+ * describeError ends up phrasing it, so that alone is enough to call the
+ * error "has detail" without needing to also inspect the rendered string.
+ */
+const NO_BODY_MESSAGE_PATTERN = /\(no body\)/i;
+
+function hasNoDiagnosticDetail(error: unknown, description: string): boolean {
+  if (
+    error &&
+    typeof error === 'object' &&
+    (error as { error?: unknown }).error !== undefined &&
+    (error as { error?: unknown }).error !== null
+  ) {
+    return false;
+  }
+
+  return description.trim().length === 0 || NO_BODY_MESSAGE_PATTERN.test(description);
+}
+
+/**
  * Converts any thrown value into a well-typed LLMError. `attempts`, when
  * given, is the accumulated record of every attempt made before `error`
  * was thrown; it's passed straight into the constructed error's options
@@ -189,7 +217,21 @@ export function normalizeError(
   const retryAfterMs = extractRetryAfterMs(error);
 
   if (status !== undefined) {
-    return new LLMError('LLM request failed', 'api', {
+    const description = describeError(error);
+
+    // The generic "LLM request failed" message previously never carried
+    // any of the detail describeError() already extracts (that function
+    // was only ever used for debug logging, gated behind `debug: true`),
+    // so a caught LLMError's own .message told you nothing beyond "it
+    // failed with this status," even when the provider's response did
+    // include a real, readable description. Folding that description into
+    // the thrown message means the detail is there unconditionally, not
+    // only when debug logging happens to be on.
+    const message = hasNoDiagnosticDetail(error, description)
+      ? `LLM request failed with status ${status} and no error detail from the provider. This usually means a field or value in the request isn't supported by the specific model (for example, a reasoning/thinking parameter the model doesn't accept), rather than a transport or auth problem.`
+      : `LLM request failed: ${description}`;
+
+    return new LLMError(message, 'api', {
       status,
       cause: error,
       retryAfterMs,

@@ -49,7 +49,7 @@
   `issues` gained real types instead of being blanket `unknown`. `LLMErrorIssuesByCode` maps every code that carries structured data to its exact shape, and a new `hasIssues(err, code)` type guard narrows `err.issues` off that same `code` with no manual cast:
 
   ```ts
-  if (isLLMError(err) && hasIssues(err, "duplicate_tool_names")) {
+  if (isLLMError(err) && hasIssues(err, 'duplicate_tool_names')) {
     console.log(err.issues.names); // string[], fully typed
   }
   ```
@@ -163,9 +163,9 @@
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: "gpt-4o",
+    model: 'gpt-4o',
     debug: true,
-    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED]"),
+    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED]'),
   });
   ```
 
@@ -182,7 +182,7 @@
   ```ts
   new VernLLM({
     client,
-    model: "gpt-4o",
+    model: 'gpt-4o',
     rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
   });
   ```
@@ -210,10 +210,10 @@
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: "gpt-4o",
+    model: 'gpt-4o',
     fallback: [
-      { client: anthropic, model: "claude-sonnet-5", name: "anthropic" },
-      { client: gemini, model: "gemini-2.5-flash", name: "gemini" },
+      { client: anthropic, model: 'claude-sonnet-5', name: 'anthropic' },
+      { client: gemini, model: 'gemini-2.5-flash', name: 'gemini' },
     ],
   });
   ```

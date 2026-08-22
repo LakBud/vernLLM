@@ -854,4 +854,100 @@ describe('fromAnthropic, native structured output', () => {
       },
     ]);
   });
+
+  describe('thinking + forced tool_choice', () => {
+    it('throws invalid_params locally, without calling the client, when budget_tokens is set alongside a forced single-tool choice', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi there');
+      const adapted = fromAnthropic(client);
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'claude-x',
+            max_tokens: 2000,
+            budget_tokens: 1024,
+            tools: [
+              {
+                type: 'function',
+                function: { name: 'summarize', description: 'x', parameters: { type: 'object' } },
+              },
+            ],
+            tool_choice: { type: 'function', function: { name: 'summarize' } },
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ type: 'invalid_params' });
+
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('throws invalid_params when reasoning_effort is set alongside tool_choice: "required"', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi there');
+      const adapted = fromAnthropic(client);
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'claude-x',
+            max_tokens: 2000,
+            reasoning_effort: 'low',
+            tools: [
+              {
+                type: 'function',
+                function: { name: 'summarize', description: 'x', parameters: { type: 'object' } },
+              },
+            ],
+            tool_choice: 'required',
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ type: 'invalid_params' });
+
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('does not throw, and sends thinking, when tool_choice is left at auto', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi there');
+      const adapted = fromAnthropic(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          max_tokens: 2000,
+          budget_tokens: 1024,
+          tools: [
+            {
+              type: 'function',
+              function: { name: 'summarize', description: 'x', parameters: { type: 'object' } },
+            },
+          ],
+          tool_choice: 'auto',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sentParams = at(create.mock.calls, 0)[0];
+      expect(sentParams.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+    });
+
+    it('does not throw when budget_tokens is set with no tools/tool_choice at all', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi there');
+      const adapted = fromAnthropic(client);
+
+      await adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          max_tokens: 2000,
+          budget_tokens: 1024,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create).toHaveBeenCalledOnce();
+    });
+  });
 });

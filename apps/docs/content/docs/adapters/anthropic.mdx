@@ -41,6 +41,17 @@ text depends on what else the call is asking for:
 
 ## Tool calling
 
+<Callout type="warn">
+  Anthropic doesn't support tool calling and thinking at the same time when `tool_choice` forces
+  tool use. Setting `budgetTokens`/`reasoningEffort` alongside a forced `toolChoice` (a specific
+  tool, or `'required'`) throws `LLMError('invalid_params')` locally before the request is sent,
+  Anthropic rejects the combination outright with a 400. `toolChoice: 'auto'` (the default when
+  `tools` is set) works fine alongside thinking, the model just needs to stay able to reply with
+  plain text. Pass `budgetTokens: null`/`reasoningEffort: null` to opt one call out of an
+  instance-level reasoning default when it needs a forced choice. See [Call Params →
+  Reasoning](/docs/API-reference/call-params#reasoning-budget) for the full detail.
+</Callout>
+
 `tools` and `tool_calls` map onto Anthropic's native `tool_use` / `tool_result` content blocks.
 Since Anthropic requires strict `user`/`assistant` alternation, `fromAnthropic` merges consecutive
 tool result messages from a multi-tool turn back into a single `user` turn with multiple

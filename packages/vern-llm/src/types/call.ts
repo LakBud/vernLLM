@@ -106,8 +106,15 @@ export interface CallParams<T = unknown> extends UsageHooks {
   /** Overrides the instance model for this call. */
   model?: string;
 
-  /** Reasoning effort for supported reasoning models. */
-  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  /**
+   * Reasoning effort for supported reasoning models. Pass `null` to
+   * explicitly skip an instance-level `defaultReasoningEffort` for this
+   * one call (e.g. a call using a forced `toolChoice`, which Anthropic
+   * rejects alongside any reasoning at all), the same way `temperature:
+   * null` opts a call out of `defaultTemperature`. Omitting the field
+   * entirely (`undefined`) defers to the instance default instead.
+   */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | null;
 
   /**
    * Token budget for internal reasoning, for models with a native numeric
@@ -117,9 +124,12 @@ export interface CallParams<T = unknown> extends UsageHooks {
    * a raw number. When both `budgetTokens` and `reasoningEffort` are set,
    * each adapter prefers whichever field it natively understands and
    * ignores the other. See the reasoning budget docs for the conversion
-   * table used in each direction.
+   * table used in each direction. Pass `null` to explicitly skip an
+   * instance-level `defaultBudgetTokens` for this one call, mirroring
+   * `reasoningEffort: null` above; omitting the field entirely defers to
+   * the instance default.
    */
-  budgetTokens?: number;
+  budgetTokens?: number | null;
 
   /**
    * Provider-native JSON Schema output constraint. Implies jsonMode: true.
