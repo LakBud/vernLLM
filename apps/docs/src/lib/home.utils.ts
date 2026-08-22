@@ -190,7 +190,7 @@ export const faqItems = [
   {
     question: 'How big is the bundle?',
     answer:
-      '55+ kB minified, 16+ kB minified and gzipped. Small enough to drop into a project without thinking twice about it.',
+      '72+ kB minified, 21+ kB minified and gzipped. Small enough to drop into a project without thinking twice about it.',
   },
   {
     question: 'Is it open source?',

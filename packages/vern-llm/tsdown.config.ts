@@ -6,6 +6,9 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
+  minify: true,
+  publint: true,
+  unused: true,
 
   external: [
     '@aws-sdk/client-bedrock-runtime',

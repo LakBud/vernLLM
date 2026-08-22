@@ -1,7 +1,7 @@
 {
   "name": "vern-llm",
   "version": "2.4.0",
-  "description": "Production-ready resilience for LLM calls: retries, timeouts, caching, and circuit breaking behind one typed interface, with adapters for OpenAI-compatible APIs (OpenAI, Groq, and more), Anthropic, Gemini, and Bedrock.",
+  "description": "The LLM call framework. Resilience, observability, and control for every call. Retries, timeouts, provider fallback, rate limiting, circuit breaking and more, dependency-light and typed from the start.",
   "keywords": [
     "llm",
     "ai",
@@ -21,11 +21,17 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "files": [
@@ -64,16 +70,18 @@
     "@vitest/coverage-v8": "^4.1.10",
     "groq-sdk": "^1.5.0",
     "openai": "^7.4.0",
+    "publint": "^0.3.24",
     "size-limit": "^13.0.3",
     "tsdown": "^0.9.9",
     "typescript": "^5.9.3",
+    "unplugin-unused": "^0.4.4",
     "vitest": "^4.1.10",
     "zod": "^4.4.3"
   },
   "packageManager": "pnpm@11.22.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/LakBud/vernLLM",
+    "url": "git+https://github.com/LakBud/vernLLM.git",
     "directory": "packages/vern-llm"
   },
   "license": "MIT",
