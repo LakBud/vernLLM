@@ -8,6 +8,384 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 2.4.0
+
+### Minor Changes
+
+- 411164c: A round of fixes and additions from a hands-on DX report exercising every built-in adapter
+  end-to-end. One real build-level bug, one error-message improvement, and one new capability
+  (with matching pre-flight validation) that came directly out of hitting these while wiring up a
+  real multi-provider example app.
+
+  **Fixed:** `fromBedrock`'s raw-AWS-SDK-client path threw `TypeError: ConverseCommand is not a constructor` (or the same for `ConverseStreamCommand`) on every call. The published build was
+  bundling `@aws-sdk/client-bedrock-runtime` into a local chunk instead of leaving the dynamic
+  `import('@aws-sdk/client-bedrock-runtime')` in `wrapAwsSendClient` as a genuine runtime import
+  resolved from the consumer's own `node_modules`. The bundler's CJS interop for that inlined chunk
+  only produced a `default` export, not real named exports, so destructuring
+  `ConverseCommand`/`ConverseStreamCommand` off the resolved module returned `undefined` for both.
+  `@aws-sdk/client-bedrock-runtime` (and every other provider SDK package, defensively, even though
+  none of the others are currently dynamically imported) is now marked `external` in the build
+  config, so it's never bundled. This also restores the documented zero-runtime-dependency
+  guarantee for this path: the AWS SDK was being silently embedded (~937KB) into every install
+  regardless of whether this path was ever used.
+
+  **Improved:** `LLMError.message` for provider API errors (`type: 'api'`) now includes the provider's own error description instead of always being the generic `"LLM request failed"`.
+  `describeError()` already existed internally and correctly extracted a provider's error body (it
+  was previously only used for `debug: true` logging); that detail is now folded into the thrown
+  error's own `.message` unconditionally. When a provider genuinely returns no error detail at all
+  (a non-2xx response with an empty body, which some providers do for certain field-validation
+  failures, e.g. sending `reasoning_effort` to a model that doesn't support it), the message now
+  says so explicitly and points at the likely cause, instead of falling back to the same
+  uninformative string every other API error got:
+
+  ```text
+  LLM request failed with status 400 and no error detail from the provider. This usually means a
+  field or value in the request isn't supported by the specific model (for example, a
+  reasoning/thinking parameter the model doesn't accept), rather than a transport or auth problem.
+  ```
+
+  `status`, `code`, `cause`, and every other field on `LLMError` are unchanged, this only affects
+  `.message` on `type: 'api'` errors. If you were matching on the exact previous message, match on
+  `.type === 'api'` and `.status` instead, both unaffected and always the more precise way to
+  branch on this.
+
+  **Added:** `budgetTokens`/`reasoningEffort` now accept `null` to explicitly skip an
+  instance-level `defaultBudgetTokens`/`defaultReasoningEffort` for one call, mirroring the
+  existing `temperature: number | null` pattern. Previously there was no way to say "not for this
+  call" once an instance default was set, only `undefined` (defer to the instance default) or a
+  real value (override it).
+
+  **Added:** Anthropic (and Claude models on Bedrock) now pre-validate `budgetTokens`/
+  `reasoningEffort` combined with a forced `toolChoice`. Anthropic rejects `thinking` (manual or
+  adaptive) alongside a `tool_choice` that forces tool use, a forced single tool or `'required'`,
+  with a 400: `"Thinking may not be enabled when tool_choice forces tool use."` This is now caught
+  locally and thrown as `LLMError('invalid_params')` before any request is sent, the same treatment
+  `budgetTokens >= maxTokens` already got. This also covers the implicit case where `jsonSchema`
+  silently forces a single synthetic tool call to emulate structured output on a model without
+  native support, even with no `toolChoice` of the caller's own set.
+
+  The last two land together because the second directly motivated the first: an instance-wide
+  `defaultBudgetTokens` used to make every forced-tool-choice call on that instance fail, with no
+  way to opt just that one call out short of dropping the instance default entirely.
+
+  ```ts title="null-override-and-forced-tool-choice.ts"
+  const llm = new VernLLM({
+    client: fromAnthropic(anthropic),
+    model: "claude-sonnet-4-6",
+    defaultBudgetTokens: 1024, // reasoning on by default
+  });
+
+  // Throws LLMError('invalid_params') before any request is sent: forced
+  // toolChoice + budgetTokens (from the instance default) is a real
+  // Anthropic-side conflict.
+  await llm.call({
+    userContent: "summarize",
+    tools: [summarizeTool],
+    toolChoice: { name: "summarize" },
+  });
+
+  // Fixed: explicitly opt this one call out of the instance-level reasoning
+  // default instead of dropping it for every call.
+  await llm.call({
+    userContent: "summarize",
+    tools: [summarizeTool],
+    toolChoice: { name: "summarize" },
+    budgetTokens: null,
+  });
+  ```
+
+- c203fb2: `response_format: { type: 'json_object' }` is no longer emulated on `fromAnthropic`/`fromBedrock`
+  via an unenforced system-prompt instruction ("Respond with valid JSON only, no prose or markdown
+  fences."). Neither provider has a request field that mechanically guarantees JSON output for this
+  mode. That instruction was a weaker guarantee than the type implied: the model could still ignore
+  it, wrap output in prose, or add a markdown fence. This was also the one place in the codebase
+  where an unsupported provider feature was silently degraded instead of failing loudly, unlike
+  every other cross-provider gap (e.g. `jsonSchema` + `tools` on an unsupported model already throws
+  instead of degrading).
+
+  Both `LLMClient` implementations now report this via a new `supportsJsonObjectMode?: boolean`
+  field (defaults to `true` when omitted; every OpenAI-compatible client and `fromGemini` are
+  unaffected, since both map `json_object` to a real API field). `fromAnthropic` and `fromBedrock`
+  set it to `false`, and `RequestBuilder`'s behavior branches on it:
+
+  - **An explicit `jsonMode: true`** (or `VernLLM.call({ jsonSchema })` isn't set and you asked for
+    JSON directly) on a client with `supportsJsonObjectMode: false` now throws
+    `LLMError('invalid_params')` before the request is ever sent, naming the client and pointing at
+    `jsonSchema` as the real alternative.
+  - **The _default_, unset `jsonMode`, with no `schema` to validate against**, the common case of a
+    plain `llm.call({ userContent })`, is silently downgraded to plain text instead of throwing.
+    This keeps a bare `llm.call({ userContent })` working exactly as before on Anthropic/Bedrock, for
+    callers who never actually wanted JSON and were just getting the library's default.
+  - **`schema` without `jsonSchema`** always requires real JSON output to validate against, so it
+    always throws `LLMError('invalid_params')` on `supportsJsonObjectMode: false` clients, naming
+    the real cause, whether `jsonMode` was set explicitly or left at its default. An implicit request
+    for JSON (via `schema`) is deliberately not silently downgraded the way a schema-less call is:
+    doing so would skip validation entirely while reporting success.
+  - **`jsonSchema`** is unaffected either way: it was never routed through `json_object`, and maps
+    to a real API-level constraint on both providers (native structured output or a forced single
+    tool call).
+
+  If you were relying on `jsonMode: true` (explicitly or by default) to get JSON-shaped text on
+  Anthropic/Bedrock without a `jsonSchema`, switch to `jsonSchema`. It's a strictly stronger
+  guarantee anyway.
+
+- 6d0bcdb: `fromBedrock` now accepts a raw AWS SDK v3 client directly. It takes either a hand-written
+  `BedrockConverseClient` (`.converse()`/`.converseStream()`) or a real `BedrockRuntimeClient`
+  (anything with `.send()`), and detects which one it got. No wrapper is required for the latter:
+
+  ```ts
+  import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
+  import { VernLLM, fromBedrock } from "vern-llm";
+
+  const client = new BedrockRuntimeClient({ region: "us-east-1" });
+
+  const llm = new VernLLM({
+    client: fromBedrock(client),
+    model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  });
+  ```
+
+  `vern-llm` still has zero runtime dependencies. `@aws-sdk/client-bedrock-runtime` is not a
+  dependency, not even a peer dependency. A raw AWS client pulls in
+  `ConverseCommand`/`ConverseStreamCommand` with a dynamic `import()` on the first real request, not
+  when `fromBedrock` is called. A missing install throws a clear `LLMError` naming what's missing.
+
+  Also fixed two typing gaps between AWS's generated types and `BedrockConverseClient`, previously
+  bridged with a plain `as` assertion:
+
+  - AWS types `ConverseStreamCommandOutput.stream` as optional. `BedrockConverseClient`'s own
+    `converseStream` always returns `{ stream: AsyncIterable<...> }`. A response missing `stream`
+    now throws a clear `LLMError('api')` instead of crashing the internal `for await` loop.
+  - AWS's real streaming event union includes a generated `$unknown` member VernLLM doesn't model.
+    Every event is now narrowed through an explicit check first. Anything unmodeled, including
+    `$unknown`, is dropped rather than forwarded.
+
+  `fromBedrock(converseClient)` with a hand-written `BedrockConverseClient` is unaffected. It's
+  still the zero-dependency option for a different AWS SDK generation or a hand-rolled HTTP client.
+
+- 4756645: `call()` and `cachedCall()` return better types for JSON mode.
+
+  Before, `jsonMode: false` still typed the result as `unknown`, even though the runtime value was always a `string`:
+
+  ```ts
+  const response = await llm.call({
+    userContent: "Hello",
+    jsonMode: false,
+  });
+  // response: unknown, but really a string
+  ```
+
+  Now the return type matches the requested mode:
+
+  ```ts
+  const response = await llm.call({
+    userContent: "Hello",
+    jsonMode: false,
+  });
+  // response: string
+
+  const parsed = await llm.call({
+    userContent: "Hello",
+    jsonMode: true,
+  });
+  // parsed: JsonValue
+  ```
+
+  `JsonValue` is a new exported type for any valid JSON shape:
+
+  ```ts
+  type JsonValue =
+    | string
+    | number
+    | boolean
+    | null
+    | JsonValue[]
+    | { [key: string]: JsonValue };
+  ```
+
+  A call site that also sets `schema` still gets `T` inferred from the schema, exactly as before. This overload change only affects calls that don't use `schema`. Streaming calls (`stream: true`) get the same treatment: `finalResult` now resolves to `string`/`JsonValue` instead of `unknown` for the same two `jsonMode` cases, for both `call()` and `cachedCall()`.
+
+  `ConversationTurn` assistant `content` now also accepts a parsed `JsonValue`, so a `jsonMode: true` result can be pushed straight into `history` without stringifying it yourself:
+
+  ```ts
+  import type { ConversationTurn } from "vern-llm";
+
+  const history: ConversationTurn[] = [];
+
+  const parsed = await llm.call({
+    userContent: "Give me a JSON summary.",
+    jsonMode: true,
+  });
+
+  history.push(
+    { role: "user", content: "Give me a JSON summary." },
+    { role: "assistant", content: parsed }
+  );
+  ```
+
+  VernLLM's request construction `JSON.stringify`s non-string assistant `content` before it's sent as part of the wire request, so no manual stringifying is needed on the caller's side.
+
+- b3a5de4: Added `budgetTokens` on `CallParams`, a numeric reasoning budget alongside the existing
+  `reasoningEffort` tier string.
+
+  Each adapter reads its own native field first. Anthropic and Gemini use `budgetTokens` directly.
+  OpenAI compatible clients use `reasoningEffort` directly. Bedrock forwards a budget only for Claude
+  models. When only the other field is set, it is converted through a shared table, documented in
+  `adapters/internal/reasoningBudget.utils.ts`.
+
+  Also added `reasoningTokens` on `TokenUsage`, a subset of `completionTokens`, populated whenever
+  the provider reports a separate figure for internal reasoning. Undefined for Bedrock today, since
+  Converse only returns that figure if the request explicitly asks for it, a separate feature outside
+  this change.
+
+  Added `defaultReasoningEffort` and `defaultBudgetTokens` on `VernLLMOptions` and `FallbackTarget`,
+  matching the existing `defaultTemperature` pattern. Resolution order is per call value, then the
+  fallback target's own default, then the instance default.
+
+  Added `reasoningEffortTokens` as an option on `fromAnthropic`, `fromGemini`,
+  `fromOpenAICompatible`, and `fromBedrock`, letting the conversion table itself be overridden per
+  adapter instance. Only the tiers listed are changed, any tier left out keeps the built in default.
+
+  Neither field is required. Existing calls and instances that set nothing here are unaffected.
+
+  See the `budgetTokens` row in the
+  [Call Params reference](https://vernllm.vercel.app/docs/API-reference/call-params) for full per
+  provider behavior.
+
+- d420f6f: `fromGemini` now accepts the whole `@google/genai` client, not just `ai.models`, and unwraps
+  `.models` internally:
+
+  ```ts
+  import { GoogleGenAI } from "@google/genai";
+  import { VernLLM, fromGemini } from "vern-llm";
+
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+  const llm = new VernLLM({
+    client: fromGemini(ai),
+    model: "gemini-2.5-flash",
+  });
+  ```
+
+  `fromGemini(ai.models)` still works exactly as before. `GeminiClient` now models both shapes
+  itself, via an optional self-referencing `models?: GeminiClient` field, so there's nothing new to
+  import: passing `ai` directly, or `ai.models`, both type-check against the real `GoogleGenAI`
+  client with no `as GeminiClient`/`as unknown as` cast required anywhere. Previously, `GeminiClient`
+  diverged from the real SDK's generated types on `model` (optional here vs. required there),
+  `functionCall.args`/`functionResponse.response` (`unknown` here vs. `Record<string, unknown>`
+  there), and `toolConfig.functionCallingConfig.mode` (a plain string union here vs. a real string
+  enum there, which TypeScript never treats as structurally compatible); all three are now aligned.
+
+  **Behavior change:** `parseToolResult` (used for `role: 'tool'` messages) now always produces an
+  object for Gemini's `functionResponse.response`, matching the real SDK's
+  `Record<string, unknown>` requirement there. A tool result whose `content` parses to something
+  other than a plain JSON object, a bare string, number, array, or unparseable text, is now wrapped
+  under an `output` key (e.g. `content: '"sunny"'` sends `{ output: 'sunny' }` instead of the bare
+  string `'sunny'`). Tool results that are already JSON objects are unaffected.
+
+  `fromGemini` now throws `LLMError('invalid_params')` immediately if the client it's given, and its
+  `.models` if present, has no `generateContent` (or `generateContentStream`, for `stream: true`
+  calls) that's actually a function, instead of deferring to a confusing native `TypeError` on the
+  first real call.
+
+- adca7fb: Every recorded `RetryAttempt` now also carries `request`, a snapshot of what was actually sent for
+  that attempt, sitting next to the existing `error` snapshot of what came back:
+
+  ```ts
+  try {
+    await llm.call({ userContent: "Hello" });
+  } catch (err) {
+    if (isLLMError(err)) {
+      for (const attempt of err.attempts ?? []) {
+        console.log(attempt.error.message, attempt.request?.body);
+      }
+    }
+  }
+  ```
+
+  `request` is an `LLMRequestSnapshot`:
+
+  ```ts
+  interface LLMRequestSnapshot {
+    provider: string;
+    model: string;
+    body: unknown;
+    headers?: Record<string, string>;
+    startedAt: number;
+  }
+  ```
+
+  Auth headers (`Authorization`, `x-api-key`, `x-goog-api-key`, `api-key`) are always stripped
+  before the snapshot is built, case insensitively, so they never end up in `headers`.
+
+  `request` is optional and additive. It is `undefined` on attempts recorded before this field
+  existed, and `FallbackAttempt` picks it up for free since it already extends `RetryAttempt`. No
+  existing field, method, or constructor option changes shape.
+
+### Patch Changes
+
+- 40212b7: `call()`/`cachedCall()` (including their `stream: true` variants) no longer silently mistype a
+  `tool_calls` result as plain content when `tools` is set conditionally:
+
+  ```ts
+  const tools = condition ? [myTool] : undefined;
+
+  const result = await llm.call({ userContent, tools });
+  // Before: typed `unknown` (or whatever T you asked for), even though the
+  // runtime value could genuinely be a `tool_calls` result once `tools` was
+  // actually an array at call time.
+  // Now:    typed `T | CallWithToolsResult<T>`, so `isToolCallResult(result)`
+  // is required (and correctly enforced) before treating it as plain content.
+  ```
+
+  The runtime behavior was already correct: `call()` has always returned a real
+  `CallWithToolsResult<T>` whenever the model was actually offered tools, regardless of whether
+  `tools` was a literal array or a variable. Only the _type_ was wrong, `tools: ToolDefinition[] |
+undefined` matched neither the tools-enabled nor the tools-disabled overload, so TypeScript fell
+  through to the final generic overload and typed the result as plain `T`.
+
+  This adds a `ConditionalToolCallParams<T>` overload (and cached/streaming counterparts
+  `CachedConditionalToolCallParams<T>`, `CachedStreamConditionalToolCallParams<T>`) that catches this
+  shape and returns the honest union instead. It's picked up automatically; no code changes are
+  needed to benefit from it, as long as `tools`'s narrower type reaches `call()` intact (an inline
+  literal, or a variable that hasn't been widened by an explicit `: CallParams<T>` annotation, see
+  below). Call sites using a literal `tools: [...]` array are unaffected and keep inferring
+  `CallWithToolsResult<T>` directly, same as before. Call sites that omit `tools` entirely are also
+  unaffected, since tools genuinely cannot have run there.
+
+  **New exports: `defineCallParams()` / `defineCachedCallParams()`.** A `: CallParams<T>` variable
+  annotation widens `tools` away before it ever reaches `call()`, no overload fix can recover from
+  that (it's how TypeScript's type annotations work, not a gap in this library). These two are
+  identity functions, return exactly what you pass them, for building a `call()`/`cachedCall()`
+  params object in a named, reusable variable without hitting that trap:
+
+  ```ts
+  import { defineCallParams } from "vern-llm";
+
+  const params = defineCallParams({
+    userContent: "What is the weather?",
+    tools: someCondition ? [weatherTool] : undefined,
+  });
+
+  const result = await llm.call<string>(params);
+  // result: string | CallWithToolsResult<string> (defaults to unknown if T
+  // isn't pinned via call<T>() or schema)
+  ```
+
+  They work by giving `P` (the whole params object) a single, plain generic parameter, no `const`
+  type parameter needed. TypeScript 5.0's `const` type parameters would also solve this, but they'd
+  silently raise this package's effective minimum TypeScript version (this package declares none
+  today, and the whole package's `.d.ts` would fail to parse on TypeScript `<5.0`, not just these two
+  functions), and turned out to be unnecessary here anyway: `tools: someCondition ? [tool] :
+undefined`'s type is already the union the ternary computes, not a literal that needs `const` to
+  avoid being widened. `T` isn't a parameter of `defineCallParams()` itself; pin it the normal way,
+  via `llm.call<T>(params)`, exactly as you would with an inline object. `satisfies CallParams<T>`
+  remains a valid, import-free alternative to `defineCallParams()` for the same purpose.
+
+  `isToolCallResult()` was already the documented way to narrow a dynamically-typed result; this
+  change makes TypeScript require that check for the conditional-tools case instead of only
+  recommending it in a doc comment.
+
 ## 2.3.0
 
 ### Minor Changes
@@ -57,7 +435,7 @@ vern-llm uses Changesets for versioning. The release history below is generated 
   `issues` gained real types instead of being blanket `unknown`. `LLMErrorIssuesByCode` maps every code that carries structured data to its exact shape, and a new `hasIssues(err, code)` type guard narrows `err.issues` off that same `code` with no manual cast:
 
   ```ts
-  if (isLLMError(err) && hasIssues(err, 'duplicate_tool_names')) {
+  if (isLLMError(err) && hasIssues(err, "duplicate_tool_names")) {
     console.log(err.issues.names); // string[], fully typed
   }
   ```
@@ -171,9 +549,9 @@ vern-llm uses Changesets for versioning. The release history below is generated 
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: 'gpt-4o',
+    model: "gpt-4o",
     debug: true,
-    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED]'),
+    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED]"),
   });
   ```
 
@@ -190,7 +568,7 @@ vern-llm uses Changesets for versioning. The release history below is generated 
   ```ts
   new VernLLM({
     client,
-    model: 'gpt-4o',
+    model: "gpt-4o",
     rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
   });
   ```
@@ -218,10 +596,10 @@ vern-llm uses Changesets for versioning. The release history below is generated 
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: 'gpt-4o',
+    model: "gpt-4o",
     fallback: [
-      { client: anthropic, model: 'claude-sonnet-5', name: 'anthropic' },
-      { client: gemini, model: 'gemini-3.1-flash-lite', name: 'gemini' },
+      { client: anthropic, model: "claude-sonnet-5", name: "anthropic" },
+      { client: gemini, model: "gemini-2.5-flash", name: "gemini" },
     ],
   });
   ```
@@ -701,3 +1079,4 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 ### Minor Changes
 
 - dbce6e2: created a `tsconfig.base.json` which the `tsconfig.json` extends from
+
