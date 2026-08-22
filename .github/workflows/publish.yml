@@ -1,13 +1,11 @@
 name: Publish
 
 on:
-  pull_request:
-    types: [closed]
-    branches:
-      - main
+  release:
+    types: [published]
   workflow_dispatch:
 
-concurrency: ${{ github.workflow }}-${{ github.event.pull_request.merge_commit_sha || github.run_id }}
+concurrency: ${{ github.workflow }}-${{ github.event.release.tag_name || github.run_id }}
 
 permissions:
   contents: write
@@ -15,17 +13,20 @@ permissions:
 
 jobs:
   publish:
+    # version.yml only creates a release once it has confirmed there are no
+    # pending changesets left, i.e. the Version Packages PR was just merged.
+    # Triggering on release publish (rather than the PR close event) means
+    # this job can no longer run before that tag/release actually exists.
     if: >
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.ref == 'changeset-release/main'
+      github.event_name == 'release' &&
+      startsWith(github.event.release.tag_name, 'vern-llm@')
 
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.release.target_commitish }}
 
       - uses: pnpm/action-setup@v4
 
@@ -44,15 +45,12 @@ jobs:
         run: |
           echo "version=$(node -p "require('./packages/vern-llm/package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Verify release tag
+      - name: Sanity check release tag matches package version
         run: |
-          TAG="vern-llm@${{ steps.pkg.outputs.version }}"
-          echo "Publishing $TAG"
-
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG"; then
-            echo "Tag $TAG exists"
-          else
-            echo "Tag $TAG does not exist"
+          TAG="${{ github.event.release.tag_name }}"
+          EXPECTED="vern-llm@${{ steps.pkg.outputs.version }}"
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "Release tag $TAG does not match package.json version ($EXPECTED)"
             exit 1
           fi
 

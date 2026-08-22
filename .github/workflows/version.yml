@@ -51,8 +51,10 @@ jobs:
 
       # Fires only right after the Version Packages PR itself gets merged,
       # changesets/action reports no pending changesets in that case, which
-      # means the version bump is already on main and ready to ship. Tagging
-      # here and publishing the GitHub Release is what triggers publish.yml.
+      # means the version bump is already on main and ready to ship. Creating
+      # the GitHub Release below (which publishes it) is what triggers
+      # publish.yml via its `on: release: types: [published]` trigger,
+      # keeping the two workflows sequential instead of racing each other.
       - if: steps.filter.outputs.code == 'true' && steps.changesets.outputs.hasChangesets == 'false'
         name: Read published version
         id: pkg
