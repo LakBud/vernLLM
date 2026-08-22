@@ -28,7 +28,7 @@ failures, e.g. sending `reasoning_effort` to a model that doesn't support it), t
 says so explicitly and points at the likely cause, instead of falling back to the same
 uninformative string every other API error got:
 
-```
+```text
 LLM request failed with status 400 and no error detail from the provider. This usually means a
 field or value in the request isn't supported by the specific model (for example, a
 reasoning/thinking parameter the model doesn't accept), rather than a transport or auth problem.

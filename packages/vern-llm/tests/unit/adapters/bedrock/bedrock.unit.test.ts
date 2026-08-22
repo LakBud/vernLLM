@@ -1247,6 +1247,29 @@ describe('fromBedrock, native structured output', () => {
       });
     });
 
+    it('throws invalid_params locally, without calling the client, when budget_tokens is set alongside a non-native response_format jsonSchema (implicit forced tool)', async () => {
+      const { client, converse } = makeFakeBedrockClient('unused');
+      const adapted = fromBedrock(client);
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'anthropic.claude-test',
+            max_tokens: 2000,
+            budget_tokens: 1024,
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'Out', schema: { type: 'object' } },
+            },
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ type: 'invalid_params' });
+
+      expect(converse).not.toHaveBeenCalled();
+    });
+
     it('is unaffected on a non-Claude model (thinking never applies there in the first place)', async () => {
       const { client, converse } = makeFakeBedrockClient('ok');
       const adapted = fromBedrock(client);

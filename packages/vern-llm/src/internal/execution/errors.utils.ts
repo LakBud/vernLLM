@@ -151,31 +151,49 @@ function codeForStatus(status: number): LLMErrorCode | undefined {
 }
 
 /**
- * Whether a provider's error response, given how `describeError` rendered
- * it, actually contains anything a person could act on. Some providers
- * return a non-2xx status with **no body at all** for certain
- * field-validation failures (Mistral's OpenAI-compatible endpoint does
- * this, for example, when a request includes a field the target model
- * doesn't support). SDKs built on top of `openai` render that specific
- * case as a message like `"400 status code (no body)"`, describeError's
- * other source, `error.error` (the provider's raw structured error body),
- * is genuine diagnostic content whenever it's present, regardless of how
- * describeError ends up phrasing it, so that alone is enough to call the
- * error "has detail" without needing to also inspect the rendered string.
+ * Whether a provider's error response actually contains anything a person
+ * could act on. Some providers return a non-2xx status with **no body at
+ * all** for certain field-validation failures (Mistral's OpenAI-compatible
+ * endpoint does this, for example, when a request includes a field the
+ * target model doesn't support). SDKs built on top of `openai` render that
+ * specific case as a message like `"400 status code (no body)"`.
+ *
+ * Derived from the object's own `error`/`message` fields directly, rather
+ * than from whatever `describeError` rendered, because `describeError`
+ * falls back to serializing the *whole* thrown value when neither field is
+ * present or meaningful. That fallback is local echo (e.g. just the
+ * `status` a caller passed in), not provider diagnostic content, and
+ * treating it as "detail" defeats the whole point of this check.
  */
 const NO_BODY_MESSAGE_PATTERN = /\(no body\)/i;
 
-function hasNoDiagnosticDetail(error: unknown, description: string): boolean {
-  if (
-    error &&
-    typeof error === 'object' &&
-    (error as { error?: unknown }).error !== undefined &&
-    (error as { error?: unknown }).error !== null
-  ) {
-    return false;
+function hasNoDiagnosticDetail(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const { error: errorField, message } = error as { error?: unknown; message?: unknown };
+
+    // A present, non-null `.error` is the provider's raw structured error
+    // body, genuine diagnostic content whenever it's present, regardless
+    // of how describeError ends up phrasing it. `error: null` is a
+    // placeholder, not real content, and falls through to the message
+    // check below like a missing field would.
+    if (errorField !== undefined && errorField !== null) {
+      return false;
+    }
+
+    if (typeof message === 'string') {
+      const trimmed = message.trim();
+      return trimmed.length === 0 || NO_BODY_MESSAGE_PATTERN.test(trimmed);
+    }
+
+    // Neither a meaningful `.error` nor a `.message` string: describeError
+    // has nothing of the provider's own to report and falls back to
+    // stringifying the whole object instead.
+    return true;
   }
 
-  return description.trim().length === 0 || NO_BODY_MESSAGE_PATTERN.test(description);
+  // A non-object thrown value (string, number, etc.) has no `.error`/
+  // `.message` fields to check at all.
+  return true;
 }
 
 /**
@@ -227,15 +245,26 @@ export function normalizeError(
     // include a real, readable description. Folding that description into
     // the thrown message means the detail is there unconditionally, not
     // only when debug logging happens to be on.
-    const message = hasNoDiagnosticDetail(error, description)
-      ? `LLM request failed with status ${status} and no error detail from the provider. This usually means a field or value in the request isn't supported by the specific model (for example, a reasoning/thinking parameter the model doesn't accept), rather than a transport or auth problem.`
+    const code = codeForStatus(status);
+
+    // The "probably an unsupported field/value" guidance is only accurate
+    // for statuses that don't already have a more specific, known meaning
+    // (auth, rate limiting, not-found, payload-too-large, server errors);
+    // for those, a no-body response is just a no-body response and the
+    // field-validation explanation would be actively misleading.
+    const isRequestValidationStatus = code === undefined;
+
+    const message = hasNoDiagnosticDetail(error)
+      ? isRequestValidationStatus
+        ? `LLM request failed with status ${status} and no error detail from the provider. This usually means a field or value in the request isn't supported by the specific model (for example, a reasoning/thinking parameter the model doesn't accept), rather than a transport or auth problem.`
+        : `LLM request failed with status ${status} and no error detail from the provider.`
       : `LLM request failed: ${description}`;
 
     return new LLMError(message, 'api', {
       status,
       cause: error,
       retryAfterMs,
-      code: codeForStatus(status),
+      code,
       attempts,
     });
   }

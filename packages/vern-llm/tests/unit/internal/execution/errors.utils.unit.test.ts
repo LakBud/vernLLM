@@ -146,11 +146,33 @@ describe('normalizeError', () => {
     expect(result.message).toContain('no error detail from the provider');
   });
 
-  it('does not treat a status-only object with no message/error as "no detail" (still stringifies something useful)', () => {
+  it('gives a neutral no-detail message (no field-guidance) for a body-less 401 authentication error', () => {
+    const result = normalizeError({ status: 401, message: '401 status code (no body)' });
+
+    expect(result.message).toContain('no error detail from the provider');
+    expect(result.message).not.toContain('field or value');
+    expect(result.message).not.toContain('auth problem');
+  });
+
+  it('gives a neutral no-detail message (no field-guidance) for a body-less 500 server error', () => {
+    const result = normalizeError({ status: 500, message: '500 status code (no body)' });
+
+    expect(result.message).toContain('no error detail from the provider');
+    expect(result.message).not.toContain('field or value');
+  });
+
+  it('treats a status-only object with no message/error as "no detail", not as its own local serialization', () => {
     const result = normalizeError({ status: 500 });
 
-    expect(result.message).not.toContain('no error detail from the provider');
+    expect(result.message).toContain('no error detail from the provider');
     expect(result.message).toContain('500');
+  });
+
+  it('treats an explicit `error: null` as no detail, not as a literal "null" description', () => {
+    const result = normalizeError({ status: 400, error: null });
+
+    expect(result.message).toContain('no error detail from the provider');
+    expect(result.message).not.toContain('null');
   });
 
   it('does not treat a real, non-"(no body)" message as having no detail', () => {

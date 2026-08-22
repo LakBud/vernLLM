@@ -933,6 +933,29 @@ describe('fromAnthropic, native structured output', () => {
       expect(sentParams.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
     });
 
+    it('throws invalid_params locally, without calling the client, when budget_tokens is set alongside a non-native response_format jsonSchema (implicit forced tool)', async () => {
+      const { client, create } = makeFakeAnthropicClient('hi there');
+      const adapted = fromAnthropic(client);
+
+      await expect(
+        adapted.chat.completions.create(
+          {
+            model: 'claude-x',
+            max_tokens: 2000,
+            budget_tokens: 1024,
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'Out', schema: { type: 'object' } },
+            },
+            messages: [{ role: 'user', content: 'hi' }],
+          },
+          { signal: new AbortController().signal },
+        ),
+      ).rejects.toMatchObject({ type: 'invalid_params' });
+
+      expect(create).not.toHaveBeenCalled();
+    });
+
     it('does not throw when budget_tokens is set with no tools/tool_choice at all', async () => {
       const { client, create } = makeFakeAnthropicClient('hi there');
       const adapted = fromAnthropic(client);
