@@ -251,6 +251,20 @@ See [Streaming](/docs/core/streaming) for the full `stream: true` contract.
 
 ## Tool calling
 
+<Callout type="warn">
+  On Claude models, Bedrock doesn't support tool calling and thinking at the same time when
+  `toolChoice` forces tool use, the same restriction as the underlying Claude API itself (see
+  [Anthropic → Tool calling](/docs/adapters/anthropic#tool-calling)). Setting
+  `budgetTokens`/`reasoningEffort` alongside a forced `toolChoice` (a specific tool, or
+  `'required'`) throws `LLMError('invalid_params')` locally before the request is sent, Bedrock
+  rejects the combination outright otherwise. `toolChoice: 'auto'` (the default when `tools` is set)
+  works fine alongside thinking. Pass `budgetTokens: null`/`reasoningEffort: null` to opt one call
+  out of an instance-level reasoning default when it needs a forced choice. This only applies to
+  Claude models, non-Claude models on Bedrock don't support `budgetTokens`/`reasoningEffort` at all
+  (see the reasoning note above). See [Call Params →
+  Reasoning](/docs/API-reference/call-params#reasoning-budget) for the full detail.
+</Callout>
+
 `tools` and `tool_calls` map onto Converse's native `toolUse` / `toolResult` content blocks, the
 same mechanism used internally for `jsonSchema`. Consecutive tool result messages from a
 multi-tool turn are merged back into a single `user` turn, matching what Converse expects. Converse

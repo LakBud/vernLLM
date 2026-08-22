@@ -204,6 +204,51 @@ export function assertValidClaudeBudgetTokens(budgetTokens: number, maxTokens: n
 }
 
 /**
+ * Anthropic rejects any form of `thinking` (manual `budget_tokens` or
+ * adaptive) combined with a `tool_choice` that forces tool use, a forced
+ * single tool or "must call some tool", with a 400: `"Thinking may not be
+ * enabled when tool_choice forces tool use."` Auto/none (or no tools at
+ * all) are unaffected, thinking only conflicts with a choice that removes
+ * the model's ability to just reply with text. This is a Claude-model
+ * constraint, not specific to the Anthropic API's own wire shape, so it
+ * applies identically to Claude models called through Bedrock's Converse
+ * API, which forwards `thinking` under `additionalModelRequestFields` but
+ * is still talking to the same underlying model.
+ *
+ * This combination can arise two ways: a caller explicitly sets both
+ * `budgetTokens`/`reasoningEffort` and a forced `toolChoice`, or, more
+ * subtly (Anthropic adapter only), a caller sets `jsonSchema` on a model
+ * without native structured output support, which silently forces a
+ * single synthetic tool call to emulate it, with no `tool_choice` of the
+ * caller's own in sight. Both end up resolving to a forced tool choice by
+ * the time each adapter calls this, so checking the adapter's own
+ * already-resolved choice (rather than the caller's raw
+ * `params.tool_choice`) catches both, right before a `thinking` block
+ * would be built, rather than left for Anthropic's own 400 to explain
+ * after a real network round trip.
+ *
+ * Takes a plain description of the forced choice rather than either
+ * adapter's own wire shape (Anthropic SDK's `{ type: 'tool' | 'any', ... }`
+ * vs Converse's `{ tool: {...} } | { any: {} }`), so both adapters can
+ * share one check without either shape leaking into this file. Pass
+ * `undefined` when the resolved choice is `auto`/`none`/unset, forcing
+ * nothing.
+ */
+export function assertNoForcedToolChoiceWithThinking(
+  forcedChoiceDescription: string | undefined,
+): void {
+  if (!forcedChoiceDescription) return;
+
+  throw new LLMError(
+    `budgetTokens/reasoningEffort was set alongside ${forcedChoiceDescription}. Anthropic ` +
+      'rejects thinking combined with a tool_choice that forces tool use, the model has to be ' +
+      "able to reply with plain text for thinking to run. Use toolChoice: 'auto' (or omit " +
+      'toolChoice) for this call, or drop budgetTokens/reasoningEffort for it.',
+    'invalid_params',
+  );
+}
+
+/**
  * Anthropic's own effort levels for adaptive thinking, `output_config.effort`
  * (or Bedrock's typed `outputConfig.effort`), five tiers: `low`, `medium`,
  * `high`, `xhigh`, `max`. This is a different control than VernLLM's own

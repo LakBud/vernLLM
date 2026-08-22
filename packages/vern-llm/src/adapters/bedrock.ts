@@ -11,6 +11,7 @@ import {
   type ModelCapabilityOverride,
 } from './internal/nativeStructuredOutput.js';
 import {
+  assertNoForcedToolChoiceWithThinking,
   assertValidClaudeBudgetTokens,
   budgetTokensToEffort,
   effortToBudgetTokens,
@@ -482,6 +483,23 @@ function buildBedrockRequest(
     isClaudeModel(params.model) &&
     (params.budget_tokens !== undefined || params.reasoning_effort !== undefined)
   ) {
+    // Checked once here, right before any thinking block is built, so a
+    // caller who set budgetTokens/reasoningEffort alongside a forced
+    // toolChoice (or a jsonSchema call that silently forces one to emulate
+    // structured output on a non-native model, see toolConfig above) gets
+    // a clear local error instead of a 400 after a real network round
+    // trip. Same underlying Claude-model constraint as the Anthropic
+    // adapter's own check, just against Converse's toolChoice shape
+    // instead of the Anthropic SDK's.
+    const forcedToolChoice = toolConfig?.toolChoice;
+    assertNoForcedToolChoiceWithThinking(
+      forcedToolChoice && 'tool' in forcedToolChoice
+        ? `toolChoice forcing the "${forcedToolChoice.tool?.name}" tool`
+        : forcedToolChoice && 'any' in forcedToolChoice
+          ? "toolChoice: 'required' (Converse's \"any\" tool_choice)"
+          : undefined,
+    );
+
     if (supportsManualThinkingBudget(params.model, adaptiveOnlyModels)) {
       const budgetTokens =
         params.budget_tokens ?? effortToBudgetTokens(params.reasoning_effort!, effortTokenTable);

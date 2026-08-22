@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  assertNoForcedToolChoiceWithThinking,
   effortToBudgetTokens,
   budgetTokensToEffort,
   resolveEffortTokenTable,
@@ -9,6 +10,7 @@ import {
   supportsManualThinkingBudget,
   toGeminiThinkingLevel,
 } from '../../../../src/adapters/internal/reasoningBudget.utils.js';
+import { LLMError } from '../../../../src/types/errors.js';
 
 describe('reasoningBudget.utils', () => {
   it('maps each effort tier to a fixed token budget', () => {
@@ -240,6 +242,35 @@ describe('reasoningBudget.utils', () => {
       // like the original 3.0 Pro's narrower LOW/HIGH-only set.
       expect(toGeminiThinkingLevel('medium', 'gemini-3.5-pro-preview')).toBe('MEDIUM');
       expect(toGeminiThinkingLevel('minimal', 'gemini-3.5-pro-preview')).toBe('LOW');
+    });
+  });
+
+  describe('assertNoForcedToolChoiceWithThinking', () => {
+    it('does not throw when given undefined (no forced choice)', () => {
+      expect(() => assertNoForcedToolChoiceWithThinking(undefined)).not.toThrow();
+    });
+
+    it('throws LLMError(invalid_params) when given a forced-choice description', () => {
+      expect(() =>
+        assertNoForcedToolChoiceWithThinking('toolChoice forcing the "summarize" tool'),
+      ).toThrow(LLMError);
+
+      try {
+        assertNoForcedToolChoiceWithThinking('toolChoice forcing the "summarize" tool');
+      } catch (error) {
+        expect(error).toBeInstanceOf(LLMError);
+        expect((error as LLMError).type).toBe('invalid_params');
+        expect((error as LLMError).message).toContain('toolChoice forcing the "summarize" tool');
+        expect((error as LLMError).message).toContain('budgetTokens/reasoningEffort');
+      }
+    });
+
+    it('includes an actionable fix in the thrown message', () => {
+      try {
+        assertNoForcedToolChoiceWithThinking("toolChoice: 'required'");
+      } catch (error) {
+        expect((error as LLMError).message).toContain("toolChoice: 'auto'");
+      }
     });
   });
 });

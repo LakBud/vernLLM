@@ -6,4 +6,12 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
+
+  external: [
+    '@aws-sdk/client-bedrock-runtime',
+    '@anthropic-ai/sdk',
+    '@google/genai',
+    'groq-sdk',
+    'openai',
+  ],
 });

@@ -208,7 +208,9 @@ export class RequestBuilder {
       max_tokens: maxTokens,
       ...(responseFormat ? { response_format: responseFormat } : {}),
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-      ...(budgetTokens !== undefined ? { budget_tokens: budgetTokens } : {}),
+      ...(budgetTokens !== undefined && budgetTokens !== null
+        ? { budget_tokens: budgetTokens }
+        : {}),
       ...(tools ? { tools: toWireTools(tools) } : {}),
       ...(tools ? { tool_choice: this.buildWireToolChoice(toolChoice) } : {}),
       messages: [
