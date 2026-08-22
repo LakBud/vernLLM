@@ -175,6 +175,20 @@ describe('normalizeError', () => {
     expect(result.message).not.toContain('null');
   });
 
+  it('treats an empty `error: {}` payload as no detail, not as literal "{}"', () => {
+    const result = normalizeError({ status: 400, error: {} });
+
+    expect(result.message).toContain('no error detail from the provider');
+    expect(result.message).not.toContain('{}');
+  });
+
+  it("treats an empty `error: ''` payload as no detail, not as literal '\"\"'", () => {
+    const result = normalizeError({ status: 400, error: '' });
+
+    expect(result.message).toContain('no error detail from the provider');
+    expect(result.message).not.toContain('""');
+  });
+
   it('does not treat a real, non-"(no body)" message as having no detail', () => {
     const result = normalizeError({ status: 400, message: 'invalid API key' });
 

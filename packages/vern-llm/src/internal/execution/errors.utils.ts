@@ -167,17 +167,27 @@ function codeForStatus(status: number): LLMErrorCode | undefined {
  */
 const NO_BODY_MESSAGE_PATTERN = /\(no body\)/i;
 
+function isEmptyObject(value: object): boolean {
+  return Object.keys(value).length === 0;
+}
+
 function hasNoDiagnosticDetail(error: unknown): boolean {
   if (error && typeof error === 'object') {
     const { error: errorField, message } = error as { error?: unknown; message?: unknown };
 
-    // A present, non-null `.error` is the provider's raw structured error
-    // body, genuine diagnostic content whenever it's present, regardless
-    // of how describeError ends up phrasing it. `error: null` is a
-    // placeholder, not real content, and falls through to the message
-    // check below like a missing field would.
+    // A present, non-null, non-empty `.error` is the provider's raw
+    // structured error body, genuine diagnostic content whenever it's
+    // present, regardless of how describeError ends up phrasing it.
+    // `error: null`, `error: ''`, and `error: {}` are all placeholders,
+    // not real content, and fall through to the message check below like
+    // a missing field would.
     if (errorField !== undefined && errorField !== null) {
-      return false;
+      const isEmptyString = typeof errorField === 'string' && errorField.trim().length === 0;
+      const isEmptyStruct = typeof errorField === 'object' && isEmptyObject(errorField);
+
+      if (!isEmptyString && !isEmptyStruct) {
+        return false;
+      }
     }
 
     if (typeof message === 'string') {
