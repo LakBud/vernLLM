@@ -1,32 +1,53 @@
 name: Publish
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What should be published'
+        required: true
+        type: choice
+        options:
+          - production
+          - canary
 
-concurrency: ${{ github.workflow }}-${{ github.event.release.tag_name || github.run_id }}
+      tag:
+        description: 'Production release tag, e.g. vern-llm@1.2.3'
+        required: false
+        type: string
+
+concurrency:
+  group: publish-${{ inputs.mode }}-${{ inputs.tag || github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
-  publish:
-    # version.yml only creates a release once it has confirmed there are no
-    # pending changesets left, i.e. the Version Packages PR was just merged.
-    # Triggering on release publish (rather than the PR close event) means
-    # this job can no longer run before that tag/release actually exists.
-    if: >
-      github.event_name == 'release' &&
-      startsWith(github.event.release.tag_name, 'vern-llm@')
-
+  production:
+    if: inputs.mode == 'production'
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Require release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ -z "$TAG" ]]; then
+            echo "ERROR: production publishing requires a release tag"
+            exit 1
+          fi
+
+          if [[ ! "$TAG" =~ ^vern-llm@[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: invalid release tag: $TAG"
+            exit 1
+          fi
+
+      - name: Checkout exact release tag
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -36,7 +57,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: https://registry.npmjs.org
 
       - run: npm install -g npm@11.5.1 && npm --version
 
@@ -45,22 +66,29 @@ jobs:
       - name: Read package version
         id: pkg
         run: |
-          echo "version=$(node -p "require('./packages/vern-llm/package.json').version")" >> "$GITHUB_OUTPUT"
+          VERSION="$(node -p "require('./packages/vern-llm/package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Sanity check release tag matches package version
+      - name: Verify tag matches package version
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ steps.pkg.outputs.version }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          EXPECTED="vern-llm@${{ steps.pkg.outputs.version }}"
-          if [ "$TAG" != "$EXPECTED" ]; then
-            echo "Release tag $TAG does not match package.json version ($EXPECTED)"
+          EXPECTED="vern-llm@$VERSION"
+
+          if [[ "$TAG" != "$EXPECTED" ]]; then
+            echo "ERROR: tag '$TAG' does not match package.json version '$VERSION'"
             exit 1
           fi
 
-      - run: pnpm run typecheck
+      - name: Typecheck
+        run: pnpm run typecheck
 
-      - run: pnpm run test
+      - name: Test
+        run: pnpm run test
 
-      - run: pnpm run build
+      - name: Build
+        run: pnpm run build
 
       - name: Publish to npm
         run: pnpm changeset publish
@@ -72,9 +100,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git fetch origin main
           git checkout main
+
           git add apps/docs/content/docs/changelog.mdx
+
           git commit -m "docs: update changelog" || exit 0
           git push origin main
 
@@ -82,14 +113,8 @@ jobs:
         run: |
           curl -X POST "${{ secrets.VERNLLM_RELEASE }}"
 
-  # Manually-triggered canary publish, kept in this workflow file (rather than
-  # its own) because npm's trusted publishing (OIDC) only trusts one workflow
-  # file per package. A separate canary.yml would need its own trust
-  # relationship configured on npmjs.com; living here means canary publishes
-  # share the same npm access as the real release job above.
   canary:
-    if: github.event_name == 'workflow_dispatch'
-
+    if: inputs.mode == 'canary'
     runs-on: ubuntu-latest
 
     steps:
@@ -103,7 +128,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: https://registry.npmjs.org
 
       - run: npm install -g npm@11.5.1 && npm --version
 
@@ -124,4 +149,6 @@ jobs:
         run: npm publish --tag next
 
       - name: Summary
-        run: echo "Published 0.0.0-canary-${GITHUB_SHA::7} to the next tag on npm" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "Published 0.0.0-canary-${GITHUB_SHA::7} to the next tag on npm" \
+            >> "$GITHUB_STEP_SUMMARY"
