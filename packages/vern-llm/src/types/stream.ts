@@ -5,6 +5,7 @@ import type {
   JsonValue,
   ToolEnabledCallParams,
 } from './call.js';
+import type { ToolDefinition } from './tools.js';
 import type { TokenUsage } from './usage.js';
 
 /** One incremental unit of a streaming response, as delivered to the caller. */
@@ -46,7 +47,10 @@ export interface StreamCallResult<R> {
  * select the streaming `call()` overload and return `StreamCallResult<...>`
  * instead of the normal, single-shot response type.
  */
-export type StreamEnabledCallParams<T> = CallParams<T> & { stream: true };
+export type StreamEnabledCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CallParams<T, Tools> & { stream: true };
 
 /**
  * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
@@ -136,8 +140,14 @@ export type CachedStreamCallParams<T> = CachedCallInput & {
  * `CachedToolCallParams<T>`, with the same live-chunks-on-miss,
  * replayed-chunks-on-hit behavior as `CachedStreamCallParams<T>`.
  */
-export type CachedStreamToolCallParams<T> = CachedCallInput & {
-  call: Omit<StreamEnabledCallParams<T> & ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+export type CachedStreamToolCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CachedCallInput & {
+  call: Omit<
+    StreamEnabledCallParams<T, Tools> & ToolEnabledCallParams<T, Tools>,
+    'reserveUsage' | 'refundUsage'
+  >;
 };
 
 /**

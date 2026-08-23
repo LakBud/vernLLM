@@ -39,6 +39,7 @@ import {
   type TargetCircuitState,
   type CircuitTarget,
   type StreamEnabledCallParams,
+  type ToolDefinition,
   type ToolEnabledCallParams,
   type ToolsDisabledCallParams,
   type VernLLMEvent,
@@ -331,9 +332,9 @@ export class VernLLM {
     params: StreamEnabledCallParams<T> & ToolsDisabledCallParams<T>,
   ): Promise<StreamCallResult<ContentResult<T>>>;
 
-  async call<T = unknown>(
-    params: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>,
-  ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: StreamEnabledCallParams<T, Tools> & ToolEnabledCallParams<T, Tools>,
+  ): Promise<StreamCallResult<CallWithToolsResult<T, Tools>>>;
 
   async call<T = unknown>(
     params: StreamEnabledCallParams<T> & ConditionalToolCallParams<T>,
@@ -347,7 +348,9 @@ export class VernLLM {
 
   async call<T = unknown>(params: ToolsDisabledCallParams<T>): Promise<ContentResult<T>>;
 
-  async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: ToolEnabledCallParams<T, Tools>,
+  ): Promise<CallWithToolsResult<T, Tools>>;
 
   async call<T = unknown>(
     params: ConditionalToolCallParams<T>,
@@ -485,9 +488,9 @@ export class VernLLM {
    * request, set `signal` inside `call`.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
-  async cachedCall<T>(
-    params: CachedStreamToolCallParams<T>,
-  ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
+  async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedStreamToolCallParams<T, Tools>,
+  ): Promise<StreamCallResult<CallWithToolsResult<T, Tools>>>;
 
   async cachedCall<T>(
     params: CachedStreamConditionalToolCallParams<T>,
@@ -503,7 +506,9 @@ export class VernLLM {
 
   async cachedCall<T>(params: CachedStreamCallParams<T>): Promise<StreamCallResult<T>>;
 
-  async cachedCall<T>(params: CachedToolCallParams<T>): Promise<CallWithToolsResult<T>>;
+  async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedToolCallParams<T, Tools>,
+  ): Promise<CallWithToolsResult<T, Tools>>;
 
   async cachedCall<T>(
     params: CachedConditionalToolCallParams<T>,

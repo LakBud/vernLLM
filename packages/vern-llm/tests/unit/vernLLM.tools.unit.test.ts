@@ -912,7 +912,7 @@ describe('defineCallParams / defineCachedCallParams', () => {
     const params = defineCallParams({ userContent: 'weather?', tools: [weatherTool] });
 
     const result = await llm.call(params);
-    expectTypeOf(result).toEqualTypeOf<CallWithToolsResult<unknown>>();
+    expectTypeOf(result).toEqualTypeOf<CallWithToolsResult<unknown, typeof params.tools>>();
     expect(isToolCallResult(result)).toBe(true);
   });
 
