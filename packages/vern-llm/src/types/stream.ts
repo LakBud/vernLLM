@@ -157,9 +157,12 @@ export type CachedStreamToolCallParams<
  * `T | CallWithToolsResult<T>` instead of narrowing to plain `T`. See
  * `ConditionalToolCallParams` for why this overload exists.
  */
-export type CachedStreamConditionalToolCallParams<T> = CachedCallInput & {
+export type CachedStreamConditionalToolCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CachedCallInput & {
   call: Omit<
-    StreamEnabledCallParams<T> & ConditionalToolCallParams<T>,
+    StreamEnabledCallParams<T, Tools> & ConditionalToolCallParams<T, Tools>,
     'reserveUsage' | 'refundUsage'
   >;
 };

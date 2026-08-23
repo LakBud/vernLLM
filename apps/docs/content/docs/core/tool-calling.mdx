@@ -332,10 +332,65 @@ if (result.type === 'tool_calls') {
 
 <Callout type="info">
   This narrowing depends on TypeScript seeing the exact tool objects at the `call()`/`cachedCall()`
-  site, the same `const`-literal requirement described in [A note on the call()
-  overload](#a-note-on-the-call-overload) below. `tools` built conditionally (`tools: someCondition
-  ? [weatherTool] : undefined`) or passed through a plain `: CallParams<T>` annotation loses this,
-  and `ToolCall.arguments` falls back to `unknown` there, same as before this feature existed.
+  site. A plain `const tools = [weatherTool, cancelOrder]` variable (assigned once, not
+  conditionally) still narrows correctly when passed through, same as an inline array literal.
+  Conditional tools (`tools: someCondition ? [weatherTool] : undefined`) also narrow correctly,
+  `isToolCallResult()` infers `Tools` from the result automatically in this case, see [Narrowing a
+  conditional-tools result](#narrowing-a-conditional-tools-result) below. `ToolCall.arguments` only
+  falls back to `unknown` when the params object carries an explicit `: CallParams<T>` annotation,
+  which widens `tools` away before `call()`/`cachedCall()` ever sees it, the same `const`-literal
+  requirement described in [A note on the call() overload](#a-note-on-the-call-overload) below.
+</Callout>
+
+## Narrowing a conditional-tools result
+
+`isToolCallResult()` infers `Tools` automatically from `result`'s own static type whenever
+`call()`/`cachedCall()`'s overload resolution already produced it, which includes the conditional
+case, no type argument needed:
+
+```ts title="tool-calling-conditional-typed.ts"
+const tools = someCondition ? [weatherTool, cancelOrder] : undefined;
+
+const result = await llm.call({
+  userContent: 'What is the weather?',
+  tools,
+  jsonMode: true,
+  schema: stringSchema,
+});
+
+if (isToolCallResult(result)) {
+  const call = result.toolCalls[0];
+  if (call.name === 'get_weather') {
+    call.arguments.city; // typed, inferred automatically
+  }
+}
+```
+
+<Callout type="warn">
+  This only works when `result`'s static type still carries `Tools`, which requires TypeScript's
+  overload resolution to have succeeded (see [A note on the call()
+  overload](#a-note-on-the-call-overload)). If `params` was instead built as a variable explicitly
+  annotated `: CallParams<T>`, that annotation widens `tools` away before `call()` ever sees it,
+  and there is nothing left for `isToolCallResult()` to infer from. Pass `Tools` explicitly as its
+  first type argument in that case:
+
+```ts title="tool-calling-conditional-explicit-tools.ts"
+const params: CallParams<string> = {
+  userContent: 'What is the weather?',
+  tools,
+  jsonMode: true,
+  schema: stringSchema,
+};
+const result = await llm.call(params);
+
+if (isToolCallResult<typeof tools>(result)) {
+  // arguments typed per tool via the explicit override
+}
+```
+
+Prefer `defineCallParams()` over a `:` annotation to avoid needing the override at all, see [A
+note on the call() overload](#a-note-on-the-call-overload).
+
 </Callout>
 
 ## Tool contract errors
