@@ -69,6 +69,10 @@ parameter schemas use an object root.
 By default, `jsonSchema` and `tools` cannot be used in the same call: `jsonSchema` is emulated as
 a forced single tool call, which occupies the same `tools`/`tool_choice` field real tools need.
 
+On unsupported models, this throws `LLMError('invalid_params')` with
+`code: 'unsupported_capability'` and `issues.capability: 'tools_with_json_schema'`, so the default
+fallback policy can try the next target.
+
 Anthropic also supports native, schema-constrained output, `output_config.format`, a request field
 independent of `tools`/`tool_choice`, so it composes with real `tools` on models that support it.
 This is opt-in, pass `nativeStructuredOutputModels` as the second argument to `fromAnthropic`. See

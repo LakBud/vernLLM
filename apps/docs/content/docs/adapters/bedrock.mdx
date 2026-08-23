@@ -162,6 +162,10 @@ The same preflight also runs when a `jsonSchema` call ends up sending `toolConfi
 By default, `jsonSchema` and `tools` cannot be used in the same call: `jsonSchema` is emulated as
 a forced single tool call via `toolConfig`, which occupies the same field real tools need.
 
+On unsupported models, this throws `LLMError('invalid_params')` with `code: 'unsupported_capability'`
+and `issues.capability: 'tools_with_json_schema'`, so the default fallback policy can try the next
+target.
+
 Bedrock Converse also supports native, schema-constrained output, `outputConfig.textFormat`, a
 request field independent of `toolConfig`, so it composes with real `tools` on models that support
 it. This is opt-in, pass `nativeStructuredOutputModels` as part of the second argument to

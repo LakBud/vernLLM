@@ -381,7 +381,8 @@ function buildBedrockRequest(
         'collides with the `tools` you also provided. Either drop `tools` or `jsonSchema` for this ' +
         "call, or pass this model in fromBedrock's `nativeStructuredOutputModels` option once " +
         "you've confirmed it supports Converse's `outputConfig.textFormat`.",
-      'validation',
+      'invalid_params',
+      { code: 'unsupported_capability', issues: { capability: 'tools_with_json_schema' } },
     );
   }
 
@@ -819,7 +820,8 @@ function wrapAwsSendClient(client: AwsSendClient): BedrockConverseClient {
  * the schema, description, and strictness settings, and `toolChoice`
  * forces the model to call it. This legacy path cannot be combined with
  * real `tools` (both would need the same `toolConfig`), and a call that
- * tries throws `LLMError('validation')` before reaching the API.
+ * tries throws `LLMError('invalid_params')` with `code: 'unsupported_capability'`
+ * and `issues: { capability: 'tools_with_json_schema' }` before reaching the API.
  * Provider-constrained schema matching applies only when `strict: true` is
  * forwarded and supported. Native tool support varies by model family;
  * pass `toolUseSupportedModels` to preflight-check it (see
