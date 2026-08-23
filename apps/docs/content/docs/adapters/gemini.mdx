@@ -49,11 +49,14 @@ const llm = new VernLLM({
 ## Tool calling
 
 `tools` and `tool_calls` map onto Gemini's native `functionCall` / `functionResponse` parts, and
-`toolChoice` maps onto `toolConfig.functionCallingConfig`. Gemini has no call id concept, so
-`fromGemini` uses the function name as the wire tool call id, adding a `#n` suffix on the second and
-later calls to the same tool within one turn so they stay distinguishable; the suffix is stripped
-back off before a tool result is sent as a `functionResponse`. Consecutive function response
-messages from a multi-tool turn are merged back into a single `user` content entry. See [Tool Calling](/docs/core/tool-calling) for the full reference.
+`toolChoice` maps onto `toolConfig.functionCallingConfig`. When Gemini populates `FunctionCall.id`,
+`fromGemini` uses it as the wire tool call id and echoes it back on the matching `functionResponse`.
+When Gemini omits it, `fromGemini` falls back to the function name as the wire tool call id, adding
+a `#n` suffix on the second and later calls to the same tool within one turn so they stay
+distinguishable. That synthesized id is never sent back to Gemini; the bare function name is sent
+on the `functionResponse` instead. Consecutive function response messages from a multi-tool turn are
+merged back into a single `user` content entry. See [Tool Calling](/docs/core/tool-calling) for the
+full reference.
 
 ## Streaming
 

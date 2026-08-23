@@ -141,8 +141,8 @@ const result = await llm.call({
   There is no built-in default list of native-capable models. Anthropic's and Bedrock's supported
   model set changes over time and isn't this package's call to make, hardcoding a guess would risk
   silently routing a request onto a field a given model doesn't actually support, trading a clear
-  `LLMError('validation')` for a confusing error from the provider instead. Left unset, every model
-  keeps using the forced-single-tool-call emulation, and `tools` + `jsonSchema` together is
+  `LLMError('invalid_params')` for a confusing error from the provider instead. Left unset, every
+  model keeps using the forced single tool call emulation, and `tools` + `jsonSchema` together is
   rejected, exactly the behavior before this option existed.
 </Callout>
 

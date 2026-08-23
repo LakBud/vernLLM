@@ -523,6 +523,79 @@ describe('fromGemini, tools', () => {
     ]);
   });
 
+  it('preserves a native Gemini FunctionCall.id through the wire, the functionCall part, and the matching functionResponse', async () => {
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { functionCall: { id: 'call-abc123', name: 'get_weather', args: { city: 'NYC' } } },
+            ],
+          },
+        },
+      ],
+    }));
+    const adapted = fromGemini({ generateContent });
+
+    // 1. A native Gemini id is used as the wire tool call id directly,
+    // not run through the name-based dedupe fallback.
+    const first = await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather in NYC?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const toolCall = first.choices![0]!.message!.tool_calls![0]!;
+    expect(toolCall.id).toBe('call-abc123');
+
+    // 2. Feeding the result back echoes the native id on both the
+    // assistant's functionCall and the matching functionResponse.
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call-abc123',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'call-abc123', content: JSON.stringify({ tempC: 21 }) },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[1]![0].contents).toEqual([
+      {
+        role: 'model',
+        parts: [
+          {
+            functionCall: { name: 'get_weather', args: { city: 'NYC' }, id: 'call-abc123' },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: { name: 'get_weather', response: { tempC: 21 }, id: 'call-abc123' },
+          },
+        ],
+      },
+    ]);
+  });
+
   it('combines two consecutive functionResponse wire messages into a single user content entry', async () => {
     const { client, generateContent } = makeFakeGeminiClient('ok');
     const adapted = fromGemini(client);

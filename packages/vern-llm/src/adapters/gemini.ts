@@ -18,10 +18,13 @@ import {
 import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.js';
 
 /**
- * Gemini has no per-call tool-call id: a `functionCall` part carries only
- * a name, and `functionResponse` correlates by that same name. That's
- * fine for one call per tool per turn, but two parallel calls to the
- * *same* tool (e.g. "check the weather in NYC and LA") would otherwise
+ * Gemini's `FunctionCall.id` / `FunctionResponse.id` are optional: when the
+ * model populates one, it's used as the wire tool call id directly and
+ * echoed back on the matching `functionResponse`. When it doesn't (still
+ * the common case), a `functionCall` part carries only a name, and
+ * `functionResponse` correlates by that same name. That's fine for one call
+ * per tool per turn, but two parallel calls to the *same* tool with no
+ * native id (e.g. "check the weather in NYC and LA") would otherwise
  * synthesize the same wire `id` twice, which `callExecutor`'s
  * `validateToolCallArguments` rightly rejects as `duplicate_tool_call_id`.
  * Its a real ambiguity for every other provider, but a false positive here
@@ -29,12 +32,28 @@ import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.
  * the bare name to the first call to a given tool in a turn and suffixes
  * `#n` on every later one, so ids stay unique; `toGeminiContent` strips
  * the suffix back off before sending a tool result to `functionResponse`,
- * which only ever expects the bare name.
+ * which only ever expects the bare name when no native id was involved.
  */
 function dedupeToolCallId(name: string, seen: Map<string, number>): string {
   const n = seen.get(name) ?? 0;
   seen.set(name, n + 1);
   return n === 0 ? name : `${name}#${n}`;
+}
+
+/**
+ * True when `id` is one `dedupeToolCallId` could have produced for `name`
+ * (i.e. no native Gemini id was present when the wire tool call id was
+ * built): the bare name, or the name with a `#n` disambiguator suffix.
+ * Used to tell a synthesized id apart from a real Gemini-issued one, since
+ * only the latter should be echoed back on outgoing `functionCall`/
+ * `functionResponse` parts.
+ */
+function isSynthesizedToolCallId(id: string, name: string): boolean {
+  return id === name || new RegExp(`^${escapeRegExp(name)}#\\d+$`).test(id);
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -47,8 +66,8 @@ function dedupeToolCallId(name: string, seen: Map<string, number>): string {
 type GeminiPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } }
-  | { functionCall: { name: string; args: Record<string, unknown> } }
-  | { functionResponse: { name: string; response: Record<string, unknown> } };
+  | { functionCall: { name: string; args: Record<string, unknown>; id?: string } }
+  | { functionResponse: { name: string; response: Record<string, unknown>; id?: string } };
 
 /**
  * Structural type matching the real `@google/genai` SDK, in either shape
@@ -123,7 +142,10 @@ export interface GeminiClient {
   }): Promise<{
     candidates?: Array<{
       content?: {
-        parts?: Array<{ text?: string; functionCall?: { name?: string; args?: unknown } }>;
+        parts?: Array<{
+          text?: string;
+          functionCall?: { name?: string; args?: unknown; id?: string };
+        }>;
       };
     }>;
     usageMetadata?: {
@@ -148,7 +170,10 @@ export interface GeminiClient {
     AsyncIterable<{
       candidates?: Array<{
         content?: {
-          parts?: Array<{ text?: string; functionCall?: { name?: string; args?: unknown } }>;
+          parts?: Array<{
+            text?: string;
+            functionCall?: { name?: string; args?: unknown; id?: string };
+          }>;
         };
       }>;
       usageMetadata?: {
@@ -201,20 +226,30 @@ function toGeminiToolConfig(
  * Gemini has no separate 'tool' role: a prior assistant tool request
  * becomes a `'model'` turn with `functionCall` parts, and its result
  * becomes a `'user'` turn with `functionResponse` parts.
+ *
+ * `toolCallNames` maps each wire `tool_call_id` seen so far in this
+ * conversation back to its function name, built once in
+ * `buildGeminiRequest` from the preceding assistant tool calls. A `tool`
+ * message's `tool_call_id` may be a real Gemini-issued id (opaque, not
+ * name-derived), so its function name has to be resolved from the
+ * assistant turn that produced it rather than parsed off the id itself.
  */
 function toGeminiContent(
   m: Extract<
     Parameters<LLMClient['chat']['completions']['create']>[0]['messages'][number],
     { role: 'user' | 'assistant' | 'tool' }
   >,
+  toolCallNames: Map<string, string>,
 ): { role: 'user' | 'model'; parts: GeminiPart[] } {
   if (m.role === 'tool') {
-    // Gemini's functionResponse identifies the call by function *name*.
-    // tool_call_id is normally already that name, but may carry a
-    // VernLLM-added "#n" disambiguator for the 2nd+ parallel call to the
-    // same tool in one turn (see `dedupeToolCallId`) — strip it back off
-    // before sending, since Gemini only ever expects the bare name.
-    const name = m.tool_call_id.replace(/#\d+$/, '');
+    // Prefer the name recorded from the preceding assistant tool call;
+    // fall back to stripping a VernLLM-added "#n" disambiguator (see
+    // `dedupeToolCallId`) for cases where no matching assistant turn was
+    // found (e.g. a tool message supplied without its assistant turn).
+    const name = toolCallNames.get(m.tool_call_id) ?? m.tool_call_id.replace(/#\d+$/, '');
+    // Echo the id back only when it's a real Gemini-issued id, not one
+    // VernLLM synthesized from the name (see `isSynthesizedToolCallId`).
+    const id = isSynthesizedToolCallId(m.tool_call_id, name) ? undefined : m.tool_call_id;
     return {
       role: 'user',
       parts: [
@@ -222,6 +257,7 @@ function toGeminiContent(
           functionResponse: {
             name,
             response: parseToolResult(m.content),
+            ...(id ? { id } : {}),
           },
         },
       ],
@@ -240,6 +276,8 @@ function toGeminiContent(
         functionCall: {
           name: tc.function.name,
           args: parseToolArguments(tc.function.arguments, tc.function.name),
+          // Only echo back a real Gemini-issued id, never a synthesized one.
+          ...(isSynthesizedToolCallId(tc.id, tc.function.name) ? {} : { id: tc.id }),
         },
       })),
     );
@@ -431,10 +469,20 @@ function buildGeminiRequest(
     }
   }
 
+  // Built once so `toGeminiContent` can resolve a `tool` message's function
+  // name from the assistant tool call that produced it, since a real
+  // Gemini-issued `tool_call_id` is opaque and can't be parsed for a name.
+  const toolCallNames = new Map<string, string>();
+  for (const m of conversationMessages) {
+    if (m.role === 'assistant' && m.tool_calls?.length) {
+      for (const tc of m.tool_calls) toolCallNames.set(tc.id, tc.function.name);
+    }
+  }
+
   return {
     model: params.model,
     contents: mergeConsecutiveFunctionResponses(
-      conversationMessages.map((m) => toGeminiContent(m)),
+      conversationMessages.map((m) => toGeminiContent(m, toolCallNames)),
     ),
     config,
   };
@@ -537,9 +585,10 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
           if (functionCalls.length) {
             const seen = new Map<string, number>();
             wireToolCalls = functionCalls.map((p) => ({
-              // Gemini's functionResponse correlates by function *name*, not
-              // a call id (Gemini has no call-id concept at all), so the id
-              // here is derived from the name, disambiguated across
+              // Prefer Gemini's own `FunctionCall.id` when populated. When
+              // it's absent (still the common case), Gemini's
+              // functionResponse correlates by function *name* instead, so
+              // the id is derived from the name, disambiguated across
               // multiple calls to the same tool within one turn by
               // `dedupeToolCallId` (see its doc comment).
               // INVARIANT: `name` is typed optional (matching the real
@@ -547,7 +596,7 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
               // populates it on an actual function call part in practice;
               // the `!` here asserts that invariant, same rationale as the
               // `complete: true` invariant on the streaming path below.
-              id: dedupeToolCallId(p.functionCall!.name!, seen),
+              id: p.functionCall!.id ?? dedupeToolCallId(p.functionCall!.name!, seen),
               type: 'function' as const,
               function: {
                 name: p.functionCall!.name!,
@@ -611,14 +660,17 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
                 yield {
                   type: 'tool_call_delta',
                   index: toolCallIndex,
-                  // Disambiguated the same way as the non-streaming path
-                  // (see `dedupeToolCallId`'s doc comment); Gemini always
+                  // Prefer Gemini's own `FunctionCall.id`; otherwise
+                  // disambiguate the same way as the non-streaming path
+                  // (see `dedupeToolCallId`'s doc comment). Gemini always
                   // sends a function call whole in one chunk (per the
                   // `complete: true` invariant below), so counting per
                   // chunk here is equivalent to counting per response.
-                  id: part.functionCall.name
-                    ? dedupeToolCallId(part.functionCall.name, seen)
-                    : undefined,
+                  id:
+                    part.functionCall.id ??
+                    (part.functionCall.name
+                      ? dedupeToolCallId(part.functionCall.name, seen)
+                      : undefined),
                   name: part.functionCall.name,
                   argumentsDelta: JSON.stringify(part.functionCall.args ?? {}),
                   // INVARIANT: assumes Gemini always sends a complete

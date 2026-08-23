@@ -450,6 +450,10 @@ describe('VernLLM + adapter integration: conversation history', () => {
                     args: {
                       city: 'Paris',
                     },
+                    // 'call_1' isn't a VernLLM-synthesized name-derived id
+                    // (see `isSynthesizedToolCallId`), so it's treated as a
+                    // real caller/Gemini-issued id and echoed back.
+                    id: 'call_1',
                   },
                 },
               ],
@@ -459,12 +463,17 @@ describe('VernLLM + adapter integration: conversation history', () => {
               parts: [
                 {
                   functionResponse: {
-                    name: 'call_1',
+                    // Resolved from the preceding assistant tool call
+                    // (`get_weather`), not parsed off the tool_call_id
+                    // ('call_1'), since a real id is opaque and unrelated
+                    // to the function name.
+                    name: 'get_weather',
                     // Gemini's real functionResponse.response requires an
                     // object; a plain-string tool result ("sunny", not
                     // JSON) is wrapped under an "output" key by the
                     // adapter's parseToolResult, see gemini.ts.
                     response: { output: 'sunny' },
+                    id: 'call_1',
                   },
                 },
               ],
