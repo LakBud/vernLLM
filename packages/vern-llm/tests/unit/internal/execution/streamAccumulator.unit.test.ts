@@ -132,6 +132,46 @@ describe('buildStreamResult, chunk translation', () => {
     ]);
   });
 
+  it('rejects streams with too many distinct tool calls before growing the accumulator', async () => {
+    const iterator = scriptedIterator(
+      Array.from({ length: 10_000 }, (_, index) => ({
+        type: 'tool_call_delta' as const,
+        index: index + 1,
+        argumentsDelta: '{}',
+      })),
+    );
+    const first: IteratorResult<WireStreamChunk> = {
+      done: false,
+      value: { type: 'tool_call_delta', index: 0, argumentsDelta: '{}' },
+    };
+
+    const { finalResult } = buildStreamResult(iterator, first, baseOptions());
+
+    await expect(finalResult).rejects.toMatchObject({
+      type: 'validation',
+      message: 'Stream contained more than 10000 distinct tool calls',
+    });
+  });
+
+  it('rejects a tool call before accumulated arguments exceed the stream limit', async () => {
+    const iterator = scriptedIterator([]);
+    const first: IteratorResult<WireStreamChunk> = {
+      done: false,
+      value: {
+        type: 'tool_call_delta',
+        index: 0,
+        argumentsDelta: 'x'.repeat(1_000_001),
+      },
+    };
+
+    const { finalResult } = buildStreamResult(iterator, first, baseOptions());
+
+    await expect(finalResult).rejects.toMatchObject({
+      type: 'validation',
+      message: 'Tool call arguments exceeded the 1000000-character stream limit',
+    });
+  });
+
   it('translates a usage chunk into TokenUsage carrying requestId/model/providerName, pushes it live, and passes it to finalize', async () => {
     const iterator = scriptedIterator([
       { type: 'usage', usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } },

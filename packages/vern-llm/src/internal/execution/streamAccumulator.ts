@@ -1,8 +1,8 @@
+import { LLMError } from '../../types/errors.js';
 import { normalizeError } from './errors.utils.js';
 import { withChunkIdleTimeout } from './retry.utils.js';
 
 import type { Logger } from '../../logger.js';
-import type { LLMError } from '../../types/errors.js';
 import type {
   CallWithToolsResult,
   StreamChunk,
@@ -10,6 +10,12 @@ import type {
   WireStreamChunk,
   WireToolCall,
 } from '../../types/index.js';
+
+// Bound provider-controlled tool accumulation independently of the unread
+// chunk buffer: one stream can otherwise create unlimited map entries or
+// append unlimited argument text before finalization runs.
+const MAX_TOOL_CALLS = 10_000;
+const MAX_TOOL_ARGUMENTS_LENGTH = 1_000_000;
 
 /** Everything `buildStreamResult` needs beyond the raw iterator and first chunk. */
 export interface StreamAccumulatorOptions<T> {
@@ -209,11 +215,34 @@ export function buildStreamResult<T>(
           textAcc += wireChunk.delta;
           push({ type: 'text-delta', delta: wireChunk.delta });
         } else if (wireChunk.type === 'tool_call_delta') {
-          const entry = toolCallAcc.get(wireChunk.index) ?? { args: '' };
+          let entry = toolCallAcc.get(wireChunk.index);
+
+          if (!entry) {
+            // Check before creating the entry so an unbounded sequence of
+            // provider-supplied indices cannot grow the map.
+            if (toolCallAcc.size >= MAX_TOOL_CALLS) {
+              throw new LLMError(
+                `Stream contained more than ${MAX_TOOL_CALLS} distinct tool calls`,
+                'validation',
+              );
+            }
+
+            entry = { args: '' };
+          }
+
+          const argumentsDelta = wireChunk.argumentsDelta ?? '';
+          // Check before concatenation: string growth is the other unbounded
+          // path, including when one delta is already very large.
+          if (entry.args.length + argumentsDelta.length > MAX_TOOL_ARGUMENTS_LENGTH) {
+            throw new LLMError(
+              `Tool call arguments exceeded the ${MAX_TOOL_ARGUMENTS_LENGTH}-character stream limit`,
+              'validation',
+            );
+          }
 
           entry.id ??= wireChunk.id;
           entry.name ??= wireChunk.name;
-          entry.args += wireChunk.argumentsDelta ?? '';
+          entry.args += argumentsDelta;
           toolCallAcc.set(wireChunk.index, entry);
 
           push({
