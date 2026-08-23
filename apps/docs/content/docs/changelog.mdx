@@ -8,6 +8,75 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 2.4.2
+
+### Patch Changes
+
+- 25677cc: Anthropic and Bedrock now classify `tools` combined with `jsonSchema` on models outside
+  `nativeStructuredOutputModels` as `LLMError('invalid_params')` with
+  `code: 'unsupported_capability'` and `issues: { capability: 'tools_with_json_schema' }`. The
+  existing `defaultFallbackOn` policy can therefore continue to the next target instead of stopping
+  on the adapter's local capability restriction.
+- f9dbdfe: Fixed two bugs in the Gemini adapter's tool call handling.
+
+  Parallel calls to the same tool in one turn no longer throw a spurious `duplicate_tool_call_id` validation error. The adapter previously built every wire tool call id from the function name alone, so two calls to `get_weather` in the same turn always collided. Gemini 3 and later now populate a native, unique `id` on every `functionCall`, and the adapter uses it when present. On models before Gemini 3 that omit it, an id is synthesized from the function name plus how many times that name has already appeared in the response, so repeated calls to the same tool still get distinct ids.
+
+  `functionResponse.name` sent back to Gemini is now resolved from the assistant turn's own prior tool call, instead of being assumed equal to the wire tool call id. The old assumption only held because ids were always synthesized from the name; it silently sent the wrong function name whenever a native id didn't match the name string.
+
+  No change to `WireToolCall`, `ToolCall`, or any other adapter. Every fix stays inside `adapters/gemini.ts`.
+
+- d8fa998: `buildStreamResult` now bounds its streamed `tool_call_delta` accumulator. `toolCallAcc` accepts at
+  most 10,000 distinct tool-call indices, and each entry retains at most 1,000,000 argument
+  characters. Both checks run before inserting a new map entry or appending to an existing argument
+  string, so a misbehaving provider cannot grow either structure without limit.
+
+  Exceeding either limit throws `LLMError('validation')` through the existing stream failure path.
+  The iterator is cleaned up, the stream is aborted, and both `chunks` and `finalResult` observe the
+  normalized failure instead of allowing the accumulator to continue consuming provider output.
+
+- 64010df: `ToolCall.arguments` is now typed per tool instead of `unknown`, when TypeScript can see the exact tools passed to `call()`/`cachedCall()`.
+
+  `ToolDefinition` is generic over the tool's `name` and its `argumentsSchema`'s inferred argument type. A new `defineTool()` helper preserves a tool's literal `name` (without requiring `as const`), which is what lets a `ToolCall` be matched back to the tool that produced it:
+
+  ```ts
+  import { z } from "zod";
+  import { defineTool } from "vern-llm";
+
+  const weatherTool = defineTool({
+    name: "get_weather",
+    description: "Gets the current weather for a city",
+    parameters: {
+      type: "object",
+      properties: { city: { type: "string" } },
+      required: ["city"],
+    },
+    argumentsSchema: z.object({ city: z.string() }),
+  });
+
+  const result = await llm.call({
+    userContent: "What is the weather?",
+    tools: [weatherTool],
+  });
+
+  if (result.type === "tool_calls") {
+    const call = result.toolCalls[0];
+    call.arguments.city; // typed as string, no cast or re-parse needed
+  }
+  ```
+
+  With more than one tool in the array, `arguments` is a discriminated union keyed by `name`; narrowing on `call.name` (`if (call.name === 'get_weather')` or a `switch`) is required before accessing a tool-specific field, the same way `isToolCallResult()` narrows `call()`'s own result union today.
+
+  This only applies when TypeScript can see the exact tools at the `call()`/`cachedCall()` call site. A plain `const tools = [weatherTool, cancelOrder]` variable (assigned once, not conditionally, without its own type annotation) still narrows correctly when passed through, same as an inline array literal. Conditional tools (`tools: someCondition ? [weatherTool] : undefined`) also narrow correctly: `isToolCallResult()` is now generic and infers `Tools` from the result automatically in this case, no type argument needed. `arguments` falls back to `unknown` in three cases, all variations on TypeScript no longer having the literal tool objects to work with: the `tools` variable itself is explicitly annotated (`const tools: ToolDefinition[] = [...]`), the params object carries an explicit `: CallParams<T>` annotation, or `T` is pinned explicitly (`call<string>(...)`) alongside a literal `tools` array, TypeScript's own generic inference rules suppress inference for every subsequent type parameter once any leading one is explicit, not something specific to this library. Pass `Tools` explicitly to `isToolCallResult<typeof tools>()` (for the first two cases) or to `call<T, Tools>()`/`cachedCall<T, Tools>()` (for the third), or route through `defineCallParams()` instead of a `:` annotation, to recover typing in each case. Nothing about runtime behavior changes: validation, parsing, and error handling for tool arguments are unaffected.
+
+- a14dd2a: Improve TypeScript inference for calls that combine `jsonMode: false` with conditional `tools`.
+  `call()` and `cachedCall()`, with or without `stream: true`, now infer string content for the
+  non-tool result without requiring an explicit response type, while preserving the wrapped content
+  and tool-call result union when tools are present.
+
+  The conditional string-tool parameter shapes are exposed as named helper types for reuse:
+  `ConditionalStringToolCallParams`, `CachedConditionalStringToolCallParams`,
+  `StreamConditionalStringToolCallParams`, and `CachedStreamConditionalStringToolCallParams`.
+
 ## 2.4.1
 
 ### Patch Changes
