@@ -1,0 +1,69 @@
+name: Version
+
+on:
+  push:
+    branches: [main]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'packages/vern-llm/**'
+              - '.changeset/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+
+      - if: steps.filter.outputs.code == 'true'
+        uses: pnpm/action-setup@v4
+
+      - if: steps.filter.outputs.code == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - if: steps.filter.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.filter.outputs.code == 'true'
+        name: Open or update the Version Packages PR
+        uses: changesets/action@v1
+        id: changesets
+        with:
+          version: pnpm changeset version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fires only right after the Version Packages PR itself gets merged,
+      # changesets/action reports no pending changesets in that case, which
+      # means the version bump is already on main and ready to ship. Creating
+      # the GitHub Release below (which publishes it) is what triggers
+      # publish.yml via its `on: release: types: [published]` trigger,
+      # keeping the two workflows sequential instead of racing each other.
+      - if: steps.filter.outputs.code == 'true' && steps.changesets.outputs.hasChangesets == 'false'
+        name: Read published version
+        id: pkg
+        run: echo "version=$(node -p "require('./packages/vern-llm/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - if: steps.filter.outputs.code == 'true' && steps.changesets.outputs.hasChangesets == 'false'
+        name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vern-llm@${{ steps.pkg.outputs.version }}
+          name: vern-llm@${{ steps.pkg.outputs.version }}
+          generate_release_notes: true
