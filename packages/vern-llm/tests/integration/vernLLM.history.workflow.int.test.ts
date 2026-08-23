@@ -446,6 +446,7 @@ describe('VernLLM + adapter integration: conversation history', () => {
                 },
                 {
                   functionCall: {
+                    id: 'call_1',
                     name: 'get_weather',
                     args: {
                       city: 'Paris',
@@ -459,7 +460,8 @@ describe('VernLLM + adapter integration: conversation history', () => {
               parts: [
                 {
                   functionResponse: {
-                    name: 'call_1',
+                    id: 'call_1',
+                    name: 'get_weather',
                     // Gemini's real functionResponse.response requires an
                     // object; a plain-string tool result ("sunny", not
                     // JSON) is wrapped under an "output" key by the

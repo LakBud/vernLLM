@@ -315,7 +315,7 @@ describe('fromGemini, tools', () => {
       content: 'Checking the weather now.',
       tool_calls: [
         {
-          id: 'get_weather',
+          id: 'get_weather#0',
           type: 'function',
           function: {
             name: 'get_weather',
@@ -393,7 +393,7 @@ describe('fromGemini, tools', () => {
 
     expect(result.choices?.[0]?.message?.tool_calls).toEqual([
       {
-        id: 'get_weather',
+        id: 'get_weather#0',
         type: 'function',
         function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
       },
@@ -431,11 +431,15 @@ describe('fromGemini, tools', () => {
     expect(generateContent.mock.calls[0]![0].contents).toEqual([
       {
         role: 'model',
-        parts: [{ functionCall: { name: 'get_weather', args: { city: 'New York' } } }],
+        parts: [
+          { functionCall: { id: 'get_weather', name: 'get_weather', args: { city: 'New York' } } },
+        ],
       },
       {
         role: 'user',
-        parts: [{ functionResponse: { name: 'get_weather', response: { tempC: 21 } } }],
+        parts: [
+          { functionResponse: { id: 'get_weather', name: 'get_weather', response: { tempC: 21 } } },
+        ],
       },
       { role: 'user', parts: [{ text: 'thanks, what about tomorrow?' }] },
     ]);
@@ -480,8 +484,8 @@ describe('fromGemini, tools', () => {
     expect(sentContents.at(-1)).toEqual({
       role: 'user',
       parts: [
-        { functionResponse: { name: 'get_weather', response: { tempC: 21 } } },
-        { functionResponse: { name: 'get_time', response: { hour: 14 } } },
+        { functionResponse: { id: 'get_weather', name: 'get_weather', response: { tempC: 21 } } },
+        { functionResponse: { id: 'get_time', name: 'get_time', response: { hour: 14 } } },
       ],
     });
   });
@@ -519,7 +523,15 @@ describe('fromGemini, tools', () => {
 
     expect(generateContent.mock.calls[0]![0].contents.at(-1)).toEqual({
       role: 'user',
-      parts: [{ functionResponse: { name: 'get_weather', response: { output: 'sunny, 21C' } } }],
+      parts: [
+        {
+          functionResponse: {
+            id: 'get_weather',
+            name: 'get_weather',
+            response: { output: 'sunny, 21C' },
+          },
+        },
+      ],
     });
   });
 
@@ -553,7 +565,125 @@ describe('fromGemini, tools', () => {
     expect(generateContent.mock.calls[0]![0].contents.at(-1)).toEqual({
       role: 'user',
       parts: [
-        { functionResponse: { name: 'get_weather', response: { output: 'not json at all' } } },
+        {
+          functionResponse: {
+            id: 'get_weather',
+            name: 'get_weather',
+            response: { output: 'not json at all' },
+          },
+        },
+      ],
+    });
+  });
+
+  it('preserves Gemini native functionCall ids and does not collide on parallel same-tool calls', async () => {
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { functionCall: { id: 'call_abc', name: 'get_weather', args: { city: 'NYC' } } },
+              { functionCall: { id: 'call_def', name: 'get_weather', args: { city: 'LA' } } },
+            ],
+          },
+        },
+      ],
+    }));
+    const adapted = fromGemini({ generateContent });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 100,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather in NYC and LA?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: 'call_abc',
+        type: 'function',
+        function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
+      },
+      {
+        id: 'call_def',
+        type: 'function',
+        function: { name: 'get_weather', arguments: JSON.stringify({ city: 'LA' }) },
+      },
+    ]);
+  });
+
+  it('synthesizes distinct ids for parallel same-tool calls when Gemini omits a native id', async () => {
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { functionCall: { name: 'get_weather', args: { city: 'NYC' } } },
+              { functionCall: { name: 'get_weather', args: { city: 'LA' } } },
+            ],
+          },
+        },
+      ],
+    }));
+    const adapted = fromGemini({ generateContent });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'gemini-2.5-flash',
+        max_tokens: 100,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather in NYC and LA?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const ids = result.choices?.[0]?.message?.tool_calls?.map((tc) => tc.id);
+    expect(ids).toEqual(['get_weather#0', 'get_weather#1']);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('resolves functionResponse.name from history, not from the id, even when a native id looks like a function name', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('sunny');
+    const adapted = fromGemini(client);
+
+    // A native Gemini id that happens to have the exact shape a
+    // synthesized id would have. Name resolution must not be fooled by
+    // this, since it never inspects the id's shape at all.
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-3.1-flash-lite',
+        max_tokens: 100,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'get_weather#1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'get_weather#1', content: JSON.stringify({ tempC: 21 }) },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].contents.at(-1)).toEqual({
+      role: 'user',
+      parts: [
+        {
+          functionResponse: {
+            id: 'get_weather#1',
+            name: 'get_weather',
+            response: { tempC: 21 },
+          },
+        },
       ],
     });
   });

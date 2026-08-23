@@ -93,7 +93,16 @@ export interface FallbackAttempt extends RetryAttempt {
  */
 export type FallbackOn = (error: LLMError, context: { isLastTarget: boolean }) => 'next' | 'stop';
 
-/** Tool contract failures are the model ignoring the request, not a sick provider: repeating it elsewhere can't help. */
+/**
+ * Tool contract failures where retrying elsewhere can't help: `unknown_tool`,
+ * `tool_choice_none_violated`, and `unexpected_tool_calls` are the model
+ * ignoring the request outright. `duplicate_tool_call_id` is different in
+ * kind, once an adapter prefers a real provider-issued id and only
+ * synthesizes a collision-free one when none is given, a duplicate means an
+ * actual protocol violation (the provider reused an id it shouldn't have),
+ * not the model misbehaving, but it's still not something a different
+ * provider in the chain would be expected to reproduce or fix.
+ */
 const TOOL_CONTRACT_CODES = new Set([
   'unknown_tool',
   'duplicate_tool_call_id',

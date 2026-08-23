@@ -27,8 +27,8 @@ import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.
 type GeminiPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } }
-  | { functionCall: { name: string; args: Record<string, unknown> } }
-  | { functionResponse: { name: string; response: Record<string, unknown> } };
+  | { functionCall: { id?: string; name: string; args: Record<string, unknown> } }
+  | { functionResponse: { id?: string; name: string; response: Record<string, unknown> } };
 
 /**
  * Structural type matching the real `@google/genai` SDK, in either shape
@@ -103,7 +103,10 @@ export interface GeminiClient {
   }): Promise<{
     candidates?: Array<{
       content?: {
-        parts?: Array<{ text?: string; functionCall?: { name?: string; args?: unknown } }>;
+        parts?: Array<{
+          text?: string;
+          functionCall?: { id?: string; name?: string; args?: unknown };
+        }>;
       };
     }>;
     usageMetadata?: {
@@ -128,7 +131,10 @@ export interface GeminiClient {
     AsyncIterable<{
       candidates?: Array<{
         content?: {
-          parts?: Array<{ text?: string; functionCall?: { name?: string; args?: unknown } }>;
+          parts?: Array<{
+            text?: string;
+            functionCall?: { id?: string; name?: string; args?: unknown };
+          }>;
         };
       }>;
       usageMetadata?: {
@@ -155,6 +161,17 @@ function toGeminiParts(blocks: ContentBlock[]): GeminiPart[] {
   );
 }
 
+/**
+ * Builds a wire tool_call id for a functionCall that Gemini did not assign
+ * a native id to (models before Gemini 3). `occurrenceIndex` is how many
+ * times this function name has already appeared earlier in the same
+ * response, so repeated calls to the same tool in one turn get distinct
+ * ids instead of colliding.
+ */
+function synthesizeToolCallId(name: string, occurrenceIndex: number): string {
+  return `${name}#${occurrenceIndex}`;
+}
+
 /** Maps VernLLM's OpenAI-shaped wire `tool_choice` onto Gemini's `functionCallingConfig`. */
 function toGeminiToolConfig(
   toolChoice: Parameters<LLMClient['chat']['completions']['create']>[0]['tool_choice'],
@@ -177,6 +194,30 @@ function toGeminiToolConfig(
 }
 
 /**
+ * Builds a lookup of wire tool_call_id to function name, from every
+ * assistant tool_calls entry in the conversation. The id itself carries no
+ * meaning: it may be a real Gemini-issued id or one synthesized locally
+ * when Gemini omitted one, and nothing here needs to tell those apart.
+ * The name is always resolved from the assistant turn that made the call,
+ * never derived from the id string.
+ */
+function buildToolCallNameMap(
+  messages: Parameters<LLMClient['chat']['completions']['create']>[0]['messages'],
+): Map<string, string> {
+  const map = new Map<string, string>();
+
+  for (const m of messages) {
+    if (m.role === 'assistant') {
+      for (const tc of m.tool_calls ?? []) {
+        map.set(tc.id, tc.function.name);
+      }
+    }
+  }
+
+  return map;
+}
+
+/**
  * Translates one VernLLM wire message into a Gemini `contents` entry.
  * Gemini has no separate 'tool' role: a prior assistant tool request
  * becomes a `'model'` turn with `functionCall` parts, and its result
@@ -187,18 +228,21 @@ function toGeminiContent(
     Parameters<LLMClient['chat']['completions']['create']>[0]['messages'][number],
     { role: 'user' | 'assistant' | 'tool' }
   >,
+  toolCallNames: Map<string, string>,
 ): { role: 'user' | 'model'; parts: GeminiPart[] } {
   if (m.role === 'tool') {
-    // Gemini's functionResponse identifies the call by function *name*, and
-    // the Gemini branch of this adapter sets wire tool_call ids equal to
-    // the function name for exactly this reason, so tool_call_id here is
-    // already the name Gemini expects.
+    // The name is resolved from the assistant turn that made this call,
+    // never from the id's shape, so this is correct whether the id is a
+    // real Gemini-issued id or one synthesized locally. The id itself is
+    // passed through unchanged; Gemini 3 and later use it to correlate
+    // this response with the original call.
     return {
       role: 'user',
       parts: [
         {
           functionResponse: {
-            name: m.tool_call_id,
+            id: m.tool_call_id,
+            name: toolCallNames.get(m.tool_call_id) ?? m.tool_call_id,
             response: parseToolResult(m.content),
           },
         },
@@ -216,6 +260,7 @@ function toGeminiContent(
     parts.push(
       ...m.tool_calls.map((tc) => ({
         functionCall: {
+          id: tc.id,
           name: tc.function.name,
           args: parseToolArguments(tc.function.arguments, tc.function.name),
         },
@@ -409,10 +454,12 @@ function buildGeminiRequest(
     }
   }
 
+  const toolCallNames = buildToolCallNameMap(conversationMessages);
+
   return {
     model: params.model,
     contents: mergeConsecutiveFunctionResponses(
-      conversationMessages.map((m) => toGeminiContent(m)),
+      conversationMessages.map((m) => toGeminiContent(m, toolCallNames)),
     ),
     config,
   };
@@ -513,25 +560,38 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
           let wireToolCalls: WireToolCall[] | undefined;
 
           if (functionCalls.length) {
-            wireToolCalls = functionCalls.map((p) => ({
-              // Gemini's functionResponse correlates by function *name*, not
-              // a call id (Gemini has no call-id concept at all), so the id
-              // here is just the name. This means two calls to the *same*
-              // tool within one turn can't be told apart when results come
-              // back, a real limitation of Gemini's own function-calling
-              // API, not something VernLLM can paper over.
+            const nameOccurrence = new Map<string, number>();
+
+            wireToolCalls = functionCalls.map((p) => {
               // INVARIANT: `name` is typed optional (matching the real
               // SDK's own `FunctionCall.name?: string`), but Gemini always
               // populates it on an actual function call part in practice;
               // the `!` here asserts that invariant, same rationale as the
               // `complete: true` invariant on the streaming path below.
-              id: p.functionCall!.name!,
-              type: 'function' as const,
-              function: {
-                name: p.functionCall!.name!,
-                arguments: JSON.stringify(p.functionCall!.args ?? {}),
-              },
-            }));
+              const name = p.functionCall!.name!;
+              const nativeId = p.functionCall!.id;
+              const occurrenceIndex = nameOccurrence.get(name) ?? 0;
+              nameOccurrence.set(name, occurrenceIndex + 1);
+
+              return {
+                // Gemini 3 and later always populate a native, unique `id`
+                // on every functionCall, meant to be echoed back on the
+                // matching functionResponse for correlation. Models before
+                // Gemini 3 never populate it, in which case an id is
+                // synthesized from the name plus how many times that name
+                // has already appeared in this response, so two calls to
+                // the same tool in one turn still get distinct ids. Either
+                // way, this id is opaque from here on: nothing downstream
+                // inspects its shape to decide whether it's native or
+                // synthesized.
+                id: nativeId ?? synthesizeToolCallId(name, occurrenceIndex),
+                type: 'function' as const,
+                function: {
+                  name,
+                  arguments: JSON.stringify(p.functionCall!.args ?? {}),
+                },
+              };
+            });
           }
 
           return {
@@ -570,6 +630,7 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
           const stream = await generateContentStream(request);
 
           let toolCallIndex = 0;
+          const nameOccurrence = new Map<string, number>();
           let lastUsage:
             | NonNullable<
                 Awaited<ReturnType<NonNullable<GeminiClient['generateContent']>>>['usageMetadata']
@@ -585,10 +646,15 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
               }
 
               if (part.functionCall) {
+                const name = part.functionCall.name;
+                const nativeId = part.functionCall.id;
+                const occurrenceIndex = name ? (nameOccurrence.get(name) ?? 0) : 0;
+                if (name) nameOccurrence.set(name, occurrenceIndex + 1);
+
                 yield {
                   type: 'tool_call_delta',
                   index: toolCallIndex,
-                  id: part.functionCall.name,
+                  id: nativeId ?? (name ? synthesizeToolCallId(name, occurrenceIndex) : undefined),
                   name: part.functionCall.name,
                   argumentsDelta: JSON.stringify(part.functionCall.args ?? {}),
                   // INVARIANT: assumes Gemini always sends a complete
