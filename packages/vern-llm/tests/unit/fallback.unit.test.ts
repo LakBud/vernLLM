@@ -553,6 +553,15 @@ describe('VernLLM, fallback', () => {
       expect(defaultFallbackOn(new LLMError('m', 'timeout'), { isLastTarget: false })).toBe('next');
       expect(defaultFallbackOn(new LLMError('m', 'unknown'), { isLastTarget: false })).toBe('next');
     });
+
+    it('returns "next" for unsupported capabilities', () => {
+      const unsupported = new LLMError('m', 'invalid_params', {
+        code: 'unsupported_capability',
+        issues: { capability: 'tools_with_json_schema' },
+      });
+
+      expect(defaultFallbackOn(unsupported, { isLastTarget: false })).toBe('next');
+    });
   });
 
   it('a custom fallbackOn overrides the default policy entirely', async () => {

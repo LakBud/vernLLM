@@ -735,7 +735,9 @@ describe('fromBedrock, native structured output', () => {
       ),
     ).rejects.toMatchObject({
       name: 'LLMError',
-      type: 'validation',
+      type: 'invalid_params',
+      code: 'unsupported_capability',
+      issues: { capability: 'tools_with_json_schema' },
       message: expect.stringContaining(nativeModel),
     });
 
@@ -771,7 +773,9 @@ describe('fromBedrock, native structured output', () => {
       ),
     ).rejects.toMatchObject({
       name: 'LLMError',
-      type: 'validation',
+      type: 'invalid_params',
+      code: 'unsupported_capability',
+      issues: { capability: 'tools_with_json_schema' },
       message: expect.stringContaining('amazon.titan-text'),
     });
 

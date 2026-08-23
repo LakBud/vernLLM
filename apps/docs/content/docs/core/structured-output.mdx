@@ -87,8 +87,10 @@ const result = await llm.call({
 
 By default, on Anthropic and Bedrock, `jsonSchema` and `tools` cannot be used together.
 `jsonSchema` is emulated as a forced single tool call, which occupies the same request field real,
-caller-supplied `tools` need. Setting both throws `LLMError('validation')` before a request is
-sent. Gemini and OpenAI-compatible clients never had this restriction and don't need
+caller-supplied `tools` need. On unsupported Anthropic and Bedrock models, setting both throws
+`LLMError('invalid_params')` with `code: 'unsupported_capability'` and
+`issues.capability: 'tools_with_json_schema'` before a request is sent, allowing the default
+fallback policy to try the next target. Gemini and OpenAI-compatible clients never had this restriction and don't need
 `nativeStructuredOutputModels` at all: Gemini builds `responseSchema` and `tools` as independent,
 unconditional fields, and OpenAI-compatible clients pass `response_format`/`tools` straight
 through, so `jsonSchema` and `tools` always compose there.
@@ -140,9 +142,9 @@ const result = await llm.call({
   There is no built-in default list of native-capable models. Anthropic's and Bedrock's supported
   model set changes over time and isn't this package's call to make, hardcoding a guess would risk
   silently routing a request onto a field a given model doesn't actually support, trading a clear
-  `LLMError('validation')` for a confusing error from the provider instead. Left unset, every model
-  keeps using the forced-single-tool-call emulation, and `tools` + `jsonSchema` together is
-  rejected, exactly the behavior before this option existed.
+  `LLMError('invalid_params')` with `code: 'unsupported_capability'` for a confusing error from the
+  provider instead. Left unset, every model keeps using the forced-single-tool-call emulation, and
+  `tools` + `jsonSchema` together is rejected, exactly the behavior before this option existed.
 </Callout>
 
 On a model not covered by `nativeStructuredOutputModels`, `jsonSchema` alone (no `tools`) is
