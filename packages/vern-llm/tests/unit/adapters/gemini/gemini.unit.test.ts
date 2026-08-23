@@ -315,7 +315,7 @@ describe('fromGemini, tools', () => {
       content: 'Checking the weather now.',
       tool_calls: [
         {
-          id: 'get_weather',
+          id: 'VernLLM:get_weather',
           type: 'function',
           function: {
             name: 'get_weather',
@@ -393,7 +393,7 @@ describe('fromGemini, tools', () => {
 
     expect(result.choices?.[0]?.message?.tool_calls).toEqual([
       {
-        id: 'get_weather',
+        id: 'VernLLM:get_weather',
         type: 'function',
         function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
       },
@@ -415,13 +415,17 @@ describe('fromGemini, tools', () => {
             role: 'assistant',
             tool_calls: [
               {
-                id: 'get_weather',
+                id: 'VernLLM:get_weather',
                 type: 'function',
                 function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
               },
             ],
           },
-          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify({ tempC: 21 }) },
+          {
+            role: 'tool',
+            tool_call_id: 'VernLLM:get_weather',
+            content: JSON.stringify({ tempC: 21 }),
+          },
           { role: 'user', content: 'thanks, what about tomorrow?' },
         ],
       },
@@ -468,7 +472,7 @@ describe('fromGemini, tools', () => {
     );
 
     const toolCalls = first.choices![0]!.message!.tool_calls!;
-    expect(toolCalls.map((c) => c.id)).toEqual(['get_weather', 'get_weather#1']);
+    expect(toolCalls.map((c) => c.id)).toEqual(['VernLLM:get_weather', 'VernLLM:get_weather#1']);
     expect(toolCalls.every((c) => c.function.name === 'get_weather')).toBe(true);
 
     // 2. Feeding both results back as tool messages sends the bare
@@ -483,12 +487,12 @@ describe('fromGemini, tools', () => {
             role: 'assistant',
             tool_calls: [
               {
-                id: 'get_weather',
+                id: 'VernLLM:get_weather',
                 type: 'function',
                 function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
               },
               {
-                id: 'get_weather#1',
+                id: 'VernLLM:get_weather#1',
                 type: 'function',
                 function: {
                   name: 'get_weather',
@@ -497,8 +501,16 @@ describe('fromGemini, tools', () => {
               },
             ],
           },
-          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify({ tempC: 21 }) },
-          { role: 'tool', tool_call_id: 'get_weather#1', content: JSON.stringify({ tempC: 24 }) },
+          {
+            role: 'tool',
+            tool_call_id: 'VernLLM:get_weather',
+            content: JSON.stringify({ tempC: 21 }),
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'VernLLM:get_weather#1',
+            content: JSON.stringify({ tempC: 24 }),
+          },
         ],
       },
       { signal: new AbortController().signal },
@@ -596,6 +608,67 @@ describe('fromGemini, tools', () => {
     ]);
   });
 
+  it('round-trips a native id that happens to look like the bare function name, since only the VernLLM: prefix marks a synthesized id', async () => {
+    // Before the reserved-prefix scheme, a native id equal to the bare
+    // function name was indistinguishable from what dedupeToolCallId
+    // would have synthesized. Now that every synthesized id is
+    // unconditionally prefixed with `VernLLM:`, an unprefixed native id
+    // like this one is never ambiguous, and always round-trips.
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { functionCall: { id: 'get_weather', name: 'get_weather', args: { city: 'NYC' } } },
+            ],
+          },
+        },
+      ],
+    }));
+    const adapted = fromGemini({ generateContent });
+
+    const first = await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather in NYC?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const toolCall = first.choices![0]!.message!.tool_calls![0]!;
+    expect(toolCall.id).toBe('get_weather');
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          { role: 'assistant', tool_calls: [toolCall] },
+          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify({ tempC: 21 }) },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[1]![0].contents).toEqual([
+      {
+        role: 'model',
+        parts: [
+          { functionCall: { name: 'get_weather', args: { city: 'NYC' }, id: 'get_weather' } },
+        ],
+      },
+      {
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'get_weather', response: { tempC: 21 }, id: 'get_weather' } },
+        ],
+      },
+    ]);
+  });
+
   it('combines two consecutive functionResponse wire messages into a single user content entry', async () => {
     const { client, generateContent } = makeFakeGeminiClient('ok');
     const adapted = fromGemini(client);
@@ -611,19 +684,23 @@ describe('fromGemini, tools', () => {
             role: 'assistant',
             tool_calls: [
               {
-                id: 'get_weather',
+                id: 'VernLLM:get_weather',
                 type: 'function',
                 function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
               },
               {
-                id: 'get_time',
+                id: 'VernLLM:get_time',
                 type: 'function',
                 function: { name: 'get_time', arguments: JSON.stringify({ city: 'New York' }) },
               },
             ],
           },
-          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify({ tempC: 21 }) },
-          { role: 'tool', tool_call_id: 'get_time', content: JSON.stringify({ hour: 14 }) },
+          {
+            role: 'tool',
+            tool_call_id: 'VernLLM:get_weather',
+            content: JSON.stringify({ tempC: 21 }),
+          },
+          { role: 'tool', tool_call_id: 'VernLLM:get_time', content: JSON.stringify({ hour: 14 }) },
         ],
       },
       { signal: new AbortController().signal },
@@ -656,7 +733,7 @@ describe('fromGemini, tools', () => {
             role: 'assistant',
             tool_calls: [
               {
-                id: 'get_weather',
+                id: 'VernLLM:get_weather',
                 type: 'function',
                 function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
               },
@@ -666,7 +743,11 @@ describe('fromGemini, tools', () => {
           // (here, a bare string): Gemini's real `FunctionResponse.response`
           // type requires a `Record<string, unknown>`, so this can't be
           // sent as-is and must be wrapped.
-          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify('sunny, 21C') },
+          {
+            role: 'tool',
+            tool_call_id: 'VernLLM:get_weather',
+            content: JSON.stringify('sunny, 21C'),
+          },
         ],
       },
       { signal: new AbortController().signal },
@@ -693,13 +774,13 @@ describe('fromGemini, tools', () => {
             role: 'assistant',
             tool_calls: [
               {
-                id: 'get_weather',
+                id: 'VernLLM:get_weather',
                 type: 'function',
                 function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
               },
             ],
           },
-          { role: 'tool', tool_call_id: 'get_weather', content: 'not json at all' },
+          { role: 'tool', tool_call_id: 'VernLLM:get_weather', content: 'not json at all' },
         ],
       },
       { signal: new AbortController().signal },

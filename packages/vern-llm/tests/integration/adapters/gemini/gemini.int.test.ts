@@ -102,7 +102,7 @@ describe('fromGemini().chat.completions.createStream', () => {
       {
         type: 'tool_call_delta',
         index: 0,
-        id: 'get_weather',
+        id: 'VernLLM:get_weather',
         name: 'get_weather',
         argumentsDelta: '{"city":"NYC"}',
         complete: true,

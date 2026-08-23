@@ -18,6 +18,16 @@ import {
 import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.js';
 
 /**
+ * Every wire tool call id VernLLM synthesizes for Gemini (see
+ * `dedupeToolCallId`) starts with this prefix, reserved for VernLLM's own
+ * id generation. It's what lets `isSynthesizedToolCallId` tell a
+ * synthesized id apart from a real Gemini-issued one by a plain, exact
+ * prefix check instead of guessing at shape: Gemini's own ids are opaque
+ * tokens it generates, and are never expected to start with this prefix.
+ */
+const SYNTHESIZED_ID_PREFIX = 'VernLLM:';
+
+/**
  * Gemini's `FunctionCall.id` / `FunctionResponse.id` are optional: when the
  * model populates one, it's used as the wire tool call id directly and
  * echoed back on the matching `functionResponse`. When it doesn't (still
@@ -28,32 +38,44 @@ import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.
  * synthesize the same wire `id` twice, which `callExecutor`'s
  * `validateToolCallArguments` rightly rejects as `duplicate_tool_call_id`.
  * Its a real ambiguity for every other provider, but a false positive here
- * since Gemini's own ordering already disambiguates them. This assigns
- * the bare name to the first call to a given tool in a turn and suffixes
- * `#n` on every later one, so ids stay unique; `toGeminiContent` strips
- * the suffix back off before sending a tool result to `functionResponse`,
- * which only ever expects the bare name when no native id was involved.
+ * since Gemini's own ordering already disambiguates them. This builds a
+ * `SYNTHESIZED_ID_PREFIX`-namespaced id from the name, the bare `name` for
+ * the first call to a given tool in a turn and a `#n` suffix on every
+ * later one, so ids stay unique. The function name is still resolved from
+ * the assistant turn that produced the id (see `toolCallNames` in
+ * `buildGeminiRequest`), not by parsing the id, so the id only needs to be
+ * unique and self-identifying as VernLLM's own, not name-shaped.
  */
 function dedupeToolCallId(name: string, seen: Map<string, number>): string {
   const n = seen.get(name) ?? 0;
   seen.set(name, n + 1);
-  return n === 0 ? name : `${name}#${n}`;
+  return `${SYNTHESIZED_ID_PREFIX}${n === 0 ? name : `${name}#${n}`}`;
 }
 
 /**
- * True when `id` is one `dedupeToolCallId` could have produced for `name`
- * (i.e. no native Gemini id was present when the wire tool call id was
- * built): the bare name, or the name with a `#n` disambiguator suffix.
- * Used to tell a synthesized id apart from a real Gemini-issued one, since
- * only the latter should be echoed back on outgoing `functionCall`/
- * `functionResponse` parts.
+ * True when `id` is one VernLLM itself synthesized (see
+ * `dedupeToolCallId`), as opposed to a real Gemini-issued id. An exact
+ * prefix check, not a guess: every synthesized id starts with
+ * `SYNTHESIZED_ID_PREFIX`, a namespace reserved for VernLLM's own id
+ * generation that Gemini's own opaque, provider-generated ids are never
+ * expected to collide with. Used to decide whether an id should be
+ * echoed back on outgoing `functionCall`/`functionResponse` parts (only
+ * a real Gemini-issued id should be).
  */
-function isSynthesizedToolCallId(id: string, name: string): boolean {
-  return id === name || new RegExp(`^${escapeRegExp(name)}#\\d+$`).test(id);
+function isSynthesizedToolCallId(id: string): boolean {
+  return id.startsWith(SYNTHESIZED_ID_PREFIX);
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * Recovers the original function name from a `dedupeToolCallId`-produced
+ * id, by stripping `SYNTHESIZED_ID_PREFIX` and any `#n` disambiguator.
+ * Only a fallback for when `toolCallNames` has no entry for a given id
+ * (e.g. a `tool` message supplied without its assistant turn); returns
+ * `id` unchanged if it isn't one VernLLM synthesized.
+ */
+function nameFromSynthesizedId(id: string): string {
+  if (!isSynthesizedToolCallId(id)) return id;
+  return id.slice(SYNTHESIZED_ID_PREFIX.length).replace(/#\d+$/, '');
 }
 
 /**
@@ -243,13 +265,13 @@ function toGeminiContent(
 ): { role: 'user' | 'model'; parts: GeminiPart[] } {
   if (m.role === 'tool') {
     // Prefer the name recorded from the preceding assistant tool call;
-    // fall back to stripping a VernLLM-added "#n" disambiguator (see
-    // `dedupeToolCallId`) for cases where no matching assistant turn was
-    // found (e.g. a tool message supplied without its assistant turn).
-    const name = toolCallNames.get(m.tool_call_id) ?? m.tool_call_id.replace(/#\d+$/, '');
+    // fall back to stripping `dedupeToolCallId`'s `SYNTHESIZED_ID_PREFIX`
+    // and "#n" disambiguator for cases where no matching assistant turn
+    // was found (e.g. a tool message supplied without its assistant turn).
+    const name = toolCallNames.get(m.tool_call_id) ?? nameFromSynthesizedId(m.tool_call_id);
     // Echo the id back only when it's a real Gemini-issued id, not one
     // VernLLM synthesized from the name (see `isSynthesizedToolCallId`).
-    const id = isSynthesizedToolCallId(m.tool_call_id, name) ? undefined : m.tool_call_id;
+    const id = isSynthesizedToolCallId(m.tool_call_id) ? undefined : m.tool_call_id;
     return {
       role: 'user',
       parts: [
@@ -277,7 +299,7 @@ function toGeminiContent(
           name: tc.function.name,
           args: parseToolArguments(tc.function.arguments, tc.function.name),
           // Only echo back a real Gemini-issued id, never a synthesized one.
-          ...(isSynthesizedToolCallId(tc.id, tc.function.name) ? {} : { id: tc.id }),
+          ...(isSynthesizedToolCallId(tc.id) ? {} : { id: tc.id }),
         },
       })),
     );

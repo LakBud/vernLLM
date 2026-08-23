@@ -6,4 +6,4 @@ Fixed two cases where a provider limitation was misclassified as a validation er
 
 `fromAnthropic` and `fromBedrock` now throw `invalid_params` with code `unsupported_capability` when `tools` and `jsonSchema` are combined on a model not covered by `nativeStructuredOutputModels`, instead of `validation`. Fallback now falls through to the next target correctly.
 
-`fromGemini` now assigns a unique wire id to each of two parallel calls to the same tool in one turn, instead of reusing the tool name for both and tripping the shared `duplicate_tool_call_id` check.
+`fromGemini` now assigns a unique wire id to each of two parallel calls to the same tool in one turn, instead of reusing the tool name for both and tripping the shared `duplicate_tool_call_id` check. Synthesized ids are now namespaced under a `VernLLM:` prefix (e.g. `VernLLM:get_weather`, `VernLLM:get_weather#1`), so they can never be mistaken for a real Gemini-issued `FunctionCall.id`/`FunctionResponse.id`, which `fromGemini` now also preserves and echoes back when Gemini provides one.

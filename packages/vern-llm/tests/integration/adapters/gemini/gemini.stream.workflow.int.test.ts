@@ -121,7 +121,9 @@ describe('VernLLM.call(stream: true) through fromGemini, end to end', () => {
 
     await expect(finalResult).resolves.toEqual({
       type: 'tool_calls',
-      toolCalls: [{ id: 'get_weather', name: 'get_weather', arguments: { city: 'Denver' } }],
+      toolCalls: [
+        { id: 'VernLLM:get_weather', name: 'get_weather', arguments: { city: 'Denver' } },
+      ],
     });
   });
 
