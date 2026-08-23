@@ -225,6 +225,13 @@ export type ConditionalToolCallParams<
   tools: Tools | undefined;
 };
 
+/** Conditional tool-call parameters whose non-tool result is plain text. */
+export type ConditionalStringToolCallParams<
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = ConditionalToolCallParams<string, Tools> & {
+  jsonMode: false;
+};
+
 /**
  * A `CallParams` variant where tools are offered but the model is barred
  * from calling one. `toolChoice: 'none'` guarantees the response can never
@@ -319,6 +326,13 @@ export type CachedConditionalToolCallParams<
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = CachedCallInput & {
   call: Omit<ConditionalToolCallParams<T, Tools>, 'reserveUsage' | 'refundUsage'>;
+};
+
+/** Cached conditional tool-call parameters whose non-tool result is plain text. */
+export type CachedConditionalStringToolCallParams<
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CachedConditionalToolCallParams<string, Tools> & {
+  call: { jsonMode: false };
 };
 
 /**

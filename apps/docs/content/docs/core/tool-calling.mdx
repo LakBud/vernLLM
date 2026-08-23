@@ -128,6 +128,15 @@ if (isToolCallResult(result)) {
 }
 ```
 
+When `jsonMode: false` is explicit, conditional tools still infer the non-tool result as a
+`string`, including with `stream: true` and `cachedCall()`. No response-type generic is needed:
+the result is `string | CallWithToolsResult<string>`. The raw `string` branch applies when
+`tools` is `undefined`; when tools are present, a normal response is the wrapped
+`{ type: 'content', content: string }` branch.
+The corresponding reusable parameter types are `ConditionalStringToolCallParams`,
+`CachedConditionalStringToolCallParams`, `StreamConditionalStringToolCallParams`, and
+`CachedStreamConditionalStringToolCallParams`.
+
 <Callout type="warn">
   This only works when the object passed to `call()` still carries `tools`'s real, narrower type.
   If you build `params` as a variable explicitly annotated `CallParams<T>` first, that annotation

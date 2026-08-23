@@ -822,6 +822,25 @@ describe('VernLLM.call, conditionally-set tools', () => {
     expect(result).toBe('sunny');
   });
 
+  it('call(): jsonMode false infers string content with conditional tools', async () => {
+    const { client } = createMockClient([textResponse('sunny')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const result = await llm.call({
+      userContent: 'weather?',
+      tools,
+      jsonMode: false,
+    });
+
+    expectTypeOf(result).toEqualTypeOf<
+      string | CallWithToolsResult<string, NonNullable<typeof tools>>
+    >();
+    expect(result).toEqual({ type: 'content', content: 'sunny' });
+  });
+
   it('call(): omitting tools resolves to plain T, not the union', async () => {
     const { client } = createMockClient([jsonResponse('hi there')]);
     const llm = new VernLLM({ client, model: 'test-model' });
@@ -871,6 +890,28 @@ describe('VernLLM.call, conditionally-set tools', () => {
     }
   });
 
+  it('call(): stream: true with jsonMode false infers string content with conditional tools', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'sunny' }]]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const { finalResult, chunks } = await llm.call({
+      userContent: 'weather?',
+      tools,
+      stream: true,
+      jsonMode: false,
+    });
+    await drain(chunks);
+    const result = await finalResult;
+
+    expectTypeOf(result).toEqualTypeOf<
+      string | CallWithToolsResult<string, NonNullable<typeof tools>>
+    >();
+    expect(result).toEqual({ type: 'content', content: 'sunny' });
+  });
+
   it('cachedCall(): tool_calls response types as the union', async () => {
     const { client } = createMockClient([
       toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Boston' } }]),
@@ -895,6 +936,29 @@ describe('VernLLM.call, conditionally-set tools', () => {
     } else {
       throw new Error('expected a tool_calls result');
     }
+  });
+
+  it('cachedCall(): jsonMode false infers string content with conditional tools', async () => {
+    const { client } = createMockClient([textResponse('sunny')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const result = await llm.cachedCall({
+      cacheKey: 'conditional-tools-json-mode-false',
+      ttl: 60,
+      call: {
+        userContent: 'weather?',
+        tools,
+        jsonMode: false,
+      },
+    });
+
+    expectTypeOf(result).toEqualTypeOf<
+      string | CallWithToolsResult<string, NonNullable<typeof tools>>
+    >();
+    expect(result).toEqual({ type: 'content', content: 'sunny' });
   });
 
   it('cachedCall(): stream: true with conditional tools resolves finalResult to the union', async () => {
@@ -932,6 +996,28 @@ describe('VernLLM.call, conditionally-set tools', () => {
     } else {
       throw new Error('expected a tool_calls result');
     }
+  });
+
+  it('cachedCall(): stream: true with jsonMode false infers string content with conditional tools', async () => {
+    const { client } = createMockStreamingClient([
+      [{ type: 'text-delta', delta: 'The weather is clear.' }],
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const { finalResult, chunks } = await llm.cachedCall({
+      cacheKey: 'conditional-tools-json-mode-false',
+      ttl: 60,
+      call: { userContent: 'weather?', tools, stream: true, jsonMode: false },
+    });
+    await drain(chunks);
+    const result = await finalResult;
+
+    expectTypeOf(result).toEqualTypeOf<
+      string | CallWithToolsResult<string, NonNullable<typeof tools>>
+    >();
   });
 });
 

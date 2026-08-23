@@ -16,14 +16,17 @@ import {
   type CachedCallParams,
   type CachedStreamCallParams,
   type CachedStreamConditionalToolCallParams,
+  type CachedStreamConditionalStringToolCallParams,
   type CachedStreamToolCallParams,
   type CachedConditionalToolCallParams,
+  type CachedConditionalStringToolCallParams,
   type CachedToolCallParams,
   type CachedJsonModeDisabledCallParams,
   type CachedJsonModeEnabledCallParams,
   type CallParams,
   type CallWithToolsResult,
   type ConditionalToolCallParams,
+  type ConditionalStringToolCallParams,
   type ContentResult,
   type FallbackAttempt,
   type FallbackOn,
@@ -32,6 +35,7 @@ import {
   type JsonModeEnabledCallParams,
   type JsonValue,
   type StreamCallResult,
+  type StreamConditionalStringToolCallParams,
   type StreamJsonModeDisabledCallParams,
   type StreamJsonModeEnabledCallParams,
   type CachedStreamJsonModeDisabledCallParams,
@@ -348,6 +352,10 @@ export class VernLLM {
     params: StreamEnabledCallParams<T, Tools> & ToolEnabledCallParams<T, Tools>,
   ): Promise<StreamCallResult<CallWithToolsResult<T, Tools>>>;
 
+  async call<const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: StreamConditionalStringToolCallParams<Tools>,
+  ): Promise<StreamCallResult<string | CallWithToolsResult<string, Tools>>>;
+
   async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: StreamEnabledCallParams<T, Tools> & ConditionalToolCallParams<T, Tools>,
   ): Promise<StreamCallResult<T | CallWithToolsResult<T, Tools>>>;
@@ -363,6 +371,10 @@ export class VernLLM {
   async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: ToolEnabledCallParams<T, Tools>,
   ): Promise<CallWithToolsResult<T, Tools>>;
+
+  async call<const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: ConditionalStringToolCallParams<Tools>,
+  ): Promise<string | CallWithToolsResult<string, Tools>>;
 
   async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: ConditionalToolCallParams<T, Tools>,
@@ -509,6 +521,10 @@ export class VernLLM {
     params: CachedStreamToolCallParams<T, Tools>,
   ): Promise<StreamCallResult<CallWithToolsResult<T, Tools>>>;
 
+  async cachedCall<const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedStreamConditionalStringToolCallParams<Tools>,
+  ): Promise<StreamCallResult<string | CallWithToolsResult<string, Tools>>>;
+
   async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: CachedStreamConditionalToolCallParams<T, Tools>,
   ): Promise<StreamCallResult<T | CallWithToolsResult<T, Tools>>>;
@@ -526,6 +542,10 @@ export class VernLLM {
   async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: CachedToolCallParams<T, Tools>,
   ): Promise<CallWithToolsResult<T, Tools>>;
+
+  async cachedCall<const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedConditionalStringToolCallParams<Tools>,
+  ): Promise<string | CallWithToolsResult<string, Tools>>;
 
   async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: CachedConditionalToolCallParams<T, Tools>,

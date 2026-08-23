@@ -1,6 +1,7 @@
 import type {
   CachedCallInput,
   CallParams,
+  ConditionalStringToolCallParams,
   ConditionalToolCallParams,
   JsonValue,
   ToolEnabledCallParams,
@@ -51,6 +52,11 @@ export type StreamEnabledCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = CallParams<T, Tools> & { stream: true };
+
+/** Streaming conditional tool-call parameters whose non-tool result is text. */
+export type StreamConditionalStringToolCallParams<
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = StreamEnabledCallParams<string, Tools> & ConditionalStringToolCallParams<Tools>;
 
 /**
  * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
@@ -165,6 +171,13 @@ export type CachedStreamConditionalToolCallParams<
     StreamEnabledCallParams<T, Tools> & ConditionalToolCallParams<T, Tools>,
     'reserveUsage' | 'refundUsage'
   >;
+};
+
+/** Cached streaming conditional tool-call parameters whose non-tool result is text. */
+export type CachedStreamConditionalStringToolCallParams<
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CachedStreamConditionalToolCallParams<string, Tools> & {
+  call: { jsonMode: false };
 };
 
 /**
