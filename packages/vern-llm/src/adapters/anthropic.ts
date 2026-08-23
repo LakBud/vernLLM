@@ -289,7 +289,8 @@ function buildAnthropicRequestBody(
         '`tools` you also provided. Either drop `tools` or `jsonSchema` for this call, or pass ' +
         "this model in fromAnthropic's `nativeStructuredOutputModels` option once you've " +
         "confirmed it supports Anthropic's `output_config.format`.",
-      'validation',
+      'invalid_params',
+      { code: 'unsupported_capability', issues: { capability: 'tools_with_json_schema' } },
     );
   }
 
@@ -482,7 +483,8 @@ export interface AnthropicAdapterOptions {
  * forwarded when set, and `tool_choice` forces the model to call it. This
  * legacy path cannot be combined with real `tools` (both would need the
  * same `tools`/`tool_choice` field), and a call that tries throws
- * `LLMError('validation')` before reaching the API. Provider-constrained
+ * `LLMError('invalid_params')` with `code: 'unsupported_capability'` and
+ * `issues: { capability: 'tools_with_json_schema' }` before reaching the API. Provider-constrained
  * schema matching applies only when `strict: true` is forwarded and
  * supported.
  *

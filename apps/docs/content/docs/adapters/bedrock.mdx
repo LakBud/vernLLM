@@ -162,6 +162,10 @@ The same preflight also runs when a `jsonSchema` call ends up sending `toolConfi
 By default, `jsonSchema` and `tools` cannot be used in the same call: `jsonSchema` is emulated as
 a forced single tool call via `toolConfig`, which occupies the same field real tools need.
 
+On unsupported models, this throws `LLMError('invalid_params')` with `code: 'unsupported_capability'`
+and `issues.capability: 'tools_with_json_schema'`, so the default fallback policy can try the next
+target.
+
 Bedrock Converse also supports native, schema-constrained output, `outputConfig.textFormat`, a
 request field independent of `toolConfig`, so it composes with real `tools` on models that support
 it. This is opt-in, pass `nativeStructuredOutputModels` as part of the second argument to
@@ -182,7 +186,9 @@ There is no built-in default list, see [Structured Output → Combining with too
 tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
 while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
-`jsonSchema` still throws `LLMError('validation')`, naming the model and pointing at this option.
+`jsonSchema` throws `LLMError('invalid_params')` with `code: 'unsupported_capability'` and
+`issues.capability: 'tools_with_json_schema'`, naming the model and pointing at this option. The
+default fallback policy can then try the next target.
 
 <Callout type="warn">
   `outputConfig.textFormat`'s shape is not flat, and not the parsed-object schema every other part
