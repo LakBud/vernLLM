@@ -441,6 +441,88 @@ describe('fromGemini, tools', () => {
     ]);
   });
 
+  it('dedupes wire tool_call ids for two parallel calls to the same tool, and round-trips both results back with the bare function name', async () => {
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { functionCall: { name: 'get_weather', args: { city: 'New York' } } },
+              { functionCall: { name: 'get_weather', args: { city: 'Los Angeles' } } },
+            ],
+          },
+        },
+      ],
+    }));
+    const adapted = fromGemini({ generateContent });
+
+    // 1. Two parallel calls to the same tool synthesize distinct ids.
+    const first = await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather in NYC and LA?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const toolCalls = first.choices![0]!.message!.tool_calls!;
+    expect(toolCalls.map((c) => c.id)).toEqual(['get_weather', 'get_weather#1']);
+    expect(toolCalls.every((c) => c.function.name === 'get_weather')).toBe(true);
+
+    // 2. Feeding both results back as tool messages sends the bare
+    // function name on both, not the disambiguated id.
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'get_weather',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
+              },
+              {
+                id: 'get_weather#1',
+                type: 'function',
+                function: {
+                  name: 'get_weather',
+                  arguments: JSON.stringify({ city: 'Los Angeles' }),
+                },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'get_weather', content: JSON.stringify({ tempC: 21 }) },
+          { role: 'tool', tool_call_id: 'get_weather#1', content: JSON.stringify({ tempC: 24 }) },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const contents = generateContent.mock.calls[1]![0].contents;
+    expect(contents).toEqual([
+      {
+        role: 'model',
+        parts: [
+          { functionCall: { name: 'get_weather', args: { city: 'New York' } } },
+          { functionCall: { name: 'get_weather', args: { city: 'Los Angeles' } } },
+        ],
+      },
+      {
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'get_weather', response: { tempC: 21 } } },
+          { functionResponse: { name: 'get_weather', response: { tempC: 24 } } },
+        ],
+      },
+    ]);
+  });
+
   it('combines two consecutive functionResponse wire messages into a single user content entry', async () => {
     const { client, generateContent } = makeFakeGeminiClient('ok');
     const adapted = fromGemini(client);

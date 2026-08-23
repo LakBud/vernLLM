@@ -18,6 +18,26 @@ import {
 import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.js';
 
 /**
+ * Gemini has no per-call tool-call id: a `functionCall` part carries only
+ * a name, and `functionResponse` correlates by that same name. That's
+ * fine for one call per tool per turn, but two parallel calls to the
+ * *same* tool (e.g. "check the weather in NYC and LA") would otherwise
+ * synthesize the same wire `id` twice, which `callExecutor`'s
+ * `validateToolCallArguments` rightly rejects as `duplicate_tool_call_id`.
+ * Its a real ambiguity for every other provider, but a false positive here
+ * since Gemini's own ordering already disambiguates them. This assigns
+ * the bare name to the first call to a given tool in a turn and suffixes
+ * `#n` on every later one, so ids stay unique; `toGeminiContent` strips
+ * the suffix back off before sending a tool result to `functionResponse`,
+ * which only ever expects the bare name.
+ */
+function dedupeToolCallId(name: string, seen: Map<string, number>): string {
+  const n = seen.get(name) ?? 0;
+  seen.set(name, n + 1);
+  return n === 0 ? name : `${name}#${n}`;
+}
+
+/**
  * Gemini's native per-part content shape for a `contents` entry.
  * `functionCall.args` and `functionResponse.response` are typed as
  * `Record<string, unknown>` (not `unknown`) to match the real SDK's
@@ -189,16 +209,18 @@ function toGeminiContent(
   >,
 ): { role: 'user' | 'model'; parts: GeminiPart[] } {
   if (m.role === 'tool') {
-    // Gemini's functionResponse identifies the call by function *name*, and
-    // the Gemini branch of this adapter sets wire tool_call ids equal to
-    // the function name for exactly this reason, so tool_call_id here is
-    // already the name Gemini expects.
+    // Gemini's functionResponse identifies the call by function *name*.
+    // tool_call_id is normally already that name, but may carry a
+    // VernLLM-added "#n" disambiguator for the 2nd+ parallel call to the
+    // same tool in one turn (see `dedupeToolCallId`) — strip it back off
+    // before sending, since Gemini only ever expects the bare name.
+    const name = m.tool_call_id.replace(/#\d+$/, '');
     return {
       role: 'user',
       parts: [
         {
           functionResponse: {
-            name: m.tool_call_id,
+            name,
             response: parseToolResult(m.content),
           },
         },
@@ -513,19 +535,19 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
           let wireToolCalls: WireToolCall[] | undefined;
 
           if (functionCalls.length) {
+            const seen = new Map<string, number>();
             wireToolCalls = functionCalls.map((p) => ({
               // Gemini's functionResponse correlates by function *name*, not
               // a call id (Gemini has no call-id concept at all), so the id
-              // here is just the name. This means two calls to the *same*
-              // tool within one turn can't be told apart when results come
-              // back, a real limitation of Gemini's own function-calling
-              // API, not something VernLLM can paper over.
+              // here is derived from the name, disambiguated across
+              // multiple calls to the same tool within one turn by
+              // `dedupeToolCallId` (see its doc comment).
               // INVARIANT: `name` is typed optional (matching the real
               // SDK's own `FunctionCall.name?: string`), but Gemini always
               // populates it on an actual function call part in practice;
               // the `!` here asserts that invariant, same rationale as the
               // `complete: true` invariant on the streaming path below.
-              id: p.functionCall!.name!,
+              id: dedupeToolCallId(p.functionCall!.name!, seen),
               type: 'function' as const,
               function: {
                 name: p.functionCall!.name!,
@@ -570,6 +592,7 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
           const stream = await generateContentStream(request);
 
           let toolCallIndex = 0;
+          const seen = new Map<string, number>();
           let lastUsage:
             | NonNullable<
                 Awaited<ReturnType<NonNullable<GeminiClient['generateContent']>>>['usageMetadata']
@@ -588,7 +611,14 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
                 yield {
                   type: 'tool_call_delta',
                   index: toolCallIndex,
-                  id: part.functionCall.name,
+                  // Disambiguated the same way as the non-streaming path
+                  // (see `dedupeToolCallId`'s doc comment); Gemini always
+                  // sends a function call whole in one chunk (per the
+                  // `complete: true` invariant below), so counting per
+                  // chunk here is equivalent to counting per response.
+                  id: part.functionCall.name
+                    ? dedupeToolCallId(part.functionCall.name, seen)
+                    : undefined,
                   name: part.functionCall.name,
                   argumentsDelta: JSON.stringify(part.functionCall.args ?? {}),
                   // INVARIANT: assumes Gemini always sends a complete

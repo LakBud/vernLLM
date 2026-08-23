@@ -680,10 +680,3 @@ provider's native mechanism:
 | Bedrock              | Converse's `toolUse` / `toolResult` content blocks                                                                                                     |
 | Gemini               | `functionCall` / `functionResponse` parts                                                                                                              |
 | Custom / `fromFetch` | Whatever your provider's own wire format is; `mapRequest`/`mapResponse` translate it, see [Custom Providers](/docs/adapters/custom-fetch#tool-calling) |
-
-<Callout>
-  Gemini has no call ID concept. VernLLM's Gemini adapter uses the function name as the wire tool
-  call ID, which means two calls to the same tool within a single turn cannot be told apart when
-  results come back. This is a limitation of Gemini's own function calling API, not something
-  VernLLM can work around.
-</Callout>

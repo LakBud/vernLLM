@@ -553,6 +553,12 @@ describe('VernLLM, fallback', () => {
       expect(defaultFallbackOn(new LLMError('m', 'timeout'), { isLastTarget: false })).toBe('next');
       expect(defaultFallbackOn(new LLMError('m', 'unknown'), { isLastTarget: false })).toBe('next');
     });
+
+    it('returns "next" for an unsupported_capability error (e.g. tools + jsonSchema on a non-native Anthropic/Bedrock model), unlike a real validation failure', () => {
+      const unsupported = new LLMError('m', 'invalid_params', { code: 'unsupported_capability' });
+
+      expect(defaultFallbackOn(unsupported, { isLastTarget: false })).toBe('next');
+    });
   });
 
   it('a custom fallbackOn overrides the default policy entirely', async () => {

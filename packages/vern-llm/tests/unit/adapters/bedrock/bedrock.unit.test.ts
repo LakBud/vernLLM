@@ -735,14 +735,15 @@ describe('fromBedrock, native structured output', () => {
       ),
     ).rejects.toMatchObject({
       name: 'LLMError',
-      type: 'validation',
+      type: 'invalid_params',
+      code: 'unsupported_capability',
       message: expect.stringContaining(nativeModel),
     });
 
     expect(converse).not.toHaveBeenCalled();
   });
 
-  it('throws a validation LLMError naming the model when combining `tools` with `jsonSchema` on a model not covered by nativeStructuredOutputModels', async () => {
+  it('throws an invalid_params/unsupported_capability LLMError naming the model when combining `tools` with `jsonSchema` on a model not covered by nativeStructuredOutputModels', async () => {
     const { client, converse } = makeFakeBedrockClient('unused');
     const adapted = fromBedrock(client, { nativeStructuredOutputModels: ['some-other-model'] });
 
@@ -771,7 +772,8 @@ describe('fromBedrock, native structured output', () => {
       ),
     ).rejects.toMatchObject({
       name: 'LLMError',
-      type: 'validation',
+      type: 'invalid_params',
+      code: 'unsupported_capability',
       message: expect.stringContaining('amazon.titan-text'),
     });
 

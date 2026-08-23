@@ -375,13 +375,19 @@ function buildBedrockRequest(
     supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels);
 
   if (jsonSchema && params.tools?.length && !isNative) {
+    // Provider-capability limitation, not a caller/model contract
+    // violation. See the matching comment in adapters/anthropic.ts.
+    // `invalid_params`/`unsupported_capability` lets `defaultFallbackOn`
+    // fall through instead of stopping the chain, and gives callers a
+    // stable `code` instead of string-matching the message.
     throw new LLMError(
       `Bedrock model "${params.model}" is not covered by nativeStructuredOutputModels, so ` +
         '`jsonSchema` is emulated as a forced single tool call there (via `toolConfig`), which ' +
         'collides with the `tools` you also provided. Either drop `tools` or `jsonSchema` for this ' +
         "call, or pass this model in fromBedrock's `nativeStructuredOutputModels` option once " +
         "you've confirmed it supports Converse's `outputConfig.textFormat`.",
-      'validation',
+      'invalid_params',
+      { code: 'unsupported_capability', issues: { capability: 'tools_with_json_schema' } },
     );
   }
 

@@ -91,7 +91,9 @@ There is no built-in default list, see [Structured Output → Combining with too
 tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
 while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
-`jsonSchema` still throws `LLMError('validation')`, naming the model and pointing at this option.
+`jsonSchema` still throws `LLMError('invalid_params')` with `code: 'unsupported_capability'`,
+naming the model and pointing at this option. Fallback treats this as the provider limitation it
+is: the chain moves on to the next target instead of stopping.
 
 <Callout type="warn">
   `output_config.format` only sends `type` and `schema`, matching the real Anthropic API exactly.

@@ -611,12 +611,13 @@ describe('fromAnthropic, native structured output', () => {
       ),
     ).rejects.toMatchObject({
       name: 'LLMError',
-      type: 'validation',
+      type: 'invalid_params',
+      code: 'unsupported_capability',
       message: expect.stringContaining('claude-any-model'),
     });
   });
 
-  it('throws a validation LLMError naming the model when combining `tools` with `jsonSchema` on a model not covered by nativeStructuredOutputModels', async () => {
+  it('throws an invalid_params/unsupported_capability LLMError naming the model when combining `tools` with `jsonSchema` on a model not covered by nativeStructuredOutputModels', async () => {
     const { client } = makeFakeAnthropicClient('unused');
     const adapted = fromAnthropic(client, { nativeStructuredOutputModels: ['claude-other-model'] });
 
@@ -645,7 +646,8 @@ describe('fromAnthropic, native structured output', () => {
       ),
     ).rejects.toMatchObject({
       name: 'LLMError',
-      type: 'validation',
+      type: 'invalid_params',
+      code: 'unsupported_capability',
       message: expect.stringContaining('claude-uncovered-model'),
     });
   });

@@ -283,13 +283,21 @@ function buildAnthropicRequestBody(
     supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels);
 
   if (jsonSchema && params.tools?.length && !isNative) {
+    // This is a provider-capability limitation, not a caller/model
+    // contract violation: Gemini and OpenAI-compatible clients never had
+    // this restriction, and a different fallback target may well not
+    // either. `invalid_params`/`unsupported_capability` (rather than
+    // `validation`) lets `defaultFallbackOn` fall through to the next
+    // target instead of stopping the chain outright, and gives callers a
+    // stable `code` to match on instead of string-matching the message.
     throw new LLMError(
       `Anthropic model "${params.model}" is not covered by nativeStructuredOutputModels, so ` +
         '`jsonSchema` is emulated as a forced single tool call there, which collides with the ' +
         '`tools` you also provided. Either drop `tools` or `jsonSchema` for this call, or pass ' +
         "this model in fromAnthropic's `nativeStructuredOutputModels` option once you've " +
         "confirmed it supports Anthropic's `output_config.format`.",
-      'validation',
+      'invalid_params',
+      { code: 'unsupported_capability', issues: { capability: 'tools_with_json_schema' } },
     );
   }
 
