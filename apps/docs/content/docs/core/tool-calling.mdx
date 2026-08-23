@@ -19,6 +19,12 @@ set.
   `history` entries from a loosely typed `role`.
 </Callout>
 
+<Callout type="info">
+  `ToolCall.arguments` is typed per tool when a tool is declared with `defineTool()` and an
+  `argumentsSchema`, instead of `unknown`. See [Typed arguments per tool](#typed-arguments-per-tool)
+  below.
+</Callout>
+
 ## Enabling tools
 
 Pass `tools` to `call()` as an array of `ToolDefinition` objects. Each one describes a capability
@@ -54,19 +60,24 @@ const result = await llm.call({
 `CallWithToolsResult<T>` is either a content result or a tool call result:
 
 ```ts title="tool-calling-result-types.ts"
-type CallWithToolsResult<T> = ContentResult<T> | ToolCallResult;
+type CallWithToolsResult<T, Tools extends readonly ToolDefinition[] = ToolDefinition[]> =
+  ContentResult<T> | ToolCallResult<Tools>;
 
 type ContentResult<T> = {
   type: 'content';
   content: T;
 };
 
-type ToolCallResult = {
+type ToolCallResult<Tools extends readonly ToolDefinition[] = ToolDefinition[]> = {
   type: 'tool_calls';
-  toolCalls: ToolCall[];
+  toolCalls: ToolCall<Tools>[];
   content?: string; // any text the model produced alongside the request
 };
 ```
+
+`Tools` defaults to `ToolDefinition[]`, so `ToolCall.arguments` is `unknown` unless the tools you
+pass let TypeScript infer a more specific `Tools`, see [Typed arguments per
+tool](#typed-arguments-per-tool) below.
 
 Check `result.type` to branch:
 
@@ -244,6 +255,189 @@ const weatherTool = {
   `LLMError('validation')` with `code: 'unknown_tool'`.
 </Callout>
 
+## Typed arguments per tool
+
+`ToolDefinition` is generic over the tool's `name` and its `argumentsSchema`'s inferred argument
+type. When `call()`/`cachedCall()` can see the exact tools you passed, `ToolCall.arguments` is
+typed accordingly instead of `unknown`, with no cast or re-parse needed at the call site.
+
+Wrap each tool in `defineTool()` to preserve its literal `name`, which is what lets TypeScript
+match a `ToolCall` back to the tool that produced it:
+
+```ts title="tool-calling-define-tool.ts"
+import { z } from 'zod';
+import { defineTool } from 'vern-llm';
+
+const weatherTool = defineTool({
+  name: 'get_weather',
+  description: 'Gets the current weather for a city',
+  parameters: {
+    type: 'object',
+    properties: { city: { type: 'string' } },
+    required: ['city'],
+  },
+  argumentsSchema: z.object({ city: z.string() }),
+});
+
+const result = await llm.call({
+  userContent: 'What is the weather in New York?',
+  tools: [weatherTool],
+});
+
+if (result.type === 'tool_calls') {
+  const call = result.toolCalls[0];
+  call.arguments.city; // typed as string, no cast, no re-parse
+}
+```
+
+With a single tool in the array, `arguments` resolves directly, there is nothing to discriminate
+against. With more than one tool, `arguments` is a union keyed by `name`, and TypeScript requires
+narrowing on `call.name` before letting you read a tool specific field:
+
+```ts title="tool-calling-multiple-typed-tools.ts"
+const cancelOrder = defineTool({
+  name: 'cancel_order',
+  description: 'Cancels an order',
+  parameters: {
+    type: 'object',
+    properties: { orderId: { type: 'string' } },
+    required: ['orderId'],
+  },
+  argumentsSchema: z.object({ orderId: z.string() }),
+});
+
+const result = await llm.call({
+  userContent: 'Cancel order #4821.',
+  tools: [weatherTool, cancelOrder],
+});
+
+if (result.type === 'tool_calls') {
+  for (const call of result.toolCalls) {
+    if (call.name === 'get_weather') {
+      call.arguments.city; // string
+    } else if (call.name === 'cancel_order') {
+      call.arguments.orderId; // string
+    }
+  }
+}
+```
+
+<Callout type="warn">
+  A plain object literal without `defineTool()` still works at runtime, and single-tool narrowing
+  still works too, since there's nothing to discriminate against. But `name` widens to `string`
+  without `defineTool()` (or an explicit `as const`), which silently defeats narrowing the moment a
+  second tool is added to the same `tools: [...]` array, `call.name === 'get_weather'` would no
+  longer narrow `arguments`. Wrap tools in `defineTool()` to avoid this.
+</Callout>
+
+<Callout type="info">
+  This narrowing depends on TypeScript seeing the exact tool objects at the `call()`/`cachedCall()`
+  site. A plain `const tools = [weatherTool, cancelOrder]` variable (assigned once, not
+  conditionally, and without its own type annotation) still narrows correctly when passed through,
+  same as an inline array literal. Conditional tools (`tools: someCondition ? [weatherTool] :
+  undefined`) also narrow correctly, `isToolCallResult()` infers `Tools` from the result
+  automatically in this case, see [Narrowing a conditional-tools
+  result](#narrowing-a-conditional-tools-result) below.
+
+`ToolCall.arguments` falls back to `unknown` in three cases, all variations on the same theme:
+TypeScript no longer has the literal tool objects to work with by the time `call()`/`cachedCall()`
+sees them.
+
+- The `tools` variable itself is explicitly annotated, e.g. `const tools: ToolDefinition[] =
+[weatherTool, cancelOrder]`. The annotation replaces the inferred literal type the same way a
+  `: CallParams<T>` annotation on the whole params object does below.
+- The params object carries an explicit `: CallParams<T>` annotation, the same `const`-literal
+  requirement described in [A note on the call() overload](#a-note-on-the-call-overload) below.
+- `T` is pinned explicitly (`call<string>(...)`, `cachedCall<string>(...)`) alongside a literal
+  `tools` array. TypeScript's own generic inference rules suppress inference for every
+  subsequent type parameter once any leading one is explicit, `Tools` included, regardless of
+  its `const` modifier, this is true of any TypeScript generic call with a partial explicit type
+  argument list, not something specific to this library. Pass `Tools` explicitly too in that
+  case (`call<string, typeof myTools>(...)`), or prefer inferring `T` from `schema`/`jsonSchema`
+  instead, which doesn't touch the type argument list.
+
+</Callout>
+
+<Callout type="warn">
+  Passing `Tools` explicitly, whichever of the three cases above applies, still requires the tools
+  themselves to have been declared without their own widening annotation upstream, `defineTool()` or
+  a literal array works, but a variable already typed `ToolDefinition[]` has nothing left to
+  recover.
+</Callout>
+
+## Narrowing a conditional-tools result
+
+`isToolCallResult()` infers `Tools` automatically from `result`'s own static type whenever
+`call()`/`cachedCall()`'s overload resolution already produced it, which includes the conditional
+case, no type argument needed:
+
+```ts title="tool-calling-conditional-typed.ts"
+const tools = someCondition ? [weatherTool, cancelOrder] : undefined;
+
+const result = await llm.call({
+  userContent: 'What is the weather?',
+  tools,
+  jsonMode: true,
+  schema: stringSchema,
+});
+
+if (isToolCallResult(result)) {
+  const call = result.toolCalls[0];
+  if (call.name === 'get_weather') {
+    call.arguments.city; // typed, inferred automatically
+  }
+}
+```
+
+<Callout type="warn">
+  This only works when `result`'s static type still carries `Tools`, which requires TypeScript's
+  overload resolution to have succeeded (see [A note on the call()
+  overload](#a-note-on-the-call-overload)). If `params` was instead built as a variable explicitly
+  annotated `: CallParams<T>`, that annotation widens `tools` away before `call()` ever sees it,
+  and there is nothing left for `isToolCallResult()` to infer from. Pass `Tools` explicitly as its
+  first type argument in that case:
+
+```ts title="tool-calling-conditional-explicit-tools.ts"
+const params: CallParams<string> = {
+  userContent: 'What is the weather?',
+  tools,
+  jsonMode: true,
+  schema: stringSchema,
+};
+const result = await llm.call(params);
+
+if (isToolCallResult<typeof tools>(result)) {
+  // arguments typed per tool via the explicit override
+}
+```
+
+The same override is needed when `T` is pinned explicitly instead, even with a literal `tools`
+array and no `: CallParams<T>` annotation anywhere:
+
+```ts title="tool-calling-pinned-t-explicit-tools.ts"
+const myTools = [weatherTool, cancelOrder];
+
+// `call<string>(...)` alone loses `Tools` inference here, same underlying
+// cause as the `: CallParams<T>` case above.
+const result = await llm.call<string, typeof myTools>({
+  userContent: 'What is the weather?',
+  tools: myTools,
+  jsonMode: true,
+  schema: stringSchema,
+});
+
+if (isToolCallResult(result)) {
+  // arguments typed per tool, inferred normally here since `result`'s
+  // static type already carries `Tools` from the explicit second
+  // type argument above
+}
+```
+
+Prefer `defineCallParams()` over a `:` annotation to avoid needing the override at all, see [A
+note on the call() overload](#a-note-on-the-call-overload).
+
+</Callout>
+
 ## Tool contract errors
 
 VernLLM validates the tool calls returned by the model before returning them to the application.
@@ -333,7 +527,7 @@ const first = await llm.call({
 
 if (first.type === 'tool_calls') {
   const call = first.toolCalls[0];
-  const weather = await getWeather(call.arguments.city); // your own execution logic
+  const weather = await getWeather(call.arguments.city); // typed as string when weatherTool used defineTool()
 
   const final = await llm.call({
     userContent: 'What is the weather in New York?',

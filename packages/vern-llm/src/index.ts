@@ -69,6 +69,7 @@ export {
   isFallbackExhaustedError,
   hasIssues,
   isToolCallResult,
+  defineTool,
   InMemoryCacheAdapter,
   NormalizedCacheAdapter,
   TieredCacheAdapter,

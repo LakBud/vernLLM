@@ -39,6 +39,7 @@ import {
   type TargetCircuitState,
   type CircuitTarget,
   type StreamEnabledCallParams,
+  type ToolDefinition,
   type ToolEnabledCallParams,
   type ToolsDisabledCallParams,
   type VernLLMEvent,
@@ -318,6 +319,18 @@ export class VernLLM {
    * shape whenever `stream` evaluates to `true`, callers doing this should
    * narrow/cast accordingly rather than relying on the static return type.
    *
+   * Pinning `T` explicitly (`call<string>(...)`) alongside a literal
+   * `tools` array loses per-tool `arguments` typing: TypeScript's own
+   * generic inference rules mean providing *any* explicit type argument
+   * suppresses inference for every subsequent type parameter in that call,
+   * `Tools` included, regardless of its `const` modifier or default. This
+   * isn't specific to this overload, it's true of all TypeScript generic
+   * calls with a partial explicit type argument list. Pass `Tools`
+   * explicitly too when pinning `T` this way, e.g. `call<string, typeof
+   * myTools>(...)`, or prefer inferring `T` from `schema`/`jsonSchema`
+   * instead (which doesn't touch the type argument list, so `Tools` still
+   * infers normally).
+   *
    * @param params System/user content plus per-call overrides. See `CallParams`.
    * @returns Without `tools` or `stream`: the parsed response, or raw
    * string if `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`,
@@ -331,13 +344,13 @@ export class VernLLM {
     params: StreamEnabledCallParams<T> & ToolsDisabledCallParams<T>,
   ): Promise<StreamCallResult<ContentResult<T>>>;
 
-  async call<T = unknown>(
-    params: StreamEnabledCallParams<T> & ToolEnabledCallParams<T>,
-  ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: StreamEnabledCallParams<T, Tools> & ToolEnabledCallParams<T, Tools>,
+  ): Promise<StreamCallResult<CallWithToolsResult<T, Tools>>>;
 
-  async call<T = unknown>(
-    params: StreamEnabledCallParams<T> & ConditionalToolCallParams<T>,
-  ): Promise<StreamCallResult<T | CallWithToolsResult<T>>>;
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: StreamEnabledCallParams<T, Tools> & ConditionalToolCallParams<T, Tools>,
+  ): Promise<StreamCallResult<T | CallWithToolsResult<T, Tools>>>;
 
   async call(params: StreamJsonModeDisabledCallParams): Promise<StreamCallResult<string>>;
 
@@ -347,11 +360,13 @@ export class VernLLM {
 
   async call<T = unknown>(params: ToolsDisabledCallParams<T>): Promise<ContentResult<T>>;
 
-  async call<T = unknown>(params: ToolEnabledCallParams<T>): Promise<CallWithToolsResult<T>>;
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: ToolEnabledCallParams<T, Tools>,
+  ): Promise<CallWithToolsResult<T, Tools>>;
 
-  async call<T = unknown>(
-    params: ConditionalToolCallParams<T>,
-  ): Promise<T | CallWithToolsResult<T>>;
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: ConditionalToolCallParams<T, Tools>,
+  ): Promise<T | CallWithToolsResult<T, Tools>>;
 
   async call(params: JsonModeDisabledCallParams): Promise<string>;
 
@@ -477,6 +492,11 @@ export class VernLLM {
    * general-purpose caching unrelated to an LLM call, use a dedicated
    * caching library at the application level instead.
    *
+   * The same `T`-vs-`Tools` inference caveat documented on `call()` applies
+   * here too: pinning `T` explicitly (`cachedCall<string>(...)`) alongside
+   * a literal `call.tools` array loses per-tool `arguments` typing, pass
+   * `Tools` explicitly too in that case.
+   *
    * @param params `cacheKey`, `ttl`, and optional
    * `reserveUsage`/`refundUsage`/`signal`, plus `call`, the `CallParams`
    * (optionally with `tools` and/or `stream`) to pass through to
@@ -485,13 +505,13 @@ export class VernLLM {
    * request, set `signal` inside `call`.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
-  async cachedCall<T>(
-    params: CachedStreamToolCallParams<T>,
-  ): Promise<StreamCallResult<CallWithToolsResult<T>>>;
+  async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedStreamToolCallParams<T, Tools>,
+  ): Promise<StreamCallResult<CallWithToolsResult<T, Tools>>>;
 
-  async cachedCall<T>(
-    params: CachedStreamConditionalToolCallParams<T>,
-  ): Promise<StreamCallResult<T | CallWithToolsResult<T>>>;
+  async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedStreamConditionalToolCallParams<T, Tools>,
+  ): Promise<StreamCallResult<T | CallWithToolsResult<T, Tools>>>;
 
   async cachedCall(
     params: CachedStreamJsonModeDisabledCallParams,
@@ -503,11 +523,13 @@ export class VernLLM {
 
   async cachedCall<T>(params: CachedStreamCallParams<T>): Promise<StreamCallResult<T>>;
 
-  async cachedCall<T>(params: CachedToolCallParams<T>): Promise<CallWithToolsResult<T>>;
+  async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedToolCallParams<T, Tools>,
+  ): Promise<CallWithToolsResult<T, Tools>>;
 
-  async cachedCall<T>(
-    params: CachedConditionalToolCallParams<T>,
-  ): Promise<T | CallWithToolsResult<T>>;
+  async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: CachedConditionalToolCallParams<T, Tools>,
+  ): Promise<T | CallWithToolsResult<T, Tools>>;
 
   async cachedCall(params: CachedJsonModeDisabledCallParams): Promise<string>;
 

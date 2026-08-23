@@ -28,12 +28,15 @@ const weatherTool = {
 ```
 
 Add `argumentsSchema` if you want VernLLM to validate the parsed arguments client side before
-handing them back to you, using any `safeParse` compatible validator such as Zod:
+handing them back to you, using any `safeParse` compatible validator such as Zod. Wrapping the tool
+in `defineTool()` also lets TypeScript type `arguments` from that schema instead of `unknown`, see
+[Typed arguments per tool](/docs/core/tool-calling#typed-arguments-per-tool):
 
 ```ts title="define-weather-tool-with-schema.ts"
 import { z } from 'zod';
+import { defineTool } from 'vern-llm';
 
-const weatherTool = {
+const weatherTool = defineTool({
   name: 'get_weather',
   description: 'Gets the current weather for a given city',
   parameters: {
@@ -42,7 +45,7 @@ const weatherTool = {
     required: ['city'],
   },
   argumentsSchema: z.object({ city: z.string() }),
-};
+});
 ```
 
 ## 2. Make the first call
@@ -71,7 +74,9 @@ if (first.type === 'tool_calls') {
 ## 3. Execute the tool yourself
 
 When `first.type` is `'tool_calls'`, run each requested tool with your own application logic.
-`ToolCall.arguments` is already parsed JSON, and validated if `argumentsSchema` was set:
+`ToolCall.arguments` is already parsed JSON, and validated if `argumentsSchema` was set. Since
+`weatherTool` was wrapped in `defineTool()`, `arguments` is already typed as `{ city: string }`
+here, no cast needed:
 
 ```ts title="tool-calling-execute.ts"
 async function getWeather(city: string) {
@@ -83,8 +88,7 @@ const toolResults = [];
 
 if (first.type === 'tool_calls') {
   for (const call of first.toolCalls) {
-    const args = call.arguments as { city: string };
-    const weather = await getWeather(args.city);
+    const weather = await getWeather(call.arguments.city);
 
     toolResults.push({
       toolCallId: call.id,
@@ -201,7 +205,7 @@ async function askAboutWeather(city: string) {
   const toolResults = await Promise.all(
     first.toolCalls.map(async (call) => ({
       toolCallId: call.id,
-      content: await getWeather((call.arguments as { city: string }).city),
+      content: await getWeather(call.arguments.city),
     })),
   );
 

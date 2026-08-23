@@ -71,7 +71,10 @@ export interface ImageBlock {
 /** A single segment of multimodal `userContent`. */
 export type ContentBlock = TextBlock | ImageBlock;
 
-export interface CallParams<T = unknown> extends UsageHooks {
+export interface CallParams<
+  T = unknown,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> extends UsageHooks {
   systemPrompt?: string;
 
   /** Current user message, as text or multimodal content blocks. */
@@ -146,8 +149,12 @@ export interface CallParams<T = unknown> extends UsageHooks {
    * Tools the model may call. When set, `call()` returns a
    * `CallWithToolsResult<T>` union instead of `T` directly. Combining with
    * `jsonSchema` is provider-dependent; see the Tool Calling docs.
+   *
+   * Passed as a literal array (or via `defineTool()`-wrapped entries, see
+   * `types/tools.ts`), this also drives the `Tools` type parameter, which
+   * narrows `CallWithToolsResult`'s `toolCalls[number].arguments` per tool.
    */
-  tools?: ToolDefinition[];
+  tools?: Tools;
 
   /** Defaults to `'auto'` when `tools` is set. */
   toolChoice?: ToolChoice;
@@ -186,23 +193,36 @@ export interface CallParams<T = unknown> extends UsageHooks {
  * tool-aware `call()` overload and return `CallWithToolsResult<T>` instead
  * of the normal `T` response type.
  */
-export type ToolEnabledCallParams<T> = CallParams<T> & {
-  tools: NonNullable<CallParams<T>['tools']>;
+export type ToolEnabledCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CallParams<T, Tools> & {
+  tools: NonNullable<CallParams<T, Tools>['tools']>;
 };
 
 /**
  * A `CallParams` variant for tools set conditionally, e.g. `tools:
  * someCondition ? [myTool] : undefined`. Selects the `call()` overload
- * returning the honest union `T | CallWithToolsResult<T>` instead of
+ * returning the honest union `T | CallWithToolsResult<T, Tools>` instead of
  * falling through to plain `T` (which is what happened before this type
  * existed, since `ToolDefinition[] | undefined` matched neither
  * `ToolEnabledCallParams` nor `ToolsDisabledCallParams`). Forces an
  * `isToolCallResult()` check before treating the result as plain
  * content. Omitting `tools` entirely still resolves to plain `T`, since
  * tools genuinely cannot have run there.
+ *
+ * `Tools` still can't reliably infer a literal tuple here the way
+ * `ToolEnabledCallParams` does for an inline array (a ternary/variable
+ * expression doesn't carry the same `const`-literal preservation), so
+ * getting typed `arguments` out of a conditional-tools result also needs
+ * an explicit `Tools` type argument on `isToolCallResult<Tools>()` when
+ * narrowing, see its docs.
  */
-export type ConditionalToolCallParams<T> = CallParams<T> & {
-  tools: ToolDefinition[] | undefined;
+export type ConditionalToolCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CallParams<T, Tools> & {
+  tools: Tools | undefined;
 };
 
 /**
@@ -215,8 +235,11 @@ export type ConditionalToolCallParams<T> = CallParams<T> & {
  * on the wrapper object silently produces `"[object Object]"` instead of
  * throwing. The type itself rules that shape out.
  */
-export type ToolsDisabledCallParams<T> = CallParams<T> & {
-  tools: NonNullable<CallParams<T>['tools']>;
+export type ToolsDisabledCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CallParams<T, Tools> & {
+  tools: NonNullable<CallParams<T, Tools>['tools']>;
   toolChoice: 'none';
 };
 
@@ -278,8 +301,11 @@ export type CachedCallParams<T> = CachedCallInput & {
  * See `CachedCallParams` for why `reserveUsage`/`refundUsage` are omitted
  * from `call`'s type here too.
  */
-export type CachedToolCallParams<T> = CachedCallInput & {
-  call: Omit<ToolEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+export type CachedToolCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CachedCallInput & {
+  call: Omit<ToolEnabledCallParams<T, Tools>, 'reserveUsage' | 'refundUsage'>;
 };
 
 /**
@@ -288,8 +314,11 @@ export type CachedToolCallParams<T> = CachedCallInput & {
  * `T | CallWithToolsResult<T>` instead of narrowing to plain `T`. See
  * `ConditionalToolCallParams` for why this overload exists.
  */
-export type CachedConditionalToolCallParams<T> = CachedCallInput & {
-  call: Omit<ConditionalToolCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+export type CachedConditionalToolCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+> = CachedCallInput & {
+  call: Omit<ConditionalToolCallParams<T, Tools>, 'reserveUsage' | 'refundUsage'>;
 };
 
 /**
