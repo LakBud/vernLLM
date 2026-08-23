@@ -319,6 +319,18 @@ export class VernLLM {
    * shape whenever `stream` evaluates to `true`, callers doing this should
    * narrow/cast accordingly rather than relying on the static return type.
    *
+   * Pinning `T` explicitly (`call<string>(...)`) alongside a literal
+   * `tools` array loses per-tool `arguments` typing: TypeScript's own
+   * generic inference rules mean providing *any* explicit type argument
+   * suppresses inference for every subsequent type parameter in that call,
+   * `Tools` included, regardless of its `const` modifier or default. This
+   * isn't specific to this overload, it's true of all TypeScript generic
+   * calls with a partial explicit type argument list. Pass `Tools`
+   * explicitly too when pinning `T` this way, e.g. `call<string, typeof
+   * myTools>(...)`, or prefer inferring `T` from `schema`/`jsonSchema`
+   * instead (which doesn't touch the type argument list, so `Tools` still
+   * infers normally).
+   *
    * @param params System/user content plus per-call overrides. See `CallParams`.
    * @returns Without `tools` or `stream`: the parsed response, or raw
    * string if `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`,
@@ -479,6 +491,11 @@ export class VernLLM {
    * `VernLLM`. This method always composes with `call()`. For
    * general-purpose caching unrelated to an LLM call, use a dedicated
    * caching library at the application level instead.
+   *
+   * The same `T`-vs-`Tools` inference caveat documented on `call()` applies
+   * here too: pinning `T` explicitly (`cachedCall<string>(...)`) alongside
+   * a literal `call.tools` array loses per-tool `arguments` typing, pass
+   * `Tools` explicitly too in that case.
    *
    * @param params `cacheKey`, `ttl`, and optional
    * `reserveUsage`/`refundUsage`/`signal`, plus `call`, the `CallParams`

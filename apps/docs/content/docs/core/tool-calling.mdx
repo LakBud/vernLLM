@@ -333,13 +333,35 @@ if (result.type === 'tool_calls') {
 <Callout type="info">
   This narrowing depends on TypeScript seeing the exact tool objects at the `call()`/`cachedCall()`
   site. A plain `const tools = [weatherTool, cancelOrder]` variable (assigned once, not
-  conditionally) still narrows correctly when passed through, same as an inline array literal.
-  Conditional tools (`tools: someCondition ? [weatherTool] : undefined`) also narrow correctly,
-  `isToolCallResult()` infers `Tools` from the result automatically in this case, see [Narrowing a
-  conditional-tools result](#narrowing-a-conditional-tools-result) below. `ToolCall.arguments` only
-  falls back to `unknown` when the params object carries an explicit `: CallParams<T>` annotation,
-  which widens `tools` away before `call()`/`cachedCall()` ever sees it, the same `const`-literal
+  conditionally, and without its own type annotation) still narrows correctly when passed through,
+  same as an inline array literal. Conditional tools (`tools: someCondition ? [weatherTool] :
+  undefined`) also narrow correctly, `isToolCallResult()` infers `Tools` from the result
+  automatically in this case, see [Narrowing a conditional-tools
+  result](#narrowing-a-conditional-tools-result) below.
+
+`ToolCall.arguments` falls back to `unknown` in three cases, all variations on the same theme:
+TypeScript no longer has the literal tool objects to work with by the time `call()`/`cachedCall()`
+sees them.
+
+- The `tools` variable itself is explicitly annotated, e.g. `const tools: ToolDefinition[] =
+[weatherTool, cancelOrder]`. The annotation replaces the inferred literal type the same way a
+  `: CallParams<T>` annotation on the whole params object does below.
+- The params object carries an explicit `: CallParams<T>` annotation, the same `const`-literal
   requirement described in [A note on the call() overload](#a-note-on-the-call-overload) below.
+- `T` is pinned explicitly (`call<string>(...)`, `cachedCall<string>(...)`) alongside a literal
+  `tools` array. TypeScript's own generic inference rules suppress inference for every
+  subsequent type parameter once any leading one is explicit, `Tools` included, regardless of
+  its `const` modifier, this is true of any TypeScript generic call with a partial explicit type
+  argument list, not something specific to this library. Pass `Tools` explicitly too in that
+  case (`call<string, typeof myTools>(...)`), or prefer inferring `T` from `schema`/`jsonSchema`
+  instead, which doesn't touch the type argument list.
+  </Callout>
+
+<Callout type="warn">
+  Passing `Tools` explicitly, whichever of the three cases above applies, still requires the tools
+  themselves to have been declared without their own widening annotation upstream, `defineTool()` or
+  a literal array works, but a variable already typed `ToolDefinition[]` has nothing left to
+  recover.
 </Callout>
 
 ## Narrowing a conditional-tools result
@@ -385,6 +407,28 @@ const result = await llm.call(params);
 
 if (isToolCallResult<typeof tools>(result)) {
   // arguments typed per tool via the explicit override
+}
+```
+
+The same override is needed when `T` is pinned explicitly instead, even with a literal `tools`
+array and no `: CallParams<T>` annotation anywhere:
+
+```ts title="tool-calling-pinned-t-explicit-tools.ts"
+const myTools = [weatherTool, cancelOrder];
+
+// `call<string>(...)` alone loses `Tools` inference here, same underlying
+// cause as the `: CallParams<T>` case above.
+const result = await llm.call<string, typeof myTools>({
+  userContent: 'What is the weather?',
+  tools: myTools,
+  jsonMode: true,
+  schema: stringSchema,
+});
+
+if (isToolCallResult(result)) {
+  // arguments typed per tool, inferred normally here since `result`'s
+  // static type already carries `Tools` from the explicit second
+  // type argument above
 }
 ```
 

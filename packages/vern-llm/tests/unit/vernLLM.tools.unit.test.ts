@@ -1185,4 +1185,54 @@ describe('typed arguments via defineTool()', () => {
       throw new Error('expected a tool_calls result');
     }
   });
+
+  it('call<T>(): pinning T explicitly alone loses Tools inference (TS generic inference limitation, not fixable per-overload)', async () => {
+    const { client } = createMockClient([
+      toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'Boston' } }]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const myTools = [getWeatherTyped, cancelOrderTyped];
+
+    // Explicit `<string>` alone: TypeScript suppresses inference for every
+    // subsequent type parameter once any leading one is explicit, `Tools`
+    // included, so this genuinely resolves to the untyped default. Proven
+    // directly here (rather than via `toEqualTypeOf`, which is stricter
+    // than real assignability once `CallWithToolsResult` carries `Tools`
+    // as a second parameter) by showing a tool-specific field access is a
+    // real compile error, since `arguments` stayed `unknown`.
+    const untyped = await llm.call<string>({
+      userContent: 'weather?',
+      tools: myTools,
+      jsonMode: true,
+      schema: stringSchema,
+    });
+    if (isToolCallResult(untyped)) {
+      const call = untyped.toolCalls[0]!;
+      expect(call.name).toBe('get_weather');
+      // @ts-expect-error - arguments is `unknown` here, this is the bug this test documents
+      void call.arguments.city;
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
+
+    // Workaround: pass `Tools` explicitly too, restores narrowing.
+    const typed = await llm.call<string, typeof myTools>({
+      userContent: 'weather?',
+      tools: myTools,
+      jsonMode: true,
+      schema: stringSchema,
+    });
+    if (typed.type === 'tool_calls') {
+      const call = typed.toolCalls[0]!;
+      if (call.name === 'get_weather') {
+        expectTypeOf(call.arguments).toEqualTypeOf<{ city: string }>();
+        expect(call.arguments.city).toBe('Boston');
+      } else if (call.name === 'cancel_order') {
+        expectTypeOf(call.arguments).toEqualTypeOf<{ orderId: string }>();
+      }
+    } else {
+      throw new Error('expected a tool_calls result');
+    }
+  });
 });
