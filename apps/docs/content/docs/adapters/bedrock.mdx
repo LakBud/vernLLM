@@ -186,7 +186,9 @@ There is no built-in default list, see [Structured Output → Combining with too
 tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
 while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
 present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
-`jsonSchema` still throws `LLMError('validation')`, naming the model and pointing at this option.
+`jsonSchema` throws `LLMError('invalid_params')` with `code: 'unsupported_capability'` and
+`issues.capability: 'tools_with_json_schema'`, naming the model and pointing at this option. The
+default fallback policy can then try the next target.
 
 <Callout type="warn">
   `outputConfig.textFormat`'s shape is not flat, and not the parsed-object schema every other part
