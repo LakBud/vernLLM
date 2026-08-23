@@ -102,12 +102,88 @@ describe('fromGemini().chat.completions.createStream', () => {
       {
         type: 'tool_call_delta',
         index: 0,
-        id: 'get_weather',
+        id: 'get_weather#0',
         name: 'get_weather',
         argumentsDelta: '{"city":"NYC"}',
         complete: true,
       },
     ]);
+  });
+
+  it('preserves a native functionCall id on the streaming path', async () => {
+    const { client } = makeFakeStreamingGeminiClient([
+      {
+        candidates: [
+          {
+            content: {
+              parts: [
+                { functionCall: { id: 'call_abc', name: 'get_weather', args: { city: 'NYC' } } },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+    const adapted = fromGemini(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        {
+          model: 'gemini-3.1-flash-lite',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'weather?' }],
+          tools: [
+            {
+              type: 'function',
+              function: { name: 'get_weather', description: 'gets weather', parameters: {} },
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks[0]).toMatchObject({ type: 'tool_call_delta', id: 'call_abc' });
+  });
+
+  it('synthesizes distinct ids on the streaming path for parallel calls to the same tool', async () => {
+    const { client } = makeFakeStreamingGeminiClient([
+      {
+        candidates: [
+          {
+            content: {
+              parts: [
+                { functionCall: { name: 'get_weather', args: { city: 'NYC' } } },
+                { functionCall: { name: 'get_weather', args: { city: 'LA' } } },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+    const adapted = fromGemini(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        {
+          model: 'gemini-2.5-flash',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'weather in NYC and LA?' }],
+          tools: [
+            {
+              type: 'function',
+              function: { name: 'get_weather', description: 'gets weather', parameters: {} },
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    const ids = chunks
+      .filter((c) => c.type === 'tool_call_delta')
+      .map((c) => (c as { id?: string }).id);
+    expect(ids).toEqual(['get_weather#0', 'get_weather#1']);
   });
 
   it('emits a single usage WireStreamChunk after the stream completes, from the last chunk carrying usageMetadata', async () => {

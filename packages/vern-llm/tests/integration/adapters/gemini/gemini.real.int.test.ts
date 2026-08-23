@@ -110,7 +110,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
 
     expect(result.choices?.[0]?.message?.tool_calls).toEqual([
       {
-        id: 'getWeather',
+        id: 'getWeather#0',
         type: 'function',
         function: { name: 'getWeather', arguments: '{"city":"Paris"}' },
       },
