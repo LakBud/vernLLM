@@ -14,6 +14,21 @@ Fork the repo and branch off `main`, then install the workspace:
 pnpm install
 ```
 
+## Coding standard
+
+VernLLM's job is to make the **call** reliable, not necessarily the app. Every module in
+`packages/vern-llm` should stay inside that lane: normalize provider quirks,
+handle failure modes explicitly, and hand the caller a predictable result.
+It is not the place for app-level concerns (business logic, UI state,
+persistence beyond the built-in cache). If a change starts pulling in those
+concerns, it's probably the wrong framework.
+
+Anything that comes from a call, meaning a timeout, a bad response, a circuit trip, a provider error, should come out the other end as an `LLMError` with a clear `type` and `code` if it is possible, never a bare exception or a raw provider error. This only applies to the call path though. An internal bug, like an out of range index inside `vernLLM.ts`, is a plain thrown error or assertion, not an `LLMError`, since it isn't something a caller should branch on.
+
+Reliability code such as `circuitBreaker.ts`, `rateLimit.ts`, and `retry.utils.ts` should handle the weird inputs on purpose (zero, negative, `Infinity`, concurrent calls) instead of assuming the happy path. Explain unusual decisions with a short comment describing why, not a restatement of the code. Provider quirks stay inside `src/adapters/*`; everything else works against the shared `LLMClient` shape and stays provider agnostic. Tests run entirely on fakes and mocks, never real network calls.
+
+Keep types precise. `any` is a final escape hatch, not a shortcut. Reach for it only when a provider SDK genuinely gives you no usable type (see the Gemini adapter's `thinkingLevel`), and when you do, leave a comment explaining why it's there instead of a narrower type.
+
 ## Tests
 
 Add or update tests alongside any change to `packages/vern-llm`:
@@ -22,6 +37,8 @@ Add or update tests alongside any change to `packages/vern-llm`:
 - `tests/integration/` for cross-cutting workflows
 
 No real API calls are made anywhere in the suite; everything runs against fakes and mocks. See [Development](/docs/development) for the full test layout.
+
+Before a change is merged, expect a personal canary test on a simple real app, like a small chat CLI, to confirm the change behaves as intended outside the test suite.
 
 ## Before opening a PR
 

@@ -94,14 +94,7 @@ export function budgetTokensToEffort(
  * `[5, 0]`. Not anchored, so it matches equally inside a bare Anthropic id
  * or a Bedrock id carrying a provider prefix. Returns `null` for a
  * non-Opus model id.
- */
-/**
- * Parses an Opus model id's generation and minor version, e.g.
- * `"claude-opus-4-7-20260101"` -> `[4, 7]`, `"anthropic.claude-opus-5-x"` ->
- * `[5, 0]`. Not anchored, so it matches equally inside a bare Anthropic id
- * or a Bedrock id carrying a provider prefix. Returns `null` for a
- * non-Opus model id.
- *
+
  * Anthropic model ids sometimes carry a trailing snapshot date instead of
  * (or in addition to) an explicit minor version, e.g. the real, still-
  * supported base `"claude-opus-4-20250514"` (no `.7`-style minor at all,
