@@ -3,8 +3,12 @@ import { randomUUID } from 'crypto';
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
 import { buildCircuitBreaker, makeEventReporter } from './internal/circuitBreaker.utils.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
-import { normalizeError } from './internal/execution/errors.utils.js';
-import { withReservedUsage, withReservedUsageForStream } from './internal/execution/usage.utils.js';
+import { setupDeadline, stampDeadlineCode } from './internal/execution/utils/deadline.utils.js';
+import { normalizeError } from './internal/execution/utils/errors.utils.js';
+import {
+  withReservedUsage,
+  withReservedUsageForStream,
+} from './internal/execution/utils/usage.utils.js';
 import { createSafeLogger } from './internal/logger.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import { RateLimiter } from './rateLimit.js';
@@ -51,7 +55,7 @@ import {
 } from './types/index.js';
 
 import type { CircuitState } from './circuitBreaker.js';
-import type { InternalCacheParams } from './internal/cache/cache.utils.js';
+import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
 
 /**
  * A LLM call framework for resilience, observability and control. This is VernLLM!
@@ -295,54 +299,16 @@ export class VernLLM {
   /**
    * Makes a single logical LLM call, retrying on failure per the configured
    * policy. Fails fast if the breaker is open or the signal is already
-   * aborted. Rejects with a normalized LLMError on exhausted retries.
+   * aborted. Rejects with a normalized `LLMError` on exhausted retries.
    *
-   * When `tools` is set, returns a `CallWithToolsResult<T>` instead of `T`:
-   * `{ type: 'content', content }` or `{ type: 'tool_calls', toolCalls,
-   * content? }`. VernLLM never executes tools; run them yourself and
-   * continue via `history` (see `ConversationTurn`). Mutually exclusive
-   * with `jsonSchema`/`schema`.
-   *
-   * TypeScript picks the tools-aware overload (`CallWithToolsResult<T>`)
-   * when `tools` is a literal array on `params`, and the conditional-tools
-   * overload (`T | CallWithToolsResult<T>`, see `ConditionalToolCallParams`)
-   * when `tools` is present but statically `ToolDefinition[] | undefined`,
-   * e.g. `const tools = condition ? [myTool] : undefined`. Either way, use
-   * `isToolCallResult()` to narrow the result once `tools` isn't a literal
-   * array: TypeScript's static type can't know from the `ConditionalToolCallParams`
-   * shape alone whether tools actually ran on a given call. Only omitting
-   * `tools` entirely resolves to the plain `T` overload, since then tools
-   * genuinely cannot have run. See the Tool Calling docs for details.
-   *
-   * The same static-vs-dynamic caveat applies to `stream`: TypeScript only
-   * selects the streaming overload (returning `StreamCallResult<...>`) when
-   * `stream: true` is statically present on `params`. A `stream` value set
-   * conditionally on a plain `CallParams<T>` still resolves to `Promise<T>`
-   * (or `Promise<CallWithToolsResult<T>>`) at the type level even though
-   * the actual runtime result is the `{ chunks, finalResult }` streaming
-   * shape whenever `stream` evaluates to `true`, callers doing this should
-   * narrow/cast accordingly rather than relying on the static return type.
-   *
-   * Pinning `T` explicitly (`call<string>(...)`) alongside a literal
-   * `tools` array loses per-tool `arguments` typing: TypeScript's own
-   * generic inference rules mean providing *any* explicit type argument
-   * suppresses inference for every subsequent type parameter in that call,
-   * `Tools` included, regardless of its `const` modifier or default. This
-   * isn't specific to this overload, it's true of all TypeScript generic
-   * calls with a partial explicit type argument list. Pass `Tools`
-   * explicitly too when pinning `T` this way, e.g. `call<string, typeof
-   * myTools>(...)`, or prefer inferring `T` from `schema`/`jsonSchema`
-   * instead (which doesn't touch the type argument list, so `Tools` still
-   * infers normally).
+   * Supports `tools`, `stream`, and JSON mode/schema, in any combination.
+   * See the Tool Calling and Streaming docs for return-shape details and
+   * the TypeScript overloads that select between them.
    *
    * @param params System/user content plus per-call overrides. See `CallParams`.
-   * @returns Without `tools` or `stream`: the parsed response, or raw
-   * string if `jsonMode` is false. With `tools`: a `CallWithToolsResult<T>`,
-   * narrowed to `ContentResult<T>` when `toolChoice: 'none'` is set, since
-   * the model is then structurally barred from returning a `tool_calls`
-   * result. With `stream: true` (statically): a `{ chunks, finalResult }`
-   * `StreamCallResult`, `finalResult` resolving to whichever of the above
-   * shapes applies once the stream completes. See `StreamCallResult`.
+   * @returns The parsed response (or raw string if `jsonMode` is false), a
+   * `CallWithToolsResult<T>` when `tools` is set, or a `{ chunks,
+   * finalResult }` `StreamCallResult` when `stream: true`. See `StreamCallResult`.
    */
   async call<T = unknown>(
     params: StreamEnabledCallParams<T> & ToolsDisabledCallParams<T>,
@@ -395,71 +361,91 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
-    // A lone target (no `fallback` configured) keeps the exact pre-fallback
-    // contract: the breaker is checked once, up front, before usage is
-    // reserved, so a call that's definitely blocked never pays a
-    // reserve-then-refund round trip. This can only be hoisted out of the
-    // chain for the sole-target case: `assertBreakerClosed` claims a
-    // half-open trial slot as a side effect, which must happen exactly
-    // once per logical call, so with more than one target the check has
-    // to stay inside `runFallbackChain`, where an open primary is just
-    // another target failure that `fallbackOn` can fall over from.
-    const soleTarget = this.executors.length === 1;
+    // deadlineMs composes one more AbortSignal on top of whatever the
+    // caller already passed, using the same AbortSignal.any pattern
+    // withTimeout already established, so every existing signal check
+    // downstream (shouldRetry, waitForRetry, withTimeout, the top of
+    // withReservedUsage) automatically also stops a deadline-exceeded
+    // call, no per-site change needed.
+    const { signal: effectiveSignal, timer: deadlineTimer } = setupDeadline(
+      params.deadlineMs,
+      params.signal,
+    );
 
-    if (soleTarget) {
-      this.executors[0]!.assertBreakerClosed(params.model);
-    }
+    const effectiveParams =
+      effectiveSignal === params.signal ? params : { ...params, signal: effectiveSignal };
 
-    if (params.stream) {
-      // Same breaker/logging treatment as non-streaming, applied around
-      // opening the stream; mid-stream failures are handled separately
-      // inside the executor and never fall over (see `runFallbackChain`).
-      // Usage refund/report is deferred onto finalResult, since call()
-      // must return { chunks, finalResult } before the real outcome is
-      // known, which is also why `params.meta` isn't populated for
-      // streaming calls.
-      return withReservedUsageForStream(
-        params,
+    try {
+      // A lone target (no `fallback` configured) keeps the exact pre-fallback
+      // contract: the breaker is checked once, up front, before usage is
+      // reserved, so a call that's definitely blocked never pays a
+      // reserve-then-refund round trip. This can only be hoisted out of the
+      // chain for the sole-target case: `assertBreakerClosed` claims a
+      // half-open trial slot as a side effect, which must happen exactly
+      // once per logical call, so with more than one target the check has
+      // to stay inside `runFallbackChain`, where an open primary is just
+      // another target failure that `fallbackOn` can fall over from.
+      const soleTarget = this.executors.length === 1;
+
+      if (soleTarget) {
+        this.executors[0]!.assertBreakerClosed(effectiveParams.model);
+      }
+
+      if (effectiveParams.stream) {
+        // Same breaker/logging treatment as non-streaming, applied around
+        // opening the stream; mid-stream failures are handled separately
+        // inside the executor and never fall over (see `runFallbackChain`).
+        // Usage refund/report is deferred onto finalResult, since call()
+        // must return { chunks, finalResult } before the real outcome is
+        // known, which is also why `params.meta` isn't populated for
+        // streaming calls.
+        return await withReservedUsageForStream(
+          effectiveParams,
+          async () => {
+            const { result } = await this.runFallbackChain(
+              effectiveParams,
+              requestId,
+              (executor, onAttempt) => executor.runStream(effectiveParams, requestId, onAttempt),
+              soleTarget,
+            );
+            return result;
+          },
+          effectiveParams.signal,
+          (logMessage, error) => this.logRefundError(logMessage, error),
+        );
+      }
+
+      return await withReservedUsage(
+        effectiveParams,
+        false,
         async () => {
-          const { result } = await this.runFallbackChain(
-            params,
+          const { result, executor, index, attemptCount } = await this.runFallbackChain(
+            effectiveParams,
             requestId,
-            (executor, onAttempt) => executor.runStream(params, requestId, onAttempt),
+            (target, onAttempt) => target.run(effectiveParams, requestId, onAttempt),
             soleTarget,
           );
+
+          if (effectiveParams.meta) {
+            effectiveParams.meta.current = {
+              provider: executor.providerName,
+              model: effectiveParams.model ?? executor.model,
+              fallbackIndex: index - 1,
+              usedFallback: index > 0,
+              attempts: attemptCount,
+            };
+          }
+
           return result;
         },
-        params.signal,
+        effectiveParams.signal,
         (logMessage, error) => this.logRefundError(logMessage, error),
       );
+    } catch (error) {
+      throw stampDeadlineCode(error, effectiveSignal);
+    } finally {
+      clearTimeout(deadlineTimer);
     }
-
-    return withReservedUsage(
-      params,
-      false,
-      async () => {
-        const { result, executor, index, attemptCount } = await this.runFallbackChain(
-          params,
-          requestId,
-          (target, onAttempt) => target.run(params, requestId, onAttempt),
-          soleTarget,
-        );
-
-        if (params.meta) {
-          params.meta.current = {
-            provider: executor.providerName,
-            model: params.model ?? executor.model,
-            fallbackIndex: index - 1,
-            usedFallback: index > 0,
-            attempts: attemptCount,
-          };
-        }
-
-        return result;
-      },
-      params.signal,
-      (logMessage, error) => this.logRefundError(logMessage, error),
-    );
   }
 
   /**
@@ -486,35 +472,19 @@ export class VernLLM {
 
   /**
    * Cache wrapper composing `call` + caching, so cached LLM calls
-   * automatically get retry/timeout/circuit-breaker behavior. `reserveUsage`/
-   * `refundUsage` are read from the top-level params only. Concurrent misses
-   * for the same `cacheKey` share a single in-flight call, avoiding cache
-   * stampedes. Supports `stream: true` and `tools` in any combination.
+   * automatically get retry/timeout/circuit-breaker behavior. Concurrent
+   * misses for the same `cacheKey` share a single in-flight call, avoiding
+   * cache stampedes. Supports `stream: true` and `tools` in any combination.
    *
-   * When `call.tools` is set, this caches the whole `CallWithToolsResult`,
-   * including `tool_calls` results, not just final answers. Whether
-   * that's appropriate depends on the tool: caching "the model decided to
-   * call get_weather" is usually fine to reuse briefly, but caching a
-   * decision made under permissions or account state that can change
-   * between calls is not. Use a short `ttl` or a separate `cacheKey` for
-   * such tools if this distinction matters.
+   * When `call.tools` is set, this caches the whole result including any
+   * `tool_calls` decision, not just final answers; use a short `ttl` or a
+   * separate `cacheKey` if a tool's result shouldn't be reused across calls.
    *
-   * There is no public way to cache an arbitrary non-LLM function through
-   * `VernLLM`. This method always composes with `call()`. For
-   * general-purpose caching unrelated to an LLM call, use a dedicated
-   * caching library at the application level instead.
-   *
-   * The same `T`-vs-`Tools` inference caveat documented on `call()` applies
-   * here too: pinning `T` explicitly (`cachedCall<string>(...)`) alongside
-   * a literal `call.tools` array loses per-tool `arguments` typing, pass
-   * `Tools` explicitly too in that case.
-   *
-   * @param params `cacheKey`, `ttl`, and optional
+   * @param params `cacheKey`, `ttl`, optional
    * `reserveUsage`/`refundUsage`/`signal`, plus `call`, the `CallParams`
-   * (optionally with `tools` and/or `stream`) to pass through to
-   * `this.call(...)`. The top-level `signal` governs the cached operation
-   * and its usage hooks only; to also abort the underlying provider
-   * request, set `signal` inside `call`.
+   * to pass through to `this.call(...)`. The top-level `signal` governs
+   * the cached operation and its usage hooks only; to also abort the
+   * underlying provider request, set `signal` inside `call`.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
   async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
@@ -690,45 +660,4 @@ export class VernLLM {
       );
     }
   }
-}
-
-/**
- * Identity function preserving `params`'s own precise type, unlike a `:
- * CallParams<T>` annotation, which would widen `tools` away and break the
- * `ConditionalToolCallParams<T>` overload for `tools: someCondition ?
- * [tool] : undefined`. Use it when you need `call()` params in a named,
- * reusable variable; skip it when you can pass the object inline.
- *
- * ```ts
- * const params = defineCallParams({
- *   userContent: 'What is the weather?',
- *   tools: someCondition ? [weatherTool] : undefined,
- * });
- * const result = await llm.call(params);
- * // result: unknown | CallWithToolsResult<unknown>, same as inline
- * ```
- *
- * `T` isn't a parameter here; pin it via `llm.call<T>(params)` as usual.
- * `defineCachedCallParams` is the `cachedCall()` counterpart.
- */
-export function defineCallParams<P extends CallParams<unknown>>(params: P): P {
-  return params;
-}
-
-/**
- * The `cachedCall()` counterpart to `defineCallParams`: preserves the
- * whole `{ cacheKey, ttl, call }` object, `call.tools` included, in one
- * named variable.
- *
- * ```ts
- * const params = defineCachedCallParams({
- *   cacheKey: 'weather-ny',
- *   ttl: 60,
- *   call: { userContent: 'What is the weather?', tools: someCondition ? [weatherTool] : undefined },
- * });
- * const result = await llm.cachedCall(params);
- * ```
- */
-export function defineCachedCallParams<P extends CachedCallParams<unknown>>(params: P): P {
-  return params;
 }

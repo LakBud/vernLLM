@@ -1,4 +1,4 @@
-import { LLMError, type StreamChunk, type UsageHooks } from '../../types/index.js';
+import { LLMError, type StreamChunk, type UsageHooks } from '../../../types/index.js';
 
 /**
  * Calls `params.reserveUsage`, if present, mapping any failure to a

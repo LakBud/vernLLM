@@ -762,6 +762,139 @@ describe('VernLLM.call, abort handling', () => {
   });
 });
 
+describe('VernLLM.call, deadlineMs', () => {
+  it('rejects with code deadline_exceeded when deadlineMs elapses before the target resolves', async () => {
+    const { client, create } = createMockClient([
+      (_params, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted by caller')));
+        }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(
+      llm.call({ systemPrompt: 's', userContent: 'u', deadlineMs: 10 }),
+    ).rejects.toMatchObject({ type: 'aborted', code: 'deadline_exceeded' });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves normally, and clears the deadline timer specifically, when deadlineMs is longer than the call takes', async () => {
+    const { client } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    // The per-attempt withTimeout timer also calls clearTimeout on every
+    // call regardless of deadlineMs, so asserting clearTimeout was merely
+    // called at all wouldn't actually prove the deadline timer specifically
+    // was cleared. Capture the handle setTimeout returns for the 60_000ms
+    // deadline call and assert clearTimeout was called with that exact
+    // handle, distinguishing it from the instance's default 25_000ms
+    // per-attempt timer.
+    const setSpy = vi.spyOn(global, 'setTimeout');
+    const clearSpy = vi.spyOn(global, 'clearTimeout');
+
+    const result = await llm.call({
+      systemPrompt: 's',
+      userContent: 'u',
+      deadlineMs: 60_000,
+    });
+
+    expect(result).toEqual({ ok: true });
+
+    const deadlineTimerCall = setSpy.mock.calls.find(([, delay]) => delay === 60_000);
+    expect(deadlineTimerCall).toBeDefined();
+    const deadlineTimerHandle =
+      setSpy.mock.results[setSpy.mock.calls.indexOf(deadlineTimerCall!)]!.value;
+
+    expect(clearSpy).toHaveBeenCalledWith(deadlineTimerHandle);
+
+    setSpy.mockRestore();
+    clearSpy.mockRestore();
+  });
+
+  it('does not stamp deadline_exceeded when a caller signal aborts before the deadline', async () => {
+    const controller = new AbortController();
+    const { client } = createMockClient([
+      (_params, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted by caller')));
+        }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const promise = llm.call({
+      systemPrompt: 's',
+      userContent: 'u',
+      deadlineMs: 60_000,
+      signal: controller.signal,
+    });
+    const assertion = expect(promise).rejects.toMatchObject({
+      type: 'aborted',
+      code: undefined,
+    });
+    controller.abort();
+    await assertion;
+  });
+
+  it('stamps deadline_exceeded when the deadline fires before a caller-supplied signal aborts', async () => {
+    const controller = new AbortController();
+    const { client, create } = createMockClient([
+      (_params, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted by caller')));
+        }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    await expect(
+      llm.call({
+        systemPrompt: 's',
+        userContent: 'u',
+        deadlineMs: 10,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ type: 'aborted', code: 'deadline_exceeded' });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('cuts a fallback chain short once deadlineMs elapses, never reaching the fallback target', async () => {
+    const primary = createMockClient([
+      (_params, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted by caller')));
+        }),
+    ]);
+    const fallback = createMockClient([jsonResponse({ ok: true })]);
+
+    const llm = new VernLLM({
+      client: primary.client,
+      model: 'm',
+      maxRetries: 0,
+      fallback: { client: fallback.client, model: 'm2' },
+    });
+
+    await expect(
+      llm.call({ systemPrompt: 's', userContent: 'u', deadlineMs: 10 }),
+    ).rejects.toMatchObject({ type: 'aborted', code: 'deadline_exceeded' });
+    expect(fallback.create).not.toHaveBeenCalled();
+  });
+
+  it('creates no controller or timer when deadlineMs is omitted', async () => {
+    const { client } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+
+    const setSpy = vi.spyOn(global, 'setTimeout');
+    await llm.call({ systemPrompt: 's', userContent: 'u' });
+
+    // withTimeout still schedules its own per-attempt timer (unrelated to
+    // deadlineMs), so the assertion is on its duration: the instance's
+    // default timeoutMs (25000), never a deadline timer, since none was
+    // requested.
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    expect(setSpy).toHaveBeenCalledWith(expect.any(Function), 25_000);
+    setSpy.mockRestore();
+  });
+});
+
 describe('LLMError', () => {
   it('carries type, status, and issues', () => {
     const err = new LLMError('boom', 'validation', { issues: { field: 'name' } });

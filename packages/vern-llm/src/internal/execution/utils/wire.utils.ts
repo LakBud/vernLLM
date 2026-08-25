@@ -1,7 +1,7 @@
-import { LLMError } from '../../types/errors.js';
+import { LLMError } from '../../../types/errors.js';
 
-import type { LLMClient, WireToolCall } from '../../types/client.js';
-import type { ToolCall, ToolDefinition } from '../../types/tools.js';
+import type { LLMClient, WireToolCall } from '../../../types/client.js';
+import type { ToolCall, ToolDefinition } from '../../../types/tools.js';
 
 /** Translates app-facing `ToolDefinition[]` into the OpenAI-shaped wire tools array. */
 export function toWireTools(

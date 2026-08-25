@@ -3,9 +3,9 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   extractRetryAfterMs,
   getBackoffDelay,
-  withTimeout,
   withChunkIdleTimeout,
-} from '../../../../src/internal/execution/retry.utils.js';
+  withTimeout,
+} from '../../../../src/internal/execution/utils/retry.utils.js';
 
 /** Mirrors the internal MAX_SETTIMEOUT_MS constant, setTimeout's real ceiling (~24.8 days). */
 const MAX_SETTIMEOUT_MS = 2_147_483_647;

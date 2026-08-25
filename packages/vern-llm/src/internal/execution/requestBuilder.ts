@@ -1,5 +1,5 @@
 import { LLMError } from '../../types/errors.js';
-import { toWireTools, toWireToolCalls } from './wire.utils.js';
+import { toWireTools, toWireToolCalls } from './utils/wire.utils.js';
 
 import type {
   AssistantContent,

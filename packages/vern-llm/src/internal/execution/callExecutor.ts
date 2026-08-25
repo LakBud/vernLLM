@@ -1,12 +1,17 @@
 import { CircuitBreaker } from '../../circuitBreaker.js';
 import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
-import { describeError, extractStatus, normalizeError } from './errors.utils.js';
-import { defaultParseJson } from './parse.utils.js';
 import { RequestBuilder } from './requestBuilder.js';
-import { extractRetryAfterMs, getBackoffDelay, waitForRetry, withTimeout } from './retry.utils.js';
 import { buildStreamResult } from './streamAccumulator.js';
-import { parseWireToolCalls } from './wire.utils.js';
+import { describeError, extractStatus, normalizeError } from './utils/errors.utils.js';
+import { defaultParseJson } from './utils/parse.utils.js';
+import {
+  extractRetryAfterMs,
+  getBackoffDelay,
+  waitForRetry,
+  withTimeout,
+} from './utils/retry.utils.js';
+import { parseWireToolCalls } from './utils/wire.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { RateLimiter } from '../../rateLimit.js';

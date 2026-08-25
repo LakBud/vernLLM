@@ -51,4 +51,33 @@ describe('VernLLM workflow integration', () => {
       }),
     );
   });
+
+  it('deadlineMs cuts a real retry loop short instead of letting it continue into a second attempt', async () => {
+    const { client, create } = createMockClient([
+      new FakeApiError('temporary failure', 500),
+      jsonResponse({ answer: 'hello' }),
+    ]);
+
+    // A large baseDelayMs means a second attempt, if it happened, would
+    // only fire long after the short deadline below, so a call that
+    // still rejects with deadline_exceeded (rather than eventually
+    // resolving) demonstrates the deadline actually stopped the loop
+    // mid backoff, not merely raced it.
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 3,
+      baseDelayMs: 60_000,
+    });
+
+    await expect(
+      llm.call({
+        systemPrompt: 'Answer JSON',
+        userContent: 'hello',
+        deadlineMs: 20,
+      }),
+    ).rejects.toMatchObject({ type: 'aborted', code: 'deadline_exceeded' });
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
 });
