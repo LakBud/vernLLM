@@ -1,4 +1,4 @@
-import { LLMError, type LLMErrorCode, type RetryAttempt } from '../../types/errors.js';
+import { LLMError, type LLMErrorCode, type RetryAttempt } from '../../../types/errors.js';
 import { extractRetryAfterMs } from './retry.utils.js';
 
 /**

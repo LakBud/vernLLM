@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 
-import { describeError, normalizeError } from '../../../../src/internal/execution/errors.utils.js';
+import {
+  describeError,
+  normalizeError,
+} from '../../../../src/internal/execution/utils/errors.utils.js';
 import { LLMError } from '../../../../src/types/errors.js';
 
 describe('normalizeError', () => {

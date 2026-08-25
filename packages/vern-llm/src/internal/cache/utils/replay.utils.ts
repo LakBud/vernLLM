@@ -1,5 +1,5 @@
-import type { StreamChunk } from '../../types/stream.js';
-import type { CallWithToolsResult } from '../../types/tools.js';
+import type { StreamChunk } from '../../../types/stream.js';
+import type { CallWithToolsResult } from '../../../types/tools.js';
 
 /**
  * Converts an already-known cache value back into a plausible "text" form

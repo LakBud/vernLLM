@@ -445,6 +445,44 @@ describe('VernLLM.call, stream: true', () => {
     ).rejects.toMatchObject({ type: 'timeout' });
   });
 
+  it('rejects the call promise itself with code deadline_exceeded when deadlineMs elapses before the stream opens', async () => {
+    // Same construction as the withTimeout test above: the mock captures
+    // and honors the abort signal `createStream` receives, mirroring how
+    // a real adapter's `createStream` lets an AbortController actually
+    // interrupt a hung stream-open.
+    const client = {
+      chat: {
+        completions: {
+          create: async () => {
+            throw new Error('not scripted');
+          },
+          createStream: (_params: unknown, options: { signal: AbortSignal }) => ({
+            [Symbol.asyncIterator]() {
+              return {
+                next(): Promise<IteratorResult<WireStreamChunk>> {
+                  return new Promise((_resolve, reject) => {
+                    options.signal.addEventListener(
+                      'abort',
+                      () => {
+                        reject(new DOMException('The operation was aborted', 'AbortError'));
+                      },
+                      { once: true },
+                    );
+                  });
+                },
+              };
+            },
+          }),
+        },
+      },
+    };
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0 });
+
+    await expect(
+      llm.call({ userContent: 'hi', jsonMode: false, stream: true, deadlineMs: 10 }),
+    ).rejects.toMatchObject({ type: 'aborted', code: 'deadline_exceeded' });
+  });
+
   it('does not bound total stream duration once the first chunk has arrived', async () => {
     const { client } = createMockStreamingClient([
       () => ({

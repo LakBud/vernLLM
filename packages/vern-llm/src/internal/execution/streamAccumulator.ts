@@ -1,6 +1,6 @@
 import { LLMError } from '../../types/errors.js';
-import { normalizeError } from './errors.utils.js';
-import { withChunkIdleTimeout } from './retry.utils.js';
+import { normalizeError } from './utils/errors.utils.js';
+import { withChunkIdleTimeout } from './utils/retry.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type {

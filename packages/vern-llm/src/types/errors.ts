@@ -40,6 +40,8 @@ export type LLMErrorCode =
   // Timeouts (timeout)
   | 'request_timeout'
   | 'idle_timeout'
+  // Deadline (aborted)
+  | 'deadline_exceeded'
   // HTTP status (api)
   | 'authentication'
   | 'authorization'

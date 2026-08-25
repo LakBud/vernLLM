@@ -1,4 +1,5 @@
-export { VernLLM, defineCallParams, defineCachedCallParams } from './vernLLM.js';
+export { VernLLM } from './vernLLM.js';
+export { defineCallParams, defineCachedCallParams } from './paramsHelpers.js';
 export { CircuitBreaker, type CircuitBreakerOptions, type CircuitState } from './circuitBreaker.js';
 export {
   RateLimiter,

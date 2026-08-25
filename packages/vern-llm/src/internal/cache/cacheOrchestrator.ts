@@ -1,9 +1,9 @@
-import { withReservedUsage, withReservedUsageForStream } from '../execution/usage.utils.js';
-import { buildReplayChunks, buildReplayChunksFromPromise } from './replay.utils.js';
+import { withReservedUsage, withReservedUsageForStream } from '../execution/utils/usage.utils.js';
+import { buildReplayChunks, buildReplayChunksFromPromise } from './utils/replay.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { CacheAdapter, StreamChunk } from '../../types/index.js';
-import type { InternalCacheParams, InternalCacheStreamParams } from './cache.utils.js';
+import type { InternalCacheParams, InternalCacheStreamParams } from './utils/cache.utils.js';
 
 /**
  * Owns cache key resolution, cache reads/writes, and in-flight coalescing

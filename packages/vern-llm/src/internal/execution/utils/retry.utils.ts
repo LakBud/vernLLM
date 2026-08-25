@@ -1,6 +1,6 @@
-import { LLMError } from '../../types/errors.js';
+import { LLMError } from '../../../types/errors.js';
 
-import type { Logger } from '../../logger.js';
+import type { Logger } from '../../../logger.js';
 
 /**
  * Default cap (ms) for both exponential backoff and honored Retry-After

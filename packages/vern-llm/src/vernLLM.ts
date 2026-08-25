@@ -3,8 +3,12 @@ import { randomUUID } from 'crypto';
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
 import { buildCircuitBreaker, makeEventReporter } from './internal/circuitBreaker.utils.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
-import { normalizeError } from './internal/execution/errors.utils.js';
-import { withReservedUsage, withReservedUsageForStream } from './internal/execution/usage.utils.js';
+import { setupDeadline, stampDeadlineCode } from './internal/execution/utils/deadline.utils.js';
+import { normalizeError } from './internal/execution/utils/errors.utils.js';
+import {
+  withReservedUsage,
+  withReservedUsageForStream,
+} from './internal/execution/utils/usage.utils.js';
 import { createSafeLogger } from './internal/logger.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import { RateLimiter } from './rateLimit.js';
@@ -51,7 +55,7 @@ import {
 } from './types/index.js';
 
 import type { CircuitState } from './circuitBreaker.js';
-import type { InternalCacheParams } from './internal/cache/cache.utils.js';
+import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
 
 /**
  * A LLM call framework for resilience, observability and control. This is VernLLM!
@@ -395,71 +399,91 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
-    // A lone target (no `fallback` configured) keeps the exact pre-fallback
-    // contract: the breaker is checked once, up front, before usage is
-    // reserved, so a call that's definitely blocked never pays a
-    // reserve-then-refund round trip. This can only be hoisted out of the
-    // chain for the sole-target case: `assertBreakerClosed` claims a
-    // half-open trial slot as a side effect, which must happen exactly
-    // once per logical call, so with more than one target the check has
-    // to stay inside `runFallbackChain`, where an open primary is just
-    // another target failure that `fallbackOn` can fall over from.
-    const soleTarget = this.executors.length === 1;
+    // deadlineMs composes one more AbortSignal on top of whatever the
+    // caller already passed, using the same AbortSignal.any pattern
+    // withTimeout already established, so every existing signal check
+    // downstream (shouldRetry, waitForRetry, withTimeout, the top of
+    // withReservedUsage) automatically also stops a deadline-exceeded
+    // call, no per-site change needed.
+    const { signal: effectiveSignal, timer: deadlineTimer } = setupDeadline(
+      params.deadlineMs,
+      params.signal,
+    );
 
-    if (soleTarget) {
-      this.executors[0]!.assertBreakerClosed(params.model);
-    }
+    const effectiveParams =
+      effectiveSignal === params.signal ? params : { ...params, signal: effectiveSignal };
 
-    if (params.stream) {
-      // Same breaker/logging treatment as non-streaming, applied around
-      // opening the stream; mid-stream failures are handled separately
-      // inside the executor and never fall over (see `runFallbackChain`).
-      // Usage refund/report is deferred onto finalResult, since call()
-      // must return { chunks, finalResult } before the real outcome is
-      // known, which is also why `params.meta` isn't populated for
-      // streaming calls.
-      return withReservedUsageForStream(
-        params,
+    try {
+      // A lone target (no `fallback` configured) keeps the exact pre-fallback
+      // contract: the breaker is checked once, up front, before usage is
+      // reserved, so a call that's definitely blocked never pays a
+      // reserve-then-refund round trip. This can only be hoisted out of the
+      // chain for the sole-target case: `assertBreakerClosed` claims a
+      // half-open trial slot as a side effect, which must happen exactly
+      // once per logical call, so with more than one target the check has
+      // to stay inside `runFallbackChain`, where an open primary is just
+      // another target failure that `fallbackOn` can fall over from.
+      const soleTarget = this.executors.length === 1;
+
+      if (soleTarget) {
+        this.executors[0]!.assertBreakerClosed(effectiveParams.model);
+      }
+
+      if (effectiveParams.stream) {
+        // Same breaker/logging treatment as non-streaming, applied around
+        // opening the stream; mid-stream failures are handled separately
+        // inside the executor and never fall over (see `runFallbackChain`).
+        // Usage refund/report is deferred onto finalResult, since call()
+        // must return { chunks, finalResult } before the real outcome is
+        // known, which is also why `params.meta` isn't populated for
+        // streaming calls.
+        return await withReservedUsageForStream(
+          effectiveParams,
+          async () => {
+            const { result } = await this.runFallbackChain(
+              effectiveParams,
+              requestId,
+              (executor, onAttempt) => executor.runStream(effectiveParams, requestId, onAttempt),
+              soleTarget,
+            );
+            return result;
+          },
+          effectiveParams.signal,
+          (logMessage, error) => this.logRefundError(logMessage, error),
+        );
+      }
+
+      return await withReservedUsage(
+        effectiveParams,
+        false,
         async () => {
-          const { result } = await this.runFallbackChain(
-            params,
+          const { result, executor, index, attemptCount } = await this.runFallbackChain(
+            effectiveParams,
             requestId,
-            (executor, onAttempt) => executor.runStream(params, requestId, onAttempt),
+            (target, onAttempt) => target.run(effectiveParams, requestId, onAttempt),
             soleTarget,
           );
+
+          if (effectiveParams.meta) {
+            effectiveParams.meta.current = {
+              provider: executor.providerName,
+              model: effectiveParams.model ?? executor.model,
+              fallbackIndex: index - 1,
+              usedFallback: index > 0,
+              attempts: attemptCount,
+            };
+          }
+
           return result;
         },
-        params.signal,
+        effectiveParams.signal,
         (logMessage, error) => this.logRefundError(logMessage, error),
       );
+    } catch (error) {
+      throw stampDeadlineCode(error, effectiveSignal);
+    } finally {
+      clearTimeout(deadlineTimer);
     }
-
-    return withReservedUsage(
-      params,
-      false,
-      async () => {
-        const { result, executor, index, attemptCount } = await this.runFallbackChain(
-          params,
-          requestId,
-          (target, onAttempt) => target.run(params, requestId, onAttempt),
-          soleTarget,
-        );
-
-        if (params.meta) {
-          params.meta.current = {
-            provider: executor.providerName,
-            model: params.model ?? executor.model,
-            fallbackIndex: index - 1,
-            usedFallback: index > 0,
-            attempts: attemptCount,
-          };
-        }
-
-        return result;
-      },
-      params.signal,
-      (logMessage, error) => this.logRefundError(logMessage, error),
-    );
   }
 
   /**
@@ -690,45 +714,4 @@ export class VernLLM {
       );
     }
   }
-}
-
-/**
- * Identity function preserving `params`'s own precise type, unlike a `:
- * CallParams<T>` annotation, which would widen `tools` away and break the
- * `ConditionalToolCallParams<T>` overload for `tools: someCondition ?
- * [tool] : undefined`. Use it when you need `call()` params in a named,
- * reusable variable; skip it when you can pass the object inline.
- *
- * ```ts
- * const params = defineCallParams({
- *   userContent: 'What is the weather?',
- *   tools: someCondition ? [weatherTool] : undefined,
- * });
- * const result = await llm.call(params);
- * // result: unknown | CallWithToolsResult<unknown>, same as inline
- * ```
- *
- * `T` isn't a parameter here; pin it via `llm.call<T>(params)` as usual.
- * `defineCachedCallParams` is the `cachedCall()` counterpart.
- */
-export function defineCallParams<P extends CallParams<unknown>>(params: P): P {
-  return params;
-}
-
-/**
- * The `cachedCall()` counterpart to `defineCallParams`: preserves the
- * whole `{ cacheKey, ttl, call }` object, `call.tools` included, in one
- * named variable.
- *
- * ```ts
- * const params = defineCachedCallParams({
- *   cacheKey: 'weather-ny',
- *   ttl: 60,
- *   call: { userContent: 'What is the weather?', tools: someCondition ? [weatherTool] : undefined },
- * });
- * const result = await llm.cachedCall(params);
- * ```
- */
-export function defineCachedCallParams<P extends CachedCallParams<unknown>>(params: P): P {
-  return params;
 }

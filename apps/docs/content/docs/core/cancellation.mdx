@@ -46,6 +46,22 @@ throws `LLMError('aborted')` before any request is dispatched, same as a non-str
 fires after the stream has opened, the in-flight request is cancelled and `finalResult` rejects
 with `LLMError('aborted')`; any chunks already delivered through `chunks` are not retracted. See [Streaming](/docs/core/streaming) for the full contract.
 
+## Setting a total time budget
+
+`timeoutMs` bounds a single attempt and resets on every retry. `deadlineMs` is different: it is one clock for the whole call, spanning every retry and every fallback target, starting the moment `call()` is invoked.
+
+```ts title="deadline.ts"
+const result = await llm.call({
+  systemPrompt,
+  userContent,
+  deadlineMs: 30_000,
+});
+```
+
+Once `deadlineMs` elapses, VernLLM throws `LLMError('aborted', { code: 'deadline_exceeded' })`, even mid retry or mid fallback. If your own `signal` fires first instead, the error still has type `aborted` but no `deadline_exceeded` code, so the two causes stay distinguishable.
+
+A deadline only bounds getting to a final result. It does not extend to reading a stream once it has opened; see the per attempt timeout section above for that.
+
 ## Cached calls and cancellation
 
 `cachedCall()` also accepts a caller-provided `signal`.
