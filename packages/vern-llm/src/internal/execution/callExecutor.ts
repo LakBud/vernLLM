@@ -852,9 +852,13 @@ export class CallExecutor {
 
   /**
    * Waits out the backoff delay for a retry attempt, honoring a
-   * Retry-After header on the failed attempt's error when present.
-   * Both Retry-After and plain exponential backoff are capped at the same
-   * max delay (see `DEFAULT_MAX_DELAY_MS` in `retry.utils.ts`).
+   * Retry-After header on the failed attempt's error when present. When
+   * no Retry-After is present, a rate-limited (429) response backs off
+   * hardest, a server error (500 through 599) backs off somewhat more
+   * than the default curve, and every other retryable failure keeps the
+   * default curve. Both Retry-After and plain exponential backoff are
+   * capped at the same max delay (see `DEFAULT_MAX_DELAY_MS` in
+   * `retry.utils.ts`).
    */
   private async recoverDelay(
     requestId: string,
@@ -864,7 +868,16 @@ export class CallExecutor {
     signal?: AbortSignal,
   ) {
     const retryAfterMs = extractRetryAfterMs(error);
-    const delay = retryAfterMs ?? getBackoffDelay(this.baseDelayMs, attempt);
+    const status = extractStatus(error);
+    const delay =
+      retryAfterMs ??
+      getBackoffDelay(
+        this.baseDelayMs,
+        attempt,
+        undefined,
+        status === 429,
+        status !== undefined && status >= 500 && status <= 599,
+      );
     const retryAfterHonored = retryAfterMs !== undefined;
 
     this.logger.warn(

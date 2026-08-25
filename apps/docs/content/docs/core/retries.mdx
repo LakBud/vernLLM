@@ -48,6 +48,15 @@ A provider's own timing guidance is honored ahead of the default backoff curve. 
 
 A value that gives no usable timing, a negative delta or a date already in the past, is treated the same as a missing header rather than as an immediate retry. It falls through to the computed backoff instead.
 
+### Backing off harder for rate limits and server errors
+
+When no explicit timing is present, the computed backoff itself is not one single curve. A rate-limited response with no explicit timing is still a clear signal to slow down, so it waits longest. A server fault waits somewhat longer than the default curve, since it is a transient failure the provider did not choose to send. Every other retryable failure keeps the default curve described above.
+
+<Callout type="info">
+  An explicit `Retry-After` value, when present, always wins over any of this. This only changes the
+  computed curve used when no provider timing is available at all.
+</Callout>
+
 ## What gets retried
 
 `shouldRetry` skips a retry when any of these are true:
