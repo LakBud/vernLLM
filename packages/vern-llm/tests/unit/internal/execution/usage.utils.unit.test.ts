@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   withReservedUsage,
   withReservedUsageForStream,
-} from '../../../../src/internal/execution/utils/usage.utils';
+} from '../../../../src/internal/execution/utils/usage.utils.js';
 
 describe('withReservedUsage', () => {
   it('runs getResult and returns its value when no reserveUsage hook is given', async () => {

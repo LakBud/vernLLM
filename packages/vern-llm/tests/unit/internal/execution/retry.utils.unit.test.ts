@@ -5,7 +5,7 @@ import {
   getBackoffDelay,
   withChunkIdleTimeout,
   withTimeout,
-} from '../../../../src/internal/execution/utils/retry.utils';
+} from '../../../../src/internal/execution/utils/retry.utils.js';
 
 /** Mirrors the internal MAX_SETTIMEOUT_MS constant, setTimeout's real ceiling (~24.8 days). */
 const MAX_SETTIMEOUT_MS = 2_147_483_647;
