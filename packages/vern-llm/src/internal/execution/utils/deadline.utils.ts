@@ -30,6 +30,20 @@ export function setupDeadline(
   }
 
   const controller = new AbortController();
+
+  // A deadline of 0 (or negative) means the budget is already spent. A
+  // `setTimeout(fn, 0)` still queues a macrotask, so it wouldn't reliably
+  // beat dispatch, the abort has to happen synchronously here instead, the
+  // same way an already-aborted caller signal is treated as a fail-fast
+  // case rather than raced.
+  if (deadlineMs <= 0) {
+    controller.abort(DEADLINE_REASON);
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, controller.signal])
+      : controller.signal;
+    return { signal, timer: undefined };
+  }
+
   const timer = setTimeout(() => controller.abort(DEADLINE_REASON), deadlineMs);
   const signal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])

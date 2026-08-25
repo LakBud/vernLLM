@@ -60,7 +60,7 @@ const result = await llm.call({
 
 Once `deadlineMs` elapses, VernLLM throws `LLMError('aborted', { code: 'deadline_exceeded' })`, even mid retry or mid fallback. If your own `signal` fires first instead, the error still has type `aborted` but no `deadline_exceeded` code, so the two causes stay distinguishable.
 
-A deadline only bounds getting to a final result. It does not extend to reading a stream once it has opened; see the per attempt timeout section above for that.
+A deadline only bounds getting to a final result: choosing a target, retrying, and opening a stream. Once a stream has actually opened, `deadlineMs` no longer applies to it: `timeoutMs` only bounds opening the stream and receiving its first chunk, and every gap after that is bounded separately by `chunkIdleTimeoutMs`. Neither option, nor `deadlineMs`, imposes a total time limit on the rest of an already-opened stream. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout) for the full contract.
 
 ## Cached calls and cancellation
 

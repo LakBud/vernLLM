@@ -55,6 +55,35 @@ describe('setupDeadline', () => {
     expect(signal?.aborted).toBe(true);
     expect(signal?.reason).toBe(DEADLINE_REASON);
   });
+
+  it('aborts synchronously with DEADLINE_REASON, no timer, when deadlineMs is 0', () => {
+    // setTimeout(fn, 0) still queues a macrotask, so it wouldn't reliably
+    // beat dispatch. A deadline of 0 means the budget is already spent, so
+    // this must abort before setupDeadline even returns.
+    const { signal, timer } = setupDeadline(0, undefined);
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(DEADLINE_REASON);
+    expect(timer).toBeUndefined();
+  });
+
+  it('aborts synchronously with DEADLINE_REASON when deadlineMs is negative', () => {
+    const { signal, timer } = setupDeadline(-100, undefined);
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(DEADLINE_REASON);
+    expect(timer).toBeUndefined();
+  });
+
+  it('combines a synchronous deadlineMs: 0 abort with a caller signal into one signal', () => {
+    const controller = new AbortController();
+
+    const { signal, timer } = setupDeadline(0, controller.signal);
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(DEADLINE_REASON);
+    expect(timer).toBeUndefined();
+  });
 });
 
 describe('stampDeadlineCode', () => {

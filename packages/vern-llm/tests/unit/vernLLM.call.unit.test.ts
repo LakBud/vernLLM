@@ -778,10 +778,18 @@ describe('VernLLM.call, deadlineMs', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it('resolves normally, and leaves no open timer, when deadlineMs is longer than the call takes', async () => {
+  it('resolves normally, and clears the deadline timer specifically, when deadlineMs is longer than the call takes', async () => {
     const { client } = createMockClient([jsonResponse({ ok: true })]);
     const llm = new VernLLM({ client, model: 'm' });
 
+    // The per-attempt withTimeout timer also calls clearTimeout on every
+    // call regardless of deadlineMs, so asserting clearTimeout was merely
+    // called at all wouldn't actually prove the deadline timer specifically
+    // was cleared. Capture the handle setTimeout returns for the 60_000ms
+    // deadline call and assert clearTimeout was called with that exact
+    // handle, distinguishing it from the instance's default 25_000ms
+    // per-attempt timer.
+    const setSpy = vi.spyOn(global, 'setTimeout');
     const clearSpy = vi.spyOn(global, 'clearTimeout');
 
     const result = await llm.call({
@@ -791,7 +799,15 @@ describe('VernLLM.call, deadlineMs', () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(clearSpy).toHaveBeenCalled();
+
+    const deadlineTimerCall = setSpy.mock.calls.find(([, delay]) => delay === 60_000);
+    expect(deadlineTimerCall).toBeDefined();
+    const deadlineTimerHandle =
+      setSpy.mock.results[setSpy.mock.calls.indexOf(deadlineTimerCall!)]!.value;
+
+    expect(clearSpy).toHaveBeenCalledWith(deadlineTimerHandle);
+
+    setSpy.mockRestore();
     clearSpy.mockRestore();
   });
 
