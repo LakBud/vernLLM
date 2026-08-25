@@ -65,4 +65,14 @@ describe('VernLLM workflow, status differentiated backoff', () => {
     expect(avg429).toBeGreaterThan(avg500);
     expect(avg500).toBeGreaterThan(avg408);
   });
+
+  it('a status of 600 or above is out of the 5xx range and keeps the default curve', async () => {
+    // baseDelayMs=200, attempt=1: default range [200, 400), 5xx range
+    // [300, 600). A 600 status is above the valid HTTP status range
+    // entirely, so it must not be treated as a server error.
+    const avg600 = await averageDelay(600);
+    const avg500 = await averageDelay(500);
+
+    expect(avg600).toBeLessThan(avg500);
+  });
 });

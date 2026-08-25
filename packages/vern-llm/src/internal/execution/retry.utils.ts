@@ -259,11 +259,11 @@ export function extractRetryAfterMs(
  * the cap prevents unbounded delays when maxRetries is high.
  *
  * rateLimited and serverError each default to false, so a caller who
- * passes neither gets exactly today's curve. A rate limited response
+ * passes neither gets exactly today's curve. A rate-limited response
  * (429) with no explicit Retry After is still an explicit signal to slow
  * down, so it backs off hardest. A server error (5xx) is a transient
  * fault the provider did not choose to send, so it backs off more than
- * the default curve but less than a rate limited response. The two are
+ * the default curve but less than a rate-limited response. The two are
  * mutually exclusive in effect: if both are true, rateLimited wins.
  */
 export function getBackoffDelay(
