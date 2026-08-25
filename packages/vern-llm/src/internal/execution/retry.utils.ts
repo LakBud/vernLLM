@@ -158,14 +158,66 @@ export function withChunkIdleTimeout<T>(
   });
 }
 
+type HeaderKind = 'ms' | 'seconds' | 'date';
+
 /**
- * Looks inside an unknown error value for a Retry-After header and
- * converts it to milliseconds. Checks `.headers` first (fetch-style,
- * Headers-like with `.get()`), then `.response.headers` (axios-style,
- * plain object) since different client libraries surface headers
- * differently. Supports both the delta-seconds form ("30") and the
- * HTTP-date form ("Wed, 21 Oct 2015 07:28:00 GMT"). The result is capped
- * at maxDelayMs. Returns undefined when no usable Retry-After is present
+ * Header names checked, in order, when looking for provider retry timing.
+ * The millisecond forms are checked first since they carry finer
+ * granularity than the standard header allows. Retry After itself is
+ * checked twice, once as a delta seconds value and once as an HTTP date,
+ * since both forms use the same header name.
+ */
+const RETRY_AFTER_CANDIDATES: { name: string; kind: HeaderKind }[] = [
+  { name: 'Retry-After-Ms', kind: 'ms' },
+  { name: 'X-Retry-After-Ms', kind: 'ms' },
+  { name: 'Retry-After', kind: 'seconds' },
+  { name: 'Retry-After', kind: 'date' },
+];
+
+/**
+ * Reads a single header value off either a Headers-like object (has
+ * `.get()`, called with the canonical casing above, since a real Headers
+ * object is case insensitive) or a plain object (axios style, matched
+ * case insensitively here instead since the object itself is not).
+ */
+function readHeader(headers: object, name: string): string | undefined {
+  const getter = headers as { get?: (n: string) => string | null };
+
+  if (typeof getter.get === 'function') {
+    return getter.get(name) ?? undefined;
+  }
+
+  return Object.entries(headers as Record<string, string>).find(
+    ([key]) => key.toLowerCase() === name.toLowerCase(),
+  )?.[1];
+}
+
+/**
+ * A value below 0 means the header told us nothing usable, a malformed
+ * negative delta or a date already in the past, so it is treated the same
+ * as a header that failed to parse at all rather than as an immediate 0ms
+ * retry against a provider that just asked us to slow down.
+ */
+function clampOrUndefined(rawMs: number, maxDelayMs: number): number | undefined {
+  return rawMs < 0 ? undefined : Math.min(rawMs, maxDelayMs);
+}
+
+/**
+ * Looks inside an unknown error value for provider retry timing and
+ * converts it to milliseconds. Checks a small set of known millisecond
+ * headers first (some providers, Bedrock included, surface these for
+ * finer granularity than the standard header allows), then falls back to
+ * the standard Retry After header in both its delta seconds form ("30")
+ * and its HTTP date form ("Wed, 21 Oct 2015 07:28:00 GMT").
+ *
+ * Checks `.headers` first (fetch style, Headers like with `.get()`), then
+ * `.response.headers` (axios style, plain object), since different client
+ * libraries surface headers differently.
+ *
+ * The result is capped at maxDelayMs. A header that parses to a negative
+ * value, a negative delta or a date already in the past, is treated as
+ * absent rather than clamped to 0, since it gave no usable timing.
+ * Returns undefined when no usable value is present.
  */
 export function extractRetryAfterMs(
   err: unknown,
@@ -178,26 +230,22 @@ export function extractRetryAfterMs(
 
   if (!headers || typeof headers !== 'object') return undefined;
 
-  const getter = headers as { get?: (name: string) => string | null };
+  for (const { name, kind } of RETRY_AFTER_CANDIDATES) {
+    const raw = readHeader(headers, name)?.trim();
+    if (!raw) continue;
 
-  const raw =
-    typeof getter.get === 'function'
-      ? getter.get('Retry-After')
-      : Object.entries(headers as Record<string, string>)
-          .find(([name]) => name.toLowerCase() === 'retry-after')
-          ?.at(1);
+    if (kind === 'ms' && /^\d+$/.test(raw)) {
+      return clampOrUndefined(Number(raw), maxDelayMs);
+    }
 
-  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+    if (kind === 'seconds' && /^\d+(\.\d+)?$/.test(raw)) {
+      return clampOrUndefined(Number(raw) * 1000, maxDelayMs);
+    }
 
-  const trimmed = raw.trim();
-
-  if (/^\d+$/.test(trimmed)) {
-    return Math.max(0, Math.min(Number(trimmed) * 1000, maxDelayMs));
-  }
-
-  const dateMs = Date.parse(trimmed);
-  if (!Number.isNaN(dateMs)) {
-    return Math.max(0, Math.min(dateMs - Date.now(), maxDelayMs));
+    if (kind === 'date') {
+      const dateMs = Date.parse(raw);
+      if (!Number.isNaN(dateMs)) return clampOrUndefined(dateMs - Date.now(), maxDelayMs);
+    }
   }
 
   return undefined;
