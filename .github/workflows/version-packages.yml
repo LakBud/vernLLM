@@ -1,0 +1,55 @@
+name: Version Packages
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: version-packages-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  version-packages:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'packages/vern-llm/**'
+              - '.changeset/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+
+      - if: steps.filter.outputs.code == 'true'
+        uses: pnpm/action-setup@v4
+
+      - if: steps.filter.outputs.code == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - if: steps.filter.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.filter.outputs.code == 'true'
+        name: Open or update the Version Packages PR
+        uses: changesets/action@v1
+        with:
+          version: pnpm changeset version
+          commit: 'chore: version packages'
+          title: 'chore: version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
