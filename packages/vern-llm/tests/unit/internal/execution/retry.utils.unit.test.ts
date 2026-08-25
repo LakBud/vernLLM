@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
   extractRetryAfterMs,
+  getBackoffDelay,
   withTimeout,
   withChunkIdleTimeout,
 } from '../../../../src/internal/execution/retry.utils.js';
@@ -117,6 +118,88 @@ describe('extractRetryAfterMs', () => {
   it('treats a negative retry-after-ms value as absent instead of 0', () => {
     const err = { headers: headersOf({ 'retry-after-ms': '-100' }) };
     expect(extractRetryAfterMs(err)).toBeUndefined();
+  });
+});
+
+describe('getBackoffDelay', () => {
+  /** Samples across enough attempts/iterations to bound jitter reliably. */
+  function sampleRange(fn: () => number, iterations = 200): { min: number; max: number } {
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < iterations; i++) {
+      const v = fn();
+      min = Math.min(min, v);
+      max = Math.max(max, v);
+    }
+    return { min, max };
+  }
+
+  it('omitting rateLimited and serverError reproduces the pre-change range', () => {
+    const baseDelayMs = 100;
+    const attempt = 2;
+    const maxDelayMs = 10_000;
+    const exp = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+    const { min, max } = sampleRange(() => getBackoffDelay(baseDelayMs, attempt, maxDelayMs));
+    expect(min).toBeGreaterThanOrEqual(exp / 2);
+    expect(max).toBeLessThanOrEqual(exp);
+  });
+
+  it('rateLimited produces a value in the doubled range', () => {
+    const baseDelayMs = 100;
+    const attempt = 2;
+    const maxDelayMs = 10_000;
+    const exp = Math.min(baseDelayMs * 2 * 2 ** attempt, maxDelayMs);
+    const { min, max } = sampleRange(() =>
+      getBackoffDelay(baseDelayMs, attempt, maxDelayMs, true, false),
+    );
+    expect(min).toBeGreaterThanOrEqual(exp / 2);
+    expect(max).toBeLessThanOrEqual(exp);
+    // distinct from the default range
+    expect(max).toBeGreaterThan(baseDelayMs * 2 ** attempt);
+  });
+
+  it('serverError produces a value in the 1.5x range, distinct from default and rateLimited', () => {
+    const baseDelayMs = 100;
+    const attempt = 2;
+    const maxDelayMs = 10_000;
+    const exp = Math.min(baseDelayMs * 1.5 * 2 ** attempt, maxDelayMs);
+    const { min, max } = sampleRange(() =>
+      getBackoffDelay(baseDelayMs, attempt, maxDelayMs, false, true),
+    );
+    expect(min).toBeGreaterThanOrEqual(exp / 2);
+    expect(max).toBeLessThanOrEqual(exp);
+    expect(max).toBeGreaterThan(baseDelayMs * 2 ** attempt);
+    expect(max).toBeLessThan(baseDelayMs * 2 * 2 ** attempt);
+  });
+
+  it('rateLimited wins when both rateLimited and serverError are true', () => {
+    const baseDelayMs = 100;
+    const attempt = 2;
+    const maxDelayMs = 10_000;
+    const expRateLimited = Math.min(baseDelayMs * 2 * 2 ** attempt, maxDelayMs);
+    const { min, max } = sampleRange(() =>
+      getBackoffDelay(baseDelayMs, attempt, maxDelayMs, true, true),
+    );
+    expect(min).toBeGreaterThanOrEqual(expRateLimited / 2);
+    expect(max).toBeLessThanOrEqual(expRateLimited);
+  });
+
+  it('caps every curve at maxDelayMs, default, rateLimited, and serverError', () => {
+    const baseDelayMs = 100;
+    const attempt = 20; // high enough to hit the cap under every multiplier
+    const maxDelayMs = 10_000;
+
+    for (const [rateLimited, serverError] of [
+      [false, false],
+      [true, false],
+      [false, true],
+    ] as const) {
+      const { max } = sampleRange(
+        () => getBackoffDelay(baseDelayMs, attempt, maxDelayMs, rateLimited, serverError),
+        50,
+      );
+      expect(max).toBeLessThanOrEqual(maxDelayMs);
+    }
   });
 });
 

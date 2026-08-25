@@ -256,14 +256,25 @@ export function extractRetryAfterMs(
 /**
  * Exponential backoff with jitter, capped at maxDelayMs.
  * Jitter avoids thundering-herd retries when many callers back off in lockstep,
- * the cap prevents unbounded delays when maxRetries is high
+ * the cap prevents unbounded delays when maxRetries is high.
+ *
+ * rateLimited and serverError each default to false, so a caller who
+ * passes neither gets exactly today's curve. A rate limited response
+ * (429) with no explicit Retry After is still an explicit signal to slow
+ * down, so it backs off hardest. A server error (5xx) is a transient
+ * fault the provider did not choose to send, so it backs off more than
+ * the default curve but less than a rate limited response. The two are
+ * mutually exclusive in effect: if both are true, rateLimited wins.
  */
 export function getBackoffDelay(
   baseDelayMs: number,
   attempt: number,
   maxDelayMs = DEFAULT_MAX_DELAY_MS,
+  rateLimited = false,
+  serverError = false,
 ): number {
-  const exp = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+  const multiplier = rateLimited ? 2 : serverError ? 1.5 : 1;
+  const exp = Math.min(baseDelayMs * multiplier * 2 ** attempt, maxDelayMs);
   return exp / 2 + Math.random() * (exp / 2);
 }
 
