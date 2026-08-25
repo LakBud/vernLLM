@@ -44,7 +44,7 @@ recoverDelay = retryAfterMs ?? getBackoffDelay(baseDelayMs, attempt);
 
 ### Millisecond headers and malformed values
 
-A provider's own timing guidance is honored ahead of the default backoff curve. Some providers surface a `Retry After Ms` or `X Retry After Ms` header for finer granularity than a whole second allows, and that value is checked before falling back to the standard `Retry After` header.
+A provider's own timing guidance is honored ahead of the default backoff curve. Some providers surface a `Retry-After-Ms` or `X-Retry-After-Ms` header for finer granularity than a whole second allows, and that value is checked before falling back to the standard `Retry-After` header.
 
 A value that gives no usable timing, a negative delta or a date already in the past, is treated the same as a missing header rather than as an immediate retry. It falls through to the computed backoff instead.
 

@@ -103,6 +103,12 @@ describe('extractRetryAfterMs', () => {
     expect(extractRetryAfterMs(err)).toBe(600);
   });
 
+  it('ignores a matching plain-object header whose value is not a string, instead of throwing', () => {
+    const err = { response: { headers: { 'retry-after-ms': 600 } } };
+    expect(() => extractRetryAfterMs(err)).not.toThrow();
+    expect(extractRetryAfterMs(err)).toBeUndefined();
+  });
+
   it('caps an oversized retry-after-ms value at maxDelayMs', () => {
     const err = { headers: headersOf({ 'retry-after-ms': '999999' }) };
     expect(extractRetryAfterMs(err, 10_000)).toBe(10_000);

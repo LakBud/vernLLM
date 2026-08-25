@@ -187,9 +187,11 @@ function readHeader(headers: object, name: string): string | undefined {
     return getter.get(name) ?? undefined;
   }
 
-  return Object.entries(headers as Record<string, string>).find(
+  const match = Object.entries(headers as Record<string, unknown>).find(
     ([key]) => key.toLowerCase() === name.toLowerCase(),
   )?.[1];
+
+  return typeof match === 'string' ? match : undefined;
 }
 
 /**
