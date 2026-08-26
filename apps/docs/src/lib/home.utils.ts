@@ -178,6 +178,11 @@ export const faqItems = [
       'Yes. cachedCall works with any adapter implementing get/set (delete is optional), so you can plug in Redis, a database, or your own store instead of the built-in in-memory cache.',
   },
   {
+    question: 'Can I hook into or modify requests before they go out?',
+    answer:
+      'Yes, via middleware. transform lets you redact or change an outgoing request before it is sent, and wrap lets you observe or short-circuit one whole logical call, retries and fallback included, for logging, tracing, or cost tracking.',
+  },
+  {
     question: 'Is it typed?',
     answer:
       'Yes, written in TypeScript from the ground up. Structured output schemas, call params, and errors are all typed, so mistakes surface at compile time instead of at runtime.',

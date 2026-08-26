@@ -9,26 +9,29 @@ Everything below is opt-in beyond sensible defaults, mix and match whichever of 
   <Card title="Provider Fallback" href="/docs/core/provider-fallback">
     Run declared backup targets only when the fallback policy allows the transition
   </Card>
-  <Card title="Circuit Breaker" href="/docs/core/circuit-breaker">
-    Stop hammering a provider that's down
-  </Card>
-  <Card title="Retries" href="/docs/core/retries">
-    Exponential backoff with jitter, and Retry-After awareness
+  <Card title="Caching" href="/docs/core/caching">
+    Wrap calls with cachedCall to avoid duplicate work and reduce provider usage
   </Card>
   <Card title="Rate Limiting" href="/docs/core/rate-limiting">
     Stay under a provider's requests/tokens/concurrency limits before they reject you
   </Card>
-  <Card title="Usage Metering" href="/docs/core/usage-metering">
-    Reserve usage before LLM calls and refund failed calls
-  </Card>
-  <Card title="Caching" href="/docs/core/caching">
-    Wrap calls with cachedCall to avoid duplicate work and reduce provider usage
-  </Card>
   <Card title="Observability" href="/docs/core/observability">
     One event stream for retries, circuit state transitions, rate limit waits, and fallback
   </Card>
+  <Card title="Usage Metering" href="/docs/core/usage-metering">
+    Reserve usage before LLM calls and refund failed calls
+  </Card>
   <Card title="Usage Tracking" href="/docs/core/usage-tracking">
     Track token usage from provider responses
+  </Card>
+  <Card title="Circuit Breaker" href="/docs/core/circuit-breaker">
+    Stop hammering a provider that's down
+  </Card>
+  <Card title="Middleware" href="/docs/core/middleware">
+    Transform outgoing requests and observe or wrap the outcome of a call
+  </Card>
+  <Card title="Retries" href="/docs/core/retries">
+    Exponential backoff with jitter, and Retry-After awareness
   </Card>
   <Card title="Error Handling" href="/docs/core/error-handling">
     LLMError types, what triggers each, and what gets retried

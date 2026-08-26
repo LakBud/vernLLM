@@ -1,0 +1,163 @@
+---
+title: Middleware Tracing and Cost Tracking
+description: Build a request-tracing and cost-tracking pair with transform, wrap, and ctx.state
+---
+
+This guide walks through a complete middleware pair: one middleware opens a tracing span around
+every call, and a second, independent middleware reads that span back out to record cost, without
+either middleware needing to know how the other is implemented.
+
+See [Middleware](/docs/core/middleware) for the full hook contract this guide builds on.
+
+## 1. Create a shared state key
+
+Two middleware that need to share a value do it through `ctx.state`, keyed by a typed reference
+both sides import, not a string either could typo:
+
+```ts title="span-id-key.ts"
+import { createStateKey } from 'vern-llm';
+
+export const spanIdKey = createStateKey<string>('tracing.spanId');
+```
+
+## 2. Write the tracing middleware
+
+`wrap` opens a span before the call and closes it once `next()` resolves, so it spans the whole
+logical call, retries and fallback included, not just one attempt:
+
+```ts title="tracing-middleware.ts"
+import type { VernLLMMiddleware } from 'vern-llm';
+import { spanIdKey } from './span-id-key';
+
+export const tracing: VernLLMMiddleware = {
+  name: 'tracing',
+  priority: 1,
+  wrap: async (request, next, ctx) => {
+    const spanId = startSpan(ctx.requestId, {
+      provider: ctx.requestedProvider,
+      model: ctx.requestedModel,
+    });
+    ctx.state.set(spanIdKey, spanId);
+
+    try {
+      const result = await next();
+      endSpan(spanId, { status: 'ok', provider: result.meta?.provider });
+      return result;
+    } catch (error) {
+      endSpan(spanId, { status: 'error' });
+      throw error;
+    }
+  },
+};
+```
+
+`ctx.requestedProvider`/`requestedModel` describe the primary target before `next()` resolves;
+`result.meta?.provider` is what actually served the call, which can differ if `fallback` moved the
+call to a backup target underneath this `wrap`.
+
+## 3. Write the cost-tracking middleware
+
+A second, independent middleware reads the span ID `tracing` set, without importing anything from
+`tracing` itself beyond the shared key:
+
+```ts title="cost-tracking-middleware.ts"
+import type { VernLLMMiddleware } from 'vern-llm';
+import { spanIdKey } from './span-id-key';
+
+export const costTracking: VernLLMMiddleware = {
+  name: 'cost-tracking',
+  priority: 0, // outer: see "Why cost-tracking is priority 0" below
+  wrap: async (request, next, ctx) => {
+    const start = Date.now();
+    const result = await next();
+
+    recordCost({
+      spanId: ctx.state.get(spanIdKey),
+      elapsedMs: Date.now() - start,
+      tokens: result.meta ? undefined : 0, // see step 5 for reading real usage
+    });
+
+    return result;
+  },
+};
+```
+
+## 4. Register both, in either order
+
+`middleware` is one flat array; `priority` decides nesting, not array position:
+
+```ts title="middleware-registration.ts"
+import { costTracking } from './cost-tracking-middleware';
+import { tracing } from './tracing-middleware';
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [tracing, costTracking], // order here doesn't matter, priority does
+});
+```
+
+## 5. Read real token usage instead of a placeholder
+
+`result.meta` doesn't carry token counts, `onUsage` does. Pair `wrap` with `onUsage` for cost that
+needs real spend, not just wall-clock time:
+
+```ts title="cost-tracking-with-usage.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [tracing, costTracking],
+  onUsage: (usage) => {
+    recordTokenCost(usage.requestId, usage.totalTokens);
+  },
+});
+```
+
+`onUsage` fires per real provider response, `wrap`'s `next()` resolves once per logical call, so
+correlate the two by `requestId` if a call retried or fell over to a fallback target and you need
+per-attempt token cost rather than just the logical call's total elapsed time.
+
+## Why `cost-tracking` is `priority: 0`
+
+Lower `priority` is outermost: first to start, last to finish. `cost-tracking` needs to start its
+timer before `tracing` opens the span, and read the span ID back out after `tracing`'s own `wrap`
+has already resolved, so it needs to be the outer one:
+
+```
+cost-tracking starts timer  (pre-next, priority 0, runs first)
+  tracing opens span, sets spanIdKey  (pre-next, priority 1, runs second)
+    the real call happens
+  tracing closes span, resolves  (post-next, priority 1, resolves first)
+cost-tracking reads spanIdKey, records cost  (post-next, priority 0, resolves last)
+```
+
+This particular pair would also work with the priorities swapped, since `spanIdKey` is written in
+one middleware's pre-`next()` phase and read in the other's post-`next()` phase, and every
+middleware's pre phase finishes before any post phase begins regardless of nesting. Order would
+start to matter if `cost-tracking` needed to read `spanIdKey` in its own pre-`next()` phase instead,
+say to tag a log line with it before the call even starts, since then `tracing` would need to run
+its own pre phase first. See [Composition order](/docs/core/middleware#composition-order) for the
+general rule.
+
+## Filtering to one target
+
+Scope either middleware to just the primary target, or just fallback attempts, with `enabled`
+instead of a separate targets list:
+
+```ts title="scope-to-primary.ts"
+export const tracing: VernLLMMiddleware = {
+  name: 'tracing',
+  priority: 1,
+  enabled: (ctx) => !ctx.isFallbackAttempt,
+  wrap: async (request, next, ctx) => {
+    /* ... */
+    return next();
+  },
+};
+```
+
+<Callout type="info">
+  Both middleware here use `wrap`, never `transform`: neither one changes the outgoing request, so
+  there's nothing for `transform` to patch. Reach for `transform` instead when a middleware needs to
+  redact content or add a tool before dispatch, see [transform](/docs/core/middleware#transform).
+</Callout>

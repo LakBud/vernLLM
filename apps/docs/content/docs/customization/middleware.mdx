@@ -1,0 +1,179 @@
+---
+title: Middleware
+description: Write your own transform/wrap middleware
+---
+
+<Callout type="info">
+  This page covers writing your own middleware. See [Middleware](/docs/core/middleware) in Core for
+  the full hook contract, composition order, and error handling rules.
+</Callout>
+
+`VernLLMMiddleware` is a plain object, no base class or builder required:
+
+```ts title="minimal-middleware.ts"
+import type { VernLLMMiddleware } from 'vern-llm';
+
+const loggingMiddleware: VernLLMMiddleware = {
+  name: 'logging',
+  wrap: async (request, next, ctx) => {
+    console.log(`[${ctx.requestId}] calling ${ctx.requestedProvider}/${ctx.requestedModel}`);
+    const result = await next();
+    console.log(`[${ctx.requestId}] resolved`, result.meta);
+    return result;
+  },
+};
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [loggingMiddleware],
+});
+```
+
+## `createMiddleware` for the "I only care about failures" case
+
+Wiring a full `wrap` just to observe a failure is more ceremony than the use case needs.
+`createMiddleware` builds one for you from an `onError` callback:
+
+```ts title="create-middleware-onerror.ts"
+import { createMiddleware } from 'vern-llm';
+
+const alertOnFailure = createMiddleware({
+  name: 'alerting',
+  onError: (error, ctx) => {
+    alerting.page(`${ctx.requestedProvider} call failed: ${error.message}`);
+  },
+});
+```
+
+`onError` is called with the call's terminal error, the same error `wrap`'s own `next()` would
+reject with. Never called on success, and never called for a failure another middleware's `wrap`
+already swallowed by short-circuiting with its own `CallResult`. The original error is always
+rethrown afterward; `onError` only observes it, the same fire-and-forget contract `onUsage`/`onEvent`
+already have.
+
+Everything else on `CreateMiddlewareOptions` passes through unchanged, `transform`, `enabled`,
+`priority`, `onEvent`, so `createMiddleware` composes with the rest of the hook surface instead of
+replacing it. `wrap` itself can't be set alongside `onError`: `onError` builds its own `wrap`
+internally, and supplying both would silently drop one of the two.
+
+## Sharing state with `createStateKey`
+
+Two middleware that need to deliberately share a value import the same
+`MiddlewareStateKey<T>` reference, created once with `createStateKey`:
+
+```ts title="shared-state-key.ts"
+import { createStateKey, type VernLLMMiddleware } from 'vern-llm';
+
+// Exported so any middleware that needs the same value imports this, not a string.
+export const spanIdKey = createStateKey<string>('tracing.spanId');
+```
+
+```ts title="tracing-and-cost-middleware.ts"
+import { spanIdKey } from './span-id-key';
+
+const tracing: VernLLMMiddleware = {
+  name: 'tracing',
+  priority: 1,
+  wrap: async (request, next, ctx) => {
+    ctx.state.set(spanIdKey, startSpan(ctx.requestId));
+    return next();
+  },
+};
+
+const costTracking: VernLLMMiddleware = {
+  name: 'cost-tracking',
+  priority: 0, // outer, so its post-next() phase runs last, after tracing's own
+  wrap: async (request, next, ctx) => {
+    const start = Date.now();
+    const result = await next();
+    recordCost(ctx.state.get(spanIdKey), Date.now() - start, result.meta);
+    return result;
+  },
+};
+```
+
+There's no string key anywhere in this path, so a typo is a missing import or an undefined
+variable, a compile error, not a silently created new property or an accidental collision with
+another middleware's own key.
+
+<Callout type="warn">
+  Composition order still matters for `ctx.state`: see [Composition
+  order](/docs/core/middleware#composition-order) for when a shared value's write/read ordering is
+  order-independent versus order-dependent.
+</Callout>
+
+## Writing your own ordering
+
+`priority` is a plain number VernLLM sorts by; nothing stops a small helper from computing that
+number for you from `before`/`after` name references, entirely in userland, without VernLLM ever
+knowing it happened:
+
+```ts title="resolve-order.ts"
+import type { VernLLMMiddleware } from 'vern-llm';
+
+type OrderedMiddleware = VernLLMMiddleware & {
+  name: string; // required here, optional on VernLLMMiddleware itself
+  before?: string[];
+  after?: string[];
+};
+
+/**
+ * Topologically sorts before/after references into priority numbers, then
+ * strips them, returning a plain VernLLMMiddleware[]. Throws on a cycle,
+ * naming the middleware involved.
+ */
+function resolveOrder(entries: OrderedMiddleware[]): VernLLMMiddleware[] {
+  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  const priority = new Map<string, number>();
+  const visiting = new Set<string>();
+
+  function assign(name: string): number {
+    if (priority.has(name)) return priority.get(name)!;
+    if (visiting.has(name)) throw new Error(`resolveOrder: cycle detected at "${name}"`);
+
+    visiting.add(name);
+    const entry = byName.get(name);
+    if (!entry) throw new Error(`resolveOrder: unknown middleware "${name}"`);
+
+    const afterAll = (entry.after ?? []).map(assign);
+    const beforeAll = (entry.before ?? []).flatMap((laterName) => {
+      const later = byName.get(laterName);
+      return later ? [assign(laterName) - 1] : [];
+    });
+
+    const resolved = Math.max(0, ...afterAll, ...beforeAll.map((n) => n + 1));
+    priority.set(name, resolved);
+    visiting.delete(name);
+    return resolved;
+  }
+
+  for (const entry of entries) assign(entry.name);
+
+  return entries.map(({ before, after, ...rest }) => ({
+    ...rest,
+    priority: priority.get(rest.name!),
+  }));
+}
+```
+
+```ts title="resolve-order-usage.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: resolveOrder([
+    { name: 'redaction', transform: (request) => ({ messages: redact(request.messages) }) },
+    { name: 'tracing', after: ['redaction'], wrap: tracingWrap },
+    { name: 'cost-tracking', before: ['tracing'], wrap: costWrap },
+  ]),
+});
+```
+
+`middleware` only ever needs to be a plain `VernLLMMiddleware[]` by the time it reaches the
+constructor, so an addon like this, or one that scopes a set of middleware to a single fallback
+target via `enabled`, needs no change inside VernLLM itself.
+
+<Callout>
+  See the [Middleware guide](/docs/guides/middleware-tracing-and-cost-tracking) for a full worked
+  example combining `transform`, `wrap`, and `ctx.state`.
+</Callout>
