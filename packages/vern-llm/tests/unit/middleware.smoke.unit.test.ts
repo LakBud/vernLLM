@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createMiddleware } from '../../src/types/createMiddleware.js';
-import { createStateKey, type VernLLMMiddleware } from '../../src/types/index.js';
+import {
+  createStateKey,
+  type VernLLMEvent,
+  type VernLLMMiddleware,
+} from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, textResponse } from '../helpers.js';
 
@@ -462,5 +466,41 @@ describe('middleware smoke test', () => {
     // middlewareTimeoutMs the same way transform/enabled are.
     const result = await llm.call({ userContent: 'hello', jsonMode: false });
     expect(result).toBe('hi');
+  });
+
+  it("the 'middleware' transform event fires only when a patch actually changed something, staying silent on a no-op transform", async () => {
+    const { client } = createMockClient([textResponse('hi')]);
+    const events: Array<Extract<VernLLMEvent, { kind: 'middleware' }>> = [];
+
+    const noOpMiddleware: VernLLMMiddleware = {
+      name: 'no-op',
+      priority: 0,
+      transform: () => ({}),
+    };
+
+    const realPatchMiddleware: VernLLMMiddleware = {
+      name: 'real-patch',
+      priority: 1,
+      transform: () => ({ addMessages: [{ role: 'user', content: 'tagged' }] }),
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [noOpMiddleware, realPatchMiddleware],
+      onEvent: (event: VernLLMEvent) => {
+        if (event.kind === 'middleware') events.push(event);
+      },
+    } as never);
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: 'middleware',
+      middleware: 'real-patch',
+      hook: 'transform',
+      patchedFields: ['addMessages'],
+    });
   });
 });

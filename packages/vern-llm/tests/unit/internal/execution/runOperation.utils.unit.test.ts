@@ -4,11 +4,11 @@ import {
   runOperation,
   type RunOperationDependencies,
 } from '../../../../src/internal/execution/runOperation.js';
-import { type Logger } from '../../../../src/logger.js';
 import { LLMError } from '../../../../src/types/errors.js';
 import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
 
 import type { CallExecutor } from '../../../../src/internal/execution/callExecutor.js';
+import type { Logger } from '../../../../src/logger.js';
 import type {
   CallParams,
   CallResult,
@@ -299,6 +299,37 @@ describe('runOperation', () => {
         async () => ({ value: 'never' }),
       ),
     ).rejects.toMatchObject({ type: 'rate_limited', message: 'slow down' });
+  });
+
+  it('a plain thrown value recognized as a network transport error keeps that classification (retryable) when thrown from wrap before next() resolves', async () => {
+    const middleware: VernLLMMiddleware = {
+      name: 'flaky-external-call',
+      wrap: async () => {
+        // Simulates a middleware wrapping its own external call (e.g. a
+        // redaction microservice) that failed transiently, the same
+        // network signal normalizeError already recognizes for the LLM
+        // provider client itself.
+        const networkError = Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' });
+        throw networkError;
+      },
+    };
+
+    try {
+      await runOperation(
+        dependencies({ middleware: [middleware] }),
+        params,
+        requestId,
+        createMiddlewareStateBag(),
+        async () => ({ value: 'never' }),
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(LLMError);
+      const llmError = error as LLMError;
+      expect(llmError.type).not.toBe('invalid_params');
+      expect(llmError.type).not.toBe('unknown');
+      expect(llmError.retryable).toBe(true);
+    }
   });
 
   it('a wrap throwing after next() already resolved successfully keeps the original result and logs the error', async () => {

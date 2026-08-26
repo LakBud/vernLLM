@@ -470,4 +470,182 @@ describe('middleware workflow integration', () => {
 
     expect(observedError).toBeInstanceOf(FallbackExhaustedError);
   });
+
+  it('a genuinely unrecognizable throw is not counted toward the circuit breaker, unlike a real provider failure', async () => {
+    const { client } = createMockClient([textResponse('would have worked')]);
+
+    const buggy: VernLLMMiddleware = {
+      name: 'buggy',
+      transform: () => {
+        throw new Error('undefined is not a function');
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      middleware: [buggy],
+      circuitBreaker: { threshold: 1, cooldownMs: 60_000 },
+    });
+
+    // Trip the "breaker" with a middleware bug, repeatedly, well past the
+    // threshold that would open a breaker counting real failures.
+    for (let i = 0; i < 5; i++) {
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'middleware_threw',
+      });
+    }
+
+    // The breaker never saw any of those as a countable failure, so it's
+    // still closed: getCircuitState confirms it directly.
+    expect(llm.getCircuitState()).toBe('closed');
+  });
+
+  it("ctx.state read in the outer wrap's pre-next() phase requires the writer to be the inner (later-priority) middleware, unlike a post-next() read which is order independent", async () => {
+    const { client } = createMockClient([textResponse('hi')]);
+    const spanKey = createStateKey<string>('order-dependent-span');
+    let observedBeforeNext: string | undefined;
+
+    // `logs-before-call` is priority 0 (outermost): its pre-next() phase
+    // runs before `sets-span-id`'s pre-next() phase ever does, so reading
+    // the key here, before calling next(), can only see whatever was
+    // already there when this call started: nothing.
+    const logsBeforeCall: VernLLMMiddleware = {
+      name: 'logs-before-call',
+      priority: 0,
+      wrap: async (_request, next, ctx) => {
+        observedBeforeNext = ctx.state.get(spanKey);
+        return next();
+      },
+    };
+
+    const setsSpanId: VernLLMMiddleware = {
+      name: 'sets-span-id',
+      priority: 1,
+      wrap: async (_request, next, ctx) => {
+        ctx.state.set(spanKey, 'span-xyz');
+        return next();
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [logsBeforeCall, setsSpanId],
+    });
+
+    await llm.call({ userContent: 'hi', jsonMode: false });
+
+    // The value genuinely isn't there yet at that point in the sequence:
+    // this is the "wrong without the right priority" case, not merely an
+    // untested one.
+    expect(observedBeforeNext).toBeUndefined();
+  });
+
+  it('cachedCall: two concurrent callers on the same cacheKey join a single in-flight miss, each still getting exactly one wrap invocation of their own', async () => {
+    let resolveCall: (value: unknown) => void;
+    const pendingCall = new Promise((resolve) => {
+      resolveCall = resolve;
+    });
+
+    const { client, create } = createMockClient([() => pendingCall as Promise<never>]);
+
+    let wrapCount = 0;
+
+    const middleware: VernLLMMiddleware = {
+      name: 'counter',
+      wrap: async (_request, next) => {
+        wrapCount++;
+        return next();
+      },
+    };
+
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+
+    const callParams = {
+      cacheKey: 'join-key',
+      ttl: 1000,
+      call: { userContent: 'hi', jsonMode: false },
+    };
+
+    // Both start before either resolves, so the second joins the first's
+    // in-flight miss instead of triggering its own.
+    const first = llm.cachedCall(callParams);
+    const second = llm.cachedCall(callParams);
+
+    resolveCall!(textResponse('joined result'));
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe('joined result');
+    expect(secondResult).toBe('joined result');
+    expect(create).toHaveBeenCalledTimes(1);
+    // One wrap invocation for the trigger's own cachedCall(), one more
+    // for the joiner's own cachedCall(): never a third for the
+    // underlying provider call they shared.
+    expect(wrapCount).toBe(2);
+  });
+
+  it('CallResult.meta populated for a streaming call the same way it already is for a non-streaming one', async () => {
+    const { client: streamClient } = createMockStreamingClient([
+      [{ type: 'text-delta', delta: 'hi' }],
+    ]);
+    const { client: nonStreamClient } = createMockClient([textResponse('hi')]);
+
+    let streamingMeta: unknown;
+    let nonStreamingMeta: unknown;
+
+    const streamingMiddleware: VernLLMMiddleware = {
+      name: 'meta-observer',
+      wrap: async (_request, next) => {
+        const result = await next();
+        streamingMeta = result.meta;
+        return result;
+      },
+    };
+
+    const nonStreamingMiddleware: VernLLMMiddleware = {
+      name: 'meta-observer',
+      wrap: async (_request, next) => {
+        const result = await next();
+        nonStreamingMeta = result.meta;
+        return result;
+      },
+    };
+
+    const streamingLlm = new VernLLM({
+      client: streamClient,
+      model: 'test-model',
+      name: 'test-provider',
+      middleware: [streamingMiddleware],
+    });
+
+    const nonStreamingLlm = new VernLLM({
+      client: nonStreamClient,
+      model: 'test-model',
+      name: 'test-provider',
+      middleware: [nonStreamingMiddleware],
+    });
+
+    const { finalResult } = await streamingLlm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+    await finalResult;
+    await nonStreamingLlm.call({ userContent: 'hi', jsonMode: false });
+
+    const expectedMetaShape = {
+      provider: 'test-provider',
+      model: 'test-model',
+      fallbackIndex: -1,
+      usedFallback: false,
+      attempts: 1,
+    };
+
+    expect(streamingMeta).toEqual(expectedMetaShape);
+    expect(nonStreamingMeta).toEqual(expectedMetaShape);
+  });
 });
