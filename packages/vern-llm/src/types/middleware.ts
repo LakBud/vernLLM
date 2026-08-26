@@ -195,7 +195,7 @@ export interface VernLLMMiddleware {
    */
   enabled?: boolean | ((ctx: MiddlewareContext) => boolean | Promise<boolean>);
 
-  /** Per-middleware override of the instance-level `middlewareTimeoutMs`, applied to this entry's `transform` and function `enabled`. */
+  /** Per-middleware override of the instance-level `middlewareTimeoutMs`, applied to this entry's `transform` and function `enabled`. `<= 0` means unbounded (no timer at all). */
   timeoutMs?: number;
 
   /** Transforms the outgoing wire request for one attempt. Runs once per attempt, including retries. */

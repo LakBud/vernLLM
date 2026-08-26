@@ -440,9 +440,10 @@ export class LLMError extends Error {
    * `nonRetryableStatus` list. False for `parse`/`validation`/
    * `invalid_params`/`aborted` types (the caller's own input, the model's
    * own response, or intentional cancellation, none of which are the
-   * provider being unhealthy), the tool contract codes, and the local
-   * rate limit codes. Subclasses (see `FallbackExhaustedError`) may
-   * override this when `type` alone carries no retry signal.
+   * provider being unhealthy), the tool contract codes, the local
+   * rate limit codes, and the middleware timeout code.
+   * Subclasses (see `FallbackExhaustedError`) may override this when `type`
+   * alone carries no retry signal.
    */
   get retryable(): boolean {
     return computeRetryable(this.type, this.code);

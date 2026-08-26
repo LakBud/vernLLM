@@ -146,6 +146,8 @@ for whichever target that attempt is actually dispatched to. Scope a `transform`
 primary target, or just fallback attempts, the same way:
 
 ```ts title="scope-transform-to-primary.ts"
+import type { VernLLMMiddleware } from 'vern-llm';
+
 export const primaryOnlyRedaction: VernLLMMiddleware = {
   name: 'primary-only-redaction',
   enabled: (ctx) => !ctx.isFallbackAttempt,

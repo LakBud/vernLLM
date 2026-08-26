@@ -11,7 +11,8 @@ description: Write your own transform/wrap middleware
 `VernLLMMiddleware` is a plain object, no base class or builder required:
 
 ```ts title="minimal-middleware.ts"
-import type { VernLLMMiddleware } from 'vern-llm';
+import { VernLLM, type VernLLMMiddleware } from 'vern-llm';
+import { openai } from './openai-client'; // your configured OpenAI client
 
 const loggingMiddleware: VernLLMMiddleware = {
   name: 'logging',
@@ -188,6 +189,12 @@ function resolveOrder(entries: OrderedMiddleware[]): VernLLMMiddleware[] {
 ```
 
 ```ts title="resolve-order-usage.ts"
+import { VernLLM } from 'vern-llm';
+import { openai } from './openai-client'; // your configured OpenAI client
+import { redact } from './redact'; // your redaction helper: (messages) => messages
+import { tracingWrap } from './tracing-wrap'; // your tracing `wrap` middleware fn
+import { costWrap } from './cost-wrap'; // your cost-tracking `wrap` middleware fn
+
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',

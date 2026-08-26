@@ -954,7 +954,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   `reserveUsage`/`refundUsage` now receive a `{ coalesced: boolean }` argument, so applications can
   decide how coalesced callers are billed: full price, a reduced rate, or not billed at all. This is
-  backward compatible -> existing `() => Promise<void>` implementations don't need to change.
+  backward compatible: existing `() => Promise<void>` implementations don't need to change.
 
   Docs updated in `core/caching.mdx` to describe the coalescing behavior and the new `coalesced` flag.
 

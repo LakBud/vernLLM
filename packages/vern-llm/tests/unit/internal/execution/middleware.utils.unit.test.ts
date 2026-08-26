@@ -7,6 +7,7 @@ import {
   middlewareLabel,
   reclassifyMiddlewareThrow,
   resolveEnabled,
+  runTransform,
 } from '../../../../src/internal/execution/utils/middleware.utils.js';
 import { LLMError } from '../../../../src/types/errors.js';
 
@@ -234,6 +235,19 @@ describe('resolveEnabled', () => {
     expect(Date.now() - start).toBeLessThan(1000);
     expect(result).toBe(false);
   });
+
+  it('timeoutMs <= 0 is treated as unbounded, never rejecting on a timer', async () => {
+    const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const result = await resolveEnabled(
+      { enabled: () => Promise.resolve(true) },
+      baseCtx(),
+      'unbounded',
+      0,
+      errorLogger,
+    );
+    expect(result).toBe(true);
+    expect(errorLogger.error).not.toHaveBeenCalled();
+  });
 });
 
 describe('reclassifyMiddlewareThrow', () => {
@@ -255,5 +269,23 @@ describe('reclassifyMiddlewareThrow', () => {
     expect(result.code).toBe('middleware_threw');
     expect(result.message).toContain('my-middleware');
     expect(result.retryable).toBe(false);
+  });
+});
+
+describe('runTransform', () => {
+  it('classifies a timed-out transform as a non-retryable middleware_timeout', async () => {
+    await expect(
+      runTransform(
+        { transform: () => new Promise(() => {}) },
+        baseRequest,
+        baseCtx(),
+        'slow-transform',
+        10,
+      ),
+    ).rejects.toMatchObject({
+      type: 'timeout',
+      code: 'middleware_timeout',
+      retryable: false,
+    });
   });
 });

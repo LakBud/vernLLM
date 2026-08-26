@@ -34,8 +34,13 @@ export function middlewareLabel(middleware: VernLLMMiddleware, index: number): s
  * out, and it's excluded from the general `timeout` type's
  * retryability so `computeRetryable` doesn't retry a `transform` that's
  * just going to time out again the same way.
+ *
+ * `timeoutMs <= 0` is treated as unbounded: `fn()` is awaited directly,
+ * with no timer scheduled at all.
  */
 function raceTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (timeoutMs <= 0) return fn();
+
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(
