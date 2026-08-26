@@ -4,7 +4,7 @@ import {
   runOperation,
   type RunOperationDependencies,
 } from '../../../../src/internal/execution/runOperation.js';
-import { Logger } from '../../../../src/logger.js';
+import { type Logger } from '../../../../src/logger.js';
 import { LLMError } from '../../../../src/types/errors.js';
 import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
 
