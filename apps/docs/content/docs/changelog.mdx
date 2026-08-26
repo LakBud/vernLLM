@@ -954,7 +954,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   `reserveUsage`/`refundUsage` now receive a `{ coalesced: boolean }` argument, so applications can
   decide how coalesced callers are billed: full price, a reduced rate, or not billed at all. This is
-  backward compatible. Existing `() => Promise<void>` implementations don't need to change.
+  backward compatible -> existing `() => Promise<void>` implementations don't need to change.
 
   Docs updated in `core/caching.mdx` to describe the coalescing behavior and the new `coalesced` flag.
 
@@ -1043,7 +1043,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   - **Adapters**: Added support for providers including xAI, NVIDIA NIM, Vercel AI Gateway, Cloudflare Workers AI, GitHub Models, Nebius, SambaNova, Baseten, DashScope, Featherless, Friendli, SiliconFlow, LiteLLM Proxy, Parasail, StepFun, MiniMax, Lambda Labs, Snowflake Cortex, Anyscale, Lepton, kluster.ai, Inference.net, Infermatic, AtlasCloud, and 01.AI.
   - **Docs**: Expanded `openai-compatible` documentation with the full list of supported named adapters and clarified `fromOpenAICompatible()` as the generic fallback.
   - **Homepage**: Updated the provider list with the newly supported providers.
-  - **Changeset**: Minor bump for `vern-llm`. Purely additive, no breaking changes.
+  - **Changeset**: Minor bump for `vern-llm`: purely additive, no breaking changes.
 
 ## 1.1.0
 
@@ -1057,7 +1057,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   - **Tests**: added to the parameterized alias check in `openaiCompatible.unit.test.ts` (18/18 passing)
   - **Docs**: `adapters/index.mdx` and `adapters/openai-compatible.mdx` updated to list all providers as named wrappers
   - **Homepage**: `home.utils.ts` `providers` array expanded with icons + doc links for all new providers (fixed `Vllm` casing to match actual `@lobehub/icons` export)
-  - **Changeset**: minor bump for `vern-llm`. Purely additive, no breaking changes
+  - **Changeset**: minor bump for `vern-llm`: purely additive, no breaking changes
 
   **Verified**: `tsc --noEmit` clean on both the package and docs app, `dist/` rebuilt via `tsdown` to include new exports, `changeset status` confirms minor bump.
 
