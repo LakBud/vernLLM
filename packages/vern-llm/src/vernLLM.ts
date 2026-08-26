@@ -15,6 +15,7 @@ import {
 } from './internal/execution/logicalCall.js';
 import { runOperation, type RunOperationDependencies } from './internal/execution/runOperation.js';
 import { setupDeadline, stampDeadlineCode } from './internal/execution/utils/deadline.utils.js';
+import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './internal/execution/utils/middleware.utils.js';
 import {
   withReservedUsage,
   withReservedUsageForStream,
@@ -143,7 +144,7 @@ export class VernLLM {
     this.middleware = [...(options.middleware ?? [])].sort(
       (a, b) => (a.priority ?? 0) - (b.priority ?? 0),
     );
-    this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? 5000;
+    this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
 
     // The primary target's shared knobs, resolved once here rather than
     // inline in the retry-tunable default below, since fallback targets
@@ -610,13 +611,13 @@ export class VernLLM {
     if (restCallParams.stream) {
       const streamParams = { ...restCallParams, requestId } as StreamEnabledCallParams<T>;
 
-      const wrapped = await runOperation(
-        this.runOperationDependencies,
-        streamParams,
-        requestId,
-        middlewareState,
-        async () => {
-          try {
+      try {
+        const wrapped = await runOperation(
+          this.runOperationDependencies,
+          streamParams,
+          requestId,
+          middlewareState,
+          async () => {
             const value = await this.cacheOrchestrator.runCachedStream(
               {
                 ...cacheParams,
@@ -630,37 +631,46 @@ export class VernLLM {
             // `undefined` in that case, correctly: nothing was actually
             // spent and no target answered this call.
             return { value, meta: metaHolder.current };
-          } finally {
-            releaseMetaHolder();
-          }
-        },
-      );
+          },
+        );
 
-      return wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
+        return wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
+      } finally {
+        // Wraps the whole `runOperation` call, not just `coreOperation`'s
+        // own body: `previewRequest` (run before `coreOperation` even
+        // exists) can throw, and a `wrap` that short-circuits or throws
+        // before calling `next()` skips `coreOperation` entirely (see
+        // `runOperation`'s own docs). A `finally` nested only inside
+        // `coreOperation` would miss all three cases, leaking this entry
+        // in `cachedCallMeta` forever for a trigger that never got to
+        // release it.
+        releaseMetaHolder();
+      }
     }
 
     const paramsWithId = { ...restCallParams, requestId } as CallParams<T>;
 
-    const wrapped = await runOperation(
-      this.runOperationDependencies,
-      paramsWithId,
-      requestId,
-      middlewareState,
-      async () => {
-        try {
+    try {
+      const wrapped = await runOperation(
+        this.runOperationDependencies,
+        paramsWithId,
+        requestId,
+        middlewareState,
+        async () => {
           const value = await this.runCached({
             ...cacheParams,
             fn: () => callWrapped(paramsWithId),
           });
 
           return { value, meta: metaHolder.current };
-        } finally {
-          releaseMetaHolder();
-        }
-      },
-    );
+        },
+      );
 
-    return wrapped.value as T | CallWithToolsResult<T>;
+      return wrapped.value as T | CallWithToolsResult<T>;
+    } finally {
+      // See the matching comment in the streaming branch above.
+      releaseMetaHolder();
+    }
   }
 
   /**

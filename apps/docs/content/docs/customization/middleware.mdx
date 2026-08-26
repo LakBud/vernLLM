@@ -1,5 +1,5 @@
 ---
-title: Middleware
+title: Customization Middleware
 description: Write your own transform/wrap middleware
 ---
 
@@ -120,11 +120,49 @@ type OrderedMiddleware = VernLLMMiddleware & {
 
 /**
  * Topologically sorts before/after references into priority numbers, then
- * strips them, returning a plain VernLLMMiddleware[]. Throws on a cycle,
- * naming the middleware involved.
+ * strips them, returning a plain VernLLMMiddleware[]. Every `before`
+ * normalizes to the equivalent `after` edge on the later entry first, so
+ * both directions rank the same way. Each entry's priority is one more
+ * than the largest priority among what it must run after, so a chain of
+ * dependencies gets strictly increasing numbers instead of collapsing to
+ * the same one. Throws on a cycle or an unknown middleware name, naming
+ * the offending middleware either way.
  */
 function resolveOrder(entries: OrderedMiddleware[]): VernLLMMiddleware[] {
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
+
+  // Normalize every `before` into the equivalent `after` edge on the
+  // later entry, so ranking only ever has to walk one kind of edge.
+  const dependsOn = new Map<string, Set<string>>();
+  const edgesFor = (name: string): Set<string> => {
+    let edges = dependsOn.get(name);
+    if (!edges) {
+      edges = new Set();
+      dependsOn.set(name, edges);
+    }
+    return edges;
+  };
+
+  for (const entry of entries) {
+    edgesFor(entry.name);
+
+    for (const afterName of entry.after ?? []) {
+      if (!byName.has(afterName)) {
+        throw new Error(`resolveOrder: "${entry.name}" is after unknown middleware "${afterName}"`);
+      }
+      edgesFor(entry.name).add(afterName);
+    }
+
+    for (const beforeName of entry.before ?? []) {
+      if (!byName.has(beforeName)) {
+        throw new Error(
+          `resolveOrder: "${entry.name}" is before unknown middleware "${beforeName}"`,
+        );
+      }
+      edgesFor(beforeName).add(entry.name);
+    }
+  }
+
   const priority = new Map<string, number>();
   const visiting = new Set<string>();
 
@@ -133,16 +171,8 @@ function resolveOrder(entries: OrderedMiddleware[]): VernLLMMiddleware[] {
     if (visiting.has(name)) throw new Error(`resolveOrder: cycle detected at "${name}"`);
 
     visiting.add(name);
-    const entry = byName.get(name);
-    if (!entry) throw new Error(`resolveOrder: unknown middleware "${name}"`);
-
-    const afterAll = (entry.after ?? []).map(assign);
-    const beforeAll = (entry.before ?? []).flatMap((laterName) => {
-      const later = byName.get(laterName);
-      return later ? [assign(laterName) - 1] : [];
-    });
-
-    const resolved = Math.max(0, ...afterAll, ...beforeAll.map((n) => n + 1));
+    const deps = [...(dependsOn.get(name) ?? [])];
+    const resolved = deps.length === 0 ? 0 : Math.max(...deps.map(assign)) + 1;
     priority.set(name, resolved);
     visiting.delete(name);
     return resolved;

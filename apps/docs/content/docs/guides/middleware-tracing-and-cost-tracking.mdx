@@ -141,20 +141,26 @@ general rule.
 
 ## Filtering to one target
 
-Scope either middleware to just the primary target, or just fallback attempts, with `enabled`
-instead of a separate targets list:
+`enabled` is evaluated fresh per attempt for `transform`, with an accurate `ctx.isFallbackAttempt`
+for whichever target that attempt is actually dispatched to. Scope a `transform` to just the
+primary target, or just fallback attempts, the same way:
 
-```ts title="scope-to-primary.ts"
-export const tracing: VernLLMMiddleware = {
-  name: 'tracing',
-  priority: 1,
+```ts title="scope-transform-to-primary.ts"
+export const primaryOnlyRedaction: VernLLMMiddleware = {
+  name: 'primary-only-redaction',
   enabled: (ctx) => !ctx.isFallbackAttempt,
-  wrap: async (request, next, ctx) => {
-    /* ... */
-    return next();
-  },
+  transform: (request) => ({ messages: redact(request.messages) }),
 };
 ```
+
+<Callout type="warn">
+  `wrap`'s own `ctx.isFallbackAttempt` is always `false`: `wrap` only ever sees the primary target's
+  context, since which target actually serves the call isn't decided until `next()` resolves. An
+  `enabled` predicate gating a `wrap` can't distinguish a primary attempt from a fallback one this
+  way; read `result.meta?.provider` after `next()` resolves instead if `wrap` needs to know which
+  target actually answered. See [MiddlewareContext](/docs/core/middleware#transform) for the same
+  caveat on `requestedProvider`/`requestedModel`.
+</Callout>
 
 <Callout type="info">
   Both middleware here use `wrap`, never `transform`: neither one changes the outgoing request, so

@@ -328,9 +328,9 @@ function buildAnthropicRequestBody(
       ({ tools, toolChoice } = buildAnthropicTools(params.tools, params.tool_choice));
     }
   } else if (jsonSchema && schemaName) {
-    // Legacy path: jsonSchema alone (or with tools, on a native model),
-    // on a model without native support, becomes a forced single
-    // tool call, unchanged from before this adapter had a native path.
+    // Legacy path: jsonSchema on a model without native support becomes
+    // a forced single tool call, unchanged from before this adapter had
+    // a native path.
     const { schema, description, strict } = jsonSchema;
 
     toolName = schemaName;

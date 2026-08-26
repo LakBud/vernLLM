@@ -380,6 +380,58 @@ describe('middleware smoke test', () => {
     expect(seenInTransform).toBe('abc123');
   });
 
+  it('cachedCall: a metaHolder entry does not leak when wrap short-circuits without calling next()', async () => {
+    const { client } = createMockClient([textResponse('real answer')]);
+
+    const shortCircuit: VernLLMMiddleware = {
+      name: 'short-circuit',
+      wrap: async () => ({ value: 'canned' }),
+    };
+
+    const llm1 = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [shortCircuit],
+    });
+
+    // Trigger: this call's wrap never calls next(), so coreOperation, and
+    // any cleanup nested only inside it, never runs at all. Without the
+    // outer try/finally, the metaHolder entry for this cacheKey would
+    // stay in cachedCallMeta forever.
+    const first = await llm1.cachedCall({
+      cacheKey: 'k-short-circuit-leak',
+      ttl: 60_000,
+      call: { userContent: 'hello', jsonMode: false },
+    });
+    expect(first).toBe('canned');
+
+    // A later cachedCall() for the same cacheKey, on a fresh instance
+    // with no short-circuiting middleware, should see a real cache miss
+    // and real meta, not a stale, permanently-empty holder reused from
+    // the first call's leaked entry.
+    const metas: unknown[] = [];
+    const observer: VernLLMMiddleware = {
+      name: 'observer',
+      wrap: async (_request, next) => {
+        const result = await next();
+        metas.push(result.meta);
+        return result;
+      },
+    };
+
+    const llm2 = new VernLLM({ client, model: 'gpt-4o', middleware: [observer] });
+
+    const second = await llm2.cachedCall({
+      cacheKey: 'k-short-circuit-leak',
+      ttl: 60_000,
+      call: { userContent: 'hello', jsonMode: false },
+    });
+
+    expect(second).toBe('real answer');
+    expect(metas).toHaveLength(1);
+    expect(metas[0]).toMatchObject({ provider: 'primary' });
+  });
+
   it('createMiddleware: onError observes a failure without changing it, and never fires on success', async () => {
     const { client } = createMockClient([new Error('boom'), textResponse('recovered')]);
 

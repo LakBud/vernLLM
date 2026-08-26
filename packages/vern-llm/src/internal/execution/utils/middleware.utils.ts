@@ -10,6 +10,9 @@ import { normalizeError } from './errors.utils.js';
 
 import type { Logger } from '../../../logger.js';
 
+/** Default `middlewareTimeoutMs`, used both as `VernLLMOptions`'s own default and as the instance-level bound `CallExecutor` falls back to when none is passed in. Bounds `transform` and a function `enabled`; `wrap` itself is never bounded by this. */
+export const DEFAULT_MIDDLEWARE_TIMEOUT_MS = 5000;
+
 /** `middleware.name`, or its array position if unnamed. Used in log lines and the `'middleware'` event. */
 export function middlewareLabel(middleware: VernLLMMiddleware, index: number): string {
   return middleware.name ?? `[${index}]`;

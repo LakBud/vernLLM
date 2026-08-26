@@ -4,8 +4,10 @@ description: Transform outgoing requests and observe or wrap the outcome of a ca
 ---
 
 ```ts title="middleware-setup.ts"
-import { createStateKey } from 'vern-llm';
+import OpenAI from 'openai';
+import { createStateKey, fromOpenAI, VernLLM } from 'vern-llm';
 
+const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 const spanIdKey = createStateKey<string>('tracing.spanId');
 
 const llm = new VernLLM({

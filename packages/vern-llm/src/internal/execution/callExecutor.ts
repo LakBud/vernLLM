@@ -8,6 +8,7 @@ import { describeError, extractStatus, normalizeError } from './utils/errors.uti
 import {
   assertModelAndResponseFormatUnchanged,
   assertNoDuplicateTools,
+  DEFAULT_MIDDLEWARE_TIMEOUT_MS,
   mergePatch,
   middlewareLabel,
   reportMiddlewareEvent,
@@ -143,7 +144,7 @@ export class CallExecutor {
     this.limiter = options.limiter;
     this.isFallback = options.isFallback ?? false;
     this.middleware = options.middleware ?? [];
-    this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? 5000;
+    this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
     this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
     this.requestBuilder = new RequestBuilder({
       model,
