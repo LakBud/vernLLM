@@ -62,6 +62,15 @@ export type VernLLMEvent =
       waitedMs: number;
       /** Which configured bucket was blocking this attempt just before it cleared. */
       reason: 'concurrency' | 'rpm' | 'tpm';
+    }
+  | {
+      kind: 'middleware';
+      requestId: string;
+      /** This middleware's `name`, or its array position if unnamed. */
+      middleware: string;
+      hook: 'transform' | 'wrap_short_circuit' | 'enabled_skip';
+      /** For `hook: 'transform'` only: which top-level fields the merged patch touched. */
+      patchedFields?: string[];
     };
 
 export type OnEvent = (event: VernLLMEvent) => void;

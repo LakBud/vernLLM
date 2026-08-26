@@ -9,3 +9,5 @@ export * from './call.js';
 export * from './stream.js';
 export * from './events.js';
 export * from './fallback.js';
+export * from './middleware.js';
+export * from './createMiddleware.js';

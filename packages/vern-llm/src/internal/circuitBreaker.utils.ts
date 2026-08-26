@@ -2,6 +2,7 @@ import { CircuitBreaker, type CircuitBreakerOptions } from '../circuitBreaker.js
 
 import type { Logger } from '../logger.js';
 import type { VernLLMEvent } from '../types/events.js';
+import type { CallExecutor } from './execution/callExecutor.js';
 
 /**
  * Builds a `(event) => void` reporter that no-ops when `onEvent` is unset,
@@ -26,6 +27,37 @@ export function makeEventReporter(
       });
     }
   };
+}
+
+/** Resolves a target index so every circuit-breaker method agrees on what counts as valid. */
+export function resolveExecutor(
+  executors: CallExecutor[],
+  index: number,
+  caller: string,
+): CallExecutor {
+  const executor = executors[index];
+
+  if (!executor) {
+    throw new RangeError(
+      `${caller}: no target at index ${index} (chain has ${executors.length} target${executors.length === 1 ? '' : 's'})`,
+    );
+  }
+
+  return executor;
+}
+
+/** Warns when `model` can't do anything on this target, so it's never silently ignored. */
+export function warnIfModelUnsupported(
+  isolateByModel: boolean,
+  model: string | undefined,
+  caller: string,
+  logger: Logger,
+): void {
+  if (model !== undefined && !isolateByModel) {
+    logger.warn(
+      `[VernLLM] ${caller}: \`model: '${model}'\` has no effect here. This target's circuitBreaker doesn't have isolateByModel on, so it only tracks one shared circuit regardless of \`model\`. Omit \`model\`, or set \`circuitBreaker.isolateByModel: true\` on this target if per-model tracking is what you want.`,
+    );
+  }
 }
 
 /**

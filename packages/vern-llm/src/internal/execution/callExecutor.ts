@@ -1,9 +1,19 @@
 import { CircuitBreaker } from '../../circuitBreaker.js';
 import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
+import { createMiddlewareStateBag } from '../../types/middleware.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { buildStreamResult } from './streamAccumulator.js';
 import { describeError, extractStatus, normalizeError } from './utils/errors.utils.js';
+import {
+  assertModelAndResponseFormatUnchanged,
+  assertNoDuplicateTools,
+  mergePatch,
+  middlewareLabel,
+  reportMiddlewareEvent,
+  resolveEnabled,
+  runTransform,
+} from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
 import {
   extractRetryAfterMs,
@@ -19,11 +29,15 @@ import type {
   CallParams,
   CallWithToolsResult,
   LLMClient,
+  MiddlewareContext,
+  MiddlewareStateBag,
   RetryAttempt,
   StreamChunk,
   TokenUsage,
   ToolIssue,
   VernLLMEvent,
+  VernLLMMiddleware,
+  WireCallRequest,
   WireToolCall,
 } from '../../types/index.js';
 
@@ -76,6 +90,10 @@ export interface CallExecutorOptions {
   limiter?: RateLimiter;
   /** True for every target after the primary. Stamped onto reported `TokenUsage`. */
   isFallback?: boolean;
+  /** See `VernLLMOptions.middleware`. */
+  middleware?: VernLLMMiddleware[];
+  /** See `VernLLMOptions.middlewareTimeoutMs`. */
+  middlewareTimeoutMs?: number;
 }
 
 /**
@@ -100,6 +118,9 @@ export class CallExecutor {
   private readonly limiter?: RateLimiter;
   private readonly isFallback: boolean;
   private readonly requestBuilder: RequestBuilder;
+  private readonly middleware: VernLLMMiddleware[];
+  private readonly middlewareTimeoutMs: number;
+  private readonly supportsJsonObjectMode: boolean;
 
   constructor(
     readonly providerName: string,
@@ -121,14 +142,118 @@ export class CallExecutor {
     this.breaker = options.breaker;
     this.limiter = options.limiter;
     this.isFallback = options.isFallback ?? false;
+    this.middleware = options.middleware ?? [];
+    this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? 5000;
+    this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
     this.requestBuilder = new RequestBuilder({
       model,
       defaultMaxTokens: options.defaultMaxTokens,
       defaultTemperature: options.defaultTemperature,
       defaultReasoningEffort: options.defaultReasoningEffort,
       defaultBudgetTokens: options.defaultBudgetTokens,
-      supportsJsonObjectMode: client.supportsJsonObjectMode ?? true,
+      supportsJsonObjectMode: this.supportsJsonObjectMode,
     });
+  }
+
+  /**
+   * Runs every applicable middleware's `transform` against `request`, in
+   * priority order, merging each patch in immediately so a later
+   * middleware sees what an earlier one already changed. Reports the
+   * `'middleware'` trace event for each `transform` that actually
+   * changed something, and for each `enabled` predicate that skipped its
+   * middleware.
+   */
+  private async applyMiddlewareTransforms(
+    request: WireCallRequest,
+    requestId: string,
+    model: string,
+    attempt: number,
+    signal: AbortSignal | undefined,
+    state: MiddlewareStateBag,
+  ): Promise<WireCallRequest> {
+    if (this.middleware.length === 0) return request;
+
+    const before = request;
+    let current = request;
+
+    const ordered = this.middleware
+      .map((middleware, index) => ({ middleware, index }))
+      .sort((a, b) => (a.middleware.priority ?? 0) - (b.middleware.priority ?? 0));
+
+    for (const { middleware, index } of ordered) {
+      const label = middlewareLabel(middleware, index);
+
+      const ctx: MiddlewareContext = {
+        requestId,
+        requestedProvider: this.providerName,
+        requestedModel: model,
+        isFallbackAttempt: this.isFallback,
+        // `attempt` here is the internal 0-based retry-loop index;
+        // `MiddlewareContext.attempt` (like the public `'retry'` event's
+        // own `attempt` field) is documented as 1-based, so the first
+        // dispatch reads as attempt 1, not 0.
+        attempt: attempt + 1,
+        capabilities: { supportsJsonObjectMode: this.supportsJsonObjectMode },
+        signal,
+        state,
+        own: {},
+      };
+
+      const isEnabled = await resolveEnabled(
+        middleware,
+        ctx,
+        label,
+        this.middlewareTimeoutMs,
+        this.logger,
+      );
+
+      if (!isEnabled) {
+        if (middleware.enabled !== undefined) {
+          reportMiddlewareEvent(this.reportEvent, {
+            kind: 'middleware',
+            requestId,
+            middleware: label,
+            hook: 'enabled_skip',
+          });
+        }
+        continue;
+      }
+
+      if (!middleware.transform) continue;
+
+      const patch = await runTransform(middleware, current, ctx, label, this.middlewareTimeoutMs);
+      const { request: merged, patchedFields } = mergePatch(current, patch);
+
+      if (patchedFields.length > 0) {
+        if (patch.addTools?.length) {
+          assertNoDuplicateTools(merged, label);
+        }
+        reportMiddlewareEvent(this.reportEvent, {
+          kind: 'middleware',
+          requestId,
+          middleware: label,
+          hook: 'transform',
+          patchedFields,
+        });
+      }
+
+      current = merged;
+    }
+
+    assertModelAndResponseFormatUnchanged(before, current, 'chain');
+
+    return current;
+  }
+
+  /**
+   * Builds this target's wire request for `params` without dispatching
+   * it or applying any middleware `transform`. Used by `VernLLM` to hand
+   * `wrap` middleware a representative request before the real,
+   * per-attempt request (which does run `transform`) exists yet.
+   */
+  previewRequest<T>(params: CallParams<T>): { model: string; request: WireCallRequest } {
+    const { model, request } = this.requestBuilder.build(params);
+    return { model, request };
   }
 
   getCircuitState(model?: string) {
@@ -174,13 +299,14 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     onAttempt?: () => void,
+    state?: MiddlewareStateBag,
   ): Promise<T | CallWithToolsResult<T>> {
     const model = params.model ?? this.model;
     const attempts: RetryAttempt[] = [];
 
     try {
       return await this.retryWithBackoff(
-        (attempt, onRequest) => this.executeCall(params, requestId, attempt, onRequest),
+        (attempt, onRequest) => this.executeCall(params, requestId, attempt, onRequest, state),
         requestId,
         model,
         params.signal,
@@ -212,6 +338,7 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     onAttempt?: () => void,
+    state?: MiddlewareStateBag,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
@@ -221,7 +348,8 @@ export class CallExecutor {
 
     try {
       return await this.retryWithBackoff(
-        (attempt, onRequest) => this.executeStreamCall(params, requestId, attempt, onRequest),
+        (attempt, onRequest) =>
+          this.executeStreamCall(params, requestId, attempt, onRequest, state),
         requestId,
         model,
         params.signal,
@@ -260,8 +388,18 @@ export class CallExecutor {
     requestId: string,
     attempt: number,
     onRequest?: OnRequest,
+    middlewareState?: MiddlewareStateBag,
   ): Promise<T | CallWithToolsResult<T>> {
-    const { useJson, model, request } = this.requestBuilder.build(params);
+    const built = this.requestBuilder.build(params);
+    const { useJson, model } = built;
+    const request = await this.applyMiddlewareTransforms(
+      built.request,
+      requestId,
+      model,
+      attempt,
+      params.signal,
+      middlewareState ?? createMiddlewareStateBag(),
+    );
 
     onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
 
@@ -470,11 +608,21 @@ export class CallExecutor {
     requestId: string,
     attempt: number,
     onRequest?: OnRequest,
+    middlewareState?: MiddlewareStateBag,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
-    const { useJson, model, request } = this.requestBuilder.build(params);
+    const built = this.requestBuilder.build(params);
+    const { useJson, model } = built;
+    const request = await this.applyMiddlewareTransforms(
+      built.request,
+      requestId,
+      model,
+      attempt,
+      params.signal,
+      middlewareState ?? createMiddlewareStateBag(),
+    );
 
     onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
 

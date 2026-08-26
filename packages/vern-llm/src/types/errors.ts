@@ -32,6 +32,8 @@ export type LLMErrorCode =
   | 'duplicate_tool_result_ids'
   | 'unknown_tool_result_ids'
   | 'missing_tool_results'
+  // Middleware (invalid_params)
+  | 'middleware_threw'
   // Rate limiting (rate_limited)
   | 'rate_limit_queue_full'
   | 'rate_limit_queue_timeout'

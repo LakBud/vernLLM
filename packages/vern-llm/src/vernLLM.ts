@@ -1,10 +1,20 @@
 import { randomUUID } from 'crypto';
 
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
-import { buildCircuitBreaker, makeEventReporter } from './internal/circuitBreaker.utils.js';
+import {
+  buildCircuitBreaker,
+  makeEventReporter,
+  resolveExecutor,
+  warnIfModelUnsupported,
+} from './internal/circuitBreaker.utils.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
+import {
+  executeLogicalCall,
+  executeLogicalStreamCall,
+  type LogicalCallDependencies,
+} from './internal/execution/logicalCall.js';
+import { runOperation, type RunOperationDependencies } from './internal/execution/runOperation.js';
 import { setupDeadline, stampDeadlineCode } from './internal/execution/utils/deadline.utils.js';
-import { normalizeError } from './internal/execution/utils/errors.utils.js';
 import {
   withReservedUsage,
   withReservedUsageForStream,
@@ -15,7 +25,6 @@ import { RateLimiter } from './rateLimit.js';
 import {
   InMemoryCacheAdapter,
   LLMError,
-  FallbackExhaustedError,
   defaultFallbackOn,
   type CachedCallParams,
   type CachedStreamCallParams,
@@ -32,7 +41,6 @@ import {
   type ConditionalToolCallParams,
   type ConditionalStringToolCallParams,
   type ContentResult,
-  type FallbackAttempt,
   type FallbackOn,
   type FallbackTarget,
   type JsonModeDisabledCallParams,
@@ -44,6 +52,9 @@ import {
   type StreamJsonModeEnabledCallParams,
   type CachedStreamJsonModeDisabledCallParams,
   type CachedStreamJsonModeEnabledCallParams,
+  type CallMeta,
+  type VernLLMMiddleware,
+  type StreamChunk,
   type TargetCircuitState,
   type CircuitTarget,
   type StreamEnabledCallParams,
@@ -53,6 +64,7 @@ import {
   type VernLLMEvent,
   type VernLLMOptions,
 } from './types/index.js';
+import { createMiddlewareStateBag } from './types/middleware.js';
 
 import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
@@ -90,6 +102,24 @@ export class VernLLM {
    */
   private readonly cacheOrchestrator: CacheOrchestrator;
 
+  /** See `VernLLMOptions.middleware`. Sorted once here by `priority`, ascending, ties broken by original array order. */
+  private readonly middleware: VernLLMMiddleware[];
+
+  /** See `VernLLMOptions.middlewareTimeoutMs`. Bounds `transform` and a function `enabled`; `wrap` itself is never bounded by this. */
+  private readonly middlewareTimeoutMs: number;
+
+  /**
+   * Request IDs `cachedCall()` is already wrapping in `runOperation`
+   * itself, around the whole cache hit/miss/join operation. `call()`
+   * checks this before wrapping itself: without it, a `cachedCall()`
+   * cache miss (which internally calls `this.call()` to get the same
+   * retry/timeout/breaker guarantees as a direct call) would run every
+   * `wrap` middleware twice for the one logical operation the caller
+   * made. Membership is scoped to exactly the duration of that one
+   * `cachedCall()` invocation, see its `finally` block.
+   */
+  private readonly wrappedByCachedCall = new Set<string>();
+
   /**
    * @param options Client, model, and tunables. Defaults: `maxRetries` 1,
    * `timeoutMs` 25000, `baseDelayMs` 500, `defaultMaxTokens` 1000,
@@ -108,6 +138,10 @@ export class VernLLM {
 
     this.fallbackOn = options.fallbackOn ?? defaultFallbackOn;
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
+    this.middleware = [...(options.middleware ?? [])].sort(
+      (a, b) => (a.priority ?? 0) - (b.priority ?? 0),
+    );
+    this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? 5000;
 
     // The primary target's shared knobs, resolved once here rather than
     // inline in the retry-tunable default below, since fallback targets
@@ -193,6 +227,8 @@ export class VernLLM {
         breaker,
         limiter: target.rateLimit ? new RateLimiter(target.rateLimit) : undefined,
         isFallback,
+        middleware: options.middleware,
+        middlewareTimeoutMs: options.middlewareTimeoutMs,
       });
     });
   }
@@ -204,96 +240,25 @@ export class VernLLM {
     });
   }
 
-  /**
-   * Walks `this.executors` in order, running `attempt` against each until
-   * one succeeds or every target has failed. `run` on a lone target
-   * (no `fallback` configured) throws exactly what it throws today: the
-   * loop's single iteration path is unchanged from pre-fallback behavior.
-   *
-   * For streaming, `attempt` is `executor.runStream`, whose own retries
-   * only cover *opening* the stream (see `CallExecutor.runStream`). A
-   * mid-stream failure surfaces through `finalResult` after this function
-   * has already returned, so it's never seen here and never falls over,
-   * per the streaming limitation: splicing a second model's output into a
-   * response the consumer has already partially rendered would corrupt
-   * it.
-   */
-  private async runFallbackChain<R>(
-    params: Pick<CallParams<unknown>, 'model' | 'signal'>,
-    requestId: string,
-    attempt: (executor: CallExecutor, onAttempt: () => void) => Promise<R>,
-    skipBreakerCheckForFirst = false,
-  ): Promise<{ result: R; executor: CallExecutor; index: number; attemptCount: number }> {
-    const attempts: FallbackAttempt[] = [];
+  /** Everything `executeLogicalCall`/`executeLogicalStreamCall` (in `logicalCall.ts`) need from this instance, gathered once so `call()` doesn't rebuild it per invocation. */
+  private get logicalCallDependencies(): LogicalCallDependencies {
+    return {
+      executors: this.executors,
+      fallbackOn: this.fallbackOn,
+      reportEvent: this.reportEvent,
+    };
+  }
 
-    for (let i = 0; i < this.executors.length; i++) {
-      const executor = this.executors[i]!;
-      const startedAt = Date.now();
-      let attemptCount = 0;
-
-      try {
-        // Already checked once, before usage was reserved, when this is
-        // the sole target (see `call()`). `assertClosed` claims a
-        // half-open trial slot as a side effect on a non-throwing call,
-        // so it must run exactly once per logical call: checking it
-        // again here for the same executor could either falsely see
-        // "trial already in flight" (from the check that just claimed
-        // it) or double-claim a slot no concurrent caller actually has.
-        if (!(i === 0 && skipBreakerCheckForFirst)) {
-          executor.assertBreakerClosed(params.model);
-        }
-
-        const result = await attempt(executor, () => {
-          attemptCount += 1;
-        });
-        return { result, executor, index: i, attemptCount };
-      } catch (error) {
-        const normalized = normalizeError(error, params.signal);
-
-        attempts.push({
-          index: i - 1,
-          provider: executor.providerName,
-          model: params.model ?? executor.model,
-          // `.toSnapshot()`: this target's own `attempts` (from its own
-          // retries, already snapshots per `CallExecutor`) come along
-          // for free since `toSnapshot()` copies them as-is.
-          error: normalized.toSnapshot(),
-        });
-
-        const isLast = i === this.executors.length - 1;
-        // Always consult fallbackOn, including on the last target, so it
-        // sees every failure and callers who log or count from inside it
-        // get a complete picture. The chain still stops once the last
-        // target fails regardless of what fallbackOn returns: there is no
-        // next executor to fall over to.
-        const policyDecision = this.fallbackOn(normalized, { isLastTarget: isLast });
-        const decision = isLast ? 'stop' : policyDecision;
-
-        if (decision === 'stop') {
-          // A lone target (or a chain that stopped on its first failure)
-          // throws its own error, unchanged from pre-fallback behavior.
-          throw attempts.length > 1 ? new FallbackExhaustedError(attempts) : normalized;
-        }
-
-        const next = this.executors[i + 1]!;
-
-        this.reportEvent({
-          kind: 'fallback',
-          requestId,
-          from: executor.providerName,
-          to: next.providerName,
-          fromIndex: i - 1,
-          toIndex: i,
-          error: normalized,
-          elapsedMs: Date.now() - startedAt,
-        });
-      }
-    }
-
-    // Unreachable: the loop above always either returns or throws before
-    // running out of targets (the last iteration's `isLast` forces a
-    // throw). Kept only to satisfy the return type.
-    throw new LLMError('No provider targets configured', 'invalid_params');
+  /** Everything `runOperation` (in `runOperation.ts`) needs from this instance, gathered once so `call()`/`cachedCall()` don't rebuild it per invocation. */
+  private get runOperationDependencies(): RunOperationDependencies {
+    return {
+      middleware: this.middleware,
+      wrappedByCachedCall: this.wrappedByCachedCall,
+      primaryExecutor: this.executors[0]!,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+    };
   }
 
   /**
@@ -375,6 +340,12 @@ export class VernLLM {
     const effectiveParams =
       effectiveSignal === params.signal ? params : { ...params, signal: effectiveSignal };
 
+    // Created once per logical call, before any target is chosen, so a
+    // value a `wrap` middleware sets is visible to that same middleware's
+    // `transform` (and vice versa) on every attempt/fallback target
+    // underneath it.
+    const middlewareState = createMiddlewareStateBag();
+
     try {
       // A lone target (no `fallback` configured) keeps the exact pre-fallback
       // contract: the breaker is checked once, up front, before usage is
@@ -387,60 +358,85 @@ export class VernLLM {
       // another target failure that `fallbackOn` can fall over from.
       const soleTarget = this.executors.length === 1;
 
-      if (soleTarget) {
-        this.executors[0]!.assertBreakerClosed(effectiveParams.model);
-      }
-
-      if (effectiveParams.stream) {
-        // Same breaker/logging treatment as non-streaming, applied around
-        // opening the stream; mid-stream failures are handled separately
-        // inside the executor and never fall over (see `runFallbackChain`).
-        // Usage refund/report is deferred onto finalResult, since call()
-        // must return { chunks, finalResult } before the real outcome is
-        // known, which is also why `params.meta` isn't populated for
-        // streaming calls.
-        return await withReservedUsageForStream(
-          effectiveParams,
-          async () => {
-            const { result } = await this.runFallbackChain(
-              effectiveParams,
-              requestId,
-              (executor, onAttempt) => executor.runStream(effectiveParams, requestId, onAttempt),
-              soleTarget,
-            );
-            return result;
-          },
-          effectiveParams.signal,
-          (logMessage, error) => this.logRefundError(logMessage, error),
-        );
-      }
-
-      return await withReservedUsage(
+      // `wrap` spans the sole-target breaker precheck too, not only
+      // `runFallbackChain`: on a single-target setup a circuit-open
+      // rejection happens here, before `runFallbackChain` is ever
+      // reached, so wrapping only the fallback chain would make that
+      // rejection, a completely normal outcome of a call, invisible to
+      // every `wrap` middleware.
+      const wrapped = await runOperation(
+        this.runOperationDependencies,
         effectiveParams,
-        false,
+        requestId,
+        middlewareState,
         async () => {
-          const { result, executor, index, attemptCount } = await this.runFallbackChain(
-            effectiveParams,
-            requestId,
-            (target, onAttempt) => target.run(effectiveParams, requestId, onAttempt),
-            soleTarget,
-          );
-
-          if (effectiveParams.meta) {
-            effectiveParams.meta.current = {
-              provider: executor.providerName,
-              model: effectiveParams.model ?? executor.model,
-              fallbackIndex: index - 1,
-              usedFallback: index > 0,
-              attempts: attemptCount,
-            };
+          if (soleTarget) {
+            this.executors[0]!.assertBreakerClosed(effectiveParams.model);
           }
 
-          return result;
+          if (effectiveParams.stream) {
+            // Same breaker/logging treatment as non-streaming, applied around
+            // opening the stream; mid-stream failures are handled separately
+            // inside the executor and never fall over (see `runFallbackChain`).
+            // Usage refund/report is deferred onto finalResult, since call()
+            // must return { chunks, finalResult } before the real outcome is
+            // known, which is also why `params.meta` isn't populated for
+            // streaming calls (`wrap`'s own `next()` doesn't have that
+            // constraint, see `executeLogicalStreamCall`).
+            let meta: CallMeta | undefined;
+
+            const value = await withReservedUsageForStream(
+              effectiveParams,
+              async () => {
+                const logicalStreamCallResult = await executeLogicalStreamCall(
+                  this.logicalCallDependencies,
+                  effectiveParams,
+                  requestId,
+                  soleTarget,
+                  middlewareState,
+                );
+                meta = logicalStreamCallResult.meta;
+                return logicalStreamCallResult.value;
+              },
+              effectiveParams.signal,
+              (logMessage, error) => this.logRefundError(logMessage, error),
+            );
+
+            return { value, meta };
+          }
+
+          let meta: CallMeta | undefined;
+
+          const value = await withReservedUsage(
+            effectiveParams,
+            false,
+            async () => {
+              const logicalCallResult = await executeLogicalCall(
+                this.logicalCallDependencies,
+                effectiveParams,
+                requestId,
+                soleTarget,
+                middlewareState,
+              );
+              meta = logicalCallResult.meta;
+              return logicalCallResult.value;
+            },
+            effectiveParams.signal,
+            (logMessage, error) => this.logRefundError(logMessage, error),
+          );
+
+          return { value, meta };
         },
-        effectiveParams.signal,
-        (logMessage, error) => this.logRefundError(logMessage, error),
       );
+
+      if (effectiveParams.stream) {
+        return wrapped.value as {
+          chunks: AsyncIterable<StreamChunk>;
+          finalResult: Promise<T | CallWithToolsResult<T>>;
+        };
+      }
+
+      return wrapped.value as T | CallWithToolsResult<T>;
     } catch (error) {
       throw stampDeadlineCode(error, effectiveSignal);
     } finally {
@@ -560,22 +556,77 @@ export class VernLLM {
       );
     }
 
-    if (restCallParams.stream) {
-      const streamParams = restCallParams as StreamEnabledCallParams<T>;
+    const requestId = restCallParams.requestId ?? randomUUID();
+    const middlewareState = createMiddlewareStateBag();
 
-      return this.cacheOrchestrator.runCachedStream(
-        {
-          ...cacheParams,
-          openStream: () => this.call(streamParams),
-        },
-        Boolean(restCallParams.tools),
+    // Marks `requestId` right around each inner `this.call()` invocation
+    // only (not around this whole method): `call()`'s own `runOperation`
+    // checks this set and skips wrapping when it finds its own
+    // `requestId` already in it, so a value only ever passes through
+    // `wrap` once for this whole `cachedCall()`, hit, miss, or join
+    // alike, wrapped here instead. Scoped tightly so the *outer*
+    // `runOperation` call just below (which runs first, checking the set
+    // before `call()` ever gets a chance to add to it) still wraps.
+    // Side channel `executeLogicalCall`/`executeLogicalStreamCall` (via
+    // `call()`) already write real target metadata onto, on a miss.
+    // Read back out below to populate this `wrap`'s own `meta`, since
+    // `cachedCall()`'s `runCached`/`runCachedStream` primitives only
+    // hand back the plain value, not a `CallResult`.
+    const metaHolder: { current?: CallMeta } = {};
+
+    const callWrapped = (params: CallParams<T>) => {
+      this.wrappedByCachedCall.add(requestId);
+      return this.call({ ...params, meta: metaHolder }).finally(() =>
+        this.wrappedByCachedCall.delete(requestId),
       );
+    };
+
+    if (restCallParams.stream) {
+      const streamParams = { ...restCallParams, requestId } as StreamEnabledCallParams<T>;
+
+      const wrapped = await runOperation(
+        this.runOperationDependencies,
+        streamParams,
+        requestId,
+        middlewareState,
+        async () => {
+          const value = await this.cacheOrchestrator.runCachedStream(
+            {
+              ...cacheParams,
+              openStream: () => callWrapped(streamParams) as Promise<StreamCallResult<unknown>>,
+            },
+            Boolean(restCallParams.tools),
+          );
+
+          // A cache hit never goes through `call()` (and so never through
+          // `executeLogicalStreamCall`), so `metaHolder.current` stays
+          // `undefined` in that case, correctly: nothing was actually
+          // spent and no target answered this call.
+          return { value, meta: metaHolder.current };
+        },
+      );
+
+      return wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
     }
 
-    return this.runCached({
-      ...cacheParams,
-      fn: () => this.call(restCallParams),
-    });
+    const paramsWithId = { ...restCallParams, requestId } as CallParams<T>;
+
+    const wrapped = await runOperation(
+      this.runOperationDependencies,
+      paramsWithId,
+      requestId,
+      middlewareState,
+      async () => {
+        const value = await this.runCached({
+          ...cacheParams,
+          fn: () => callWrapped(paramsWithId),
+        });
+
+        return { value, meta: metaHolder.current };
+      },
+    );
+
+    return wrapped.value as T | CallWithToolsResult<T>;
   }
 
   /**
@@ -587,8 +638,8 @@ export class VernLLM {
    * target that doesn't exist.
    */
   getCircuitState(target?: CircuitTarget): CircuitState | undefined {
-    const executor = this.resolveExecutor(target?.index ?? 0, 'getCircuitState');
-    this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'getCircuitState');
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'getCircuitState');
+    warnIfModelUnsupported(executor.isolateByModel, target?.model, 'getCircuitState', this.logger);
 
     return executor.getCircuitState(target?.model ?? executor.model);
   }
@@ -616,8 +667,8 @@ export class VernLLM {
    * @throws {RangeError} If `target.index` names no target.
    */
   openCircuit(target?: CircuitTarget): void {
-    const executor = this.resolveExecutor(target?.index ?? 0, 'openCircuit');
-    this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'openCircuit');
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'openCircuit');
+    warnIfModelUnsupported(executor.isolateByModel, target?.model, 'openCircuit', this.logger);
     executor.openCircuit(target?.model ?? executor.model);
   }
 
@@ -630,34 +681,8 @@ export class VernLLM {
    * @throws {RangeError} If `target.index` names no target.
    */
   closeCircuit(target?: CircuitTarget): void {
-    const executor = this.resolveExecutor(target?.index ?? 0, 'closeCircuit');
-    this.warnIfModelUnsupported(executor.isolateByModel, target?.model, 'closeCircuit');
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'closeCircuit');
+    warnIfModelUnsupported(executor.isolateByModel, target?.model, 'closeCircuit', this.logger);
     executor.closeCircuit(target?.model ?? executor.model);
-  }
-
-  /** Resolves a target index so every circuit-breaker method agrees on what counts as valid. */
-  private resolveExecutor(index: number, caller: string): CallExecutor {
-    const executor = this.executors[index];
-
-    if (!executor) {
-      throw new RangeError(
-        `${caller}: no target at index ${index} (chain has ${this.executors.length} target${this.executors.length === 1 ? '' : 's'})`,
-      );
-    }
-
-    return executor;
-  }
-
-  /** Warns when `model` can't do anything on this target, so it's never silently ignored. */
-  private warnIfModelUnsupported(
-    isolateByModel: boolean,
-    model: string | undefined,
-    caller: string,
-  ): void {
-    if (model !== undefined && !isolateByModel) {
-      this.logger.warn(
-        `[VernLLM] ${caller}: \`model: '${model}'\` has no effect here. This target's circuitBreaker doesn't have isolateByModel on, so it only tracks one shared circuit regardless of \`model\`. Omit \`model\`, or set \`circuitBreaker.isolateByModel: true\` on this target if per-model tracking is what you want.`,
-      );
-    }
   }
 }
