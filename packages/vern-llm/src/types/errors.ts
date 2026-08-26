@@ -42,6 +42,7 @@ export type LLMErrorCode =
   // Timeouts (timeout)
   | 'request_timeout'
   | 'idle_timeout'
+  | 'middleware_timeout'
   // Deadline (aborted)
   | 'deadline_exceeded'
   // HTTP status (api)
@@ -91,6 +92,18 @@ export const LOCAL_RATE_LIMIT_CODES: ReadonlySet<LLMErrorCode> = new Set([
 ]);
 
 /**
+ * A middleware's own `transform`/`enabled` timed out against
+ * `middlewareTimeoutMs` (or its per-middleware override) without ever
+ * reaching the provider. Distinct from `request_timeout`, which is the
+ * provider call itself timing out: retrying a middleware timeout just
+ * re-runs the same slow/hung middleware code and times out again, so
+ * it's excluded from the general `timeout` type's retryability.
+ */
+export const NON_RETRYABLE_MIDDLEWARE_TIMEOUT_CODES: ReadonlySet<LLMErrorCode> = new Set([
+  'middleware_timeout',
+]);
+
+/**
  * Types that are never worth retrying on their own: deterministic
  * caller-input, model-response, or cancellation failures rather than a
  * transient provider fault.
@@ -112,6 +125,7 @@ function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): b
   if (NON_RETRYABLE_TYPES.has(type)) return false;
   if (code && NON_RETRYABLE_TOOL_CONTRACT_CODES.has(code)) return false;
   if (code && LOCAL_RATE_LIMIT_CODES.has(code)) return false;
+  if (code && NON_RETRYABLE_MIDDLEWARE_TIMEOUT_CODES.has(code)) return false;
   return true;
 }
 

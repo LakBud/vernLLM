@@ -23,11 +23,23 @@ export function middlewareLabel(middleware: VernLLMMiddleware, index: number): s
  * `(signal) => ...`), so a plain `Promise.race` is what actually bounds
  * them; a middleware that never resolves keeps running in the
  * background, but its result is no longer awaited past `timeoutMs`.
+ *
+ * The rejection is built with `code: 'middleware_timeout'`, a distinct
+ * identity from the provider's own `request_timeout`: it names `label`
+ * so `reclassifyMiddlewareThrow` (which only relabels truly
+ * unrecognized throws) doesn't need to guess which middleware timed
+ * out, and it's excluded from the general `timeout` type's
+ * retryability so `computeRetryable` doesn't retry a `transform` that's
+ * just going to time out again the same way.
  */
-function raceTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
+function raceTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new LLMError('Request timed out', 'timeout', { code: 'request_timeout' }));
+      reject(
+        new LLMError(`middleware "${label}" timed out after ${timeoutMs}ms`, 'timeout', {
+          code: 'middleware_timeout',
+        }),
+      );
     }, timeoutMs);
 
     fn().then(
@@ -64,7 +76,7 @@ export async function resolveEnabled(
   const timeoutMs = middleware.timeoutMs ?? middlewareTimeoutMs;
 
   try {
-    return await raceTimeout(async () => enabled(ctx), timeoutMs);
+    return await raceTimeout(async () => enabled(ctx), timeoutMs, label);
   } catch (error) {
     logger.error(
       `[VernLLM] middleware "${label}".enabled threw or timed out, treating as disabled`,
@@ -211,7 +223,7 @@ export async function runTransform(
   const timeoutMs = middleware.timeoutMs ?? middlewareTimeoutMs;
 
   try {
-    return await raceTimeout(async () => middleware.transform!(request, ctx), timeoutMs);
+    return await raceTimeout(async () => middleware.transform!(request, ctx), timeoutMs, label);
   } catch (error) {
     throw reclassifyMiddlewareThrow(error, label, ctx.signal);
   }

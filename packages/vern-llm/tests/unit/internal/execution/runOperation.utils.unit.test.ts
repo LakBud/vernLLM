@@ -39,7 +39,6 @@ function fakeLogger(): Logger {
 function dependencies(overrides: Partial<RunOperationDependencies> = {}): RunOperationDependencies {
   return {
     middleware: overrides.middleware ?? [],
-    wrappedByCachedCall: overrides.wrappedByCachedCall ?? new Set<string>(),
     primaryExecutor: overrides.primaryExecutor ?? fakePrimaryExecutor(),
     middlewareTimeoutMs: overrides.middlewareTimeoutMs ?? 5000,
     logger: overrides.logger ?? fakeLogger(),
@@ -66,17 +65,18 @@ describe('runOperation', () => {
     expect(coreOperation).toHaveBeenCalledTimes(1);
   });
 
-  it('calls coreOperation directly when this requestId is already wrapped by cachedCall, so wrap never fires twice', async () => {
+  it('calls coreOperation directly when this invocation is already wrapped by cachedCall, so wrap never fires twice', async () => {
     const wrap = vi.fn(async (_request, next: () => Promise<CallResult>) => next());
     const middleware: VernLLMMiddleware = { name: 'mw', wrap };
     const coreOperation = vi.fn(async () => ({ value: 'result' }) satisfies CallResult);
 
     const outcome = await runOperation(
-      dependencies({ middleware: [middleware], wrappedByCachedCall: new Set([requestId]) }),
+      dependencies({ middleware: [middleware] }),
       params,
       requestId,
       createMiddlewareStateBag(),
       coreOperation,
+      true,
     );
 
     expect(outcome).toEqual({ value: 'result' });
@@ -252,6 +252,29 @@ describe('runOperation', () => {
 
     const outcome = await runOperation(
       dependencies({ middleware: [middleware], logger }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      async () => ({ value: 'ok' }),
+    );
+
+    expect(outcome).toEqual({ value: 'ok' });
+    expect(wrap).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('a never-resolving enabled predicate is skipped once its middlewareTimeoutMs elapses, logging exactly once', async () => {
+    const logger = fakeLogger();
+    const wrap = vi.fn(async (_request, next: () => Promise<CallResult>) => next());
+
+    const middleware: VernLLMMiddleware = {
+      name: 'hung-enabled',
+      enabled: () => new Promise(() => {}),
+      wrap,
+    };
+
+    const outcome = await runOperation(
+      dependencies({ middleware: [middleware], logger, middlewareTimeoutMs: 15 }),
       params,
       requestId,
       createMiddlewareStateBag(),

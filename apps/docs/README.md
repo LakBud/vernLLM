@@ -46,10 +46,10 @@ Each folder has a `meta.json` controlling sidebar ordering. Edit or add `.mdx` f
 
 ## Project structure
 
-- `src/app` — Next.js App Router routes: `(home)` for the landing page, `docs` for the documentation layout, `api/search/route.ts` for the search endpoint.
-- `src/lib/source.ts` — the content source adapter; Fumadocs' [`loader()`](https://fumadocs.dev/docs/headless/source-api) exposes the MDX content to the app.
-- `src/lib/layout.shared.tsx` — shared layout options used across routes.
-- `source.config.ts` — Fumadocs MDX configuration (frontmatter schema, etc.) — see the [MDX introduction](https://fumadocs.dev/docs/mdx) for details.
+- `src/app`: Next.js App Router routes: `(home)` for the landing page, `docs` for the documentation layout, `api/search/route.ts` for the search endpoint.
+- `src/lib/source.ts`: the content source adapter; Fumadocs' [`loader()`](https://fumadocs.dev/docs/headless/source-api) exposes the MDX content to the app.
+- `src/lib/layout.shared.tsx`: shared layout options used across routes.
+- `source.config.ts`: Fumadocs MDX configuration (frontmatter schema, etc.). See the [MDX introduction](https://fumadocs.dev/docs/mdx) for details.
 
 ## Scripts
 
@@ -65,4 +65,4 @@ Each folder has a `meta.json` controlling sidebar ordering. Edit or add `.mdx` f
 
 - [Next.js documentation](https://nextjs.org/docs)
 - [Fumadocs documentation](https://fumadocs.dev)
-- [`vern-llm` package README](../../packages/vern-llm/README.md) — the full API reference this site documents
+- [`vern-llm` package README](../../packages/vern-llm/README.md) -> the full API reference this site documents

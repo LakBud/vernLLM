@@ -35,7 +35,7 @@ export interface ToolDefinition<Name extends string = string, Args = unknown> {
  * to `string` unless annotated `as const`, which silently defeats
  * `ToolCall` narrowing the moment a second tool is added to the same
  * `tools: [...]` array (single-tool arrays still narrow fine even without
- * this, since there's nothing to discriminate against — but that stops
+ * this, since there's nothing to discriminate against but that stops
  * being true as soon as a second tool shows up). Wrapping the same object
  * in `defineTool()` preserves the literal `name` type without requiring
  * `as const` at every call site.
@@ -55,7 +55,7 @@ type ToolCallFor<T> =
  *
  * When `Tools` is a literal tuple (e.g. inferred from `tools: [getWeather,
  * cancelOrder]` at a `call()`/`cachedCall()` site), this is a discriminated
- * union keyed by `name` — checking `call.name === 'get_weather'` narrows
+ * union keyed by `name`. Checking `call.name === 'get_weather'` narrows
  * `call.arguments` to that tool's `Args` with no cast needed. Without a
  * literal `Tools` (the default), this collapses back to today's
  * `{ id: string; name: string; arguments: unknown }`.

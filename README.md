@@ -89,10 +89,10 @@ Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI,
 
 This is a pnpm monorepo with two workspaces:
 
-| Path                                       | Description                                                                                 |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| [`packages/vern-llm`](./packages/vern-llm) | The `vern-llm` npm package — source, tests, and its own README with the full API reference. |
-| [`apps/docs`](./apps/docs)                 | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                            |
+| Path                                       | Description                                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| [`packages/vern-llm`](./packages/vern-llm) | The `vern-llm` npm package: source, tests, and its own README with the full API reference. |
+| [`apps/docs`](./apps/docs)                 | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                           |
 
 ## Root scripts
 

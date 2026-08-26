@@ -64,7 +64,7 @@ import {
   type VernLLMEvent,
   type VernLLMOptions,
 } from './types/index.js';
-import { createMiddlewareStateBag } from './types/middleware.js';
+import { createMiddlewareStateBag, type MiddlewareStateBag } from './types/middleware.js';
 
 import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
@@ -83,9 +83,8 @@ export class VernLLM {
   /**
    * One `CallExecutor` per provider target: index 0 is the primary,
    * everything after it is a `fallback` target, in the order declared.
-   * Each owns its own request building, retry/timeout, circuit breaker,
-   * and rate limiter. `call()` walks this array in `runFallbackChain`,
-   * moving to the next entry only when `fallbackOn` says to.
+   * Walked by `runFallbackChain`, moving to the next entry only when
+   * `fallbackOn` says to.
    */
   private readonly executors: CallExecutor[];
 
@@ -95,11 +94,7 @@ export class VernLLM {
   /** Reports a `'fallback'` event when the chain moves to the next target. Shared `onEvent` plumbing, same as every executor's. */
   private readonly reportEvent: (event: VernLLMEvent) => void;
 
-  /**
-   * Owns cache key resolution, cache reads/writes, and in-flight
-   * coalescing for `cachedCall()`. Independent of `executor`: it only
-   * ever calls back into `this.call()` as an opaque function.
-   */
+  /** Owns cache reads/writes and in-flight coalescing for `cachedCall()`. Only calls back into `this.call()` as an opaque function. */
   private readonly cacheOrchestrator: CacheOrchestrator;
 
   /** See `VernLLMOptions.middleware`. Sorted once here by `priority`, ascending, ties broken by original array order. */
@@ -109,16 +104,23 @@ export class VernLLM {
   private readonly middlewareTimeoutMs: number;
 
   /**
-   * Request IDs `cachedCall()` is already wrapping in `runOperation`
-   * itself, around the whole cache hit/miss/join operation. `call()`
-   * checks this before wrapping itself: without it, a `cachedCall()`
-   * cache miss (which internally calls `this.call()` to get the same
-   * retry/timeout/breaker guarantees as a direct call) would run every
-   * `wrap` middleware twice for the one logical operation the caller
-   * made. Membership is scoped to exactly the duration of that one
-   * `cachedCall()` invocation, see its `finally` block.
+   * Maps `cachedCall()`'s inner `this.call(...)` params to its own
+   * `middlewareState`, so that call's own `runOperation` skips wrapping
+   * again and reuses the same state bag `wrap` just ran with (so a
+   * value `wrap` sets is visible to `transform`, same as a direct
+   * call). Keyed by object identity, not `requestId`, since two
+   * concurrent `cachedCall()`s can share an explicit `requestId`.
    */
-  private readonly wrappedByCachedCall = new Set<string>();
+  private readonly cachedCallInnerParams = new WeakMap<CallParams<unknown>, MiddlewareStateBag>();
+
+  /**
+   * Shares one `CallMeta` holder across every `cachedCall()` in flight
+   * for the same resolved cache key, so a joining invocation (never
+   * calls `call()` itself) reports the trigger's real metadata instead
+   * of `undefined`. A true cache hit never creates an entry, so it
+   * still reports no metadata correctly.
+   */
+  private readonly cachedCallMeta = new Map<string, { current?: CallMeta }>();
 
   /**
    * @param options Client, model, and tunables. Defaults: `maxRetries` 1,
@@ -253,7 +255,6 @@ export class VernLLM {
   private get runOperationDependencies(): RunOperationDependencies {
     return {
       middleware: this.middleware,
-      wrappedByCachedCall: this.wrappedByCachedCall,
       primaryExecutor: this.executors[0]!,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
       logger: this.logger,
@@ -326,6 +327,12 @@ export class VernLLM {
 
     const requestId = params.requestId ?? randomUUID();
 
+    // Captured from the original `params` reference before any clone
+    // below, so a later clone doesn't lose the marker. See
+    // `cachedCallInnerParams`'s docs.
+    const sharedMiddlewareState = this.cachedCallInnerParams.get(params);
+    const skipCachedCallWrap = sharedMiddlewareState !== undefined;
+
     // deadlineMs composes one more AbortSignal on top of whatever the
     // caller already passed, using the same AbortSignal.any pattern
     // withTimeout already established, so every existing signal check
@@ -343,8 +350,9 @@ export class VernLLM {
     // Created once per logical call, before any target is chosen, so a
     // value a `wrap` middleware sets is visible to that same middleware's
     // `transform` (and vice versa) on every attempt/fallback target
-    // underneath it.
-    const middlewareState = createMiddlewareStateBag();
+    // underneath it. Reused from `cachedCall()`'s own bag on its inner
+    // call, rather than always creating a fresh one.
+    const middlewareState = sharedMiddlewareState ?? createMiddlewareStateBag();
 
     try {
       // A lone target (no `fallback` configured) keeps the exact pre-fallback
@@ -371,6 +379,15 @@ export class VernLLM {
         middlewareState,
         async () => {
           if (soleTarget) {
+            // Checked before claiming a half-open trial slot: without it,
+            // a signal that aborted during the `wrap` chain above could
+            // still claim the trial, then fail `withReservedUsage`'s own
+            // abort check before `run()` ever fires `recordSuccess`/
+            // `recordFailure`, leaving the breaker stuck mid-trial.
+            if (effectiveParams.signal?.aborted) {
+              throw new LLMError('LLM request aborted', 'aborted');
+            }
+
             this.executors[0]!.assertBreakerClosed(effectiveParams.model);
           }
 
@@ -427,6 +444,7 @@ export class VernLLM {
 
           return { value, meta };
         },
+        skipCachedCallWrap,
       );
 
       if (effectiveParams.stream) {
@@ -559,26 +577,34 @@ export class VernLLM {
     const requestId = restCallParams.requestId ?? randomUUID();
     const middlewareState = createMiddlewareStateBag();
 
-    // Marks `requestId` right around each inner `this.call()` invocation
-    // only (not around this whole method): `call()`'s own `runOperation`
-    // checks this set and skips wrapping when it finds its own
-    // `requestId` already in it, so a value only ever passes through
-    // `wrap` once for this whole `cachedCall()`, hit, miss, or join
-    // alike, wrapped here instead. Scoped tightly so the *outer*
-    // `runOperation` call just below (which runs first, checking the set
-    // before `call()` ever gets a chance to add to it) still wraps.
-    // Side channel `executeLogicalCall`/`executeLogicalStreamCall` (via
-    // `call()`) already write real target metadata onto, on a miss.
-    // Read back out below to populate this `wrap`'s own `meta`, since
-    // `cachedCall()`'s `runCached`/`runCachedStream` primitives only
-    // hand back the plain value, not a `CallResult`.
-    const metaHolder: { current?: CallMeta } = {};
+    // Maps each inner `this.call()`'s own `params` object to this
+    // `middlewareState`, so its `runOperation` skips wrapping again
+    // (the *outer* call below still wraps, since its own `params` is
+    // never marked) and its `transform` reuses the same bag `wrap` just
+    // ran with. See `cachedCallInnerParams`'s docs.
+    //
+    // `metaHolder` is shared across trigger and joiners for this
+    // resolved cache key; see `cachedCallMeta`'s docs.
+    const resolvedCacheKey = await this.cacheOrchestrator.resolveCacheKey(cacheParams.cacheKey);
+    let metaHolder = this.cachedCallMeta.get(resolvedCacheKey);
+    let ownsMetaHolder = false;
+
+    if (!metaHolder) {
+      metaHolder = {};
+      ownsMetaHolder = true;
+      this.cachedCallMeta.set(resolvedCacheKey, metaHolder);
+    }
+
+    const releaseMetaHolder = () => {
+      if (ownsMetaHolder) this.cachedCallMeta.delete(resolvedCacheKey);
+    };
 
     const callWrapped = (params: CallParams<T>) => {
-      this.wrappedByCachedCall.add(requestId);
-      return this.call({ ...params, meta: metaHolder }).finally(() =>
-        this.wrappedByCachedCall.delete(requestId),
-      );
+      const innerParams = { ...params, meta: metaHolder };
+      this.cachedCallInnerParams.set(innerParams, middlewareState);
+      return this.call(innerParams).finally(() => {
+        this.cachedCallInnerParams.delete(innerParams);
+      });
     };
 
     if (restCallParams.stream) {
@@ -590,19 +616,23 @@ export class VernLLM {
         requestId,
         middlewareState,
         async () => {
-          const value = await this.cacheOrchestrator.runCachedStream(
-            {
-              ...cacheParams,
-              openStream: () => callWrapped(streamParams) as Promise<StreamCallResult<unknown>>,
-            },
-            Boolean(restCallParams.tools),
-          );
+          try {
+            const value = await this.cacheOrchestrator.runCachedStream(
+              {
+                ...cacheParams,
+                openStream: () => callWrapped(streamParams) as Promise<StreamCallResult<unknown>>,
+              },
+              Boolean(restCallParams.tools),
+            );
 
-          // A cache hit never goes through `call()` (and so never through
-          // `executeLogicalStreamCall`), so `metaHolder.current` stays
-          // `undefined` in that case, correctly: nothing was actually
-          // spent and no target answered this call.
-          return { value, meta: metaHolder.current };
+            // A cache hit never goes through `call()` (and so never through
+            // `executeLogicalStreamCall`), so `metaHolder.current` stays
+            // `undefined` in that case, correctly: nothing was actually
+            // spent and no target answered this call.
+            return { value, meta: metaHolder.current };
+          } finally {
+            releaseMetaHolder();
+          }
         },
       );
 
@@ -617,12 +647,16 @@ export class VernLLM {
       requestId,
       middlewareState,
       async () => {
-        const value = await this.runCached({
-          ...cacheParams,
-          fn: () => callWrapped(paramsWithId),
-        });
+        try {
+          const value = await this.runCached({
+            ...cacheParams,
+            fn: () => callWrapped(paramsWithId),
+          });
 
-        return { value, meta: metaHolder.current };
+          return { value, meta: metaHolder.current };
+        } finally {
+          releaseMetaHolder();
+        }
       },
     );
 

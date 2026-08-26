@@ -9,17 +9,17 @@ import { cn } from '@/lib/utils';
 export interface AuroraBarsProps {
   /** @default 24 */
   barCount?: number;
-  /** gradient color stops, bottom to top — @default ["#ff2d78", "#c04aff", "#4a6fff", "#0a1aff", "#00000000"] */
+  /** gradient color stops, bottom to top: @default ["#ff2d78", "#c04aff", "#4a6fff", "#0a1aff", "#00000000"] */
   colors?: string[];
-  /** max bar height as fraction of container height — @default 0.92 */
+  /** max bar height as fraction of container height: @default 0.92 */
   maxHeightRatio?: number;
-  /** min bar height as fraction of container height — @default 0.18 */
+  /** min bar height as fraction of container height: @default 0.18 */
   minHeightRatio?: number;
-  /** undulation speed — @default 0.5 */
+  /** undulation speed: @default 0.5 */
   speed?: number;
   /** @default 3 */
   gap?: number;
-  /** px blur per bar, creates soft glow — @default 0 */
+  /** px blur per bar, creates soft glow: @default 0 */
   blur?: number;
   /** @default "#000000" */
   background?: string;

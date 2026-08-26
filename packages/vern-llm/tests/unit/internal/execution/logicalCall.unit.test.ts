@@ -13,14 +13,6 @@ import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
 import type { CallExecutor } from '../../../../src/internal/execution/callExecutor.js';
 import type { CallParams, StreamChunk, VernLLMEvent } from '../../../../src/types/index.js';
 
-/**
- * Builds a minimal fake `CallExecutor`: only the members
- * `runFallbackChain`/`executeLogicalCall`/`executeLogicalStreamCall`
- * actually touch (`providerName`, `model`, `assertBreakerClosed`, `run`,
- * `runStream`) are implemented, everything else is intentionally absent
- * so a test fails loudly if the functions under test start relying on
- * something new.
- */
 /** A real empty `AsyncIterable<StreamChunk>`, since `never[]`/`[]` don't structurally satisfy it (missing `Symbol.asyncIterator`). */
 async function* emptyChunks(): AsyncIterable<StreamChunk> {}
 
@@ -33,6 +25,14 @@ function toAsyncIterable(items: StreamChunk[]): AsyncIterable<StreamChunk> {
   };
 }
 
+/**
+ * Builds a minimal fake `CallExecutor`: only the members
+ * `runFallbackChain`/`executeLogicalCall`/`executeLogicalStreamCall`
+ * actually touch (`providerName`, `model`, `assertBreakerClosed`, `run`,
+ * `runStream`) are implemented, everything else is intentionally absent
+ * so a test fails loudly if the functions under test start relying on
+ * something new.
+ */
 function fakeExecutor(overrides: {
   providerName: string;
   model?: string;
@@ -93,17 +93,26 @@ describe('runFallbackChain', () => {
 
   it('checks the breaker for every target except the first when skipBreakerCheckForFirst is set', async () => {
     const primaryCheck = vi.fn();
+    const fallbackCheck = vi.fn();
     const primary = fakeExecutor({ providerName: 'primary', assertBreakerClosed: primaryCheck });
+    const fallback = fakeExecutor({
+      providerName: 'fallback',
+      assertBreakerClosed: fallbackCheck,
+    });
 
     await runFallbackChain(
-      dependencies([primary]),
+      dependencies([primary, fallback]),
       { model: undefined, signal: undefined },
       'req-1',
-      async () => 'ok',
+      async (executor) => {
+        if (executor === primary) throw new LLMError('primary down', 'api', { status: 500 });
+        return 'ok';
+      },
       true,
     );
 
     expect(primaryCheck).not.toHaveBeenCalled();
+    expect(fallbackCheck).toHaveBeenCalledTimes(1);
   });
 
   it('checks the breaker for the first target when skipBreakerCheckForFirst is not set', async () => {

@@ -225,7 +225,7 @@ export class CallExecutor {
       const { request: merged, patchedFields } = mergePatch(current, patch);
 
       if (patchedFields.length > 0) {
-        if (patch.addTools?.length) {
+        if (patch.tools !== undefined || patch.addTools?.length) {
           assertNoDuplicateTools(merged, label);
         }
         reportMiddlewareEvent(this.reportEvent, {
@@ -254,6 +254,11 @@ export class CallExecutor {
   previewRequest<T>(params: CallParams<T>): { model: string; request: WireCallRequest } {
     const { model, request } = this.requestBuilder.build(params);
     return { model, request };
+  }
+
+  /** Whether this target's underlying client supports `response_format: 'json_object'`. Used to seed `MiddlewareContext.capabilities.supportsJsonObjectMode` for the primary target before a real request exists. */
+  get jsonObjectModeSupported(): boolean {
+    return this.supportsJsonObjectMode;
   }
 
   getCircuitState(model?: string) {

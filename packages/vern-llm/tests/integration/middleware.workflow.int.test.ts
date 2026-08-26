@@ -369,11 +369,15 @@ describe('middleware workflow integration', () => {
     // attempt, so it's excluded from retry.
     expect(create).not.toHaveBeenCalled();
 
-    // A second call still reaches the real client (unaffected by the
-    // breaker), since invalid_params never counts toward it.
+    // A second call still fails the same way (unaffected by the
+    // breaker, since invalid_params never counts toward it): the
+    // deterministic bug means `transform` throws again before the real
+    // client is ever reached, not that this call "reaches the client"
+    // in any meaningful sense.
     await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
       type: 'invalid_params',
     });
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('addTools duplicate check fires against a real request reaching the fallback target, naming the offending middleware', async () => {
@@ -408,8 +412,14 @@ describe('middleware workflow integration', () => {
       fallback: { client: fallbackClient, model: 'fallback-model' },
     });
 
-    await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toBeInstanceOf(
-      FallbackExhaustedError,
+    const outcome = await llm
+      .call({ userContent: 'hi', jsonMode: false })
+      .catch((error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(FallbackExhaustedError);
+    const fallbackError = outcome as FallbackExhaustedError;
+    expect(fallbackError.attempts.some((attempt) => attempt.error.message.includes('tool-b'))).toBe(
+      true,
     );
   });
 

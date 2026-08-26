@@ -12,9 +12,9 @@ pnpm changeset
 
 Choose:
 
-- **patch** — bug fixes and small improvements
-- **minor** — new features or backwards-compatible changes
-- **major** — breaking changes
+- **patch**: bug fixes and small improvements
+- **minor**: new features or backwards-compatible changes
+- **major**: breaking changes
 
 IMPORTANT: Currently some breaking changes will be on minor changes
 

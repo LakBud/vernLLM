@@ -27,7 +27,7 @@
 
 Retries, timeouts, caching, circuit breaking, provider fallback, and client-side rate limiting behind one typed interface, with adapters for OpenAI-compatible APIs, Anthropic, Gemini, and Bedrock.
 
-**Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** — installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
+**Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** -> installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
 
 ## Install
 

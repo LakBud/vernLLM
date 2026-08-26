@@ -27,7 +27,7 @@ async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
   return out;
 }
 
-describe('VernLLM.call(stream: true) through fromBedrock — end to end', () => {
+describe('VernLLM.call(stream: true) through fromBedrock, end to end', () => {
   it('streams live text-delta chunks and resolves finalResult to the same parsed/validated shape a non-streaming call would return', async () => {
     const converse = vi.fn<BedrockConverseClient['converse']>(async () => {
       throw new Error('non-streaming converse() should not be called for stream: true');
@@ -164,7 +164,7 @@ describe('VernLLM.call(stream: true) through fromBedrock — end to end', () => 
     const collected = await drain(chunks);
 
     // The forced toolUse block is unwrapped into plain text-delta chunks,
-    // not tool_call_delta — matching how create() unwraps it into content.
+    // not tool_call_delta, matching how create() unwraps it into content.
     expect(collected).toEqual([
       { type: 'text-delta', delta: '{"answer":' },
       { type: 'text-delta', delta: '"42"}' },

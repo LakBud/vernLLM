@@ -24,15 +24,6 @@ import type { CallExecutor } from './callExecutor.js';
 export interface RunOperationDependencies {
   /** See `VernLLMOptions.middleware`. Already sorted by `priority`, ascending, ties broken by original array order. */
   middleware: VernLLMMiddleware[];
-  /**
-   * Request IDs `cachedCall()` is already wrapping in `runOperation`
-   * itself, around the whole cache hit/miss/join operation. `runOperation`
-   * checks this before wrapping: without it, a `cachedCall()` cache miss
-   * (which internally calls `VernLLM.call()` to get the same
-   * retry/timeout/breaker guarantees as a direct call) would run every
-   * `wrap` middleware twice for the one logical operation the caller made.
-   */
-  wrappedByCachedCall: Set<string>;
   /** The primary target, used to build the `previewRequest` handed to every `wrap` (and the `requestedProvider`/`requestedModel` every middleware's `ctx` carries). */
   primaryExecutor: CallExecutor;
   /** See `VernLLMOptions.middlewareTimeoutMs`. Bounds `transform` and a function `enabled`; `wrap` itself is never bounded by this. */
@@ -62,12 +53,26 @@ export async function runOperation(
   requestId: string,
   state: MiddlewareStateBag,
   coreOperation: () => Promise<CallResult>,
+  /**
+   * `true` when `VernLLM.cachedCall()` is already wrapping this exact
+   * invocation's `params` object in its own outer `runOperation` call,
+   * around the whole cache hit/miss/join operation. Skips wrapping
+   * again here so one logical `cachedCall()` still only ever runs
+   * `wrap` once: without it, a cache miss (which internally calls
+   * `VernLLM.call()` to get the same retry/timeout/breaker guarantees
+   * as a direct call) would run every `wrap` middleware twice for the
+   * one logical operation the caller made.
+   *
+   * Computed by the caller from a marker scoped to this one `params`
+   * object (see `VernLLM`'s own `cachedCallInnerParams`), not from
+   * `requestId`: two concurrent `cachedCall()` invocations can share
+   * the same caller-supplied explicit `requestId`, and a `Set<string>`
+   * keyed by that id would let one invocation's inner-call marker
+   * suppress the *other* invocation's own outer `wrap`.
+   */
+  skipWrap = false,
 ): Promise<CallResult> {
-  // `cachedCall()` already wraps this exact `requestId` around the
-  // whole cache hit/miss/join operation; skip wrapping again here so
-  // one logical `cachedCall()` still only ever runs `wrap` once. See
-  // `RunOperationDependencies.wrappedByCachedCall`'s docs.
-  if (dependencies.middleware.length === 0 || dependencies.wrappedByCachedCall.has(requestId)) {
+  if (dependencies.middleware.length === 0 || skipWrap) {
     return coreOperation();
   }
 
@@ -92,7 +97,7 @@ export async function runOperation(
         requestedModel: model,
         isFallbackAttempt: false,
         attempt: 1,
-        capabilities: { supportsJsonObjectMode: true },
+        capabilities: { supportsJsonObjectMode: primary.jsonObjectModeSupported },
         signal: params.signal,
         state,
         own: {},

@@ -224,7 +224,7 @@ describe('resolveEnabled', () => {
   it('a per-middleware timeoutMs overrides the instance middlewareTimeoutMs', async () => {
     const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const start = Date.now();
-    await resolveEnabled(
+    const result = await resolveEnabled(
       { enabled: () => new Promise(() => {}), timeoutMs: 15 },
       baseCtx(),
       'slow',
@@ -232,6 +232,7 @@ describe('resolveEnabled', () => {
       errorLogger,
     );
     expect(Date.now() - start).toBeLessThan(1000);
+    expect(result).toBe(false);
   });
 });
 

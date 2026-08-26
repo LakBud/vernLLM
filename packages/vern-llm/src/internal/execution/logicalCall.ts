@@ -196,10 +196,7 @@ export async function executeLogicalStreamCall<T>(
     soleTarget,
   );
 
-  const streamResult = fallbackChainOutcome.result as {
-    chunks: AsyncIterable<StreamChunk>;
-    finalResult: Promise<T | CallWithToolsResult<T>>;
-  };
+  const streamResult = fallbackChainOutcome.result;
 
   const meta = {
     provider: fallbackChainOutcome.executor.providerName,

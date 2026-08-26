@@ -133,7 +133,7 @@ export type WireStreamChunk =
  * like).
  *
  * `reserveUsage`/`refundUsage` are omitted from `call`'s type; see
- * `CachedCallParams` for why — they belong at the top level here too.
+ * `CachedCallParams` for why they belong at the top level here too.
  */
 export type CachedStreamCallParams<T> = CachedCallInput & {
   call: Omit<StreamEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;

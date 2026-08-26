@@ -18,7 +18,8 @@ export type CreateMiddlewareOptions = Omit<VernLLMMiddleware, 'wrap'> & {
    * already swallowed by short-circuiting with its own `CallResult`.
    * The original error is always rethrown afterward, `onError` only
    * observes it, exactly like `onUsage`/`onEvent` elsewhere: a throwing
-   * `onError` is logged and otherwise has no effect on the call.
+   * `onError` is discarded (not logged, this helper has no `Logger` of
+   * its own to log through) and otherwise has no effect on the call.
    */
   onError?: (error: LLMError, ctx: MiddlewareContext) => void | Promise<void>;
 };

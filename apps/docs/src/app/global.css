@@ -133,7 +133,7 @@ html > body[data-scroll-locked] {
 }
 
 .dark {
-  /* Dark mode — instrument panel / oscilloscope */
+  /* Dark mode, instrument panel / oscilloscope */
   --color-fd-background: hsl(215, 22%, 7%);
   --color-fd-foreground: hsl(210, 30%, 92%);
 
@@ -231,7 +231,7 @@ html > body[data-scroll-locked] {
   --ring: var(--color-fd-ring);
   --radius: 0.625rem;
 
-  /* sidebar tokens left as shadcn defaults — not used by fumadocs' own sidebar */
+  /* sidebar tokens left as shadcn defaults, not used by fumadocs' own sidebar */
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);

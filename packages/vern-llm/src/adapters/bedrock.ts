@@ -249,7 +249,7 @@ function toBedrockContent(blocks: ContentBlock[]): BedrockContentBlock[] {
 export interface BedrockAdapterOptions {
   /**
    * Optional preflight check for tool-use support, needed whenever a
-   * `jsonSchema` call ends up sending Converse `toolConfig` — either the
+   * `jsonSchema` call ends up sending Converse `toolConfig`, either the
    * legacy forced-single-tool-call emulation, or real `tools` sent
    * alongside native structured output (`outputConfig`). VernLLM never
    * guesses capability from a failed call's error message (AWS's error

@@ -34,9 +34,8 @@ describe('middleware smoke test', () => {
     const llm = new VernLLM({
       client,
       model: 'gpt-4o',
-      jsonMode: false,
       middleware: [middleware],
-    } as never);
+    });
 
     const result = await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -59,7 +58,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [middleware],
-    } as never);
+    });
 
     const result = await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -94,7 +93,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [mwA, mwB],
-    } as never);
+    });
 
     await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -117,7 +116,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [middleware],
-    } as never);
+    });
 
     await expect(llm.call({ userContent: 'hello', jsonMode: false })).rejects.toThrow(
       /changed `model`/,
@@ -137,7 +136,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [middleware],
-    } as never);
+    });
 
     await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -164,7 +163,7 @@ describe('middleware smoke test', () => {
       model: 'gpt-4o',
       middleware: [middleware],
       logger,
-    } as never);
+    });
 
     const result = await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -188,15 +187,90 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [middleware],
-    } as never);
+    });
 
     const result = await llm.cachedCall({
       cacheKey: 'k1',
+      ttl: 60_000,
       call: { userContent: 'hello', jsonMode: false },
-    } as never);
+    });
 
     expect(result).toBe('hi');
     expect(wrapCount).toBe(1);
+  });
+
+  it('cachedCall: two concurrent invocations sharing the same explicit requestId each still run their own outer wrap', async () => {
+    const { client } = createMockClient([textResponse('first'), textResponse('second')]);
+    const wrapEvents: string[] = [];
+
+    const middleware: VernLLMMiddleware = {
+      name: 'counter',
+      wrap: async (request, next) => {
+        wrapEvents.push('start');
+        const result = await next();
+        wrapEvents.push('end');
+        return result;
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [middleware],
+    });
+
+    // Same explicit requestId, different cache keys so both are genuine
+    // misses (each triggers its own inner call()), run concurrently. The
+    // old requestId-keyed `Set<string>` suppression mechanism could let
+    // one invocation's inner-call marker suppress the *other* still
+    // in-flight invocation's own outer `wrap`, since both used the same
+    // key; the object-identity-keyed marker can't cross invocations.
+    const [first, second] = await Promise.all([
+      llm.cachedCall({
+        cacheKey: 'k-dup-a',
+        ttl: 60_000,
+        call: { userContent: 'hello', jsonMode: false, requestId: 'dup-id' },
+      }),
+      llm.cachedCall({
+        cacheKey: 'k-dup-b',
+        ttl: 60_000,
+        call: { userContent: 'hello', jsonMode: false, requestId: 'dup-id' },
+      }),
+    ]);
+
+    expect([first, second].sort()).toEqual(['first', 'second']);
+    // Each cachedCall() wraps its own outer operation once: two `start`s,
+    // two `end`s. A suppressed outer wrap would show up as fewer than 4
+    // events total, or a `start` with no matching `end` for one call.
+    expect(wrapEvents.filter((e) => e === 'start')).toHaveLength(2);
+    expect(wrapEvents.filter((e) => e === 'end')).toHaveLength(2);
+  });
+
+  it('call: two concurrent invocations sharing the same explicit requestId each still run their own wrap', async () => {
+    const { client } = createMockClient([textResponse('first'), textResponse('second')]);
+    let wrapCount = 0;
+
+    const middleware: VernLLMMiddleware = {
+      name: 'counter',
+      wrap: async (_request, next) => {
+        wrapCount++;
+        return next();
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [middleware],
+    });
+
+    const [first, second] = await Promise.all([
+      llm.call({ userContent: 'hello', jsonMode: false, requestId: 'dup-id-2' }),
+      llm.call({ userContent: 'hello', jsonMode: false, requestId: 'dup-id-2' }),
+    ]);
+
+    expect([first, second].sort()).toEqual(['first', 'second']);
+    expect(wrapCount).toBe(2);
   });
 
   it('cachedCall: wrap fires exactly once on a cache hit too, with next() resolving to the cached value', async () => {
@@ -216,19 +290,21 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [middleware],
-    } as never);
+    });
 
     // Miss, populates the cache.
     await llm.cachedCall({
       cacheKey: 'k2',
+      ttl: 60_000,
       call: { userContent: 'hello', jsonMode: false },
-    } as never);
+    });
 
     // Hit: no second provider call, wrap still fires exactly once more.
     const result = await llm.cachedCall({
       cacheKey: 'k2',
+      ttl: 60_000,
       call: { userContent: 'hello', jsonMode: false },
-    } as never);
+    });
 
     expect(result).toBe('hi');
     expect(calls.length).toBe(1);
@@ -253,21 +329,55 @@ describe('middleware smoke test', () => {
       model: 'gpt-4o',
       name: 'primary',
       middleware: [middleware],
-    } as never);
+    });
 
     await llm.cachedCall({
       cacheKey: 'k3',
+      ttl: 60_000,
       call: { userContent: 'hello', jsonMode: false },
-    } as never);
+    });
 
     await llm.cachedCall({
       cacheKey: 'k3',
+      ttl: 60_000,
       call: { userContent: 'hello', jsonMode: false },
-    } as never);
+    });
 
     expect(metas).toHaveLength(2);
     expect(metas[0]).toMatchObject({ provider: 'primary', usedFallback: false, attempts: 1 });
     expect(metas[1]).toBeUndefined();
+  });
+
+  it('cachedCall: a value set by wrap in ctx.state is visible to transform on the same cache miss', async () => {
+    const { client } = createMockClient([textResponse('hi')]);
+    const spanId = createStateKey<string>('span-id');
+    let seenInTransform: string | undefined;
+
+    const middleware: VernLLMMiddleware = {
+      name: 'span',
+      wrap: async (_request, next, ctx) => {
+        ctx.state.set(spanId, 'abc123');
+        return next();
+      },
+      transform: (_request, ctx) => {
+        seenInTransform = ctx.state.get(spanId);
+        return {};
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [middleware],
+    });
+
+    await llm.cachedCall({
+      cacheKey: 'k-state-share',
+      ttl: 60_000,
+      call: { userContent: 'hello', jsonMode: false },
+    });
+
+    expect(seenInTransform).toBe('abc123');
   });
 
   it('createMiddleware: onError observes a failure without changing it, and never fires on success', async () => {
@@ -281,7 +391,7 @@ describe('middleware smoke test', () => {
       model: 'gpt-4o',
       maxRetries: 1,
       middleware: [middleware],
-    } as never);
+    });
 
     const result = await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -302,7 +412,7 @@ describe('middleware smoke test', () => {
       model: 'gpt-4o',
       maxRetries: 0,
       middleware: [middleware],
-    } as never);
+    });
 
     await expect(llm.call({ userContent: 'hello', jsonMode: false })).rejects.toThrow();
 
@@ -341,7 +451,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [outer, inner],
-    } as never);
+    });
 
     await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -375,7 +485,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [setter, reader],
-    } as never);
+    });
 
     await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -401,7 +511,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [middleware],
-    } as never);
+    });
 
     await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -435,7 +545,7 @@ describe('middleware smoke test', () => {
       client,
       model: 'gpt-4o',
       middleware: [mwA, mwB],
-    } as never);
+    });
 
     await llm.call({ userContent: 'hello', jsonMode: false });
 
@@ -460,7 +570,7 @@ describe('middleware smoke test', () => {
       model: 'gpt-4o',
       middleware: [middleware],
       middlewareTimeoutMs: 10,
-    } as never);
+    });
 
     // Would reject with a timeout error if wrap were bounded by
     // middlewareTimeoutMs the same way transform/enabled are.
@@ -491,7 +601,7 @@ describe('middleware smoke test', () => {
       onEvent: (event: VernLLMEvent) => {
         if (event.kind === 'middleware') events.push(event);
       },
-    } as never);
+    });
 
     await llm.call({ userContent: 'hello', jsonMode: false });
 

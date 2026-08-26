@@ -24,14 +24,14 @@ function pickBreakerState(): BreakerState {
   return 'open';
 }
 
-// Hardcoded directly off --color-fd-primary (37, 90%, 55%) — no runtime CSS
+// Hardcoded directly off --color-fd-primary (37, 90%, 55%), no runtime CSS
 // parsing, so there's no chance of a hue mismatch depending on how the
 // browser resolves the variable.
 const COLORS = {
   border: 'hsla(212, 15%, 30%, 0.18)',
-  closed: 'hsl(37, 35%, 40%)', // dim amber — quiet, most cells
-  halfOpen: 'hsl(37, 65%, 50%)', // mid amber — probing
-  open: 'hsl(37, 90%, 55%)', // full brand amber — tripped
+  closed: 'hsl(37, 35%, 40%)', // dim amber, quiet, most cells
+  halfOpen: 'hsl(37, 65%, 50%)', // mid amber, probing
+  open: 'hsl(37, 90%, 55%)', // full brand amber, tripped
 };
 
 const colorFor = (state: BreakerState) =>
