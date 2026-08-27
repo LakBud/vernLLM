@@ -22,7 +22,7 @@
 
 <p align="center">The LLM call framework. Resilience, observability, and control for every call.</p>
 
-<p align="center">Retries, timeouts, circuit breaking, provider fallback, rate limiting, caching, middleware, structured output, usage metering, usage tracking, observability events and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
+<p align="center">Retries, timeouts, circuit breaking, provider fallback, rate limiting, caching, middleware plug-ins, structured output, usage metering, usage tracking, observability events and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk';

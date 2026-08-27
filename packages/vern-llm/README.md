@@ -25,7 +25,7 @@
 
 <p align="center">The LLM call framework. Resilience, observability, and control for every call.</p>
 
-Retries, timeouts, caching, circuit breaking, provider fallback, and client-side rate limiting behind one typed interface, with adapters for OpenAI-compatible APIs, Anthropic, Gemini, and Bedrock.
+<p align="center">Retries, timeouts, circuit breaking, provider fallback, rate limiting, caching, middleware plug-ins, structured output, usage metering, usage tracking, observability events and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
 
 **Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** -> installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
 
@@ -92,7 +92,7 @@ const result = await finalResult; // cached, retried, and streamed, tool calls i
 - **Streaming**: set `stream: true` on any call and get live chunks alongside the same validated result the call would otherwise resolve to
 - **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
 - **Caching**: wrap any LLM call with `cachedCall`, bring your own cache adapter
-- **Middleware**: transform outgoing requests, and observe or wrap the outcome of a call, for logging, tracing, redaction, or cost tracking
+- **Middleware plug-ins**: transform outgoing requests, and observe or wrap the outcome of a call — write once, drop into `middleware: []`, for logging, tracing, redaction, or cost tracking
 - **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back, independent per fallback target too
 - **Observability**: one `onEvent` stream reports retries, fallovers, circuit transitions, and rate-limit waits
 - **Usage tracking**: `onUsage` and `onUsageFailure` report token spend on success and on failure, so nothing goes unaccounted for when a call fails after the provider already responded
