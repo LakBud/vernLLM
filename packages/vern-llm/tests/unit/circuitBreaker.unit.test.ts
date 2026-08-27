@@ -119,7 +119,7 @@ describe('CircuitBreaker (unit)', () => {
 
     cb.recordFailure('gpt-4o');
 
-    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, 'gpt-4o');
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, 'gpt-4o', undefined);
   });
 
   it('reports whichever model most recently touched the breaker, even across different models', () => {
@@ -132,7 +132,7 @@ describe('CircuitBreaker (unit)', () => {
     cb.recordFailure('gpt-4o-mini'); // 2nd failure, crosses threshold
 
     expect(onStateChange).toHaveBeenCalledTimes(1);
-    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 2, 'gpt-4o-mini');
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 2, 'gpt-4o-mini', undefined);
   });
 
   it('omitting `model` on record/assert calls reports undefined, not a stale prior value', () => {
@@ -141,14 +141,14 @@ describe('CircuitBreaker (unit)', () => {
     const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, onStateChange });
 
     cb.recordFailure();
-    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, undefined);
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, undefined, undefined);
 
     // Also cover assertClosed's own transition (open -> half-open),
     // the test's title mentions "assert calls" but only recordFailure
     // was previously exercised.
     vi.advanceTimersByTime(1001);
     cb.assertClosed();
-    expect(onStateChange).toHaveBeenCalledWith('open', 'half-open', 1, undefined);
+    expect(onStateChange).toHaveBeenCalledWith('open', 'half-open', 1, undefined, undefined);
 
     vi.useRealTimers();
   });
@@ -257,8 +257,8 @@ describe('CircuitBreaker, isolateByModel (unit)', () => {
     cb.recordFailure('gpt-4o-mini');
 
     expect(onStateChange).toHaveBeenCalledTimes(2);
-    expect(onStateChange).toHaveBeenNthCalledWith(1, 'closed', 'open', 1, 'gpt-4o');
-    expect(onStateChange).toHaveBeenNthCalledWith(2, 'closed', 'open', 1, 'gpt-4o-mini');
+    expect(onStateChange).toHaveBeenNthCalledWith(1, 'closed', 'open', 1, 'gpt-4o', undefined);
+    expect(onStateChange).toHaveBeenNthCalledWith(2, 'closed', 'open', 1, 'gpt-4o-mini', undefined);
   });
 
   it('half-open/cooldown/trial-in-flight semantics are unchanged, just scoped per model', () => {

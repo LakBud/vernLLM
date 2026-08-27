@@ -1,16 +1,20 @@
 import { LLMError } from '../../types/errors.js';
 import { FallbackExhaustedError } from '../../types/fallback.js';
 import { normalizeError } from './utils/errors.utils.js';
+import { emitEvent } from './utils/middleware.utils.js';
 
+import type { Logger } from '../../logger.js';
 import type {
   CallParams,
   CallResult,
   CallWithToolsResult,
   FallbackAttempt,
   FallbackOn,
+  MiddlewareContext,
   MiddlewareStateBag,
   StreamChunk,
   VernLLMEvent,
+  VernLLMMiddleware,
 } from '../../types/index.js';
 import type { CallExecutor } from './callExecutor.js';
 
@@ -27,6 +31,11 @@ export interface LogicalCallDependencies {
   fallbackOn: FallbackOn;
   /** Reports a `'fallback'` event when the chain moves to the next target. */
   reportEvent: (event: VernLLMEvent) => void;
+  /** See `VernLLMOptions.middleware`. Already sorted by `priority`. */
+  middleware: VernLLMMiddleware[];
+  /** See `VernLLMOptions.middlewareTimeoutMs`. */
+  middlewareTimeoutMs: number;
+  logger: Logger;
 }
 
 /**
@@ -60,6 +69,7 @@ export async function runFallbackChain<R>(
   dependencies: LogicalCallDependencies,
   params: Pick<CallParams<unknown>, 'model' | 'signal'>,
   requestId: string,
+  middlewareState: MiddlewareStateBag,
   attempt: (executor: CallExecutor, onAttempt: () => void) => Promise<R>,
   skipBreakerCheckForFirst = false,
 ): Promise<FallbackChainOutcome<R>> {
@@ -80,7 +90,11 @@ export async function runFallbackChain<R>(
       // that just claimed it) or double-claim a slot no concurrent
       // caller actually has.
       if (!(targetIndex === 0 && skipBreakerCheckForFirst)) {
-        executor.assertBreakerClosed(params.model);
+        executor.assertBreakerClosed(params.model, {
+          requestId,
+          state: middlewareState,
+          signal: params.signal,
+        });
       }
 
       const result = await attempt(executor, () => {
@@ -118,17 +132,39 @@ export async function runFallbackChain<R>(
       }
 
       const nextExecutor = dependencies.executors[targetIndex + 1]!;
+      const failedModel = params.model ?? executor.model;
 
-      dependencies.reportEvent({
-        kind: 'fallback',
+      // `ctx` describes the target that just failed (`from`), not the
+      // one about to be tried next.
+      const ctx: MiddlewareContext = {
         requestId,
-        from: executor.providerName,
-        to: nextExecutor.providerName,
-        fromIndex: targetIndex - 1,
-        toIndex: targetIndex,
-        error: normalizedError,
-        elapsedMs: Date.now() - startedAt,
-      });
+        requestedProvider: executor.providerName,
+        requestedModel: failedModel,
+        isFallbackAttempt: targetIndex > 0,
+        attempt: attemptCount,
+        capabilities: { supportsJsonObjectMode: executor.jsonObjectModeSupported },
+        signal: params.signal,
+        state: middlewareState,
+        own: {},
+      };
+
+      emitEvent(
+        {
+          kind: 'fallback',
+          requestId,
+          from: executor.providerName,
+          to: nextExecutor.providerName,
+          fromIndex: targetIndex - 1,
+          toIndex: targetIndex,
+          error: normalizedError,
+          elapsedMs: Date.now() - startedAt,
+        },
+        ctx,
+        dependencies.reportEvent,
+        dependencies.middleware,
+        dependencies.middlewareTimeoutMs,
+        dependencies.logger,
+      );
     }
   }
 
@@ -156,6 +192,7 @@ export async function executeLogicalCall<T>(
     dependencies,
     params,
     requestId,
+    middlewareState,
     (executor, onAttempt) => executor.run(params, requestId, onAttempt, middlewareState),
     soleTarget,
   );
@@ -192,6 +229,7 @@ export async function executeLogicalStreamCall<T>(
     dependencies,
     params,
     requestId,
+    middlewareState,
     (executor, onAttempt) => executor.runStream(params, requestId, onAttempt, middlewareState),
     soleTarget,
   );

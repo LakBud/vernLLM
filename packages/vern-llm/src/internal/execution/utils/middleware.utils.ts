@@ -262,10 +262,44 @@ export function reclassifyMiddlewareThrow(
   });
 }
 
-/** Reports a `'middleware'` event through the same `onEvent` plumbing every other event uses, filtered by this middleware's own `enabled` state (the caller already resolved that before calling this). */
-export function reportMiddlewareEvent(
-  onEvent: ((event: VernLLMEvent) => void) | undefined,
-  event: Extract<VernLLMEvent, { kind: 'middleware' }>,
+/** Reports `event` through the instance-level reporter, then fans it out, fire-and-forget, to every applicable middleware's own `onEvent`. */
+export function emitEvent(
+  event: VernLLMEvent,
+  ctx: MiddlewareContext,
+  reportEventInstance: (event: VernLLMEvent) => void,
+  middleware: VernLLMMiddleware[],
+  middlewareTimeoutMs: number,
+  logger: Logger,
 ): void {
-  onEvent?.(event);
+  reportEventInstance(event);
+
+  if (middleware.length === 0) return;
+
+  void dispatchEventToMiddleware(middleware, event, ctx, middlewareTimeoutMs, logger);
+}
+
+/** Calls `onEvent` on every middleware whose `enabled` resolves `true`. Never throws or rejects. */
+async function dispatchEventToMiddleware(
+  middleware: VernLLMMiddleware[],
+  event: VernLLMEvent,
+  ctx: MiddlewareContext,
+  middlewareTimeoutMs: number,
+  logger: Logger,
+): Promise<void> {
+  for (let index = 0; index < middleware.length; index++) {
+    const entry = middleware[index]!;
+    if (!entry.onEvent) continue;
+
+    const label = middlewareLabel(entry, index);
+    const isEnabled = await resolveEnabled(entry, ctx, label, middlewareTimeoutMs, logger);
+    if (!isEnabled) continue;
+
+    try {
+      entry.onEvent(event, ctx);
+    } catch (error) {
+      logger.error(`[VernLLM] middleware "${label}".onEvent failed`, {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
 }

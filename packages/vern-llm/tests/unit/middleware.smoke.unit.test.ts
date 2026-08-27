@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createMiddleware } from '../../src/types/createMiddleware.js';
 import {
+  createMiddleware,
   createStateKey,
+  VernLLM,
   type VernLLMEvent,
   type VernLLMMiddleware,
-} from '../../src/types/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
+} from '../../src/index.js';
 import { createMockClient, textResponse } from '../helpers.js';
 
 describe('middleware smoke test', () => {
@@ -40,7 +40,7 @@ describe('middleware smoke test', () => {
     const result = await llm.call({ userContent: 'hello', jsonMode: false });
 
     expect(result).toBe('hi');
-    expect(events).toEqual(['wrap:before', 'wrap:after']);
+    expect(events).toEqual(['wrap:before', 'event:middleware', 'wrap:after']);
 
     const sentMessages = calls[0]!.messages;
     expect(sentMessages.at(-1)).toEqual({ role: 'user', content: 'appended by middleware' });

@@ -3,9 +3,9 @@ title: Middleware Tracing and Cost Tracking
 description: Build a request-tracing and cost-tracking pair with transform, wrap, and ctx.state
 ---
 
-This guide walks through a complete middleware pair: one middleware opens a tracing span around
-every call, and a second, independent middleware reads that span back out to record cost, without
-either middleware needing to know how the other is implemented.
+This guide builds a middleware pair: one opens a tracing span around every call, a second,
+independent one reads that span back out to record cost, without either needing to know how the
+other is implemented.
 
 See [Middleware](/docs/core/middleware) for the full hook contract this guide builds on.
 
@@ -22,8 +22,8 @@ export const spanIdKey = createStateKey<string>('tracing.spanId');
 
 ## 2. Write the tracing middleware
 
-`wrap` opens a span before the call and closes it once `next()` resolves, so it spans the whole
-logical call, retries and fallback included, not just one attempt:
+`wrap` opens a span before the call and closes it once `next()` resolves, spanning the whole
+logical call, retries and fallback included:
 
 ```ts title="tracing-middleware.ts"
 import type { VernLLMMiddleware } from 'vern-llm';
@@ -52,13 +52,13 @@ export const tracing: VernLLMMiddleware = {
 ```
 
 `ctx.requestedProvider`/`requestedModel` describe the primary target before `next()` resolves;
-`result.meta?.provider` is what actually served the call, which can differ if `fallback` moved the
-call to a backup target underneath this `wrap`.
+`result.meta?.provider` is what actually served the call, which can differ once a fallback target
+answers instead.
 
 ## 3. Write the cost-tracking middleware
 
 A second, independent middleware reads the span ID `tracing` set, without importing anything from
-`tracing` itself beyond the shared key:
+`tracing` beyond the shared key:
 
 ```ts title="cost-tracking-middleware.ts"
 import type { VernLLMMiddleware } from 'vern-llm';
@@ -100,7 +100,7 @@ const llm = new VernLLM({
 ## 5. Read real token usage instead of a placeholder
 
 `result.meta` doesn't carry token counts, `onUsage` does. Pair `wrap` with `onUsage` for cost that
-needs real spend, not just wall-clock time:
+needs real spend, not just wall clock time:
 
 ```ts title="cost-tracking-with-usage.ts"
 const llm = new VernLLM({
@@ -113,9 +113,9 @@ const llm = new VernLLM({
 });
 ```
 
-`onUsage` fires per real provider response, `wrap`'s `next()` resolves once per logical call, so
-correlate the two by `requestId` if a call retried or fell over to a fallback target and you need
-per-attempt token cost rather than just the logical call's total elapsed time.
+`onUsage` fires per real provider response; `wrap`'s `next()` resolves once per logical call.
+Correlate the two by `requestId` for per-attempt token cost instead of just the logical call's
+total elapsed time.
 
 ## Why `cost-tracking` is `priority: 0`
 
@@ -131,19 +131,18 @@ cost-tracking starts timer  (pre-next, priority 0, runs first)
 cost-tracking reads spanIdKey, records cost  (post-next, priority 0, resolves last)
 ```
 
-This particular pair would also work with the priorities swapped, since `spanIdKey` is written in
-one middleware's pre-`next()` phase and read in the other's post-`next()` phase, and every
-middleware's pre phase finishes before any post phase begins regardless of nesting. Order would
-start to matter if `cost-tracking` needed to read `spanIdKey` in its own pre-`next()` phase instead,
-say to tag a log line with it before the call even starts, since then `tracing` would need to run
-its own pre phase first. See [Composition order](/docs/core/middleware#composition-order) for the
-general rule.
+This pair would also work with the priorities swapped, since `spanIdKey` is written in one
+middleware's pre phase and read in the other's post phase, and every pre phase finishes before any
+post phase begins regardless of nesting. Order would start to matter if `cost-tracking` needed to
+read `spanIdKey` in its own pre phase instead, say to tag a log line before the call even starts,
+since then `tracing` would need to run its own pre phase first. See
+[Composition order](/docs/core/middleware#composition-order) for the general rule.
 
 ## Filtering to one target
 
 `enabled` is evaluated fresh per attempt for `transform`, with an accurate `ctx.isFallbackAttempt`
-for whichever target that attempt is actually dispatched to. Scope a `transform` to just the
-primary target, or just fallback attempts, the same way:
+for whichever target that attempt is dispatched to. Scope a `transform` to just the primary
+target, or just fallback attempts, the same way:
 
 ```ts title="scope-transform-to-primary.ts"
 import type { VernLLMMiddleware } from 'vern-llm';
@@ -156,16 +155,15 @@ export const primaryOnlyRedaction: VernLLMMiddleware = {
 ```
 
 <Callout type="warn">
-  `wrap`'s own `ctx.isFallbackAttempt` is always `false`: `wrap` only ever sees the primary target's
-  context, since which target actually serves the call isn't decided until `next()` resolves. An
-  `enabled` predicate gating a `wrap` can't distinguish a primary attempt from a fallback one this
-  way; read `result.meta?.provider` after `next()` resolves instead if `wrap` needs to know which
-  target actually answered. See [MiddlewareContext](/docs/core/middleware#transform) for the same
-  caveat on `requestedProvider`/`requestedModel`.
+  `wrap`'s own `ctx.isFallbackAttempt` is always `false`: `wrap` only sees the primary target's
+  context, since the real target isn't decided until `next()` resolves. Read `result.meta?.provider`
+  after `next()` resolves instead if `wrap` needs to know which target actually answered. See
+  [transform](/docs/core/middleware#transform) for the same caveat on
+  `requestedProvider`/`requestedModel`.
 </Callout>
 
 <Callout type="info">
-  Both middleware here use `wrap`, never `transform`: neither one changes the outgoing request, so
+  Both middleware here use `wrap`, never `transform`: neither changes the outgoing request, so
   there's nothing for `transform` to patch. Reach for `transform` instead when a middleware needs to
-  redact content or add a tool before dispatch, see [transform](/docs/core/middleware#transform).
+  redact content or add a tool before dispatch.
 </Callout>

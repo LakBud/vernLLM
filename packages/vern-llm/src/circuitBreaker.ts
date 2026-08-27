@@ -1,5 +1,14 @@
 import { LLMError } from './types/errors.js';
 
+import type { MiddlewareStateBag } from './types/middleware.js';
+
+/** The call this mutation happened as part of, forwarded to `onStateChange` untouched. `CircuitBreaker` never inspects it. */
+export interface CircuitBreakerCallContext {
+  requestId: string;
+  state: MiddlewareStateBag;
+  signal?: AbortSignal;
+}
+
 export interface CircuitBreakerOptions {
   /** Consecutive failures before the circuit opens, default 5 */
   threshold?: number;
@@ -23,6 +32,8 @@ export interface CircuitBreakerOptions {
     to: CircuitState,
     consecutiveFailures: number,
     model?: string,
+    /** See `CircuitBreakerCallContext`. */
+    context?: CircuitBreakerCallContext,
   ) => void;
   /**
    * Track a separate circuit per resolved model instead of one shared
@@ -111,12 +122,17 @@ export class CircuitBreaker {
   }
 
   /** Every state mutation routes through here, so `onStateChange` fires exactly once per real change. */
-  private transition(bucket: CircuitBucket, to: CircuitState, model: string | undefined): void {
+  private transition(
+    bucket: CircuitBucket,
+    to: CircuitState,
+    model: string | undefined,
+    context: CircuitBreakerCallContext | undefined,
+  ): void {
     if (to === bucket.state) return;
 
     const from = bucket.state;
     bucket.state = to;
-    this.onStateChange?.(from, to, bucket.consecutiveFailures, model);
+    this.onStateChange?.(from, to, bucket.consecutiveFailures, model, context);
   }
 
   /**
@@ -126,7 +142,7 @@ export class CircuitBreaker {
    * elapsed, or half-open with no trial currently running), this call
    * becomes that trial
    */
-  assertClosed(model?: string): void {
+  assertClosed(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
 
     if (bucket.state === 'closed') return;
@@ -145,7 +161,7 @@ export class CircuitBreaker {
       // that re-enters (e.g. calls assertClosed again) must see this
       // call as already claiming the trial, not still eligible for one.
       bucket.trialInFlight = true;
-      this.transition(bucket, 'half-open', model);
+      this.transition(bucket, 'half-open', model, context);
       return;
     }
 
@@ -161,7 +177,7 @@ export class CircuitBreaker {
     bucket.trialInFlight = true;
   }
 
-  recordSuccess(model?: string): void {
+  recordSuccess(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.lookupBucket(model);
 
     if (!bucket) {
@@ -170,14 +186,14 @@ export class CircuitBreaker {
 
     bucket.consecutiveFailures = 0;
     bucket.trialInFlight = false;
-    this.transition(bucket, 'closed', model);
+    this.transition(bucket, 'closed', model, context);
 
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
       this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
     }
   }
 
-  recordFailure(model?: string): void {
+  recordFailure(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
 
     bucket.consecutiveFailures += 1;
@@ -189,13 +205,13 @@ export class CircuitBreaker {
       // a synchronous observer must see the fresh cooldown, not a stale
       // or zeroed one.
       bucket.openedAt = Date.now();
-      this.transition(bucket, 'open', model);
+      this.transition(bucket, 'open', model, context);
       return;
     }
 
     if (bucket.consecutiveFailures >= this.threshold) {
       bucket.openedAt = Date.now();
-      this.transition(bucket, 'open', model);
+      this.transition(bucket, 'open', model, context);
     }
   }
 
@@ -217,12 +233,12 @@ export class CircuitBreaker {
    * threshold-crossing failure would, and clears any in-flight half-open
    * trial since it no longer applies once the circuit is (re)opened.
    */
-  open(model?: string): void {
+  open(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
 
     bucket.openedAt = Date.now();
     bucket.trialInFlight = false;
-    this.transition(bucket, 'open', model);
+    this.transition(bucket, 'open', model, context);
   }
 
   /**
@@ -232,12 +248,12 @@ export class CircuitBreaker {
    * per-model bucket under `isolateByModel`, once idle) but without
    * requiring an actual successful call first.
    */
-  close(model?: string): void {
+  close(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
 
     bucket.consecutiveFailures = 0;
     bucket.trialInFlight = false;
-    this.transition(bucket, 'closed', model);
+    this.transition(bucket, 'closed', model, context);
 
     // transition() may have synchronously re-entered (e.g. an
     // onStateChange callback that calls open(model) on this same

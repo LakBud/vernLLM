@@ -150,7 +150,7 @@ export interface VernLLMOptions {
    * Bounds `transform` and a function `enabled`, the same way every
    * other blocking operation in the package is already bounded.
    * Overridable per middleware via that entry's own `timeoutMs`.
-   * Default 5000.
+   * `<= 0` means unbounded (no timer at all). Default 5000.
    */
   middlewareTimeoutMs?: number;
 }

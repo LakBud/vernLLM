@@ -11,7 +11,10 @@ import { FallbackExhaustedError } from '../../../../src/types/fallback.js';
 import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
 
 import type { CallExecutor } from '../../../../src/internal/execution/callExecutor.js';
+import type { Logger } from '../../../../src/logger.js';
 import type { CallParams, StreamChunk, VernLLMEvent } from '../../../../src/types/index.js';
+
+const fakeLogger: Logger = { debug: () => {}, warn: () => {}, error: () => {} };
 
 /** A real empty `AsyncIterable<StreamChunk>`, since `never[]`/`[]` don't structurally satisfy it (missing `Symbol.asyncIterator`). */
 async function* emptyChunks(): AsyncIterable<StreamChunk> {}
@@ -45,6 +48,7 @@ function fakeExecutor(overrides: {
   return {
     providerName: overrides.providerName,
     model: overrides.model ?? 'default-model',
+    jsonObjectModeSupported: true,
     assertBreakerClosed: overrides.assertBreakerClosed ?? (() => {}),
     run: async (_params: unknown, _requestId: unknown, onAttempt: () => void) => {
       onAttempt();
@@ -67,6 +71,9 @@ function dependencies(
     executors,
     fallbackOn: overrides.fallbackOn ?? (() => 'next'),
     reportEvent: overrides.reportEvent ?? (() => {}),
+    middleware: overrides.middleware ?? [],
+    middlewareTimeoutMs: overrides.middlewareTimeoutMs ?? 5000,
+    logger: overrides.logger ?? fakeLogger,
   };
 }
 
@@ -81,6 +88,7 @@ describe('runFallbackChain', () => {
       dependencies([primary], { fallbackOn }),
       { model: undefined, signal: undefined },
       'req-1',
+      state,
       async (_executor, onAttempt) => {
         onAttempt();
         return 'ok';
@@ -104,6 +112,7 @@ describe('runFallbackChain', () => {
       dependencies([primary, fallback]),
       { model: undefined, signal: undefined },
       'req-1',
+      state,
       async (executor) => {
         if (executor === primary) throw new LLMError('primary down', 'api', { status: 500 });
         return 'ok';
@@ -123,6 +132,7 @@ describe('runFallbackChain', () => {
       dependencies([primary]),
       { model: undefined, signal: undefined },
       'req-1',
+      state,
       async () => 'ok',
       false,
     );
@@ -152,6 +162,7 @@ describe('runFallbackChain', () => {
       }),
       { model: undefined, signal: undefined },
       'req-1',
+      state,
       attempt,
     );
 
@@ -178,6 +189,7 @@ describe('runFallbackChain', () => {
         dependencies([primary]),
         { model: undefined, signal: undefined },
         'req-1',
+        state,
         async () => {
           throw new LLMError('down', 'api', { status: 500 });
         },
@@ -194,6 +206,7 @@ describe('runFallbackChain', () => {
         dependencies([primary, secondary], { fallbackOn: () => 'next' }),
         { model: undefined, signal: undefined },
         'req-1',
+        state,
         async () => {
           throw new LLMError('down', 'api', { status: 500 });
         },
@@ -216,6 +229,7 @@ describe('runFallbackChain', () => {
         dependencies([primary], { fallbackOn }),
         { model: undefined, signal: undefined },
         'req-1',
+        state,
         async () => {
           throw new LLMError('down', 'api', { status: 500 });
         },
@@ -236,6 +250,7 @@ describe('runFallbackChain', () => {
         dependencies([primary, secondary], { fallbackOn: () => 'stop' }),
         { model: undefined, signal: undefined },
         'req-1',
+        state,
         async (executor) => {
           if (executor.providerName === 'secondary') secondaryAttempt();
           throw new LLMError('down', 'api', { status: 500 });

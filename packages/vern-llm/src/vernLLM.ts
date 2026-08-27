@@ -54,6 +54,7 @@ import {
   type CachedStreamJsonModeDisabledCallParams,
   type CachedStreamJsonModeEnabledCallParams,
   type CallMeta,
+  type CallResult,
   type VernLLMMiddleware,
   type StreamChunk,
   type TargetCircuitState,
@@ -199,6 +200,10 @@ export class VernLLM {
         target.model,
         options.onEvent,
         this.logger,
+        this.middleware,
+        this.middlewareTimeoutMs,
+        isFallback,
+        target.client.supportsJsonObjectMode ?? true,
       );
 
       return new CallExecutor(name, target.client, target.model, {
@@ -249,6 +254,9 @@ export class VernLLM {
       executors: this.executors,
       fallbackOn: this.fallbackOn,
       reportEvent: this.reportEvent,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
     };
   }
 
@@ -389,7 +397,11 @@ export class VernLLM {
               throw new LLMError('LLM request aborted', 'aborted');
             }
 
-            this.executors[0]!.assertBreakerClosed(effectiveParams.model);
+            this.executors[0]!.assertBreakerClosed(effectiveParams.model, {
+              requestId,
+              state: middlewareState,
+              signal: effectiveParams.signal,
+            });
           }
 
           if (effectiveParams.stream) {
@@ -611,8 +623,10 @@ export class VernLLM {
     if (restCallParams.stream) {
       const streamParams = { ...restCallParams, requestId } as StreamEnabledCallParams<T>;
 
+      let wrapped: CallResult;
+
       try {
-        const wrapped = await runOperation(
+        wrapped = await runOperation(
           this.runOperationDependencies,
           streamParams,
           requestId,
@@ -633,19 +647,21 @@ export class VernLLM {
             return { value, meta: metaHolder.current };
           },
         );
-
-        return wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
-      } finally {
-        // Wraps the whole `runOperation` call, not just `coreOperation`'s
-        // own body: `previewRequest` (run before `coreOperation` even
-        // exists) can throw, and a `wrap` that short-circuits or throws
-        // before calling `next()` skips `coreOperation` entirely (see
-        // `runOperation`'s own docs). A `finally` nested only inside
-        // `coreOperation` would miss all three cases, leaking this entry
-        // in `cachedCallMeta` forever for a trigger that never got to
-        // release it.
+      } catch (error) {
+        // No stream result exists yet, so nothing is left joinable.
         releaseMetaHolder();
+        throw error;
       }
+
+      const streamResult = wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
+
+      // Released once the real outcome is known, not just once the
+      // stream opens, since a joiner can still arrive in between. Uses
+      // `.then(fn, fn)`, not `.finally(fn)`, so a mid-stream rejection
+      // doesn't leave an unhandled promise behind.
+      void streamResult.finalResult.then(releaseMetaHolder, releaseMetaHolder);
+
+      return streamResult;
     }
 
     const paramsWithId = { ...restCallParams, requestId } as CallParams<T>;
@@ -713,7 +729,11 @@ export class VernLLM {
   openCircuit(target?: CircuitTarget): void {
     const executor = resolveExecutor(this.executors, target?.index ?? 0, 'openCircuit');
     warnIfModelUnsupported(executor.isolateByModel, target?.model, 'openCircuit', this.logger);
-    executor.openCircuit(target?.model ?? executor.model);
+    // No logical call behind a manual invocation, so mint a fresh one.
+    executor.openCircuit(target?.model ?? executor.model, {
+      requestId: randomUUID(),
+      state: createMiddlewareStateBag(),
+    });
   }
 
   /**
@@ -727,6 +747,10 @@ export class VernLLM {
   closeCircuit(target?: CircuitTarget): void {
     const executor = resolveExecutor(this.executors, target?.index ?? 0, 'closeCircuit');
     warnIfModelUnsupported(executor.isolateByModel, target?.model, 'closeCircuit', this.logger);
-    executor.closeCircuit(target?.model ?? executor.model);
+    // See `openCircuit`.
+    executor.closeCircuit(target?.model ?? executor.model, {
+      requestId: randomUUID(),
+      state: createMiddlewareStateBag(),
+    });
   }
 }

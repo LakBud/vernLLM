@@ -1,4 +1,4 @@
-import { CircuitBreaker } from '../../circuitBreaker.js';
+import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
 import { createMiddlewareStateBag } from '../../types/middleware.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
@@ -9,9 +9,9 @@ import {
   assertModelAndResponseFormatUnchanged,
   assertNoDuplicateTools,
   DEFAULT_MIDDLEWARE_TIMEOUT_MS,
+  emitEvent,
   mergePatch,
   middlewareLabel,
-  reportMiddlewareEvent,
   resolveEnabled,
   runTransform,
 } from './utils/middleware.utils.js';
@@ -156,6 +156,27 @@ export class CallExecutor {
     });
   }
 
+  /** Builds the `MiddlewareContext` for one attempt against this target. `attempt` is 0-based here, 1-based on the result. */
+  private buildEventContext(
+    requestId: string,
+    model: string,
+    attempt: number,
+    signal: AbortSignal | undefined,
+    state: MiddlewareStateBag,
+  ): MiddlewareContext {
+    return {
+      requestId,
+      requestedProvider: this.providerName,
+      requestedModel: model,
+      isFallbackAttempt: this.isFallback,
+      attempt: attempt + 1,
+      capabilities: { supportsJsonObjectMode: this.supportsJsonObjectMode },
+      signal,
+      state,
+      own: {},
+    };
+  }
+
   /**
    * Runs every applicable middleware's `transform` against `request`, in
    * priority order, merging each patch in immediately so a later
@@ -184,21 +205,7 @@ export class CallExecutor {
     for (const { middleware, index } of ordered) {
       const label = middlewareLabel(middleware, index);
 
-      const ctx: MiddlewareContext = {
-        requestId,
-        requestedProvider: this.providerName,
-        requestedModel: model,
-        isFallbackAttempt: this.isFallback,
-        // `attempt` here is the internal 0-based retry-loop index;
-        // `MiddlewareContext.attempt` (like the public `'retry'` event's
-        // own `attempt` field) is documented as 1-based, so the first
-        // dispatch reads as attempt 1, not 0.
-        attempt: attempt + 1,
-        capabilities: { supportsJsonObjectMode: this.supportsJsonObjectMode },
-        signal,
-        state,
-        own: {},
-      };
+      const ctx = this.buildEventContext(requestId, model, attempt, signal, state);
 
       const isEnabled = await resolveEnabled(
         middleware,
@@ -210,12 +217,14 @@ export class CallExecutor {
 
       if (!isEnabled) {
         if (middleware.enabled !== undefined) {
-          reportMiddlewareEvent(this.reportEvent, {
-            kind: 'middleware',
-            requestId,
-            middleware: label,
-            hook: 'enabled_skip',
-          });
+          emitEvent(
+            { kind: 'middleware', requestId, middleware: label, hook: 'enabled_skip' },
+            ctx,
+            this.reportEvent,
+            this.middleware,
+            this.middlewareTimeoutMs,
+            this.logger,
+          );
         }
         continue;
       }
@@ -229,13 +238,14 @@ export class CallExecutor {
         if (patch.tools !== undefined || patch.addTools?.length) {
           assertNoDuplicateTools(merged, label);
         }
-        reportMiddlewareEvent(this.reportEvent, {
-          kind: 'middleware',
-          requestId,
-          middleware: label,
-          hook: 'transform',
-          patchedFields,
-        });
+        emitEvent(
+          { kind: 'middleware', requestId, middleware: label, hook: 'transform', patchedFields },
+          ctx,
+          this.reportEvent,
+          this.middleware,
+          this.middlewareTimeoutMs,
+          this.logger,
+        );
       }
 
       current = merged;
@@ -272,13 +282,13 @@ export class CallExecutor {
   }
 
   /** Manually opens this target's circuit breaker, if one is configured. No-op otherwise. */
-  openCircuit(model?: string): void {
-    this.breaker?.open(model);
+  openCircuit(model?: string, context?: CircuitBreakerCallContext): void {
+    this.breaker?.open(model, context);
   }
 
   /** Manually closes this target's circuit breaker, if one is configured. No-op otherwise. */
-  closeCircuit(model?: string): void {
-    this.breaker?.close(model);
+  closeCircuit(model?: string, context?: CircuitBreakerCallContext): void {
+    this.breaker?.close(model, context);
   }
 
   /**
@@ -290,8 +300,8 @@ export class CallExecutor {
    * run exactly once per logical call: `run`/`runStream` no longer call it
    * themselves, this is now the only call site.
    */
-  assertBreakerClosed(model?: string): void {
-    this.breaker?.assertClosed(model ?? this.model);
+  assertBreakerClosed(model?: string, context?: CircuitBreakerCallContext): void {
+    this.breaker?.assertClosed(model ?? this.model, context);
   }
 
   /**
@@ -308,13 +318,16 @@ export class CallExecutor {
     state?: MiddlewareStateBag,
   ): Promise<T | CallWithToolsResult<T>> {
     const model = params.model ?? this.model;
+    const resolvedState = state ?? createMiddlewareStateBag();
     const attempts: RetryAttempt[] = [];
 
     try {
       return await this.retryWithBackoff(
-        (attempt, onRequest) => this.executeCall(params, requestId, attempt, onRequest, state),
+        (attempt, onRequest) =>
+          this.executeCall(params, requestId, attempt, onRequest, resolvedState),
         requestId,
         model,
+        resolvedState,
         params.signal,
         onAttempt,
         attempts,
@@ -330,7 +343,11 @@ export class CallExecutor {
       );
 
       if (this.countsTowardBreaker(normalized)) {
-        this.breaker?.recordFailure(model);
+        this.breaker?.recordFailure(model, {
+          requestId,
+          state: resolvedState,
+          signal: params.signal,
+        });
       }
 
       this.logger.debug(`[VernLLM:${requestId}] error:\n${this.redactText(describeError(error))}`);
@@ -350,14 +367,16 @@ export class CallExecutor {
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
     const model = params.model ?? this.model;
+    const resolvedState = state ?? createMiddlewareStateBag();
     const attempts: RetryAttempt[] = [];
 
     try {
       return await this.retryWithBackoff(
         (attempt, onRequest) =>
-          this.executeStreamCall(params, requestId, attempt, onRequest, state),
+          this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState),
         requestId,
         model,
+        resolvedState,
         params.signal,
         onAttempt,
         attempts,
@@ -371,7 +390,11 @@ export class CallExecutor {
       );
 
       if (this.countsTowardBreaker(normalized)) {
-        this.breaker?.recordFailure(model);
+        this.breaker?.recordFailure(model, {
+          requestId,
+          state: resolvedState,
+          signal: params.signal,
+        });
       }
 
       this.logger.debug(
@@ -396,6 +419,7 @@ export class CallExecutor {
     onRequest?: OnRequest,
     middlewareState?: MiddlewareStateBag,
   ): Promise<T | CallWithToolsResult<T>> {
+    const state = middlewareState ?? createMiddlewareStateBag();
     const built = this.requestBuilder.build(params);
     const { useJson, model } = built;
     const request = await this.applyMiddlewareTransforms(
@@ -404,7 +428,7 @@ export class CallExecutor {
       model,
       attempt,
       params.signal,
-      middlewareState ?? createMiddlewareStateBag(),
+      state,
     );
 
     onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
@@ -419,14 +443,21 @@ export class CallExecutor {
       release = acquired.release;
 
       if (acquired.waitedMs > 0) {
-        this.reportEvent({
-          kind: 'rate_limited',
-          requestId,
-          provider: this.providerName,
-          model,
-          waitedMs: acquired.waitedMs,
-          reason: acquired.reason ?? 'rpm',
-        });
+        emitEvent(
+          {
+            kind: 'rate_limited',
+            requestId,
+            provider: this.providerName,
+            model,
+            waitedMs: acquired.waitedMs,
+            reason: acquired.reason ?? 'rpm',
+          },
+          this.buildEventContext(requestId, model, attempt, params.signal, state),
+          this.reportEvent,
+          this.middleware,
+          this.middlewareTimeoutMs,
+          this.logger,
+        );
       }
     }
 
@@ -462,6 +493,7 @@ export class CallExecutor {
         usage,
         requestId,
         attempt,
+        state,
       );
     } finally {
       release?.();
@@ -507,7 +539,10 @@ export class CallExecutor {
     usage: TokenUsage | undefined,
     requestId: string,
     attempt: number,
+    state: MiddlewareStateBag,
   ): T | CallWithToolsResult<T> {
+    const breakerContext: CircuitBreakerCallContext = { requestId, state, signal: params.signal };
+
     try {
       // `.trim()` runs inside this try: a malformed response shape
       // (e.g. a non-string `content`) throws here and is normalized and
@@ -557,7 +592,7 @@ export class CallExecutor {
         const toolCalls = parseWireToolCalls(wireToolCalls);
 
         this.validateToolCallArguments(toolCalls, params.tools);
-        this.breaker?.recordSuccess(model);
+        this.breaker?.recordSuccess(model, breakerContext);
         this.reportUsage(usage);
 
         return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
@@ -567,14 +602,14 @@ export class CallExecutor {
       const textContent = content ?? '';
 
       if (!useJson) {
-        this.breaker?.recordSuccess(model);
+        this.breaker?.recordSuccess(model, breakerContext);
         this.reportUsage(usage);
 
         return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
       }
 
       const result = this.parseAndValidate<T>(textContent, params.schema);
-      this.breaker?.recordSuccess(model);
+      this.breaker?.recordSuccess(model, breakerContext);
       this.reportUsage(usage);
 
       return params.tools ? { type: 'content', content: result } : result;
@@ -619,6 +654,7 @@ export class CallExecutor {
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
+    const state = middlewareState ?? createMiddlewareStateBag();
     const built = this.requestBuilder.build(params);
     const { useJson, model } = built;
     const request = await this.applyMiddlewareTransforms(
@@ -627,7 +663,7 @@ export class CallExecutor {
       model,
       attempt,
       params.signal,
-      middlewareState ?? createMiddlewareStateBag(),
+      state,
     );
 
     onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
@@ -657,14 +693,21 @@ export class CallExecutor {
       release = acquired.release;
 
       if (acquired.waitedMs > 0) {
-        this.reportEvent({
-          kind: 'rate_limited',
-          requestId,
-          provider: this.providerName,
-          model,
-          waitedMs: acquired.waitedMs,
-          reason: acquired.reason ?? 'rpm',
-        });
+        emitEvent(
+          {
+            kind: 'rate_limited',
+            requestId,
+            provider: this.providerName,
+            model,
+            waitedMs: acquired.waitedMs,
+            reason: acquired.reason ?? 'rpm',
+          },
+          this.buildEventContext(requestId, model, attempt, params.signal, state),
+          this.reportEvent,
+          this.middleware,
+          this.middlewareTimeoutMs,
+          this.logger,
+        );
       }
     }
 
@@ -721,7 +764,7 @@ export class CallExecutor {
         logger: this.logger,
         signal: params.signal,
         onStreamSuccess: (usage) => {
-          this.breaker?.recordSuccess(model);
+          this.breaker?.recordSuccess(model, { requestId, state, signal: params.signal });
           releaseAtOpen?.(this.actualTokensFor(usage));
         },
         onStreamFailure: (normalized, usage) => {
@@ -729,7 +772,7 @@ export class CallExecutor {
           // breaker: otherwise a provider that hangs after one chunk
           // would always record a success and never open it.
           if (normalized.type === 'timeout') {
-            this.breaker?.recordFailure(model);
+            this.breaker?.recordFailure(model, { requestId, state, signal: params.signal });
           }
 
           if (usage && normalized.type !== 'aborted') {
@@ -748,6 +791,7 @@ export class CallExecutor {
             usage,
             requestId,
             attempt,
+            state,
           ),
       });
 
@@ -850,6 +894,7 @@ export class CallExecutor {
     fn: (attempt: number, onRequest: OnRequest) => Promise<T>,
     requestId: string,
     model: string,
+    state: MiddlewareStateBag,
     signal?: AbortSignal,
     onAttempt?: () => void,
     attempts?: RetryAttempt[],
@@ -867,7 +912,7 @@ export class CallExecutor {
 
       try {
         if (attempt > 0) {
-          await this.recoverDelay(requestId, model, attempt, lastError, signal);
+          await this.recoverDelay(requestId, model, attempt, lastError, state, signal);
         }
 
         onAttempt?.();
@@ -1024,6 +1069,7 @@ export class CallExecutor {
     model: string,
     attempt: number,
     error: unknown,
+    state: MiddlewareStateBag,
     signal?: AbortSignal,
   ) {
     const retryAfterMs = extractRetryAfterMs(error);
@@ -1044,17 +1090,24 @@ export class CallExecutor {
         (retryAfterHonored ? ' (honoring Retry-After)' : ''),
     );
 
-    this.reportEvent({
-      kind: 'retry',
-      requestId,
-      provider: this.providerName,
-      model,
-      attempt,
-      maxRetries: this.maxRetries,
-      delayMs: delay,
-      retryAfterHonored,
-      error: normalizeError(error, signal),
-    });
+    emitEvent(
+      {
+        kind: 'retry',
+        requestId,
+        provider: this.providerName,
+        model,
+        attempt,
+        maxRetries: this.maxRetries,
+        delayMs: delay,
+        retryAfterHonored,
+        error: normalizeError(error, signal),
+      },
+      this.buildEventContext(requestId, model, attempt, signal, state),
+      this.reportEvent,
+      this.middleware,
+      this.middlewareTimeoutMs,
+      this.logger,
+    );
 
     await waitForRetry(delay, signal);
   }

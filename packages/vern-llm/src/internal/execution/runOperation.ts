@@ -1,7 +1,7 @@
 import {
+  emitEvent,
   reclassifyMiddlewareThrow,
   middlewareLabel,
-  reportMiddlewareEvent,
   resolveEnabled,
 } from './utils/middleware.utils.js';
 
@@ -113,12 +113,14 @@ export async function runOperation(
 
       if (!isEnabled) {
         if (middleware.enabled !== undefined) {
-          reportMiddlewareEvent(dependencies.reportEvent, {
-            kind: 'middleware',
-            requestId,
-            middleware: label,
-            hook: 'enabled_skip',
-          });
+          emitEvent(
+            { kind: 'middleware', requestId, middleware: label, hook: 'enabled_skip' },
+            ctx,
+            dependencies.reportEvent,
+            dependencies.middleware,
+            dependencies.middlewareTimeoutMs,
+            dependencies.logger,
+          );
         }
         return inner();
       }
@@ -139,12 +141,14 @@ export async function runOperation(
         const result = await middleware.wrap(request, nextFn, ctx);
 
         if (!calledNext) {
-          reportMiddlewareEvent(dependencies.reportEvent, {
-            kind: 'middleware',
-            requestId,
-            middleware: label,
-            hook: 'wrap_short_circuit',
-          });
+          emitEvent(
+            { kind: 'middleware', requestId, middleware: label, hook: 'wrap_short_circuit' },
+            ctx,
+            dependencies.reportEvent,
+            dependencies.middleware,
+            dependencies.middlewareTimeoutMs,
+            dependencies.logger,
+          );
         }
 
         return result;

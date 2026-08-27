@@ -209,6 +209,9 @@ model reported by the callback.
 The `onStateChange` callback is observational. It does not control whether the circuit opens,
 closes, or transitions to half open.
 
+Every transition also reports a `'circuit_state'` event, both on the top-level `onEvent` option and
+on each applicable middleware's own `onEvent`. See [Middleware](/docs/core/middleware#onevent-and-the-middleware-event).
+
 ## Checking and controlling state manually
 
 ```ts title="circuit-breaker-state.ts"
@@ -236,6 +239,11 @@ llm.openCircuit({ index: 1 }); // same, for the first fallback target
 consecutive real failures had just happened. `closeCircuit` sets it to `closed` and resets the
 failure count to zero, without requiring an actual successful call first. Neither call requires a
 configured `circuitBreaker`; both are a no-op on a target that doesn't have one.
+
+A manual `openCircuit`/`closeCircuit` still reports its `'circuit_state'` event to every applicable
+middleware's own `onEvent`, the same as a transition triggered by a real call. There's no logical
+call behind a manual invocation, so it's given a fresh `MiddlewareContext` of its own rather than
+being tied to any in-flight request.
 
 `getCircuitState`, `openCircuit`, and `closeCircuit` all take an optional `target: { index?, model? }`
 (`getCircuitStates` takes a bare `model?` and reports every target at once):

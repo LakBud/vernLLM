@@ -1,5 +1,5 @@
 ---
-title: Customization Middleware
+title: Middleware
 description: Write your own transform/wrap middleware
 ---
 
@@ -34,7 +34,7 @@ const llm = new VernLLM({
 ## `createMiddleware` for the "I only care about failures" case
 
 Wiring a full `wrap` just to observe a failure is more ceremony than the use case needs.
-`createMiddleware` builds one for you from an `onError` callback:
+`createMiddleware` builds one from an `onError` callback:
 
 ```ts title="create-middleware-onerror.ts"
 import { createMiddleware } from 'vern-llm';
@@ -49,19 +49,18 @@ const alertOnFailure = createMiddleware({
 
 `onError` is called with the call's terminal error, the same error `wrap`'s own `next()` would
 reject with. Never called on success, and never called for a failure another middleware's `wrap`
-already swallowed by short-circuiting with its own `CallResult`. The original error is always
-rethrown afterward; `onError` only observes it, the same fire-and-forget contract `onUsage`/`onEvent`
+already swallowed by short circuiting with its own `CallResult`. The original error is always
+rethrown afterward; `onError` only observes it, the same fire and forget contract `onUsage`/`onEvent`
 already have.
 
-Everything else on `CreateMiddlewareOptions` passes through unchanged, `transform`, `enabled`,
-`priority`, `onEvent`, so `createMiddleware` composes with the rest of the hook surface instead of
-replacing it. `wrap` itself can't be set alongside `onError`: `onError` builds its own `wrap`
-internally, and supplying both would silently drop one of the two.
+Everything else on `CreateMiddlewareOptions` passes through unchanged: `transform`, `enabled`,
+`priority`, `onEvent`. `wrap` itself can't be set alongside `onError`: `onError` builds its own
+`wrap` internally, and supplying both would silently drop one of the two.
 
 ## Sharing state with `createStateKey`
 
-Two middleware that need to deliberately share a value import the same
-`MiddlewareStateKey<T>` reference, created once with `createStateKey`:
+Two middleware that need to share a value import the same `MiddlewareStateKey<T>` reference,
+created once with `createStateKey`:
 
 ```ts title="shared-state-key.ts"
 import { createStateKey, type VernLLMMiddleware } from 'vern-llm';
@@ -84,7 +83,7 @@ const tracing: VernLLMMiddleware = {
 
 const costTracking: VernLLMMiddleware = {
   name: 'cost-tracking',
-  priority: 0, // outer, so its post-next() phase runs last, after tracing's own
+  priority: 0, // outer, so its post-next phase runs last, after tracing's own
   wrap: async (request, next, ctx) => {
     const start = Date.now();
     const result = await next();
@@ -95,20 +94,18 @@ const costTracking: VernLLMMiddleware = {
 ```
 
 There's no string key anywhere in this path, so a typo is a missing import or an undefined
-variable, a compile error, not a silently created new property or an accidental collision with
-another middleware's own key.
+variable, a compile error, not a silently created new property.
 
 <Callout type="warn">
   Composition order still matters for `ctx.state`: see [Composition
-  order](/docs/core/middleware#composition-order) for when a shared value's write/read ordering is
-  order-independent versus order-dependent.
+  order](/docs/core/middleware#composition-order) for when a shared value's write and read ordering
+  is order independent versus order dependent.
 </Callout>
 
 ## Writing your own ordering
 
-`priority` is a plain number VernLLM sorts by; nothing stops a small helper from computing that
-number for you from `before`/`after` name references, entirely in userland, without VernLLM ever
-knowing it happened:
+`priority` is a plain number VernLLM sorts by. Nothing stops a small helper computing that number
+from `before`/`after` name references, entirely in userland, without VernLLM ever knowing:
 
 ```ts title="resolve-order.ts"
 import type { VernLLMMiddleware } from 'vern-llm';
@@ -121,19 +118,12 @@ type OrderedMiddleware = VernLLMMiddleware & {
 
 /**
  * Topologically sorts before/after references into priority numbers, then
- * strips them, returning a plain VernLLMMiddleware[]. Every `before`
- * normalizes to the equivalent `after` edge on the later entry first, so
- * both directions rank the same way. Each entry's priority is one more
- * than the largest priority among what it must run after, so a chain of
- * dependencies gets strictly increasing numbers instead of collapsing to
- * the same one. Throws on a cycle or an unknown middleware name, naming
- * the offending middleware either way.
+ * strips them, returning a plain VernLLMMiddleware[]. Throws on a cycle or
+ * an unknown middleware name, naming the offending middleware either way.
  */
 function resolveOrder(entries: OrderedMiddleware[]): VernLLMMiddleware[] {
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
 
-  // Normalize every `before` into the equivalent `after` edge on the
-  // later entry, so ranking only ever has to walk one kind of edge.
   const dependsOn = new Map<string, Set<string>>();
   const edgesFor = (name: string): Set<string> => {
     let edges = dependsOn.get(name);
