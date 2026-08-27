@@ -747,4 +747,36 @@ describe('middleware smoke test', () => {
       patchedFields: ['addMessages'],
     });
   });
+
+  it('a middleware onEvent that returns a rejected promise is logged, not left as an unhandled rejection', async () => {
+    const { client } = createMockClient([textResponse('hi')]);
+    const error = vi.fn();
+
+    const middleware: VernLLMMiddleware = {
+      name: 'flaky-observer',
+      transform: () => ({ addMessages: [{ role: 'user', content: 'tagged' }] }),
+      onEvent: async () => {
+        throw new Error('onEvent boom');
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [middleware],
+      logger: { debug: vi.fn(), warn: vi.fn(), error },
+    });
+
+    const result = await llm.call({ userContent: 'hello', jsonMode: false });
+    expect(result).toBe('hi');
+
+    // The rejection is fire-and-forget relative to the call itself, so give
+    // its microtask a turn to run before asserting it was caught and logged.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(error).toHaveBeenCalledWith(
+      '[VernLLM] middleware "flaky-observer".onEvent failed',
+      expect.objectContaining({ message: 'onEvent boom' }),
+    );
+  });
 });
