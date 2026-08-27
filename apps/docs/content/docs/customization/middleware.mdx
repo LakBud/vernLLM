@@ -17,7 +17,7 @@ import { openai } from './openai-client'; // your configured OpenAI client
 const loggingMiddleware: VernLLMMiddleware = {
   name: 'logging',
   wrap: async (request, next, ctx) => {
-    console.log(`[${ctx.requestId}] calling ${ctx.requestedProvider}/${ctx.requestedModel}`);
+    console.log(`[${ctx.requestId}] calling ${ctx.primaryProvider}/${ctx.primaryModel}`);
     const result = await next();
     console.log(`[${ctx.requestId}] resolved`, result.meta);
     return result;
@@ -42,7 +42,7 @@ import { createMiddleware } from 'vern-llm';
 const alertOnFailure = createMiddleware({
   name: 'alerting',
   onError: (error, ctx) => {
-    alerting.page(`${ctx.requestedProvider} call failed: ${error.message}`);
+    alerting.page(`${ctx.primaryProvider} call failed: ${error.message}`);
   },
 });
 ```

@@ -11,7 +11,7 @@ import {
 } from '../../../../src/internal/execution/utils/middleware.utils.js';
 import { LLMError } from '../../../../src/types/errors.js';
 
-import type { MiddlewareContext } from '../../../../src/types/index.js';
+import type { AttemptContext } from '../../../../src/types/index.js';
 import type { WireCallRequest } from '../../../../src/types/middleware.js';
 
 const baseRequest: WireCallRequest = {
@@ -20,8 +20,9 @@ const baseRequest: WireCallRequest = {
   messages: [{ role: 'user', content: 'hi' }],
 };
 
-function baseCtx(overrides: Partial<MiddlewareContext> = {}): MiddlewareContext {
+function baseCtx(overrides: Partial<AttemptContext> = {}): AttemptContext {
   return {
+    stage: 'attempt',
     requestId: 'req-1',
     requestedProvider: 'primary',
     requestedModel: 'gpt-4o',

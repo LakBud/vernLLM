@@ -1,5 +1,6 @@
 import {
   LLMError,
+  type AttemptContext,
   type MiddlewareContext,
   type VernLLMEvent,
   type VernLLMMiddleware,
@@ -222,7 +223,7 @@ export function assertModelAndResponseFormatUnchanged(
 export async function runTransform(
   middleware: VernLLMMiddleware,
   request: Readonly<WireCallRequest>,
-  ctx: MiddlewareContext,
+  ctx: AttemptContext,
   label: string,
   middlewareTimeoutMs: number,
 ): Promise<WireCallRequestPatch> {

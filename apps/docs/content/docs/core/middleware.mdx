@@ -59,7 +59,7 @@ Runs once per attempt, on the request as merged by every earlier middleware's ow
 ```ts title="transform-signature.ts"
 transform?: (
   request: Readonly<WireCallRequest>,
-  ctx: MiddlewareContext,
+  ctx: AttemptContext,
 ) => WireCallRequestPatch | Promise<WireCallRequestPatch>;
 ```
 
@@ -93,7 +93,7 @@ fallback chain:
 wrap?: (
   request: Readonly<WireCallRequest>,
   next: () => Promise<CallResult>,
-  ctx: MiddlewareContext,
+  ctx: PreDispatchContext,
 ) => Promise<CallResult>;
 ```
 
@@ -109,9 +109,10 @@ wrap: async (request, next, ctx) => {
 };
 ```
 
-`ctx.requestedProvider`/`requestedModel`/`isFallbackAttempt`/`attempt`, read before `next()`
-resolves, describe the primary target only, since the real target isn't chosen yet. Read
-`result.meta` after `next()` resolves for what actually happened.
+`wrap` runs before any fallback target is chosen, so its own `ctx` is a `PreDispatchContext`, not
+the `AttemptContext` `transform` gets: it only carries `primaryProvider`/`primaryModel`. There's no
+`requestedProvider`, `isFallbackAttempt`, or `attempt` to read here at all, since none of those have
+a real answer yet. Read `result.meta` after `next()` resolves for what actually happened.
 
 A `wrap` that never calls `next()` short-circuits the real call, and every middleware nested inside
 it never runs either:
@@ -133,15 +134,29 @@ A static boolean, or a predicate evaluated per call:
 enabled?: boolean | ((ctx: MiddlewareContext) => boolean | Promise<boolean>);
 ```
 
+`enabled` is evaluated from both stages — once gating `wrap` composition (`ctx.stage: 'pre-dispatch'`)
+and, separately, once per attempt gating `transform` (`ctx.stage: 'attempt'`) — so its own `ctx` is
+always the full `MiddlewareContext` union, never narrowed to just one variant. A predicate that
+reads a stage-specific field like `isFallbackAttempt` needs to check `ctx.stage` first:
+
 ```ts title="enabled-target-filter.ts"
 {
-  name: 'primary-only-tracing',
-  enabled: (ctx) => !ctx.isFallbackAttempt,
-  wrap: async (request, next, ctx) => { /* ... */ return next(); },
+  name: 'primary-only-redaction',
+  enabled: (ctx) => ctx.stage === 'pre-dispatch' || !ctx.isFallbackAttempt,
+  transform: (request) => ({ messages: redact(request.messages) }),
 }
 ```
 
 A throwing, rejecting, or timed out `enabled` is logged and treated as `false`.
+
+<Callout type="warn">
+  `ctx.isFallbackAttempt` only exists on the `'attempt'` stage; there's nothing meaningful to check
+  on `'pre-dispatch'` since no target has been chosen yet, so the example above returns `true` there
+  and lets the real, per-attempt check happen once `ctx.stage === 'attempt'`. Gating a `wrap`-only
+  middleware with `isFallbackAttempt` doesn't work at all, no matter how it's narrowed: `wrap`
+  itself never receives an `'attempt'`-stage `ctx`, only a `PreDispatchContext`, so it can't tell
+  which target answered even after `enabled` passes. See [wrap](#wrap) for why.
+</Callout>
 
 ### `onEvent` and the `'middleware'` event
 

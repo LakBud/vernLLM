@@ -5,12 +5,12 @@ import { emitEvent } from './utils/middleware.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type {
+  AttemptContext,
   CallParams,
   CallResult,
   CallWithToolsResult,
   FallbackAttempt,
   FallbackOn,
-  MiddlewareContext,
   MiddlewareStateBag,
   StreamChunk,
   VernLLMEvent,
@@ -136,7 +136,8 @@ export async function runFallbackChain<R>(
 
       // `ctx` describes the target that just failed (`from`), not the
       // one about to be tried next.
-      const ctx: MiddlewareContext = {
+      const ctx: AttemptContext = {
+        stage: 'attempt',
         requestId,
         requestedProvider: executor.providerName,
         requestedModel: failedModel,

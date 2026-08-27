@@ -63,27 +63,11 @@ export function createMiddlewareStateBag(): MiddlewareStateBag {
   };
 }
 
-export interface MiddlewareContext {
+/** Fields every `MiddlewareContext` variant carries, regardless of `stage`. */
+export interface MiddlewareContextBase {
   requestId: string;
 
-  /**
-   * Inside `transform`: the target this attempt is actually dispatched
-   * to. Inside `wrap`, before `next()` resolves: the primary target
-   * only, since which target actually serves the call isn't decided
-   * until `next()` resolves. Read `next()`'s resolved `CallResult.meta`
-   * for what actually happened.
-   */
-  requestedProvider: string;
-  requestedModel: string;
-  isFallbackAttempt: boolean;
-
-  /**
-   * Inside `transform`: the real, current attempt number for this
-   * dispatch. Inside `wrap`, before `next()` resolves: always `1`.
-   */
-  attempt: number;
-
-  /** Capabilities of `requestedProvider`/`requestedModel` above, same caveat as those fields. */
+  /** Capabilities of the target this stage's identity fields describe. */
   capabilities: MiddlewareCapabilities;
 
   signal?: AbortSignal;
@@ -94,6 +78,51 @@ export interface MiddlewareContext {
   /** Simple, string-keyed scratch space, pre-namespaced to this one middleware so two middleware can never collide here even by accident. */
   own: Record<string, unknown>;
 }
+
+/**
+ * The `ctx` `transform` receives, and every attempt-scoped event context
+ * (`'retry'`, `'fallback'`, `'circuit_state'`, `'middleware'`). Built once
+ * a specific target has actually been selected for this attempt, so every
+ * field describes the real target, not a placeholder.
+ */
+export interface AttemptContext extends MiddlewareContextBase {
+  stage: 'attempt';
+
+  /** The target this attempt is actually dispatched to. */
+  requestedProvider: string;
+  requestedModel: string;
+  isFallbackAttempt: boolean;
+
+  /** The real, current attempt number for this dispatch. */
+  attempt: number;
+}
+
+/**
+ * The `ctx` `wrap` receives before `next()` resolves (and `onError`'s own
+ * `ctx`, built the same way under the hood). Built once, before any
+ * fallback target is chosen, so it only ever describes the primary
+ * target — there is no real "requested" target yet, and no attempt count,
+ * fallback flag, or per-attempt capability to report. Read `next()`'s
+ * resolved `CallResult.meta` once you need to know what actually
+ * happened.
+ */
+export interface PreDispatchContext extends MiddlewareContextBase {
+  stage: 'pre-dispatch';
+
+  /** The primary target only — not necessarily who ends up answering. */
+  primaryProvider: string;
+  primaryModel: string;
+}
+
+/**
+ * `enabled` and `onEvent` are called from both stages (gating/observing
+ * `transform` as well as `wrap`), so they receive this union and must
+ * narrow on `ctx.stage` before reading stage-specific fields.
+ * `transform` and `wrap` themselves receive the single variant that's
+ * always accurate for them (`AttemptContext`/`PreDispatchContext`
+ * respectively). See `VernLLMMiddleware`.
+ */
+export type MiddlewareContext = AttemptContext | PreDispatchContext;
 
 /** The `response_format` shape `RequestBuilder` can put on the wire. */
 export type WireResponseFormat =
@@ -198,19 +227,26 @@ export interface VernLLMMiddleware {
   /** Per-middleware override of the instance-level `middlewareTimeoutMs`, applied to this entry's `transform` and function `enabled`. `<= 0` means unbounded (no timer at all). */
   timeoutMs?: number;
 
-  /** Transforms the outgoing wire request for one attempt. Runs once per attempt, including retries. */
+  /** Transforms the outgoing wire request for one attempt. Runs once per attempt, including retries. `ctx` is always accurate to the real target for this attempt. */
   transform?: (
     request: Readonly<WireCallRequest>,
-    ctx: MiddlewareContext,
+    ctx: AttemptContext,
   ) => WireCallRequestPatch | Promise<WireCallRequestPatch>;
 
-  /** Wraps one whole logical call, exactly once, regardless of how many retries or fallback targets ran underneath it. */
+  /**
+   * Wraps one whole logical call, exactly once, regardless of how many
+   * retries or fallback targets ran underneath it. `ctx` is built once,
+   * before any fallback target is chosen, so it only describes the
+   * primary target — there is no `requestedProvider`/`isFallbackAttempt`/
+   * `attempt` to read here. Read `next()`'s resolved `CallResult.meta`
+   * for what actually happened.
+   */
   wrap?: (
     request: Readonly<WireCallRequest>,
     next: () => Promise<CallResult>,
-    ctx: MiddlewareContext,
+    ctx: PreDispatchContext,
   ) => Promise<CallResult>;
 
-  /** Observes the same events reported on `VernLLMOptions.onEvent`, filtered by this middleware's own `enabled`. */
+  /** Observes the same events reported on `VernLLMOptions.onEvent`, filtered by this middleware's own `enabled`. Called from both stages; narrow on `ctx.stage` before reading stage-specific fields. */
   onEvent?: (event: VernLLMEvent, ctx: MiddlewareContext) => void;
 }

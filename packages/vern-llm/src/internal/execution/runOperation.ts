@@ -9,8 +9,8 @@ import type { Logger } from '../../logger.js';
 import type {
   CallParams,
   CallResult,
-  MiddlewareContext,
   MiddlewareStateBag,
+  PreDispatchContext,
   VernLLMEvent,
   VernLLMMiddleware,
 } from '../../types/index.js';
@@ -24,7 +24,7 @@ import type { CallExecutor } from './callExecutor.js';
 export interface RunOperationDependencies {
   /** See `VernLLMOptions.middleware`. Already sorted by `priority`, ascending, ties broken by original array order. */
   middleware: VernLLMMiddleware[];
-  /** The primary target, used to build the `previewRequest` handed to every `wrap` (and the `requestedProvider`/`requestedModel` every middleware's `ctx` carries). */
+  /** The primary target, used to build the `previewRequest` handed to every `wrap` (and the `primaryProvider`/`primaryModel` its `ctx` carries). */
   primaryExecutor: CallExecutor;
   /** See `VernLLMOptions.middlewareTimeoutMs`. Bounds `transform` and a function `enabled`; `wrap` itself is never bounded by this. */
   middlewareTimeoutMs: number;
@@ -38,8 +38,9 @@ export interface RunOperationDependencies {
  * targets included) in every applicable middleware's `wrap`, composed
  * like nested function calls: lower `priority` is outermost, starts
  * first, finishes last. `previewRequest` is built from the primary
- * target only (before any target is actually chosen), matching
- * `MiddlewareContext`'s own documented caveat for `wrap`.
+ * target only (before any target is actually chosen), which is exactly
+ * why `wrap`'s own `ctx` is a `PreDispatchContext`, not an
+ * `AttemptContext`: there is no real target yet to describe.
  *
  * Each middleware's `next()` resolves to `coreOperation`'s own result
  * once every inner middleware (and the real call) has run, or to
@@ -91,12 +92,11 @@ export async function runOperation(
     const inner = next;
 
     next = async (): Promise<CallResult> => {
-      const ctx: MiddlewareContext = {
+      const ctx: PreDispatchContext = {
+        stage: 'pre-dispatch',
         requestId,
-        requestedProvider: primary.providerName,
-        requestedModel: model,
-        isFallbackAttempt: false,
-        attempt: 1,
+        primaryProvider: primary.providerName,
+        primaryModel: model,
         capabilities: { supportsJsonObjectMode: primary.jsonObjectModeSupported },
         signal: params.signal,
         state,

@@ -1,5 +1,5 @@
 import type { LLMError } from './errors.js';
-import type { MiddlewareContext, VernLLMMiddleware } from './middleware.js';
+import type { PreDispatchContext, VernLLMMiddleware } from './middleware.js';
 
 /**
  * `VernLLMMiddleware` plus `onError`, a convenience for the common "I
@@ -20,8 +20,10 @@ export type CreateMiddlewareOptions = Omit<VernLLMMiddleware, 'wrap'> & {
    * observes it, exactly like `onUsage`/`onEvent` elsewhere: a throwing
    * `onError` is discarded (not logged, this helper has no `Logger` of
    * its own to log through) and otherwise has no effect on the call.
+   * `ctx` is `wrap`'s own pre-dispatch context (`onError` builds a `wrap`
+   * under the hood), so it only describes the primary target.
    */
-  onError?: (error: LLMError, ctx: MiddlewareContext) => void | Promise<void>;
+  onError?: (error: LLMError, ctx: PreDispatchContext) => void | Promise<void>;
 };
 
 /**

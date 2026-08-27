@@ -34,8 +34,8 @@ export const tracing: VernLLMMiddleware = {
   priority: 1,
   wrap: async (request, next, ctx) => {
     const spanId = startSpan(ctx.requestId, {
-      provider: ctx.requestedProvider,
-      model: ctx.requestedModel,
+      provider: ctx.primaryProvider,
+      model: ctx.primaryModel,
     });
     ctx.state.set(spanIdKey, spanId);
 
@@ -51,9 +51,10 @@ export const tracing: VernLLMMiddleware = {
 };
 ```
 
-`ctx.requestedProvider`/`requestedModel` describe the primary target before `next()` resolves;
-`result.meta?.provider` is what actually served the call, which can differ once a fallback target
-answers instead.
+`wrap`'s own `ctx` is a `PreDispatchContext`: `ctx.primaryProvider`/`primaryModel` describe the
+primary target before `next()` resolves, and that's the only identity it has — there's no
+`requestedProvider` or `isFallbackAttempt` to read here at all. `result.meta?.provider` is what
+actually served the call, which can differ once a fallback target answers instead.
 
 ## 3. Write the cost-tracking middleware
 
@@ -140,26 +141,31 @@ since then `tracing` would need to run its own pre-next first. See
 
 ## Filtering to one target
 
-`enabled` is evaluated fresh per attempt for `transform`, with an accurate `ctx.isFallbackAttempt`
-for whichever target that attempt is dispatched to. Scope a `transform` to just the primary
-target, or just fallback attempts, the same way:
+`enabled` runs from two stages: once gating `wrap` composition, before any target is chosen
+(`ctx.stage: 'pre-dispatch'`), and once per attempt gating `transform`, once a target has been
+selected for that attempt (`ctx.stage: 'attempt'`). Its own `ctx` is always the full union, so a
+predicate reading `isFallbackAttempt` narrows on `ctx.stage` first. Scope a `transform` to just the
+primary target, or just fallback attempts, this way:
 
 ```ts title="scope-transform-to-primary.ts"
 import type { VernLLMMiddleware } from 'vern-llm';
 
 export const primaryOnlyRedaction: VernLLMMiddleware = {
   name: 'primary-only-redaction',
-  enabled: (ctx) => !ctx.isFallbackAttempt,
+  enabled: (ctx) => ctx.stage === 'pre-dispatch' || !ctx.isFallbackAttempt,
   transform: (request) => ({ messages: redact(request.messages) }),
 };
 ```
 
 <Callout type="warn">
-  `wrap`'s own `ctx.isFallbackAttempt` is always `false`: `wrap` only sees the primary target's
-  context, since the real target isn't decided until `next()` resolves. Read `result.meta?.provider`
-  after `next()` resolves instead if `wrap` needs to know which target actually answered. See
-  [transform](/docs/core/middleware#transform) for the same caveat on
-  `requestedProvider`/`requestedModel`.
+  `isFallbackAttempt` only exists on `AttemptContext` (`ctx.stage === 'attempt'`). It's not on
+  `PreDispatchContext` at all, so the example above returns `true` unconditionally on
+  `'pre-dispatch'` (nothing meaningful to filter there yet) and applies the real check only once
+  `ctx.stage === 'attempt'`. This means gating a `wrap`-only middleware with `isFallbackAttempt`
+  can't work, no matter how it's narrowed: `wrap` itself only ever receives a `PreDispatchContext`,
+  never an `AttemptContext`, so there's no stage at which it could read the real answer. Read
+  `result.meta?.provider` after `next()` resolves instead if `wrap` needs to know which target
+  actually answered. See [wrap](/docs/core/middleware#wrap) for details.
 </Callout>
 
 <Callout type="info">

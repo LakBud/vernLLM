@@ -57,7 +57,7 @@ describe('middleware workflow integration', () => {
       name: 'counter',
       wrap: async (_request, next, ctx) => {
         wrapCount++;
-        seenProviders.push(ctx.requestedProvider);
+        seenProviders.push(ctx.primaryProvider);
         return next();
       },
     };
@@ -79,9 +79,10 @@ describe('middleware workflow integration', () => {
 
     expect(result).toBe('from fallback');
     expect(wrapCount).toBe(1);
-    // ctx.requestedProvider describes the primary target only, per
-    // MiddlewareContext's documented caveat; the real target that
-    // answered is only visible through next()'s resolved meta.
+    // wrap's own ctx is a PreDispatchContext, describing the primary
+    // target only, by construction — the field name itself says so now.
+    // The real target that answered is only visible through next()'s
+    // resolved meta.
     expect(seenProviders).toEqual(['primary']);
   });
 

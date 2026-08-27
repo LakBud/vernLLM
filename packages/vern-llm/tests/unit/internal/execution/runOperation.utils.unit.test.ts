@@ -416,7 +416,7 @@ describe('runOperation', () => {
     expect(seenInSecond).toBe(state);
   });
 
-  it("ctx describes the primary target and attempt 1, matching MiddlewareContext's documented pre-next() caveat for wrap", async () => {
+  it('ctx is a PreDispatchContext describing the primary target only, since wrap runs before next() decides the real target', async () => {
     let seenContext: unknown;
 
     const middleware: VernLLMMiddleware = {
@@ -436,12 +436,18 @@ describe('runOperation', () => {
     );
 
     expect(seenContext).toMatchObject({
+      stage: 'pre-dispatch',
       requestId,
-      requestedProvider: 'primary',
-      requestedModel: 'default-model',
-      isFallbackAttempt: false,
-      attempt: 1,
+      primaryProvider: 'primary',
+      primaryModel: 'default-model',
       capabilities: { supportsJsonObjectMode: true },
     });
+    // No isFallbackAttempt/attempt/requestedProvider/requestedModel at
+    // all: PreDispatchContext doesn't carry fields that would only ever
+    // report a placeholder value.
+    expect(seenContext).not.toHaveProperty('isFallbackAttempt');
+    expect(seenContext).not.toHaveProperty('attempt');
+    expect(seenContext).not.toHaveProperty('requestedProvider');
+    expect(seenContext).not.toHaveProperty('requestedModel');
   });
 });

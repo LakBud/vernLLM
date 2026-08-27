@@ -27,10 +27,10 @@ import { parseWireToolCalls } from './utils/wire.utils.js';
 import type { Logger } from '../../logger.js';
 import type { RateLimiter } from '../../rateLimit.js';
 import type {
+  AttemptContext,
   CallParams,
   CallWithToolsResult,
   LLMClient,
-  MiddlewareContext,
   MiddlewareStateBag,
   RetryAttempt,
   StreamChunk,
@@ -156,15 +156,16 @@ export class CallExecutor {
     });
   }
 
-  /** Builds the `MiddlewareContext` for one attempt against this target. `attempt` is 0-based here, 1-based on the result. */
+  /** Builds the `AttemptContext` for one attempt against this target. `attempt` is 0-based here, 1-based on the result. */
   private buildEventContext(
     requestId: string,
     model: string,
     attempt: number,
     signal: AbortSignal | undefined,
     state: MiddlewareStateBag,
-  ): MiddlewareContext {
+  ): AttemptContext {
     return {
+      stage: 'attempt',
       requestId,
       requestedProvider: this.providerName,
       requestedModel: model,

@@ -3,7 +3,7 @@ import { emitEvent } from './execution/utils/middleware.utils.js';
 
 import type { Logger } from '../logger.js';
 import type { VernLLMEvent } from '../types/events.js';
-import type { MiddlewareContext, VernLLMMiddleware } from '../types/index.js';
+import type { AttemptContext, VernLLMMiddleware } from '../types/index.js';
 import type { CallExecutor } from './execution/callExecutor.js';
 
 /**
@@ -113,7 +113,8 @@ export function buildCircuitBreaker(
       // `context` is absent only when someone calls `CircuitBreaker`
       // directly, bypassing `VernLLM`.
       if (context) {
-        const ctx: MiddlewareContext = {
+        const ctx: AttemptContext = {
+          stage: 'attempt',
           requestId: context.requestId,
           requestedProvider: providerName,
           requestedModel: model ?? defaultModel,
