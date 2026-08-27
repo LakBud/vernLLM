@@ -7,6 +7,13 @@ export interface CircuitBreakerCallContext {
   requestId: string;
   state: MiddlewareStateBag;
   signal?: AbortSignal;
+  /**
+   * The real, current attempt number for this dispatch, when the call
+   * site actually has one in scope (i.e. after a dispatch was made or
+   * failed). Omitted for calls that happen before any attempt exists,
+   * like `assertClosed`'s pre-dispatch check.
+   */
+  attempt?: number;
 }
 
 export interface CircuitBreakerOptions {

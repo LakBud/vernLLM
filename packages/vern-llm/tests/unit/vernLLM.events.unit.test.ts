@@ -263,6 +263,41 @@ describe('VernLLM, onEvent: circuit_state', () => {
       onEvent.mock.calls.map((c) => c[0] as VernLLMEvent).some((e) => e.kind === 'circuit_state'),
     ).toBe(false);
   });
+
+  it('reports the real, 1-based attempt number that tripped the breaker, not a hardcoded 1', async () => {
+    // Regression: `circuit_state`'s `AttemptContext.attempt` used to be
+    // hardcoded to `1` regardless of which attempt actually failed and
+    // opened the breaker. Only middleware's own `onEvent` receives
+    // `ctx`, so use that instead of the instance-level `onEvent` (which
+    // only sees the plain `VernLLMEvent`, with no `ctx.attempt`).
+    const { client } = createMockClient([new Error('down'), new Error('down again')]);
+
+    let circuitCtxAttempt: number | undefined;
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 1,
+      baseDelayMs: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      middleware: [
+        {
+          name: 'attempt-observer',
+          onEvent: (event, ctx) => {
+            if (event.kind === 'circuit_state' && ctx.stage === 'attempt') {
+              circuitCtxAttempt = ctx.attempt;
+            }
+          },
+        },
+      ],
+    });
+
+    await llm.call({ userContent: 'u' }).catch(() => {});
+
+    // Both configured attempts failed (initial + one retry), so the
+    // breaker-tripping failure is the 2nd, 1-based attempt.
+    expect(circuitCtxAttempt).toBe(2);
+  });
 });
 
 describe('VernLLM, TokenUsage.provider', () => {

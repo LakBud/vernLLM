@@ -350,10 +350,14 @@ export class CallExecutor {
       );
 
       if (this.countsTowardBreaker(normalized)) {
+        // `attempts` only holds prior attempts that were retried past
+        // (see above), so the attempt that actually exhausted the
+        // retries/broke the loop is one past that, 1-based.
         this.breaker?.recordFailure(model, {
           requestId,
           state: resolvedState,
           signal: params.signal,
+          attempt: attempts.length + 1,
         });
       }
 
@@ -397,10 +401,12 @@ export class CallExecutor {
       );
 
       if (this.countsTowardBreaker(normalized)) {
+        // See the matching comment in `run`.
         this.breaker?.recordFailure(model, {
           requestId,
           state: resolvedState,
           signal: params.signal,
+          attempt: attempts.length + 1,
         });
       }
 
@@ -548,7 +554,15 @@ export class CallExecutor {
     attempt: number,
     state: MiddlewareStateBag,
   ): T | CallWithToolsResult<T> {
-    const breakerContext: CircuitBreakerCallContext = { requestId, state, signal: params.signal };
+    // `attempt` is 0-based internally here, 1-based on the public
+    // `AttemptContext`/`CircuitBreakerCallContext` contract (see
+    // `buildEventContext`).
+    const breakerContext: CircuitBreakerCallContext = {
+      requestId,
+      state,
+      signal: params.signal,
+      attempt: attempt + 1,
+    };
 
     try {
       // `.trim()` runs inside this try: a malformed response shape
@@ -771,7 +785,12 @@ export class CallExecutor {
         logger: this.logger,
         signal: params.signal,
         onStreamSuccess: (usage) => {
-          this.breaker?.recordSuccess(model, { requestId, state, signal: params.signal });
+          this.breaker?.recordSuccess(model, {
+            requestId,
+            state,
+            signal: params.signal,
+            attempt: attempt + 1,
+          });
           releaseAtOpen?.(this.actualTokensFor(usage));
         },
         onStreamFailure: (normalized, usage) => {
@@ -779,7 +798,12 @@ export class CallExecutor {
           // breaker: otherwise a provider that hangs after one chunk
           // would always record a success and never open it.
           if (normalized.type === 'timeout') {
-            this.breaker?.recordFailure(model, { requestId, state, signal: params.signal });
+            this.breaker?.recordFailure(model, {
+              requestId,
+              state,
+              signal: params.signal,
+              attempt: attempt + 1,
+            });
           }
 
           if (usage && normalized.type !== 'aborted') {

@@ -96,10 +96,11 @@ export interface AttemptContext extends MiddlewareContextBase {
   /**
    * The real, current attempt number for this dispatch.
    *
-   * Exception: on a `'circuit_state'` event, this is always `1`. The
-   * circuit breaker's own call context carries no attempt ordinal to
-   * report here, so it isn't the real current attempt number for that
-   * event.
+   * Exception: on a `'circuit_state'` event triggered by a pre-dispatch
+   * check (`assertClosed`, before any attempt has been made), this is
+   * `1` regardless of which attempt is about to run, since no attempt
+   * exists yet to report. Every other `'circuit_state'` event, and every
+   * other attempt-scoped event, reports the real attempt number.
    */
   attempt: number;
 }
