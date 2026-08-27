@@ -1,0 +1,336 @@
+---
+title: Middleware
+description: Transform outgoing requests and observe or wrap the outcome of a call
+---
+
+```ts title="middleware-setup.ts"
+import OpenAI from 'openai';
+import { createStateKey, fromOpenAI, VernLLM } from 'vern-llm';
+
+const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+const spanIdKey = createStateKey<string>('tracing.spanId');
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [
+    {
+      name: 'redaction',
+      transform: (request) => ({ messages: redact(request.messages) }),
+    },
+    {
+      name: 'tracing',
+      wrap: async (request, next, ctx) => {
+        ctx.state.set(spanIdKey, startSpan(ctx.requestId));
+        const result = await next();
+        endSpan(ctx.state.get(spanIdKey), result.meta);
+        return result;
+      },
+    },
+  ],
+});
+```
+
+`middleware` is an ordered array of `VernLLMMiddleware` entries. Each one can transform a request,
+wrap a whole call, filter which calls it applies to, and observe events. Defaults to an empty
+array; nothing changes if you never add one.
+
+## The four hooks
+
+<Cards>
+  <Card title="transform" href="#transform">
+    Change the outgoing request before dispatch.
+  </Card>
+  <Card title="wrap" href="#wrap">
+    Observe or short-circuit one whole logical call.
+  </Card>
+  <Card title="enabled" href="#enabled">
+    Filter which calls a middleware applies to.
+  </Card>
+  <Card title="onEvent" href="#onevent-and-the-middleware-event">
+    The same event stream as the top-level option, filtered per middleware.
+  </Card>
+</Cards>
+
+### `transform`
+
+Runs once per attempt, on the request as merged by every earlier middleware's own patch:
+
+```ts title="transform-signature.ts"
+transform?: (
+  request: Readonly<WireCallRequest>,
+  ctx: AttemptContext,
+) => WireCallRequestPatch | Promise<WireCallRequestPatch>;
+```
+
+```ts title="transform-patch.ts"
+transform: (request, ctx) => {
+  if (ctx.attempt > 1) return {}; // nothing to add on a retry
+  return { addTools: [auditTool], temperature: 0.2 };
+};
+```
+
+`model` and `response_format` can't be patched: neither field exists on `WireCallRequestPatch`, so
+there's no way to desync from what VernLLM already decided for either one.
+
+`messages` and `tools` each have an `add*` field. Use `addMessages`/`addTools` to append without
+clobbering another middleware's own addition; `messages`/`tools` replace the whole list:
+
+```ts title="transform-add-vs-replace.ts"
+transform: () => ({ addTools: [myTool] }); // appended
+transform: () => ({ tools: [onlyThisOne] }); // replaces the whole list
+```
+
+A duplicate tool name from `addTools` throws `LLMError('invalid_params')`, naming the middleware
+that introduced it.
+
+### `wrap`
+
+Fires once per logical call, wrapping the breaker precheck and usage reservation too, not only the
+fallback chain:
+
+```ts title="wrap-signature.ts"
+wrap?: (
+  request: Readonly<WireCallRequest>,
+  next: () => Promise<CallResult>,
+  ctx: PreDispatchContext,
+) => Promise<CallResult>;
+```
+
+`next()` resolves to a `CallResult`, whose `meta` carries the resolved provider, model, fallback
+index, and attempt count:
+
+```ts title="wrap-cost-tracking.ts"
+wrap: async (request, next, ctx) => {
+  const start = Date.now();
+  const result = await next();
+  recordCost(ctx.requestId, Date.now() - start, result.meta);
+  return result;
+};
+```
+
+`wrap` runs before any fallback target is chosen, so its own `ctx` is a `PreDispatchContext`, not
+the `AttemptContext` `transform` gets: it only carries `primaryProvider`/`primaryModel`. There's no
+`requestedProvider`, `isFallbackAttempt`, or `attempt` to read here at all, since none of those have
+a real answer yet. Read `result.meta` after `next()` resolves for what actually happened.
+
+A `wrap` that never calls `next()` short-circuits the real call, and every middleware nested inside
+it never runs either:
+
+```ts title="wrap-short-circuit.ts"
+wrap: async (request, next, ctx) => {
+  if (isKnownCannedInput(request)) return { value: 'canned answer' };
+  return next();
+};
+```
+
+Useful for serving a canned answer, or testing against a fake `VernLLM` with no real client.
+
+### `enabled`
+
+A static boolean, or a predicate evaluated per call:
+
+```ts title="enabled-signature.ts"
+enabled?: boolean | ((ctx: MiddlewareContext) => boolean | Promise<boolean>);
+```
+
+`enabled` is evaluated from both stages. Once gating `wrap` composition (`ctx.stage: 'pre-dispatch'`)
+and, separately, once per attempt gating `transform` (`ctx.stage: 'attempt'`), so its own `ctx` is
+always the full `MiddlewareContext` union, never narrowed to just one variant. A predicate that
+reads a stage-specific field like `isFallbackAttempt` needs to check `ctx.stage` first:
+
+```ts title="enabled-target-filter.ts"
+{
+  name: 'primary-only-redaction',
+  enabled: (ctx) => ctx.stage === 'pre-dispatch' || !ctx.isFallbackAttempt,
+  transform: (request) => ({ messages: redact(request.messages) }),
+}
+```
+
+A throwing, rejecting, or timed out `enabled` is logged and treated as `false`.
+
+<Callout type="warn">
+  `ctx.isFallbackAttempt` only exists on the `'attempt'` stage; there's nothing meaningful to check
+  on `'pre-dispatch'` since no target has been chosen yet, so the example above returns `true` there
+  and lets the real, per-attempt check happen once `ctx.stage === 'attempt'`. Gating a `wrap`-only
+  middleware with `isFallbackAttempt` doesn't work at all, no matter how it's narrowed: `wrap`
+  itself never receives an `'attempt'`-stage `ctx`, only a `PreDispatchContext`, so it can't tell
+  which target answered even after `enabled` passes. See [wrap](#wrap) for why.
+</Callout>
+
+### `onEvent` and the `'middleware'` event
+
+Routed off the same event stream as the top-level `onEvent` option, filtered by that middleware's
+own `enabled`. Covers `'retry'`, `'rate_limited'`, `'fallback'`, `'circuit_state'`, and the
+`'middleware'` event described below:
+
+```ts title="middleware-onevent.ts"
+{
+  name: 'per-middleware-metrics',
+  onEvent: (event, ctx) => {
+    if (event.kind === 'retry') metrics.increment('llm.retry.seen_by_mw');
+  },
+}
+```
+
+VernLLM also reports its own `'middleware'` event, so a call touched by several middleware is
+debuggable without adding logging to each one by hand:
+
+```ts title="middleware-event-shape.ts"
+{
+  kind: 'middleware',
+  requestId: string,
+  middleware: string, // this entry's `name`, or its array position if unnamed
+  hook: 'transform' | 'wrap_short_circuit' | 'enabled_skip',
+  patchedFields?: string[], // for 'transform' only
+}
+```
+
+`transform` fires only when `patchedFields` is non-empty. `wrap_short_circuit` and `enabled_skip`
+always fire.
+
+<Callout type="info">
+  `ctx` passed to `onEvent` describes whichever target and attempt actually produced that event, not
+  the primary target `wrap`'s own `ctx` is limited to. A `'circuit_state'` event from a manual
+  `openCircuit()`/`closeCircuit()` call is the one exception: since there's no logical call behind
+  it, it gets a fresh `ctx` of its own instead. See [Circuit
+  Breaker](/docs/core/circuit-breaker#checking-and-controlling-state-manually).
+</Callout>
+
+## `ctx.state` and `ctx.own`
+
+Two middleware sharing a value, a span ID one sets and another reads, use `ctx.state`, keyed by a
+typed `MiddlewareStateKey<T>` instead of a string:
+
+```ts title="ctx-state-sharing.ts"
+import { createStateKey } from 'vern-llm';
+
+const spanIdKey = createStateKey<string>('tracing.spanId');
+
+// middleware A
+wrap: async (request, next, ctx) => {
+  ctx.state.set(spanIdKey, startSpan(ctx.requestId));
+  return next();
+};
+
+// middleware B, importing the same spanIdKey reference
+wrap: async (request, next, ctx) => {
+  const result = await next();
+  recordCost(ctx.state.get(spanIdKey), result.meta);
+  return result;
+};
+```
+
+Sharing requires both middleware to import the same key, so two middleware can only collide on
+purpose. `ctx.state` is created once per logical call and threaded into every `transform`/`wrap`
+that call triggers.
+
+`ctx.own` is a plain `Record<string, unknown>`, pre-namespaced to that one middleware, for scratch
+state it doesn't share with anyone else.
+
+<Callout type="info">
+  See [Middleware](/docs/customization/middleware) for `createStateKey`, `createMiddleware`, and
+  writing your own middleware.
+</Callout>
+
+## Composition order
+
+`middleware: [a, b, c]` sorts by `priority` ascending, default `0`, ties broken by array order.
+Lower `priority` runs first for `transform`, and its patch is merged first.
+
+For `wrap`, lower `priority` is outermost: first to start, last to finish, not first to see the
+result. `a`'s `next` calls `b`'s `wrap`, whose `next` calls `c`'s `wrap`, whose `next` is the real
+call. Going in, `a` runs before `b` before `c`. Coming out, `c` resolves first since it's
+innermost, then `b`, then `a`.
+
+Every `wrap` has two moments: before `next()`, and after it resolves. A shared `ctx.state` value's
+write and read ordering depends on which moment each middleware uses:
+
+```ts title="composition-order-example.ts"
+middleware: [
+  {
+    name: 'cost-tracking',
+    priority: 0, // outermost
+    wrap: async (request, next, ctx) => {
+      const start = Date.now(); // pre-next: runs first
+      const result = await next();
+      recordCost(ctx.state.get(spanIdKey), Date.now() - start); // post-next: runs last
+      return result;
+    },
+  },
+  {
+    name: 'tracing',
+    priority: 1,
+    wrap: async (request, next, ctx) => {
+      ctx.state.set(spanIdKey, startSpan(ctx.requestId)); // pre-next: runs second
+      return next(); // post-next: resolves first
+    },
+  },
+];
+```
+
+A value written in one middleware's pre-next and read in another's post-next is order
+independent: every pre-next finishes before any post-next begins. Order only matters when a
+value must be read in another middleware's own pre-next.
+
+`enabled` is evaluated per middleware, before its hook runs. For `wrap`, that's once per logical
+call; for `transform`, it's evaluated again on every attempt, since `transform` itself runs
+per attempt. A middleware that doesn't apply is skipped entirely; for `wrap`, it's simply absent
+from the nesting.
+
+## Timeouts
+
+`transform` and a function `enabled` are bounded by `middlewareTimeoutMs` on `VernLLMOptions`
+(default `5000`), overridable per middleware via `timeoutMs`. A value `<= 0` disables the
+timeout and leaves the hook unbounded:
+
+```ts title="middleware-timeout-override.ts"
+{
+  name: 'redaction-service',
+  timeoutMs: 2000, // overrides the instance default for this middleware only
+  transform: async (request) => ({ messages: await redactionService.redact(request.messages) }),
+}
+```
+
+A timeout normalizes to the same `'timeout'` type a slow provider call produces, retryable by
+default. `wrap` is never bounded this way: it spans the whole call, so `call()`'s own
+`timeoutMs`/`deadlineMs` already covers it.
+
+## Error handling
+
+1. A non `LLMError` thrown before `next()` resolves (or by `transform`) is passed through the same
+   `normalizeError` every other thrown value goes through. A recognizable status code or network
+   failure keeps its own classification; a genuinely unrecognizable throw becomes
+   `LLMError('...', 'invalid_params', { code: 'middleware_threw' })`, naming the offending
+   middleware, non retryable, and never counted toward the circuit breaker.
+2. An already constructed `LLMError`, or a recognized status or network signal, passes through
+   with its own type and `retryable` intact.
+3. An error thrown by `wrap` strictly after `next()` already resolved successfully is caught,
+   logged like a failing `onUsage`, and the original result is returned instead.
+4. A throwing, rejecting, or timed out `enabled` predicate is logged and treated as not applying.
+
+## Interaction with `cachedCall`
+
+`wrap` fires exactly once per logical call, including through `cachedCall()`'s hit, miss, and join
+branches.
+
+- **Hit**: `next()` resolves immediately with `meta: undefined`. `transform` never runs.
+- **Miss**: `wrap` fires once around the whole `cachedCall()`; the underlying `call()` it triggers
+  skips its own `wrap`.
+- **Join** (a concurrent `cachedCall()` for the same `cacheKey` already in flight): still exactly
+  one `wrap` invocation, resolving once the shared in-flight call settles, `meta` included.
+
+`ctx.state` is shared between a cache miss's `wrap` and the `transform` it triggers, so a value set
+during `wrap`'s pre phase is visible to that same middleware's `transform`.
+
+See [Caching](/docs/core/caching) for `cachedCall()` itself.
+
+## Options reference
+
+| Option                | Default | Notes                                                                                                                         |
+| --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `middleware`          | `[]`    | Ordered `VernLLMMiddleware[]`, sorted by `priority` ascending, ties by array order.                                           |
+| `middlewareTimeoutMs` | `5000`  | Bounds `transform` and a function `enabled`. A value `<= 0` disables the timeout. Overridable per middleware via `timeoutMs`. |
+
+See [Configuration](/docs/API-reference/configuration) for where `middleware` sits among every
+other `VernLLMOptions` field.

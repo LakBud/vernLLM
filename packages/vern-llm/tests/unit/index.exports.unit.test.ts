@@ -13,12 +13,23 @@ import {
   isFallbackExhaustedError,
   FallbackExhaustedError,
   LLMError,
+  createMiddleware,
+  createStateKey,
+  createMiddlewareStateBag,
   type AnthropicClient,
   type BedrockConverseClient,
   type GeminiClient,
   type LLMClient,
   type JsonSchemaSpec,
   type RetryAttempt,
+  type VernLLMMiddleware,
+  type MiddlewareContext,
+  type MiddlewareCapabilities,
+  type MiddlewareStateBag,
+  type WireCallRequest,
+  type WireCallRequestPatch,
+  type CallResult,
+  type CreateMiddlewareOptions,
 } from '../../src/index.js';
 
 describe('package entrypoint exports', () => {
@@ -89,5 +100,40 @@ describe('package entrypoint exports', () => {
     expect(assertBedrockClient).toBeDefined();
     expect(assertSchema).toBeDefined();
     expect(assertRetryAttempt).toBeDefined();
+  });
+
+  it('exports createMiddleware, createStateKey, and createMiddlewareStateBag as runtime functions from the package root', () => {
+    expect(typeof createMiddleware).toBe('function');
+    expect(typeof createStateKey).toBe('function');
+    expect(typeof createMiddlewareStateBag).toBe('function');
+
+    const key = createStateKey<string>('test.key');
+    const bag = createMiddlewareStateBag();
+    bag.set(key, 'value');
+    expect(bag.get(key)).toBe('value');
+
+    const middleware = createMiddleware({ name: 'test', onError: () => {} });
+    expect(middleware.name).toBe('test');
+    expect(typeof middleware.wrap).toBe('function');
+  });
+
+  it('exports the middleware type surface from the package root', () => {
+    const assertMiddleware = (_m: VernLLMMiddleware) => _m;
+    const assertContext = (_ctx: MiddlewareContext) => _ctx;
+    const assertCapabilities = (_c: MiddlewareCapabilities) => _c;
+    const assertStateBag = (_b: MiddlewareStateBag) => _b;
+    const assertRequest = (_r: WireCallRequest) => _r;
+    const assertPatch = (_p: WireCallRequestPatch) => _p;
+    const assertResult = (_r: CallResult) => _r;
+    const assertCreateOptions = (_o: CreateMiddlewareOptions) => _o;
+
+    expect(assertMiddleware).toBeDefined();
+    expect(assertContext).toBeDefined();
+    expect(assertCapabilities).toBeDefined();
+    expect(assertStateBag).toBeDefined();
+    expect(assertRequest).toBeDefined();
+    expect(assertPatch).toBeDefined();
+    expect(assertResult).toBeDefined();
+    expect(assertCreateOptions).toBeDefined();
   });
 });

@@ -504,7 +504,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   Added `LLMError.retryable`, computed purely from `type`/`code`, independent of any specific call's `nonRetryableStatus` list or its signal's abort state. `FallbackExhaustedError` overrides it to defer to the last attempted target's own `retryable`, since `type: 'fallback_exhausted'` alone carries no retry signal.
 
-  `LLMError`'s constructor collapses everything after `type` into one optional object: `new LLMError(message, type, { status, code, issues, cause, retryAfterMs })`. Previously these were five more positional parameters, so a throw site that only needed `code` still had to write four `undefined`s to reach it. This breaks any `new LLMError(...)` call site outside the package itself, including a custom `LLMClient` adapter or a subclass calling `super()` positionally — narrower than it sounds, since callers normally only catch `LLMError`, not construct it, but worth naming directly: the last time this constructor grew, the explicit goal was that every existing call site would keep compiling unchanged, and this change knowingly reverses that.
+  `LLMError`'s constructor collapses everything after `type` into one optional object: `new LLMError(message, type, { status, code, issues, cause, retryAfterMs })`. Previously these were five more positional parameters, so a throw site that only needed `code` still had to write four `undefined`s to reach it. This breaks any `new LLMError(...)` call site outside the package itself, including a custom `LLMClient` adapter or a subclass calling `super()` positionally. The break is narrower than it sounds, since callers normally only catch `LLMError`, not construct it, but worth naming directly: the last time this constructor grew, the explicit goal was that every existing call site would keep compiling unchanged, and this change knowingly reverses that.
 
   Removed the deprecated `toolIssues` getter/setter on `LLMError`. `issues` is now the only place tool contract problems (or a schema validator's error object) are carried; read `error.issues` instead of `error.toolIssues`.
 
@@ -918,7 +918,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   - **`normalizeError`**: now attaches both fields when building the final thrown `LLMError` for
     `'api'` and `'unknown'` error types. Existing consumers checking `.type`/`.status`/`.issues` are
-    unaffected — this is purely additive.
+    unaffected. This is purely additive.
 
   - **`debug` logging**: previously `logger.debug` only fired on a successful response. It now also
     fires on the failure path via a new `describeError()` helper, logging the provider's actual
@@ -954,7 +954,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   `reserveUsage`/`refundUsage` now receive a `{ coalesced: boolean }` argument, so applications can
   decide how coalesced callers are billed: full price, a reduced rate, or not billed at all. This is
-  backward compatible — existing `() => Promise<void>` implementations don't need to change.
+  backward compatible: existing `() => Promise<void>` implementations don't need to change.
 
   Docs updated in `core/caching.mdx` to describe the coalescing behavior and the new `coalesced` flag.
 
@@ -970,7 +970,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   - **`recoverDelay`**: now uses `extractRetryAfterMs(error) ?? getBackoffDelay(...)`, falling back to
     today's exponential-backoff-with-jitter exactly as before when no usable header is present. No
-    adapter changes needed — headers already flow through on thrown errors (fetch adapter via the
+    adapter changes needed. Headers already flow through on thrown errors (fetch adapter via the
     prior `request`/headers PR, SDK-based adapters natively).
 
   - **Tests**: added `tests/unit/vernLLM.utils.unit.test.ts` for `extractRetryAfterMs` (delta-seconds,
@@ -1043,7 +1043,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   - **Adapters**: Added support for providers including xAI, NVIDIA NIM, Vercel AI Gateway, Cloudflare Workers AI, GitHub Models, Nebius, SambaNova, Baseten, DashScope, Featherless, Friendli, SiliconFlow, LiteLLM Proxy, Parasail, StepFun, MiniMax, Lambda Labs, Snowflake Cortex, Anyscale, Lepton, kluster.ai, Inference.net, Infermatic, AtlasCloud, and 01.AI.
   - **Docs**: Expanded `openai-compatible` documentation with the full list of supported named adapters and clarified `fromOpenAICompatible()` as the generic fallback.
   - **Homepage**: Updated the provider list with the newly supported providers.
-  - **Changeset**: Minor bump for `vern-llm` — purely additive, no breaking changes.
+  - **Changeset**: Minor bump for `vern-llm`: purely additive, no breaking changes.
 
 ## 1.1.0
 
@@ -1057,7 +1057,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   - **Tests**: added to the parameterized alias check in `openaiCompatible.unit.test.ts` (18/18 passing)
   - **Docs**: `adapters/index.mdx` and `adapters/openai-compatible.mdx` updated to list all providers as named wrappers
   - **Homepage**: `home.utils.ts` `providers` array expanded with icons + doc links for all new providers (fixed `Vllm` casing to match actual `@lobehub/icons` export)
-  - **Changeset**: minor bump for `vern-llm` — purely additive, no breaking changes
+  - **Changeset**: minor bump for `vern-llm`: purely additive, no breaking changes
 
   **Verified**: `tsc --noEmit` clean on both the package and docs app, `dist/` rebuilt via `tsdown` to include new exports, `changeset status` confirms minor bump.
 
@@ -1069,7 +1069,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   This lets `cachedCall`/`cachedLLMCall` correctly distinguish a cache miss from a legitimately cached `null` value, so a valid `null` result is now reused from cache instead of being treated as a miss and re-triggering an LLM call.
 
-  `InMemoryCacheAdapter` (the built-in default) is updated automatically — no action needed if you're using it. If you've implemented a custom `CacheAdapter` (Redis, Upstash, or otherwise), you'll need to update its `get()` method. See the migration guide below.
+  `InMemoryCacheAdapter` (the built-in default) is updated automatically. No action needed if you're using it. If you've implemented a custom `CacheAdapter` (Redis, Upstash, or otherwise), you'll need to update its `get()` method. See the migration guide below.
 
   Also in this release:
 

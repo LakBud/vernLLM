@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { CircuitBreaker } from '../../src/circuitBreaker.js';
 import { FallbackExhaustedError } from '../../src/types/fallback.js';
+import { type VernLLMMiddleware } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
@@ -118,7 +119,7 @@ describe('CircuitBreaker (unit)', () => {
 
     cb.recordFailure('gpt-4o');
 
-    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, 'gpt-4o');
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, 'gpt-4o', undefined);
   });
 
   it('reports whichever model most recently touched the breaker, even across different models', () => {
@@ -131,7 +132,7 @@ describe('CircuitBreaker (unit)', () => {
     cb.recordFailure('gpt-4o-mini'); // 2nd failure, crosses threshold
 
     expect(onStateChange).toHaveBeenCalledTimes(1);
-    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 2, 'gpt-4o-mini');
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 2, 'gpt-4o-mini', undefined);
   });
 
   it('omitting `model` on record/assert calls reports undefined, not a stale prior value', () => {
@@ -140,14 +141,14 @@ describe('CircuitBreaker (unit)', () => {
     const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, onStateChange });
 
     cb.recordFailure();
-    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, undefined);
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 1, undefined, undefined);
 
     // Also cover assertClosed's own transition (open -> half-open),
     // the test's title mentions "assert calls" but only recordFailure
     // was previously exercised.
     vi.advanceTimersByTime(1001);
     cb.assertClosed();
-    expect(onStateChange).toHaveBeenCalledWith('open', 'half-open', 1, undefined);
+    expect(onStateChange).toHaveBeenCalledWith('open', 'half-open', 1, undefined, undefined);
 
     vi.useRealTimers();
   });
@@ -256,8 +257,8 @@ describe('CircuitBreaker, isolateByModel (unit)', () => {
     cb.recordFailure('gpt-4o-mini');
 
     expect(onStateChange).toHaveBeenCalledTimes(2);
-    expect(onStateChange).toHaveBeenNthCalledWith(1, 'closed', 'open', 1, 'gpt-4o');
-    expect(onStateChange).toHaveBeenNthCalledWith(2, 'closed', 'open', 1, 'gpt-4o-mini');
+    expect(onStateChange).toHaveBeenNthCalledWith(1, 'closed', 'open', 1, 'gpt-4o', undefined);
+    expect(onStateChange).toHaveBeenNthCalledWith(2, 'closed', 'open', 1, 'gpt-4o-mini', undefined);
   });
 
   it('half-open/cooldown/trial-in-flight semantics are unchanged, just scoped per model', () => {
@@ -353,6 +354,62 @@ describe('VernLLM, circuit breaker integration', () => {
     expect(reserveUsage).not.toHaveBeenCalled();
     expect(refundUsage).not.toHaveBeenCalled();
     expect(create.mock.calls.length).toBe(callCountBefore);
+  });
+
+  it("a signal that aborts during a slow wrap, before assertBreakerClosed runs, doesn't leak the half-open trial slot", async () => {
+    const { client } = createMockClient([new Error('down'), jsonResponse({ ok: true })]);
+
+    let gate: Promise<void> = Promise.resolve();
+    let releaseGate: (() => void) | undefined;
+    const armGate = () => {
+      gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+    };
+
+    const slowWrap: VernLLMMiddleware = {
+      name: 'slow',
+      wrap: async (_request, next) => {
+        await gate;
+        return next();
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 1 },
+      middleware: [slowWrap],
+    });
+
+    // Trip the breaker open.
+    await llm.call({ systemPrompt: 's', userContent: 'first' }).catch(() => {});
+    expect(llm.getCircuitState()).toBe('open');
+
+    // Wait past cooldown so the circuit is eligible for a half-open trial.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // Start a trial call and abort it while `wrap` is still delaying, i.e.
+    // before `assertBreakerClosed` (inside `coreOperation`) has run at all.
+    armGate();
+    const controller = new AbortController();
+    const trialPromise = llm.call({
+      systemPrompt: 's',
+      userContent: 'trial',
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    releaseGate?.();
+
+    await expect(trialPromise).rejects.toMatchObject({ type: 'aborted' });
+
+    // A leaked trial slot would reject this with `circuit_trial_in_flight`
+    // even though nothing is actually still in flight.
+    await expect(
+      llm.call({ systemPrompt: 's', userContent: 'after' }),
+    ).resolves.not.toBeUndefined();
   });
 
   it('closes again after a successful call', async () => {
@@ -830,7 +887,7 @@ describe('VernLLM, circuit breaker integration', () => {
     });
 
     // Sweeping `model` across a mixed chain is exactly what getCircuitStates
-    // is for — it must never throw just because one target ignores it.
+    // is for. It must never throw just because one target ignores it.
     expect(() => llm.getCircuitStates('gpt-4o')).not.toThrow();
     expect(llm.getCircuitStates('gpt-4o')).toEqual([
       { provider: 'primary', index: 0, isFallback: false, isolateByModel: true, state: 'closed' },
@@ -850,7 +907,7 @@ describe('VernLLM, circuit breaker integration', () => {
         client: fallbackClient,
         model: 'fallback-model',
         name: 'fallback',
-        // No circuit breaker on the fallback — a real target, just untracked.
+        // No circuit breaker on the fallback -> a real target, just untracked.
       },
     });
 

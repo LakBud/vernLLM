@@ -5,6 +5,7 @@ import type { CacheAdapter } from './cache.js';
 import type { LLMClient } from './client.js';
 import type { OnEvent } from './events.js';
 import type { FallbackOn, FallbackTarget } from './fallback.js';
+import type { VernLLMMiddleware } from './middleware.js';
 import type { OnUsage, OnUsageFailure } from './usage.js';
 
 export interface VernLLMOptions {
@@ -138,4 +139,18 @@ export interface VernLLMOptions {
    * and moves on for everything else.
    */
   fallbackOn?: FallbackOn;
+  /**
+   * Transforms outgoing requests and/or wraps whole logical calls,
+   * without touching retry, circuit breaker, or fallback internals.
+   * Defaults to an empty array. See `VernLLMMiddleware` for the four
+   * available hooks (`transform`, `wrap`, `onEvent`, `enabled`).
+   */
+  middleware?: VernLLMMiddleware[];
+  /**
+   * Bounds `transform` and a function `enabled`, the same way every
+   * other blocking operation in the package is already bounded.
+   * Overridable per middleware via that entry's own `timeoutMs`.
+   * `<= 0` means unbounded (no timer at all). Default 5000.
+   */
+  middlewareTimeoutMs?: number;
 }

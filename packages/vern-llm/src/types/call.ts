@@ -82,7 +82,7 @@ export interface CallParams<
 
   /**
    * Previous conversation turns. Must alternate roles; tool turns must follow
-   * assistant tool calls. Invalid history throws LLMError('validation').
+   * assistant tool calls. Invalid history throws LLMError('invalid_params').
    */
   history?: ConversationTurn[];
 
@@ -193,10 +193,18 @@ export interface CallParams<
    * Optional out-parameter for provider identity. Pass `{}` (or any object
    * with a mutable `current` property) and `call()` writes a `CallMeta`
    * into `meta.current` before returning, alongside whatever `onUsage`
-   * already reports. Ignored for `stream: true`, since `call()` returns
-   * before the outcome (and so the target that answered) is known; read
-   * `TokenUsage.provider`/`usedFallback` from `onUsage` for streaming
-   * calls instead.
+   * already reports. This includes `stream: true`: the target is chosen
+   * once the stream opens, which is also the point `call()` itself
+   * returns `{ chunks, finalResult }`, so `meta.current` is already set
+   * by then. `TokenUsage.provider`/`usedFallback` from `onUsage` reports
+   * the same information asynchronously, for both streaming and
+   * non-streaming calls.
+   *
+   * `meta.current` is only written once execution actually reaches and
+   * selects a provider target. A `wrap` middleware that short-circuits
+   * without calling `next()` never reaches that point, so `meta.current`
+   * is left untouched; if the same holder object is reused across calls,
+   * it can still hold a prior call's target.
    */
   meta?: { current?: CallMeta };
 }

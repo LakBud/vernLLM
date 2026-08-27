@@ -1,7 +1,7 @@
 /**
  * A static allow-list or predicate naming which models support native,
- * schema-constrained output as its own request field — Anthropic's
- * `output_config.format`, Bedrock's `outputConfig.textFormat` — separate
+ * schema-constrained output as its own request field. Anthropic's
+ * `output_config.format` and Bedrock's `outputConfig.textFormat` separate
  * from `tools`/`tool_choice`, so it can be combined with real,
  * caller-supplied `tools` in the same request.
  *

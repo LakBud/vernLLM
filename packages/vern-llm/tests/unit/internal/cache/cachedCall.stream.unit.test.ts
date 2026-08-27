@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { LLMError, type StreamChunk } from '../../../../src/index.js';
+import {
+  LLMError,
+  type StreamChunk,
+  type VernLLMMiddleware,
+  type WireStreamChunk,
+} from '../../../../src/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { createMockStreamingClient } from '../../../helpers.js';
 
@@ -381,6 +386,99 @@ describe('VernLLM.cachedCall, stream: true', () => {
       expect(result).toBe('shared');
     }
     expect(createStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('a trigger and a later joiner (arriving after the stream opens but before finalResult settles) both see the same real CallMeta in wrap, not meta: undefined for the joiner', async () => {
+    // Controls the stream's timing precisely: the first chunk resolves
+    // immediately (so the trigger's own `cachedCall()` returns, "the
+    // stream opens"), but the second chunk, and so `finalResult`, stays
+    // pending until `resolveSecondChunk()` is called below. This
+    // reproduces exactly the window the bug lived in: a joiner arriving
+    // strictly after stream-open but strictly before finalResult
+    // settles.
+    let resolveSecondChunk!: () => void;
+    const secondChunkGate = new Promise<void>((resolve) => {
+      resolveSecondChunk = resolve;
+    });
+
+    const streamFactory = (): AsyncIterable<WireStreamChunk> => ({
+      [Symbol.asyncIterator]() {
+        let index = 0;
+        return {
+          async next(): Promise<IteratorResult<WireStreamChunk>> {
+            if (index === 0) {
+              index++;
+              return { done: false, value: { type: 'text-delta', delta: 'first ' } };
+            }
+            if (index === 1) {
+              await secondChunkGate;
+              index++;
+              return { done: false, value: { type: 'text-delta', delta: 'second' } };
+            }
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    });
+
+    const { client, createStream } = createMockStreamingClient([streamFactory]);
+
+    const metas: { label: string; meta: unknown }[] = [];
+    let wrapCalls = 0;
+
+    // A plain `wrap`, no `transform`: this only needs to observe
+    // `result.meta` per logical `cachedCall()`, labeled by call order
+    // (the trigger always starts, and its own `cachedCall()` always
+    // resolves, before the joiner is issued below).
+    const tracer: VernLLMMiddleware = {
+      name: 'meta-tracer',
+      wrap: async (_request, next) => {
+        const label = wrapCalls === 0 ? 'trigger' : 'joiner';
+        wrapCalls++;
+        const result = await next();
+        metas.push({ label, meta: result.meta });
+        return result;
+      },
+    };
+
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [tracer] });
+
+    // Resolves once the stream opens (first chunk arrives), well before
+    // finalResult settles.
+    const trigger = await llm.cachedCall({
+      cacheKey: 'joiner-meta-key',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true },
+    });
+
+    // Issued after the trigger's stream has already opened, but the
+    // stream is still in flight (finalResult hasn't settled), so
+    // `CacheOrchestrator` still treats this key as joinable.
+    const joiner = await llm.cachedCall({
+      cacheKey: 'joiner-meta-key',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true },
+    });
+
+    resolveSecondChunk();
+
+    await Promise.all([drain(trigger.chunks), drain(joiner.chunks)]);
+    await Promise.all([trigger.finalResult, joiner.finalResult]);
+
+    // Only the trigger ever opened a real stream; the joiner shared it.
+    expect(createStream).toHaveBeenCalledTimes(1);
+    expect(metas).toHaveLength(2);
+
+    const triggerMeta = metas.find((m) => m.label === 'trigger')?.meta;
+    const joinerMeta = metas.find((m) => m.label === 'joiner')?.meta;
+
+    expect(triggerMeta).toMatchObject({ provider: 'primary', usedFallback: false });
+    // The bug: releasing the shared metaHolder on stream-open (instead
+    // of on finalResult settling) meant a joiner arriving in this exact
+    // window created its own fresh, disconnected holder, and always saw
+    // `meta: undefined` in its own `wrap`, even on a real cache miss
+    // with a real serving target.
+    expect(joinerMeta).toEqual(triggerMeta);
   });
 
   it('a joiner sees the same rejection as the trigger when the in-flight call fails', async () => {

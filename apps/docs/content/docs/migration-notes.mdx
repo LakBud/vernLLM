@@ -84,7 +84,7 @@ connection refused, connection reset) from the catch-all `type: 'unknown'`.
 
 ```ts
 // Before: type inherited from whichever target failed last
-err.type; // e.g. 'api', 'timeout' — varied per failure
+err.type; // e.g. 'api', 'timeout': varied per failure
 
 // After: always its own identity
 err.type; // 'fallback_exhausted'

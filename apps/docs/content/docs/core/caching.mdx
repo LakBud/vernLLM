@@ -194,7 +194,7 @@ level instead.
 ### Usage hooks
 
 Usage hooks are applied at the cache level. `reserveUsage`/`refundUsage` no longer type-check inside
-the nested `call` options at all — `CachedCallParams`'s `call` field omits them, so putting them
+the nested `call` options at all. `CachedCallParams`'s `call` field omits them, so putting them
 there is a compile error, not just a mistake caught later. If a caller bypasses that (plain JS, or
 an explicit type cast) and sets them inside `call` anyway, `cachedCall` throws `LLMError('validation')`
 before doing anything else, rather than silently ignoring them and continuing: silently dropping a
@@ -251,7 +251,7 @@ const cacheKey = `cv:${cvId}:${model}:v2`; // bump version when prompt/schema ch
 
 ## Custom cache adapter
 
-Bringing your own `CacheAdapter` (Redis, Upstash, or anything else) — including the specific
+Bringing your own `CacheAdapter` (Redis, Upstash, or anything else), including the specific
 things to get right when implementing one (`hit` semantics, `resolveKey`, `ttl` convention, and
-how a broken adapter is handled) — is covered as a customization topic, with a full worked
+how a broken adapter is handled) is covered as a customization topic, with a full worked
 example, over on [Caching → Customization](/docs/customization/caching).

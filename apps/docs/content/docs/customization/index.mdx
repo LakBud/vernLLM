@@ -1,5 +1,5 @@
 ---
-title: Overview
+title: Customization Overview
 description: The seams VernLLM lets you plug your own implementation into
 ---
 
@@ -8,12 +8,9 @@ Anywhere behavior is opinionated (how logs are written, how a cache is stored, h
 estimated), there's a matching interface you can implement instead of accepting the default.
 
 <Cards>
-  <Card title="Logging" href="/docs/customization/logging">
-    Swap the default console logger for pino, winston, or any structured logger, and redact
-    sensitive fields from debug output.
-  </Card>
-  <Card title="Provider" href="/docs/customization/provider">
-    Implement `LLMClient` (or use `fromFetch`) to talk to a provider with no existing adapter.
+  <Card title="Middleware" href="/docs/customization/middleware">
+    Write your own transform/wrap middleware, share state with createStateKey, and use
+    createMiddleware for the "I only care about failures" case.
   </Card>
   <Card title="Caching" href="/docs/customization/caching">
     Bring your own `CacheAdapter` backed by Redis, Upstash, or anything else, on top of the built-in
@@ -25,6 +22,13 @@ estimated), there's a matching interface you can implement instead of accepting 
   </Card>
   <Card title="Schema" href="/docs/customization/schema">
     Validate structured output with Zod or any validator exposing `safeParse`.
+  </Card>
+  <Card title="Provider" href="/docs/customization/provider">
+    Implement `LLMClient` (or use `fromFetch`) to talk to a provider with no existing adapter.
+  </Card>
+  <Card title="Logging" href="/docs/customization/logging">
+    Swap the default console logger for pino, winston, or any structured logger, and redact
+    sensitive fields from debug output.
   </Card>
 </Cards>
 

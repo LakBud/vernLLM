@@ -1,5 +1,6 @@
 export { VernLLM } from './vernLLM.js';
 export { defineCallParams, defineCachedCallParams } from './paramsHelpers.js';
+export { createMiddleware, type CreateMiddlewareOptions } from './types/createMiddleware.js';
 export { CircuitBreaker, type CircuitBreakerOptions, type CircuitState } from './circuitBreaker.js';
 export {
   RateLimiter,
@@ -140,4 +141,19 @@ export {
   type ContentResult,
   type ToolCallResult,
   type CallWithToolsResult,
+  type VernLLMMiddleware,
+  type MiddlewareContext,
+  type MiddlewareContextBase,
+  type AttemptContext,
+  type PreDispatchContext,
+  type MiddlewareCapabilities,
+  type MiddlewareStateKey,
+  createStateKey,
+  type MiddlewareStateBag,
+  createMiddlewareStateBag,
+  type WireCallRequest,
+  type WireCallRequestPatch,
+  type WireResponseFormat,
+  type WireTool,
+  type CallResult,
 } from './types/index.js';
