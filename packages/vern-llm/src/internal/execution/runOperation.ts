@@ -129,12 +129,21 @@ export async function runOperation(
 
       let calledNext = false;
       let resolvedResult: CallResult | undefined;
+      let nextPromise: Promise<CallResult> | undefined;
 
-      const nextFn = async (): Promise<CallResult> => {
+      // Not `async`: the synchronous `nextPromise` check must run before
+      // any `await`, so two next() calls issued back-to-back with no
+      // `await` between them (e.g. `Promise.all([next(), next()])`)
+      // still see the first call's promise already assigned, not just
+      // two calls that are individually awaited in sequence.
+      const nextFn = (): Promise<CallResult> => {
+        if (nextPromise) return nextPromise;
         calledNext = true;
-        const result = await inner();
-        resolvedResult = result;
-        return result;
+        nextPromise = inner().then((result) => {
+          resolvedResult = result;
+          return result;
+        });
+        return nextPromise;
       };
 
       try {

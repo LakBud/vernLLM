@@ -134,8 +134,8 @@ A static boolean, or a predicate evaluated per call:
 enabled?: boolean | ((ctx: MiddlewareContext) => boolean | Promise<boolean>);
 ```
 
-`enabled` is evaluated from both stages — once gating `wrap` composition (`ctx.stage: 'pre-dispatch'`)
-and, separately, once per attempt gating `transform` (`ctx.stage: 'attempt'`) — so its own `ctx` is
+`enabled` is evaluated from both stages. Once gating `wrap` composition (`ctx.stage: 'pre-dispatch'`)
+and, separately, once per attempt gating `transform` (`ctx.stage: 'attempt'`), so its own `ctx` is
 always the full `MiddlewareContext` union, never narrowed to just one variant. A predicate that
 reads a stage-specific field like `isFallbackAttempt` needs to check `ctx.stage` first:
 

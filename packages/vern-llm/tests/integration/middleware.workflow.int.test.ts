@@ -80,7 +80,7 @@ describe('middleware workflow integration', () => {
     expect(result).toBe('from fallback');
     expect(wrapCount).toBe(1);
     // wrap's own ctx is a PreDispatchContext, describing the primary
-    // target only, by construction — the field name itself says so now.
+    // target only, by construction. The field name itself says so now.
     // The real target that answered is only visible through next()'s
     // resolved meta.
     expect(seenProviders).toEqual(['primary']);

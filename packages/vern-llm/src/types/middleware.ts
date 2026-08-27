@@ -101,7 +101,7 @@ export interface AttemptContext extends MiddlewareContextBase {
  * The `ctx` `wrap` receives before `next()` resolves (and `onError`'s own
  * `ctx`, built the same way under the hood). Built once, before any
  * fallback target is chosen, so it only ever describes the primary
- * target — there is no real "requested" target yet, and no attempt count,
+ * target. There is no real "requested" target yet, and no attempt count,
  * fallback flag, or per-attempt capability to report. Read `next()`'s
  * resolved `CallResult.meta` once you need to know what actually
  * happened.
@@ -109,7 +109,7 @@ export interface AttemptContext extends MiddlewareContextBase {
 export interface PreDispatchContext extends MiddlewareContextBase {
   stage: 'pre-dispatch';
 
-  /** The primary target only — not necessarily who ends up answering. */
+  /** The primary target only, not necessarily who ends up answering. */
   primaryProvider: string;
   primaryModel: string;
 }
@@ -237,7 +237,7 @@ export interface VernLLMMiddleware {
    * Wraps one whole logical call, exactly once, regardless of how many
    * retries or fallback targets ran underneath it. `ctx` is built once,
    * before any fallback target is chosen, so it only describes the
-   * primary target — there is no `requestedProvider`/`isFallbackAttempt`/
+   * primary target. There is no `requestedProvider`/`isFallbackAttempt`/
    * `attempt` to read here. Read `next()`'s resolved `CallResult.meta`
    * for what actually happened.
    */

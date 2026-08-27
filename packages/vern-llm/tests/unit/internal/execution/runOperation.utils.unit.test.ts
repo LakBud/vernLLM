@@ -200,6 +200,58 @@ describe('runOperation', () => {
     ]);
   });
 
+  it('calling next() more than once dispatches coreOperation only once, reusing the first call for every subsequent one', async () => {
+    const coreOperation = vi.fn(async () => ({ value: 'result' }) satisfies CallResult);
+
+    const middleware: VernLLMMiddleware = {
+      name: 'double-caller',
+      wrap: async (_request, next) => {
+        const first = await next();
+        const second = await next();
+        expect(second).toBe(first); // same CallResult object, not a second dispatch's result
+        return second;
+      },
+    };
+
+    const outcome = await runOperation(
+      dependencies({ middleware: [middleware] }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      coreOperation,
+    );
+
+    expect(outcome).toEqual({ value: 'result' });
+    expect(coreOperation).toHaveBeenCalledTimes(1);
+  });
+
+  it('calling next() concurrently (no await between calls) still dispatches coreOperation only once', async () => {
+    const coreOperation = vi.fn(async () => ({ value: 'result' }) satisfies CallResult);
+
+    const middleware: VernLLMMiddleware = {
+      name: 'concurrent-caller',
+      wrap: async (_request, next) => {
+        // Both calls happen synchronously, before either has a chance to
+        // resolve. This is the case an `async`-only guard (checking a
+        // boolean after an `await`) would miss.
+        const [first, second] = await Promise.all([next(), next()]);
+        expect(second).toBe(first);
+        return first;
+      },
+    };
+
+    const outcome = await runOperation(
+      dependencies({ middleware: [middleware] }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      coreOperation,
+    );
+
+    expect(outcome).toEqual({ value: 'result' });
+    expect(coreOperation).toHaveBeenCalledTimes(1);
+  });
+
   it('enabled: false skips the middleware and reports enabled_skip', async () => {
     const events: VernLLMEvent[] = [];
     const wrap = vi.fn(async (_request, next: () => Promise<CallResult>) => next());

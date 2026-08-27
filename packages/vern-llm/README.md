@@ -92,7 +92,7 @@ const result = await finalResult; // cached, retried, and streamed, tool calls i
 - **Streaming**: set `stream: true` on any call and get live chunks alongside the same validated result the call would otherwise resolve to
 - **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
 - **Caching**: wrap any LLM call with `cachedCall`, bring your own cache adapter
-- **Middleware plug-ins**: transform outgoing requests, and observe or wrap the outcome of a call — write once, drop into `middleware: []`, for logging, tracing, redaction, or cost tracking
+- **Middleware plug-ins**: transform outgoing requests, and observe or wrap the outcome of a call. Write once, drop into `middleware: []`, for logging, tracing, redaction, or cost tracking
 - **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back, independent per fallback target too
 - **Observability**: one `onEvent` stream reports retries, fallovers, circuit transitions, and rate-limit waits
 - **Usage tracking**: `onUsage` and `onUsageFailure` report token spend on success and on failure, so nothing goes unaccounted for when a call fails after the provider already responded

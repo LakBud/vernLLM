@@ -52,7 +52,7 @@ export const tracing: VernLLMMiddleware = {
 ```
 
 `wrap`'s own `ctx` is a `PreDispatchContext`: `ctx.primaryProvider`/`primaryModel` describe the
-primary target before `next()` resolves, and that's the only identity it has — there's no
+primary target before `next()` resolves, and that's the only identity it has. There's no
 `requestedProvider` or `isFallbackAttempt` to read here at all. `result.meta?.provider` is what
 actually served the call, which can differ once a fallback target answers instead.
 
