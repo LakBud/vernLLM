@@ -93,7 +93,14 @@ export interface AttemptContext extends MiddlewareContextBase {
   requestedModel: string;
   isFallbackAttempt: boolean;
 
-  /** The real, current attempt number for this dispatch. */
+  /**
+   * The real, current attempt number for this dispatch.
+   *
+   * Exception: on a `'circuit_state'` event, this is always `1`. The
+   * circuit breaker's own call context carries no attempt ordinal to
+   * report here, so it isn't the real current attempt number for that
+   * event.
+   */
   attempt: number;
 }
 
