@@ -82,7 +82,7 @@ export interface CallParams<
 
   /**
    * Previous conversation turns. Must alternate roles; tool turns must follow
-   * assistant tool calls. Invalid history throws LLMError('validation').
+   * assistant tool calls. Invalid history throws LLMError('invalid_params').
    */
   history?: ConversationTurn[];
 
