@@ -47,8 +47,9 @@ const alertOnFailure = createMiddleware({
 });
 ```
 
-`onError` is called with the call's terminal error, the same error `wrap`'s own `next()` would
-reject with. Never called on success, and never called for a failure another middleware's `wrap`
+`onError` is called with the error its own `next()` chain rejects with, not necessarily the call's
+final outcome: an outer `wrap` may catch the rethrown error and still return a successful
+`CallResult`. Never called on success, and never called for a failure another middleware's `wrap`
 already swallowed by short circuiting with its own `CallResult`. The original error is always
 rethrown afterward; `onError` only observes it, the same fire and forget contract `onUsage`/`onEvent`
 already have.
@@ -70,6 +71,7 @@ export const spanIdKey = createStateKey<string>('tracing.spanId');
 ```
 
 ```ts title="tracing-and-cost-middleware.ts"
+import { type VernLLMMiddleware } from 'vern-llm';
 import { spanIdKey } from './span-id-key';
 
 const tracing: VernLLMMiddleware = {

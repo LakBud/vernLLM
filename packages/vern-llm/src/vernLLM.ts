@@ -410,9 +410,10 @@ export class VernLLM {
             // inside the executor and never fall over (see `runFallbackChain`).
             // Usage refund/report is deferred onto finalResult, since call()
             // must return { chunks, finalResult } before the real outcome is
-            // known, which is also why `params.meta` isn't populated for
-            // streaming calls (`wrap`'s own `next()` doesn't have that
-            // constraint, see `executeLogicalStreamCall`).
+            // known. `effectiveParams.meta.current` is still populated by the
+            // time we return below, though: `executeLogicalStreamCall` writes
+            // it as a side effect on this same `effectiveParams` object once
+            // the stream opens, which is also all `call()` itself waits for.
             let meta: CallMeta | undefined;
 
             const value = await withReservedUsageForStream(

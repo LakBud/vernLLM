@@ -132,10 +132,10 @@ cost-tracking reads spanIdKey, records cost  (post-next, priority 0, resolves la
 ```
 
 This pair would also work with the priorities swapped, since `spanIdKey` is written in one
-middleware's pre phase and read in the other's post phase, and every pre phase finishes before any
-post phase begins regardless of nesting. Order would start to matter if `cost-tracking` needed to
-read `spanIdKey` in its own pre phase instead, say to tag a log line before the call even starts,
-since then `tracing` would need to run its own pre phase first. See
+middleware's pre-next and read in the other's post-next, and every pre-next finishes before any
+post-next begins regardless of nesting. Order would start to matter if `cost-tracking` needed to
+read `spanIdKey` in its own pre-next instead, say to tag a log line before the call even starts,
+since then `tracing` would need to run its own pre-next first. See
 [Composition order](/docs/core/middleware#composition-order) for the general rule.
 
 ## Filtering to one target

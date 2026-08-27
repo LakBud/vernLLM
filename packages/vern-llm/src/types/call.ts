@@ -193,11 +193,12 @@ export interface CallParams<
    * Optional out-parameter for provider identity. Pass `{}` (or any object
    * with a mutable `current` property) and `call()` writes a `CallMeta`
    * into `meta.current` before returning, alongside whatever `onUsage`
-   * already reports. For `stream: true`, `call()` returns before the final
-   * outcome is known, so `meta.current` is instead populated with the
-   * target that opened the stream (not necessarily the one that produced
-   * the final result); read `TokenUsage.provider`/`usedFallback` from
-   * `onUsage` for the eventual outcome of streaming calls.
+   * already reports. This includes `stream: true`: the target is chosen
+   * once the stream opens, which is also the point `call()` itself
+   * returns `{ chunks, finalResult }`, so `meta.current` is already set
+   * by then. `TokenUsage.provider`/`usedFallback` from `onUsage` reports
+   * the same information asynchronously, for both streaming and
+   * non-streaming calls.
    */
   meta?: { current?: CallMeta };
 }

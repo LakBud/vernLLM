@@ -295,7 +295,7 @@ async function dispatchEventToMiddleware(
     if (!isEnabled) continue;
 
     try {
-      entry.onEvent(event, ctx);
+      entry.onEvent(event, { ...ctx, own: {} });
     } catch (error) {
       logger.error(`[VernLLM] middleware "${label}".onEvent failed`, {
         message: error instanceof Error ? error.message : 'unknown',

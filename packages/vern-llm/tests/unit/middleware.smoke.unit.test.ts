@@ -4,10 +4,18 @@ import {
   createMiddleware,
   createStateKey,
   VernLLM,
+  type CallMeta,
+  type StreamChunk,
   type VernLLMEvent,
   type VernLLMMiddleware,
 } from '../../src/index.js';
-import { createMockClient, textResponse } from '../helpers.js';
+import { createMockClient, createMockStreamingClient, textResponse } from '../helpers.js';
+
+async function drain(chunks: AsyncIterable<StreamChunk>): Promise<void> {
+  for await (const _chunk of chunks) {
+    // draining only, content isn't asserted by this test
+  }
+}
 
 describe('middleware smoke test', () => {
   it('transform patches the outgoing request, wrap sees the result and can add tracing', async () => {
@@ -44,6 +52,73 @@ describe('middleware smoke test', () => {
 
     const sentMessages = calls[0]!.messages;
     expect(sentMessages.at(-1)).toEqual({ role: 'user', content: 'appended by middleware' });
+  });
+
+  it('mutating the request in place inside transform does not leak into the sent request', async () => {
+    const { client, calls } = createMockClient([textResponse('hi')]);
+
+    const middleware: VernLLMMiddleware = {
+      name: 'mutator',
+      transform: (request) => {
+        // Mutate in place instead of returning a patch. Should have no effect.
+        const mutable = request as { model: string; response_format?: { type: string } };
+        mutable.model = 'not-the-real-model';
+        if (mutable.response_format) {
+          mutable.response_format.type = 'mutated';
+        }
+        return {};
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [middleware],
+    });
+
+    const result = await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(result).toBe('hi');
+    expect(calls[0]!.model).toBe('gpt-4o');
+  });
+
+  it('meta.current and wrap: result.meta are both populated for stream: true', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hi' }]]);
+
+    let capturedMeta: unknown;
+
+    const captureMeta: VernLLMMiddleware = {
+      name: 'capture-meta',
+      wrap: async (_request, next) => {
+        const result = await next();
+        capturedMeta = result.meta;
+        return result;
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [captureMeta],
+    });
+
+    const meta: { current?: CallMeta } = {};
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hello',
+      jsonMode: false,
+      stream: true,
+      meta,
+    });
+
+    // Both are populated by the time call() returns, since the target is
+    // chosen once the stream opens, which is also what call() itself
+    // waits for before returning.
+    expect(meta.current).toMatchObject({ provider: 'primary', model: 'gpt-4o' });
+    expect(capturedMeta).toMatchObject({ provider: 'primary', model: 'gpt-4o' });
+
+    await drain(chunks);
+    await finalResult;
   });
 
   it('a wrap that never calls next() short-circuits the real call', async () => {
@@ -383,35 +458,21 @@ describe('middleware smoke test', () => {
   it('cachedCall: a metaHolder entry does not leak when wrap short-circuits without calling next()', async () => {
     const { client } = createMockClient([textResponse('real answer')]);
 
+    // cachedCallMeta is instance-local, so both the short-circuiting call
+    // and the later real one must go through the same instance for this
+    // test to actually exercise a stale holder on the same cacheKey.
+    let phase: 1 | 2 = 1;
+
     const shortCircuit: VernLLMMiddleware = {
       name: 'short-circuit',
+      enabled: () => phase === 1,
       wrap: async () => ({ value: 'canned' }),
     };
 
-    const llm1 = new VernLLM({
-      client,
-      model: 'gpt-4o',
-      middleware: [shortCircuit],
-    });
-
-    // Trigger: this call's wrap never calls next(), so coreOperation, and
-    // any cleanup nested only inside it, never runs at all. Without the
-    // outer try/finally, the metaHolder entry for this cacheKey would
-    // stay in cachedCallMeta forever.
-    const first = await llm1.cachedCall({
-      cacheKey: 'k-short-circuit-leak',
-      ttl: 60_000,
-      call: { userContent: 'hello', jsonMode: false },
-    });
-    expect(first).toBe('canned');
-
-    // A later cachedCall() for the same cacheKey, on a fresh instance
-    // with no short-circuiting middleware, should see a real cache miss
-    // and real meta, not a stale, permanently-empty holder reused from
-    // the first call's leaked entry.
     const metas: unknown[] = [];
     const observer: VernLLMMiddleware = {
       name: 'observer',
+      enabled: () => phase === 2,
       wrap: async (_request, next) => {
         const result = await next();
         metas.push(result.meta);
@@ -419,9 +480,30 @@ describe('middleware smoke test', () => {
       },
     };
 
-    const llm2 = new VernLLM({ client, model: 'gpt-4o', middleware: [observer] });
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [shortCircuit, observer],
+    });
 
-    const second = await llm2.cachedCall({
+    // Trigger: this call's wrap never calls next(), so coreOperation, and
+    // any cleanup nested only inside it, never runs at all. Without the
+    // outer try/finally, the metaHolder entry for this cacheKey would
+    // stay in cachedCallMeta forever.
+    const first = await llm.cachedCall({
+      cacheKey: 'k-short-circuit-leak',
+      ttl: 60_000,
+      call: { userContent: 'hello', jsonMode: false },
+    });
+    expect(first).toBe('canned');
+
+    // A later cachedCall() for the same cacheKey, on the same instance
+    // with the short-circuiting middleware now disabled, should see a
+    // real cache miss and real meta, not a stale, permanently-empty
+    // holder reused from the first call's leaked entry.
+    phase = 2;
+
+    const second = await llm.cachedCall({
       cacheKey: 'k-short-circuit-leak',
       ttl: 60_000,
       call: { userContent: 'hello', jsonMode: false },

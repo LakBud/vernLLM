@@ -244,14 +244,12 @@ export async function executeLogicalStreamCall<T>(
     attempts: fallbackChainOutcome.attemptCount,
   };
 
-  // Unlike `executeLogicalCall`, `VernLLM.call()`'s own streaming branch
-  // never writes this back onto `params.meta` itself (`call()` must
-  // return `{ chunks, finalResult }` before the real outcome is known,
-  // so its own public contract leaves `params.meta` unpopulated for
-  // streaming). Written here anyway, since `wrap`'s `next()` doesn't
-  // have that constraint, and `cachedCall()` reads it back out through
-  // this same side channel to populate its own `wrap`'s `meta` on a
-  // streaming cache miss.
+  // `params` here is the same object `VernLLM.call()` received from the
+  // caller, not a clone, so this write is visible on the caller's own
+  // `meta` out-parameter too: by the time `call()` finishes awaiting this
+  // function and returns `{ chunks, finalResult }`, `params.meta.current`
+  // has already been set, even though the caller didn't have to unwrap a
+  // `wrap`'s `next()` to get it.
   if (params.meta) {
     params.meta.current = meta;
   }

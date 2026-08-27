@@ -254,9 +254,9 @@ middleware: [
 ];
 ```
 
-A value written in one middleware's pre phase and read in another's post phase is order
-independent: every pre phase finishes before any post phase begins. Order only matters when a
-value must be read in another middleware's own pre phase.
+A value written in one middleware's pre-next and read in another's post-next is order
+independent: every pre-next finishes before any post-next begins. Order only matters when a
+value must be read in another middleware's own pre-next.
 
 `enabled` is evaluated per middleware, per call, before any hook runs. A middleware that doesn't
 apply is skipped entirely; for `wrap`, it's simply absent from the nesting.
@@ -264,7 +264,8 @@ apply is skipped entirely; for `wrap`, it's simply absent from the nesting.
 ## Timeouts
 
 `transform` and a function `enabled` are bounded by `middlewareTimeoutMs` on `VernLLMOptions`
-(default `5000`), overridable per middleware via `timeoutMs`:
+(default `5000`), overridable per middleware via `timeoutMs`. A value `<= 0` disables the
+timeout and leaves the hook unbounded:
 
 ```ts title="middleware-timeout-override.ts"
 {

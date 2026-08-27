@@ -25,6 +25,7 @@ function fakePrimaryExecutor(): CallExecutor {
   return {
     providerName: 'primary',
     model: 'default-model',
+    jsonObjectModeSupported: true,
     previewRequest: () => ({
       model: 'default-model',
       request: { model: 'default-model', max_tokens: 100, messages: [] },
@@ -440,6 +441,7 @@ describe('runOperation', () => {
       requestedModel: 'default-model',
       isFallbackAttempt: false,
       attempt: 1,
+      capabilities: { supportsJsonObjectMode: true },
     });
   });
 });

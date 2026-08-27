@@ -231,7 +231,13 @@ export class CallExecutor {
 
       if (!middleware.transform) continue;
 
-      const patch = await runTransform(middleware, current, ctx, label, this.middlewareTimeoutMs);
+      const patch = await runTransform(
+        middleware,
+        structuredClone(current),
+        ctx,
+        label,
+        this.middlewareTimeoutMs,
+      );
       const { request: merged, patchedFields } = mergePatch(current, patch);
 
       if (patchedFields.length > 0) {
