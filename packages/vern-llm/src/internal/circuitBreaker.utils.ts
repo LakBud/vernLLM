@@ -119,6 +119,9 @@ export function buildCircuitBreaker(
           requestedProvider: providerName,
           requestedModel: model ?? defaultModel,
           isFallbackAttempt: isFallback,
+          // `CircuitBreakerCallContext` has no attempt ordinal to thread
+          // through here, so `circuit_state` events always report `1`
+          // rather than the real attempt number.
           attempt: 1,
           capabilities: { supportsJsonObjectMode },
           signal: context.signal,

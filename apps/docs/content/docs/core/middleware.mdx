@@ -273,8 +273,10 @@ A value written in one middleware's pre-next and read in another's post-next is 
 independent: every pre-next finishes before any post-next begins. Order only matters when a
 value must be read in another middleware's own pre-next.
 
-`enabled` is evaluated per middleware, per call, before any hook runs. A middleware that doesn't
-apply is skipped entirely; for `wrap`, it's simply absent from the nesting.
+`enabled` is evaluated per middleware, before its hook runs. For `wrap`, that's once per logical
+call; for `transform`, it's evaluated again on every attempt, since `transform` itself runs
+per attempt. A middleware that doesn't apply is skipped entirely; for `wrap`, it's simply absent
+from the nesting.
 
 ## Timeouts
 
@@ -325,10 +327,10 @@ See [Caching](/docs/core/caching) for `cachedCall()` itself.
 
 ## Options reference
 
-| Option                | Default | Notes                                                                               |
-| --------------------- | ------- | ----------------------------------------------------------------------------------- |
-| `middleware`          | `[]`    | Ordered `VernLLMMiddleware[]`, sorted by `priority` ascending, ties by array order. |
-| `middlewareTimeoutMs` | `5000`  | Bounds `transform` and a function `enabled`. Overridable per middleware.            |
+| Option                | Default | Notes                                                                                                                         |
+| --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `middleware`          | `[]`    | Ordered `VernLLMMiddleware[]`, sorted by `priority` ascending, ties by array order.                                           |
+| `middlewareTimeoutMs` | `5000`  | Bounds `transform` and a function `enabled`. A value `<= 0` disables the timeout. Overridable per middleware via `timeoutMs`. |
 
 See [Configuration](/docs/API-reference/configuration) for where `middleware` sits among every
 other `VernLLMOptions` field.

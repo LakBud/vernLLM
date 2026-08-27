@@ -238,16 +238,29 @@ describe('resolveEnabled', () => {
   });
 
   it('timeoutMs <= 0 is treated as unbounded, never rejecting on a timer', async () => {
-    const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const result = await resolveEnabled(
-      { enabled: () => Promise.resolve(true) },
-      baseCtx(),
-      'unbounded',
-      0,
-      errorLogger,
-    );
-    expect(result).toBe(true);
-    expect(errorLogger.error).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      // Resolves well after any nominal timeout would have fired, so a
+      // `Promise.resolve(true)` shortcut can't hide a timer that was
+      // scheduled and just happened not to win the race yet.
+      const pending = resolveEnabled(
+        { enabled: () => new Promise((resolve) => setTimeout(() => resolve(true), 50_000)) },
+        baseCtx(),
+        'unbounded',
+        0,
+        errorLogger,
+      );
+
+      await vi.advanceTimersByTimeAsync(50_000);
+      const result = await pending;
+
+      expect(result).toBe(true);
+      expect(errorLogger.error).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

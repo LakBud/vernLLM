@@ -142,7 +142,10 @@ export async function runFallbackChain<R>(
         requestedProvider: executor.providerName,
         requestedModel: failedModel,
         isFallbackAttempt: targetIndex > 0,
-        attempt: attemptCount,
+        // `attemptCount` stays `0` when `assertBreakerClosed` throws
+        // before `attempt()` ever runs; `AttemptContext.attempt` is
+        // documented as 1-based, so floor it here.
+        attempt: attemptCount || 1,
         capabilities: { supportsJsonObjectMode: executor.jsonObjectModeSupported },
         signal: params.signal,
         state: middlewareState,

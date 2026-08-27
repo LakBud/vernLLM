@@ -143,6 +143,14 @@ export async function runOperation(
           resolvedResult = result;
           return result;
         });
+        // `wrap` may call `nextFn()` and then never await (or stop
+        // awaiting) the returned promise, e.g. after it decides to
+        // short-circuit. Attach a no-op rejection observer on a
+        // separate handle so that discarded failure doesn't surface
+        // as an unhandled rejection; the promise returned to callers
+        // below is untouched, so its own rejection still propagates
+        // normally to anyone who does await it.
+        nextPromise.catch(() => {});
         return nextPromise;
       };
 

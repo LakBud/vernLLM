@@ -82,6 +82,37 @@ describe('middleware smoke test', () => {
     expect(calls[0]!.model).toBe('gpt-4o');
   });
 
+  it('mutating a nested field (response_format) in place inside transform does not leak into the sent request', async () => {
+    const { client, calls } = createMockClient([textResponse('{}')]);
+
+    const middleware: VernLLMMiddleware = {
+      name: 'mutator',
+      transform: (request) => {
+        const mutable = request as { model: string; response_format?: { type: string } };
+        mutable.model = 'not-the-real-model';
+        if (mutable.response_format) {
+          mutable.response_format.type = 'mutated';
+        }
+        return {};
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [middleware],
+    });
+
+    // jsonMode: true is what puts response_format on the built request in
+    // the first place, so this is what exercises the nested-mutation path
+    // the previous test (model only, a top-level field) didn't cover.
+    await llm.call({ userContent: 'hello', jsonMode: true });
+
+    expect(calls[0]!.model).toBe('gpt-4o');
+    expect(calls[0]!.response_format).toBeDefined();
+    expect(calls[0]!.response_format?.type).not.toBe('mutated');
+  });
+
   it('meta.current and wrap: result.meta are both populated for stream: true', async () => {
     const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hi' }]]);
 

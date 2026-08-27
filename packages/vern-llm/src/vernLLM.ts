@@ -235,8 +235,8 @@ export class VernLLM {
         breaker,
         limiter: target.rateLimit ? new RateLimiter(target.rateLimit) : undefined,
         isFallback,
-        middleware: options.middleware,
-        middlewareTimeoutMs: options.middlewareTimeoutMs,
+        middleware: this.middleware,
+        middlewareTimeoutMs: this.middlewareTimeoutMs,
       });
     });
   }
@@ -613,10 +613,20 @@ export class VernLLM {
       if (ownsMetaHolder) this.cachedCallMeta.delete(resolvedCacheKey);
     };
 
+    const callerMeta = restCallParams.meta;
+
     const callWrapped = (params: CallParams<T>) => {
       const innerParams = { ...params, meta: metaHolder };
       this.cachedCallInnerParams.set(innerParams, middlewareState);
       return this.call(innerParams).finally(() => {
+        // `this.call()` writes into `metaHolder`, the internal holder
+        // shared across trigger/joiners for this cache key. A
+        // caller-supplied `meta` on the inner `call` params (this
+        // function's own `params`, not the one passed to `this.call()`)
+        // is a separate out-parameter contract callers may still be
+        // relying on, so forward the written value there too instead
+        // of silently dropping it.
+        if (callerMeta) callerMeta.current = metaHolder.current;
         this.cachedCallInnerParams.delete(innerParams);
       });
     };

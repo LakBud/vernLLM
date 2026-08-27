@@ -199,6 +199,12 @@ export interface CallParams<
    * by then. `TokenUsage.provider`/`usedFallback` from `onUsage` reports
    * the same information asynchronously, for both streaming and
    * non-streaming calls.
+   *
+   * `meta.current` is only written once execution actually reaches and
+   * selects a provider target. A `wrap` middleware that short-circuits
+   * without calling `next()` never reaches that point, so `meta.current`
+   * is left untouched; if the same holder object is reused across calls,
+   * it can still hold a prior call's target.
    */
   meta?: { current?: CallMeta };
 }

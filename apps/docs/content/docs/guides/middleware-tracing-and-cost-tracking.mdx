@@ -88,6 +88,8 @@ export const costTracking: VernLLMMiddleware = {
 `middleware` is one flat array; `priority` decides nesting, not array position:
 
 ```ts title="middleware-registration.ts"
+import { VernLLM } from 'vern-llm';
+import { openai } from './openai-client'; // your configured OpenAI client
 import { costTracking } from './cost-tracking-middleware';
 import { tracing } from './tracing-middleware';
 
@@ -104,6 +106,11 @@ const llm = new VernLLM({
 needs real spend, not just wall clock time:
 
 ```ts title="cost-tracking-with-usage.ts"
+import { VernLLM } from 'vern-llm';
+import { openai } from './openai-client'; // your configured OpenAI client
+import { costTracking } from './cost-tracking-middleware';
+import { tracing } from './tracing-middleware';
+
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
