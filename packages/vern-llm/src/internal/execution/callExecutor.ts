@@ -5,6 +5,7 @@ import { makeEventReporter } from '../circuitBreaker.utils.js';
 import { createBreakerGateway, type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { buildStreamResult } from './streamAccumulator.js';
+import { createUsageReporter, type UsageReporter } from './usageReporter.js';
 import { describeError, extractStatus, normalizeError } from './utils/errors.utils.js';
 import {
   applyMiddlewareTransforms,
@@ -12,6 +13,7 @@ import {
   emitEvent,
 } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
+import { acquireRateLimit } from './utils/rateLimitDispatch.utils.js';
 import { recoverDelay, retryWithBackoff, shouldRetry, withTimeout } from './utils/retry.utils.js';
 import { parseWireToolCalls } from './utils/wire.utils.js';
 
@@ -89,8 +91,7 @@ export class CallExecutor {
   private readonly parseJson: (content: string) => unknown;
   private readonly logger: Logger;
   private readonly redact?: (text: string) => string;
-  private readonly onUsage?: (usage: TokenUsage) => void;
-  private readonly onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
+  private readonly usageReporter: UsageReporter;
   private readonly reportEvent: (event: VernLLMEvent) => void;
   private readonly breaker?: CircuitBreaker;
   private readonly limiter?: RateLimiter;
@@ -114,8 +115,6 @@ export class CallExecutor {
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
     this.redact = options.redact;
-    this.onUsage = options.onUsage;
-    this.onUsageFailure = options.onUsageFailure;
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
     this.breaker = options.breaker;
     this.limiter = options.limiter;
@@ -123,6 +122,14 @@ export class CallExecutor {
     this.middleware = options.middleware ?? [];
     this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
     this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
+    this.usageReporter = createUsageReporter({
+      providerName: this.providerName,
+      isFallback: this.isFallback,
+      maxRetries: this.maxRetries,
+      onUsage: options.onUsage,
+      onUsageFailure: options.onUsageFailure,
+      logger: this.logger,
+    });
     this.requestBuilder = new RequestBuilder({
       model,
       defaultMaxTokens: options.defaultMaxTokens,
@@ -375,21 +382,19 @@ export class CallExecutor {
     // A retry is a real request, so capacity is acquired per attempt
     // (inside the retry loop, via `executeCall` being re-invoked), not
     // once for the whole call.
-    let release: ((actualTokens?: number) => void) | undefined;
-
-    if (this.limiter) {
-      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
-      release = acquired.release;
-
-      if (acquired.waitedMs > 0) {
+    const { release: acquiredRelease } = await acquireRateLimit(
+      this.limiter,
+      request,
+      params.signal,
+      (waitedMs, reason) => {
         emitEvent(
           {
             kind: 'rate_limited',
             requestId,
             provider: this.providerName,
             model,
-            waitedMs: acquired.waitedMs,
-            reason: acquired.reason ?? 'rpm',
+            waitedMs,
+            reason,
           },
           gateway.buildAttemptContext(attempt, params.signal, state),
           this.reportEvent,
@@ -397,8 +402,9 @@ export class CallExecutor {
           this.middlewareTimeoutMs,
           this.logger,
         );
-      }
-    }
+      },
+    );
+    let release = acquiredRelease;
 
     try {
       const response = await withTimeout(
@@ -409,11 +415,11 @@ export class CallExecutor {
 
       // Extracted right after the response arrives, before anything else
       // touches it, so a post-response failure still gets its usage reported.
-      const usage = this.extractUsage(response, requestId, model);
+      const usage = this.usageReporter.extract(response, requestId, model);
 
       // Reconcile against real usage, then hand off so `finally` below
       // can't release a second time.
-      release?.(this.actualTokensFor(usage));
+      release?.(this.usageReporter.actualTokensFor(usage));
       release = undefined;
 
       // Raw and unvalidated on purpose. Extraction (including `.trim()`,
@@ -530,7 +536,7 @@ export class CallExecutor {
 
         this.validateToolCallArguments(toolCalls, params.tools);
         gateway.recordSuccess(attempt, params.signal, state);
-        this.reportUsage(usage);
+        this.usageReporter.reportSuccess(usage);
 
         return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
       }
@@ -540,14 +546,14 @@ export class CallExecutor {
 
       if (!useJson) {
         gateway.recordSuccess(attempt, params.signal, state);
-        this.reportUsage(usage);
+        this.usageReporter.reportSuccess(usage);
 
         return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
       }
 
       const result = this.parseAndValidate<T>(textContent, params.schema);
       gateway.recordSuccess(attempt, params.signal, state);
-      this.reportUsage(usage);
+      this.usageReporter.reportSuccess(usage);
 
       return params.tools ? { type: 'content', content: result } : result;
     } catch (error) {
@@ -557,7 +563,7 @@ export class CallExecutor {
       const normalized = normalizeError(error, params.signal);
 
       if (usage && normalized.type !== 'aborted') {
-        this.reportUsageFailure(usage, normalized, attempt);
+        this.usageReporter.reportFailure(usage, normalized, attempt);
       }
 
       throw normalized;
@@ -628,21 +634,19 @@ export class CallExecutor {
     // A stream holds a real connection for its whole life, so its
     // capacity is released on completion (in `buildStreamResult`), not
     // once opening succeeds.
-    let release: ((actualTokens?: number) => void) | undefined;
-
-    if (this.limiter) {
-      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
-      release = acquired.release;
-
-      if (acquired.waitedMs > 0) {
+    const { release: acquiredRelease } = await acquireRateLimit(
+      this.limiter,
+      request,
+      params.signal,
+      (waitedMs, reason) => {
         emitEvent(
           {
             kind: 'rate_limited',
             requestId,
             provider: this.providerName,
             model,
-            waitedMs: acquired.waitedMs,
-            reason: acquired.reason ?? 'rpm',
+            waitedMs,
+            reason,
           },
           gateway.buildAttemptContext(attempt, params.signal, state),
           this.reportEvent,
@@ -650,8 +654,9 @@ export class CallExecutor {
           this.middlewareTimeoutMs,
           this.logger,
         );
-      }
-    }
+      },
+    );
+    let release = acquiredRelease;
 
     // One controller for the entire stream, not just opening it. Adapters
     // already thread this signal into their transport for the life of the
@@ -707,7 +712,7 @@ export class CallExecutor {
         signal: params.signal,
         onStreamSuccess: (usage) => {
           gateway.recordSuccess(attempt, params.signal, state);
-          releaseAtOpen?.(this.actualTokensFor(usage));
+          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         onStreamFailure: (normalized, usage) => {
           // Idle timeout is the one mid-stream failure that trips the
@@ -718,10 +723,10 @@ export class CallExecutor {
           }
 
           if (usage && normalized.type !== 'aborted') {
-            this.reportUsageFailure(usage, normalized, attempt, true);
+            this.usageReporter.reportFailure(usage, normalized, attempt, true);
           }
 
-          releaseAtOpen?.(this.actualTokensFor(usage));
+          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         finalize: (textAcc, wireToolCalls, usage) =>
           this.finalizeResponse(
@@ -818,99 +823,6 @@ export class CallExecutor {
           },
         );
       }
-    }
-  }
-
-  /**
-   * Pulls `TokenUsage` out of a raw response, if the provider reported it.
-   * Extraction doesn't depend on what happens to the response afterward, so
-   * a malformed body can still yield usage if the provider's usage block
-   * itself came through intact.
-   */
-  private extractUsage(
-    response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
-    requestId: string,
-    model: string,
-  ): TokenUsage | undefined {
-    if (!response.usage) return undefined;
-
-    const reasoningTokens = response.usage.completion_tokens_details?.reasoning_tokens;
-
-    return {
-      promptTokens: response.usage.prompt_tokens ?? 0,
-      completionTokens: response.usage.completion_tokens ?? 0,
-      totalTokens: response.usage.total_tokens ?? 0,
-      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-      requestId,
-      model,
-      provider: this.providerName,
-      usedFallback: this.isFallback,
-    };
-  }
-
-  /**
-   * The token count to reconcile the rate limiter against for a finished
-   * attempt: `totalTokens` when reported, otherwise the sum of prompt and
-   * completion tokens, matching `reportUsageFailure`'s own fallback below
-   * for a hand-rolled client that reports the parts but omits the total.
-   */
-  private actualTokensFor(usage: TokenUsage | undefined): number | undefined {
-    if (!usage) return undefined;
-    return usage.totalTokens || usage.promptTokens + usage.completionTokens;
-  }
-
-  /** Reports token usage for a successful call, swallowing and logging any error `onUsage` throws. */
-  private reportUsage(usage: TokenUsage | undefined): void {
-    if (!usage || !this.onUsage) return;
-
-    try {
-      this.onUsage(usage);
-    } catch (error) {
-      this.logger.error('[VernLLM] onUsage failed', {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
-    }
-  }
-
-  /**
-   * Reports token usage spent on an attempt that then failed, so it isn't
-   * dropped alongside the error. Covers any error thrown after usage
-   * extraction, since all of them happen only after a response (real
-   * spend) already arrived. Swallows and logs any error `onUsageFailure`
-   * itself throws.
-   */
-  private reportUsageFailure(
-    usage: TokenUsage,
-    error: LLMError,
-    attempt: number,
-    terminal = false,
-  ): void {
-    // Falls back to promptTokens + completionTokens if totalTokens is 0
-    // (e.g. a hand-rolled client that omits the total), so the log
-    // doesn't understate real spend.
-    const displayTokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
-
-    // A mid-stream failure is terminal for that call (no further attempts
-    // for this stream), unlike a stream-open failure where attempt N+1 may
-    // still follow. Label them differently so the log doesn't imply a
-    // retry that isn't coming.
-    const attemptText = terminal
-      ? 'mid-stream failure (terminal, no further attempts)'
-      : `attempt ${attempt + 1}/${this.maxRetries + 1}`;
-
-    this.logger.warn(
-      `[VernLLM:${usage.requestId}] usage failure, ${attemptText}: ` +
-        `type=${error.type} tokens=${displayTokens}`,
-    );
-
-    if (!this.onUsageFailure) return;
-
-    try {
-      this.onUsageFailure(usage, error);
-    } catch (hookError) {
-      this.logger.error('[VernLLM] onUsageFailure failed', {
-        message: hookError instanceof Error ? hookError.message : 'unknown',
-      });
     }
   }
 
