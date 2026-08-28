@@ -1,21 +1,16 @@
 import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
-import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
-import { createMiddlewareStateBag } from '../../types/middleware.js';
+import { LLMError } from '../../types/errors.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
-import { createBreakerGateway, type BreakerGateway } from './circuitBreakerContext.js';
+import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { finalizeResponse } from './responseFinalizer.js';
 import { buildStreamResult } from './streamAccumulator.js';
 import { createUsageReporter, type UsageReporter } from './usageReporter.js';
-import { describeError, extractStatus, normalizeError } from './utils/errors.utils.js';
-import {
-  applyMiddlewareTransforms,
-  DEFAULT_MIDDLEWARE_TIMEOUT_MS,
-  emitEvent,
-} from './utils/middleware.utils.js';
+import { prepareAttempt, type OnRequest } from './utils/attemptDispatch.utils.js';
+import { runAttemptLoop } from './utils/attemptLoop.utils.js';
+import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
-import { acquireRateLimit } from './utils/rateLimitDispatch.utils.js';
-import { recoverDelay, retryWithBackoff, shouldRetry, withTimeout } from './utils/retry.utils.js';
+import { withTimeout } from './utils/retry.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { RateLimiter } from '../../rateLimit.js';
@@ -24,7 +19,6 @@ import type {
   CallWithToolsResult,
   LLMClient,
   MiddlewareStateBag,
-  RetryAttempt,
   StreamChunk,
   TokenUsage,
   VernLLMEvent,
@@ -32,19 +26,7 @@ import type {
   WireCallRequest,
 } from '../../types/index.js';
 
-/**
- * `executeCall`/`executeStreamCall` call `onRequest` with a fully built
- * `LLMRequestSnapshot`, right after the outgoing payload is built and
- * before dispatch (rate limiting, `client.chat.completions.create`, etc).
- * Building the complete, cloned snapshot at this point, not later once an
- * attempt has failed, matters for two reasons: `startedAt` should mean
- * "when the attempt started", not "when the failure was handled", and
- * some adapters mutate the outgoing request object during dispatch itself
- * (e.g. `fromGemini` sets `request.config` in place inside `create()`),
- * so waiting until the catch block to snapshot could capture a payload
- * that had already changed since it was actually sent.
- */
-type OnRequest = (snapshot: LLMRequestSnapshot) => void;
+export type { OnRequest };
 
 /** Everything one `CallExecutor` needs beyond the client and model. */
 export interface CallExecutorOptions {
@@ -199,73 +181,29 @@ export class CallExecutor {
     onAttempt?: () => void,
     state?: MiddlewareStateBag,
   ): Promise<T | CallWithToolsResult<T>> {
-    const model = params.model ?? this.model;
-    const resolvedState = state ?? createMiddlewareStateBag();
-    const attempts: RetryAttempt[] = [];
-    const gateway = createBreakerGateway({
-      breaker: this.breaker,
+    return runAttemptLoop({
+      fn: (attempt, onRequest, resolvedState, gateway) =>
+        this.executeCall(params, requestId, attempt, onRequest, resolvedState, gateway),
       requestId,
-      model,
+      model: params.model ?? this.model,
       providerName: this.providerName,
       isFallback: this.isFallback,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
+      breaker: this.breaker,
+      maxRetries: this.maxRetries,
+      baseDelayMs: this.baseDelayMs,
+      nonRetryableStatus: this.nonRetryableStatus,
+      signal: params.signal,
+      onAttempt,
+      state,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+      logLabel: 'error',
+      redactText: (text) => this.redactText(text),
+      countsTowardBreaker: (error) => this.countsTowardBreaker(error),
     });
-
-    try {
-      return await retryWithBackoff({
-        fn: (attempt, onRequest) =>
-          this.executeCall(params, requestId, attempt, onRequest, resolvedState, gateway),
-        maxRetries: this.maxRetries,
-        signal: params.signal,
-        onAttempt,
-        attempts,
-        shouldRetryAttempt: (error, signal) =>
-          shouldRetry(error, this.nonRetryableStatus, extractStatus, signal),
-        recoverDelayForAttempt: (attempt, error) =>
-          recoverDelay({
-            requestId,
-            model,
-            attempt,
-            error,
-            state: resolvedState,
-            signal: params.signal,
-            providerName: this.providerName,
-            maxRetries: this.maxRetries,
-            baseDelayMs: this.baseDelayMs,
-            middleware: this.middleware,
-            middlewareTimeoutMs: this.middlewareTimeoutMs,
-            logger: this.logger,
-            reportEvent: this.reportEvent,
-            buildEventContext: (requestId, model, attempt, signal, state) =>
-              gateway.buildAttemptContext(attempt, signal, state),
-            extractStatus,
-            normalizeError,
-            emitEvent,
-          }),
-        normalizeError,
-      });
-    } catch (error) {
-      // `attempts` only holds prior attempts that were actually retried
-      // past. It's `[]` when nothing was retried, so normalize that to
-      // `undefined` per `LLMError.attempts`'s contract.
-      const normalized = normalizeError(
-        error,
-        params.signal,
-        attempts.length > 0 ? attempts : undefined,
-      );
-
-      if (this.countsTowardBreaker(normalized)) {
-        // `attempts` only holds prior attempts that were retried past
-        // (see above), so the attempt that actually exhausted the
-        // retries/broke the loop is one past that. `recordFailure`
-        // converts to 1-based itself.
-        gateway.recordFailure(attempts.length, params.signal, resolvedState);
-      }
-
-      this.logger.debug(`[VernLLM:${requestId}] error:\n${this.redactText(describeError(error))}`);
-
-      throw normalized;
-    }
   }
 
   /** Streaming counterpart to `run`. Mirrors the old streaming branch of `VernLLM.call`. */
@@ -278,70 +216,29 @@ export class CallExecutor {
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
-    const model = params.model ?? this.model;
-    const resolvedState = state ?? createMiddlewareStateBag();
-    const attempts: RetryAttempt[] = [];
-    const gateway = createBreakerGateway({
-      breaker: this.breaker,
+    return runAttemptLoop({
+      fn: (attempt, onRequest, resolvedState, gateway) =>
+        this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState, gateway),
       requestId,
-      model,
+      model: params.model ?? this.model,
       providerName: this.providerName,
       isFallback: this.isFallback,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
+      breaker: this.breaker,
+      maxRetries: this.maxRetries,
+      baseDelayMs: this.baseDelayMs,
+      nonRetryableStatus: this.nonRetryableStatus,
+      signal: params.signal,
+      onAttempt,
+      state,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+      logLabel: 'stream-open error',
+      redactText: (text) => this.redactText(text),
+      countsTowardBreaker: (error) => this.countsTowardBreaker(error),
     });
-
-    try {
-      return await retryWithBackoff({
-        fn: (attempt, onRequest) =>
-          this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState, gateway),
-        maxRetries: this.maxRetries,
-        signal: params.signal,
-        onAttempt,
-        attempts,
-        shouldRetryAttempt: (error, signal) =>
-          shouldRetry(error, this.nonRetryableStatus, extractStatus, signal),
-        recoverDelayForAttempt: (attempt, error) =>
-          recoverDelay({
-            requestId,
-            model,
-            attempt,
-            error,
-            state: resolvedState,
-            signal: params.signal,
-            providerName: this.providerName,
-            maxRetries: this.maxRetries,
-            baseDelayMs: this.baseDelayMs,
-            middleware: this.middleware,
-            middlewareTimeoutMs: this.middlewareTimeoutMs,
-            logger: this.logger,
-            reportEvent: this.reportEvent,
-            buildEventContext: (requestId, model, attempt, signal, state) =>
-              gateway.buildAttemptContext(attempt, signal, state),
-            extractStatus,
-            normalizeError,
-            emitEvent,
-          }),
-        normalizeError,
-      });
-    } catch (error) {
-      // See the matching comment in `run`.
-      const normalized = normalizeError(
-        error,
-        params.signal,
-        attempts.length > 0 ? attempts : undefined,
-      );
-
-      if (this.countsTowardBreaker(normalized)) {
-        // See the matching comment in `run`.
-        gateway.recordFailure(attempts.length, params.signal, resolvedState);
-      }
-
-      this.logger.debug(
-        `[VernLLM:${requestId}] stream-open error:\n${this.redactText(describeError(error))}`,
-      );
-
-      throw normalized;
-    }
   }
 
   /**
@@ -359,49 +256,30 @@ export class CallExecutor {
     middlewareState: MiddlewareStateBag | undefined,
     gateway: BreakerGateway,
   ): Promise<T | CallWithToolsResult<T>> {
-    const state = middlewareState ?? createMiddlewareStateBag();
-    const built = this.requestBuilder.build(params);
-    const { useJson, model } = built;
-    const request = await applyMiddlewareTransforms({
-      request: built.request,
+    // A retry is a real request, so capacity is acquired per attempt
+    // (inside the retry loop, via `executeCall` being re-invoked), not
+    // once for the whole call.
+    const {
+      request,
+      model,
+      useJson,
+      state,
+      release: acquiredRelease,
+    } = await prepareAttempt({
+      params,
       requestId,
       attempt,
-      signal: params.signal,
-      state,
+      onRequest,
+      middlewareState,
+      gateway,
+      requestBuilder: this.requestBuilder,
+      providerName: this.providerName,
+      limiter: this.limiter,
       middleware: this.middleware,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
       logger: this.logger,
       reportEvent: this.reportEvent,
-      buildContext: (attempt, signal, state) => gateway.buildAttemptContext(attempt, signal, state),
     });
-
-    onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
-
-    // A retry is a real request, so capacity is acquired per attempt
-    // (inside the retry loop, via `executeCall` being re-invoked), not
-    // once for the whole call.
-    const { release: acquiredRelease } = await acquireRateLimit(
-      this.limiter,
-      request,
-      params.signal,
-      (waitedMs, reason) => {
-        emitEvent(
-          {
-            kind: 'rate_limited',
-            requestId,
-            provider: this.providerName,
-            model,
-            waitedMs,
-            reason,
-          },
-          gateway.buildAttemptContext(attempt, params.signal, state),
-          this.reportEvent,
-          this.middleware,
-          this.middlewareTimeoutMs,
-          this.logger,
-        );
-      },
-    );
     let release = acquiredRelease;
 
     try {
@@ -482,24 +360,9 @@ export class CallExecutor {
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
-    const state = middlewareState ?? createMiddlewareStateBag();
-    const built = this.requestBuilder.build(params);
-    const { useJson, model } = built;
-    const request = await applyMiddlewareTransforms({
-      request: built.request,
-      requestId,
-      attempt,
-      signal: params.signal,
-      state,
-      middleware: this.middleware,
-      middlewareTimeoutMs: this.middlewareTimeoutMs,
-      logger: this.logger,
-      reportEvent: this.reportEvent,
-      buildContext: (attempt, signal, state) => gateway.buildAttemptContext(attempt, signal, state),
-    });
-
-    onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
-
+    // A stream holds a real connection for its whole life, so its
+    // capacity is released on completion (in `buildStreamResult`), not
+    // once opening succeeds.
     const completions = this.client.chat.completions;
 
     if (!completions.createStream) {
@@ -515,31 +378,27 @@ export class CallExecutor {
 
     const createStream = completions.createStream.bind(completions);
 
-    // A stream holds a real connection for its whole life, so its
-    // capacity is released on completion (in `buildStreamResult`), not
-    // once opening succeeds.
-    const { release: acquiredRelease } = await acquireRateLimit(
-      this.limiter,
+    const {
       request,
-      params.signal,
-      (waitedMs, reason) => {
-        emitEvent(
-          {
-            kind: 'rate_limited',
-            requestId,
-            provider: this.providerName,
-            model,
-            waitedMs,
-            reason,
-          },
-          gateway.buildAttemptContext(attempt, params.signal, state),
-          this.reportEvent,
-          this.middleware,
-          this.middlewareTimeoutMs,
-          this.logger,
-        );
-      },
-    );
+      model,
+      useJson,
+      state,
+      release: acquiredRelease,
+    } = await prepareAttempt({
+      params,
+      requestId,
+      attempt,
+      onRequest,
+      middlewareState,
+      gateway,
+      requestBuilder: this.requestBuilder,
+      providerName: this.providerName,
+      limiter: this.limiter,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+    });
     let release = acquiredRelease;
 
     // One controller for the entire stream, not just opening it. Adapters
