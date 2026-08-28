@@ -1,6 +1,12 @@
-import { LLMError } from '../../../types/errors.js';
+import { LLMError, type LLMRequestSnapshot, type RetryAttempt } from '../../../types/errors.js';
 
 import type { Logger } from '../../../logger.js';
+import type {
+  AttemptContext,
+  MiddlewareStateBag,
+  VernLLMEvent,
+  VernLLMMiddleware,
+} from '../../../types/index.js';
 
 /**
  * Default cap (ms) for both exponential backoff and honored Retry-After
@@ -303,4 +309,203 @@ export async function waitForRetry(delay: number, signal?: AbortSignal): Promise
 
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+/**
+ * Whether a failed attempt is worth retrying, per `LLMError.retryable`
+ * and `nonRetryableStatus`. Takes `extractStatus` as a param instead of
+ * importing it, since `errors.utils.ts` already imports from this file.
+ */
+export function shouldRetry(
+  error: unknown,
+  nonRetryableStatus: number[],
+  extractStatus: (err: unknown) => number | undefined,
+  signal?: AbortSignal,
+): boolean {
+  if (signal?.aborted) return false;
+
+  if (error instanceof LLMError && !error.retryable) return false;
+
+  const status = extractStatus(error);
+
+  return !(status !== undefined && nonRetryableStatus.includes(status));
+}
+
+/**
+ * Everything `recoverDelay` needs. `extractStatus`, `normalizeError`, and
+ * `emitEvent` are injected instead of imported, since `errors.utils.ts`
+ * already imports from this file.
+ */
+export interface RecoverDelayParams {
+  requestId: string;
+  model: string;
+  attempt: number;
+  error: unknown;
+  state: MiddlewareStateBag;
+  signal: AbortSignal | undefined;
+  providerName: string;
+  maxRetries: number;
+  baseDelayMs: number;
+  middleware: VernLLMMiddleware[];
+  middlewareTimeoutMs: number;
+  logger: Logger;
+  reportEvent: (event: VernLLMEvent) => void;
+  buildEventContext: (
+    requestId: string,
+    model: string,
+    attempt: number,
+    signal: AbortSignal | undefined,
+    state: MiddlewareStateBag,
+  ) => AttemptContext;
+  extractStatus: (err: unknown) => number | undefined;
+  normalizeError: (err: unknown, signal?: AbortSignal) => LLMError;
+  emitEvent: (
+    event: VernLLMEvent,
+    ctx: AttemptContext,
+    reportEvent: (event: VernLLMEvent) => void,
+    middleware: VernLLMMiddleware[],
+    middlewareTimeoutMs: number,
+    logger: Logger,
+  ) => void;
+}
+
+/**
+ * Waits out the backoff delay for a retry attempt, honoring a Retry-After
+ * header on the failed attempt's error when present. When no Retry-After
+ * is present, a rate-limited (429) response backs off hardest, a server
+ * error (500 through 599) backs off somewhat more than the default curve,
+ * and every other retryable failure keeps the default curve. Both
+ * Retry-After and plain exponential backoff are capped at the same max
+ * delay (see `DEFAULT_MAX_DELAY_MS` above).
+ */
+export async function recoverDelay(params: RecoverDelayParams): Promise<void> {
+  const {
+    requestId,
+    model,
+    attempt,
+    error,
+    state,
+    signal,
+    providerName,
+    maxRetries,
+    baseDelayMs,
+    middleware,
+    middlewareTimeoutMs,
+    logger,
+    reportEvent,
+    buildEventContext,
+    extractStatus,
+    normalizeError,
+    emitEvent,
+  } = params;
+
+  const retryAfterMs = extractRetryAfterMs(error);
+  const status = extractStatus(error);
+  const delay =
+    retryAfterMs ??
+    getBackoffDelay(
+      baseDelayMs,
+      attempt,
+      undefined,
+      status === 429,
+      status !== undefined && status >= 500 && status <= 599,
+    );
+  const retryAfterHonored = retryAfterMs !== undefined;
+
+  logger.warn(
+    `[VernLLM:${requestId}] recovery attempt ${attempt}/${maxRetries}, waiting ${Math.ceil(delay)}ms` +
+      (retryAfterHonored ? ' (honoring Retry-After)' : ''),
+  );
+
+  emitEvent(
+    {
+      kind: 'retry',
+      requestId,
+      provider: providerName,
+      model,
+      attempt,
+      maxRetries,
+      delayMs: delay,
+      retryAfterHonored,
+      error: normalizeError(error, signal),
+    },
+    buildEventContext(requestId, model, attempt, signal, state),
+    reportEvent,
+    middleware,
+    middlewareTimeoutMs,
+    logger,
+  );
+
+  await waitForRetry(delay, signal);
+}
+
+/**
+ * Runs `fn`, retrying with backoff. When `attempts` is given, every
+ * failed attempt that was retried past gets recorded in order, as an
+ * `LLMError.toSnapshot()`. The terminal failure is never pushed since
+ * it's the thrown error itself. `shouldRetryAttempt`/`recoverDelayForAttempt`
+ * are params so callers can close over their own target specific context.
+ */
+export interface RetryWithBackoffParams<T> {
+  fn: (
+    attempt: number,
+    onRequest: (snapshot: LLMRequestSnapshot | undefined) => void,
+  ) => Promise<T>;
+  maxRetries: number;
+  signal?: AbortSignal;
+  onAttempt?: () => void;
+  attempts?: RetryAttempt[];
+  shouldRetryAttempt: (error: unknown, signal?: AbortSignal) => boolean;
+  recoverDelayForAttempt: (attempt: number, error: unknown) => Promise<void>;
+  /** Injected for the same reason as on `RecoverDelayParams`. */
+  normalizeError: (err: unknown, signal?: AbortSignal) => LLMError;
+}
+
+export async function retryWithBackoff<T>(params: RetryWithBackoffParams<T>): Promise<T> {
+  const {
+    fn,
+    maxRetries,
+    signal,
+    onAttempt,
+    attempts,
+    shouldRetryAttempt,
+    recoverDelayForAttempt,
+    normalizeError,
+  } = params;
+
+  let lastError: unknown;
+  let lastRequestForAttempt: LLMRequestSnapshot | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Reset before this iteration's own onRequest can run. If this
+    // attempt fails before onRequest is ever called (e.g. thrown by
+    // recoverDelayForAttempt or onAttempt, before fn/onRequest runs), the
+    // previous attempt's request must not be misattributed to this
+    // attempt's index below.
+    lastRequestForAttempt = undefined;
+
+    try {
+      if (attempt > 0) {
+        await recoverDelayForAttempt(attempt, lastError);
+      }
+
+      onAttempt?.();
+      return await fn(attempt, (req) => {
+        lastRequestForAttempt = req;
+      });
+    } catch (error) {
+      lastError = error;
+
+      const willRetry = attempt < maxRetries && shouldRetryAttempt(error, signal);
+      if (!willRetry) break;
+
+      attempts?.push({
+        index: attempt,
+        error: normalizeError(error, signal).toSnapshot(),
+        request: lastRequestForAttempt,
+      });
+    }
+  }
+
+  throw lastError;
 }

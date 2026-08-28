@@ -16,12 +16,7 @@ import {
   runTransform,
 } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
-import {
-  extractRetryAfterMs,
-  getBackoffDelay,
-  waitForRetry,
-  withTimeout,
-} from './utils/retry.utils.js';
+import { recoverDelay, retryWithBackoff, shouldRetry, withTimeout } from './utils/retry.utils.js';
 import { parseWireToolCalls } from './utils/wire.utils.js';
 
 import type { Logger } from '../../logger.js';
@@ -55,19 +50,6 @@ import type {
  * that had already changed since it was actually sent.
  */
 type OnRequest = (snapshot: LLMRequestSnapshot) => void;
-
-/**
- * Identity function with its own parameter, used only to sidestep a TS
- * quirk: a `let` reassigned solely inside a nested closure (like
- * `retryWithBackoff`'s `onRequest`) gets narrowed to `undefined` at the
- * point it was last synchronously assigned, which would otherwise make
- * `lastRequestForAttempt` read as `never` at the point it's used below.
- */
-function passThroughRequestSnapshot(
-  snapshot: LLMRequestSnapshot | undefined,
-): LLMRequestSnapshot | undefined {
-  return snapshot;
-}
 
 /** Everything one `CallExecutor` needs beyond the client and model. */
 export interface CallExecutorOptions {
@@ -329,16 +311,38 @@ export class CallExecutor {
     const attempts: RetryAttempt[] = [];
 
     try {
-      return await this.retryWithBackoff(
-        (attempt, onRequest) =>
+      return await retryWithBackoff({
+        fn: (attempt, onRequest) =>
           this.executeCall(params, requestId, attempt, onRequest, resolvedState),
-        requestId,
-        model,
-        resolvedState,
-        params.signal,
+        maxRetries: this.maxRetries,
+        signal: params.signal,
         onAttempt,
         attempts,
-      );
+        shouldRetryAttempt: (error, signal) =>
+          shouldRetry(error, this.nonRetryableStatus, extractStatus, signal),
+        recoverDelayForAttempt: (attempt, error) =>
+          recoverDelay({
+            requestId,
+            model,
+            attempt,
+            error,
+            state: resolvedState,
+            signal: params.signal,
+            providerName: this.providerName,
+            maxRetries: this.maxRetries,
+            baseDelayMs: this.baseDelayMs,
+            middleware: this.middleware,
+            middlewareTimeoutMs: this.middlewareTimeoutMs,
+            logger: this.logger,
+            reportEvent: this.reportEvent,
+            buildEventContext: (requestId, model, attempt, signal, state) =>
+              this.buildEventContext(requestId, model, attempt, signal, state),
+            extractStatus,
+            normalizeError,
+            emitEvent,
+          }),
+        normalizeError,
+      });
     } catch (error) {
       // `attempts` only holds prior attempts that were actually retried
       // past. It's `[]` when nothing was retried, so normalize that to
@@ -382,16 +386,38 @@ export class CallExecutor {
     const attempts: RetryAttempt[] = [];
 
     try {
-      return await this.retryWithBackoff(
-        (attempt, onRequest) =>
+      return await retryWithBackoff({
+        fn: (attempt, onRequest) =>
           this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState),
-        requestId,
-        model,
-        resolvedState,
-        params.signal,
+        maxRetries: this.maxRetries,
+        signal: params.signal,
         onAttempt,
         attempts,
-      );
+        shouldRetryAttempt: (error, signal) =>
+          shouldRetry(error, this.nonRetryableStatus, extractStatus, signal),
+        recoverDelayForAttempt: (attempt, error) =>
+          recoverDelay({
+            requestId,
+            model,
+            attempt,
+            error,
+            state: resolvedState,
+            signal: params.signal,
+            providerName: this.providerName,
+            maxRetries: this.maxRetries,
+            baseDelayMs: this.baseDelayMs,
+            middleware: this.middleware,
+            middlewareTimeoutMs: this.middlewareTimeoutMs,
+            logger: this.logger,
+            reportEvent: this.reportEvent,
+            buildEventContext: (requestId, model, attempt, signal, state) =>
+              this.buildEventContext(requestId, model, attempt, signal, state),
+            extractStatus,
+            normalizeError,
+            emitEvent,
+          }),
+        normalizeError,
+      });
     } catch (error) {
       // See the matching comment in `run`.
       const normalized = normalizeError(
@@ -911,63 +937,6 @@ export class CallExecutor {
   }
 
   /**
-   * Runs `fn`, retrying with backoff according to `shouldRetry`. When
-   * `attempts` is given, every failed attempt that is actually followed by
-   * a retry is recorded, in order. This mirrors `LLMError.attempts`'s
-   * contract: every attempt made before this error was thrown. The
-   * terminal failure is never pushed since it isn't a prior attempt, it
-   * is the error being thrown. `attempts` stays empty when nothing was
-   * retried, so no separate bookkeeping is needed at the call sites.
-   * Each failure is recorded as a snapshot (`LLMError.toSnapshot()`),
-   * not the live `LLMError`, per `RetryAttempt`'s contract.
-   */
-  private async retryWithBackoff<T>(
-    fn: (attempt: number, onRequest: OnRequest) => Promise<T>,
-    requestId: string,
-    model: string,
-    state: MiddlewareStateBag,
-    signal?: AbortSignal,
-    onAttempt?: () => void,
-    attempts?: RetryAttempt[],
-  ): Promise<T> {
-    let lastError: unknown;
-    let lastRequestForAttempt: LLMRequestSnapshot | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      // Reset before this iteration's own onRequest can run. If this
-      // attempt fails before onRequest is ever called (e.g. thrown by
-      // recoverDelay or onAttempt, before fn/onRequest runs), the
-      // previous attempt's request must not be misattributed to this
-      // attempt's index below.
-      lastRequestForAttempt = undefined;
-
-      try {
-        if (attempt > 0) {
-          await this.recoverDelay(requestId, model, attempt, lastError, state, signal);
-        }
-
-        onAttempt?.();
-        return await fn(attempt, (req) => {
-          lastRequestForAttempt = req;
-        });
-      } catch (error) {
-        lastError = error;
-
-        const willRetry = attempt < this.maxRetries && this.shouldRetry(error, signal);
-        if (!willRetry) break;
-
-        attempts?.push({
-          index: attempt,
-          error: normalizeError(error, signal).toSnapshot(),
-          request: passThroughRequestSnapshot(lastRequestForAttempt),
-        });
-      }
-    }
-
-    throw lastError;
-  }
-
-  /**
    * Pulls `TokenUsage` out of a raw response, if the provider reported it.
    * Extraction doesn't depend on what happens to the response afterward, so
    * a malformed body can still yield usage if the provider's usage block
@@ -1083,79 +1052,6 @@ export class CallExecutor {
     }
 
     return result.data;
-  }
-
-  /**
-   * Waits out the backoff delay for a retry attempt, honoring a
-   * Retry-After header on the failed attempt's error when present. When
-   * no Retry-After is present, a rate-limited (429) response backs off
-   * hardest, a server error (500 through 599) backs off somewhat more
-   * than the default curve, and every other retryable failure keeps the
-   * default curve. Both Retry-After and plain exponential backoff are
-   * capped at the same max delay (see `DEFAULT_MAX_DELAY_MS` in
-   * `retry.utils.ts`).
-   */
-  private async recoverDelay(
-    requestId: string,
-    model: string,
-    attempt: number,
-    error: unknown,
-    state: MiddlewareStateBag,
-    signal?: AbortSignal,
-  ) {
-    const retryAfterMs = extractRetryAfterMs(error);
-    const status = extractStatus(error);
-    const delay =
-      retryAfterMs ??
-      getBackoffDelay(
-        this.baseDelayMs,
-        attempt,
-        undefined,
-        status === 429,
-        status !== undefined && status >= 500 && status <= 599,
-      );
-    const retryAfterHonored = retryAfterMs !== undefined;
-
-    this.logger.warn(
-      `[VernLLM:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${Math.ceil(delay)}ms` +
-        (retryAfterHonored ? ' (honoring Retry-After)' : ''),
-    );
-
-    emitEvent(
-      {
-        kind: 'retry',
-        requestId,
-        provider: this.providerName,
-        model,
-        attempt,
-        maxRetries: this.maxRetries,
-        delayMs: delay,
-        retryAfterHonored,
-        error: normalizeError(error, signal),
-      },
-      this.buildEventContext(requestId, model, attempt, signal, state),
-      this.reportEvent,
-      this.middleware,
-      this.middlewareTimeoutMs,
-      this.logger,
-    );
-
-    await waitForRetry(delay, signal);
-  }
-
-  /** Decides whether a failed attempt is worth retrying. */
-  private shouldRetry(error: unknown, signal?: AbortSignal): boolean {
-    if (signal?.aborted) return false;
-
-    // `LLMError.retryable` already covers the deterministic cases: parse/
-    // validation/invalid_params/aborted types, the tool contract codes,
-    // and the local rate-limit codes. Only `nonRetryableStatus`, specific
-    // to this call, isn't part of that general-purpose property.
-    if (error instanceof LLMError && !error.retryable) return false;
-
-    const status = extractStatus(error);
-
-    return !(status !== undefined && this.nonRetryableStatus.includes(status));
   }
 
   /**
