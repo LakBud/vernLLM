@@ -1,8 +1,9 @@
 import { withReservedUsage, withReservedUsageForStream } from '../execution/utils/usage.utils.js';
+import { createInFlightRegistry } from './utils/inFlightRegistry.utils.js';
 import { buildReplayChunks, buildReplayChunksFromPromise } from './utils/replay.utils.js';
 
 import type { Logger } from '../../logger.js';
-import type { CacheAdapter, StreamChunk } from '../../types/index.js';
+import type { CacheAdapter, StreamChunk, UsageHooks } from '../../types/index.js';
 import type { InternalCacheParams, InternalCacheStreamParams } from './utils/cache.utils.js';
 
 /**
@@ -15,7 +16,7 @@ import type { InternalCacheParams, InternalCacheStreamParams } from './utils/cac
  * happened to live on the same class.
  */
 export class CacheOrchestrator {
-  private readonly inFlight = new Map<string, Promise<unknown>>();
+  private readonly inFlight = createInFlightRegistry<unknown>();
 
   constructor(
     private readonly cache: CacheAdapter<unknown>,
@@ -69,6 +70,40 @@ export class CacheOrchestrator {
   }
 
   /**
+   * Resolves `params.cacheKey` and reads the cache under that key in one
+   * step. Shared by `runCached` and `runCachedStream`, which otherwise
+   * duplicated this exact prefix.
+   */
+  private async resolveKeyAndReadCache<P extends { cacheKey: string }>(
+    params: P,
+  ): Promise<{ resolvedParams: P; cached: { hit: boolean; value?: unknown } }> {
+    const resolvedKey = await this.resolveCacheKey(params.cacheKey);
+    const resolvedParams: P =
+      resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
+
+    return { resolvedParams, cached: await this.getCached(resolvedKey) };
+  }
+
+  /**
+   * Waits on another call's already in-flight promise instead of
+   * starting a new one, reserving usage as a coalesced spend. Shared by
+   * `runCached` and `runCachedStream`, which otherwise duplicated this
+   * exact `withReservedUsage` call.
+   */
+  private joinInFlight<T, P extends UsageHooks & { signal?: AbortSignal }>(
+    params: P,
+    existing: Promise<T>,
+  ): Promise<T> {
+    return withReservedUsage(
+      params,
+      true,
+      () => existing,
+      params.signal,
+      (logMessage, error) => this.logRefundError(logMessage, error),
+    );
+  }
+
+  /**
    * Internal cache primitive around caller-supplied logic. Concurrent misses
    * for the same `cacheKey` share a single in-flight call, avoiding cache
    * stampedes.
@@ -83,30 +118,20 @@ export class CacheOrchestrator {
    * @returns The cached value on a hit, or the result of `fn()` on a miss.
    */
   async runCached<T>(params: InternalCacheParams<T>): Promise<T> {
-    const resolvedKey = await this.resolveCacheKey(params.cacheKey);
-    const resolvedParams =
-      resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
-
-    const cached = await this.getCached(resolvedKey);
+    const { resolvedParams, cached } = await this.resolveKeyAndReadCache(params);
 
     if (cached.hit) return cached.value as T;
 
-    const existing = this.inFlight.get(resolvedKey) as Promise<T> | undefined;
+    const existing = this.inFlight.get(resolvedParams.cacheKey) as Promise<T> | undefined;
 
     if (existing) {
-      return withReservedUsage(
-        resolvedParams,
-        true,
-        () => existing,
-        params.signal,
-        (logMessage, error) => this.logRefundError(logMessage, error),
-      );
+      return this.joinInFlight(resolvedParams, existing);
     }
 
     return this.registerTrigger(resolvedParams);
   }
 
-  /** Starts the shared fn() call for a cache miss and tracks it in the in-flight map until it settles. */
+  /** Starts the shared fn() call for a cache miss and tracks it in the in-flight registry until it settles. */
   private registerTrigger<T>(params: InternalCacheParams<T>): Promise<T> {
     const resultPromise = withReservedUsage(
       params,
@@ -116,13 +141,7 @@ export class CacheOrchestrator {
       (logMessage, error) => this.logRefundError(logMessage, error),
     );
 
-    this.inFlight.set(params.cacheKey, resultPromise);
-
-    void resultPromise
-      .catch(() => {})
-      .finally(() => {
-        this.inFlight.delete(params.cacheKey);
-      });
+    this.inFlight.track(params.cacheKey, resultPromise);
 
     return resultPromise;
   }
@@ -156,7 +175,7 @@ export class CacheOrchestrator {
    * - Miss, but another call for the same key is already in flight: this
    *   call has no live chunks of its own to relay, so it's treated like a
    *   delayed hit. `finalResult` shares the trigger's in-flight promise
-   *   (the same in-flight map non-streaming `runCached` uses, so
+   *   (the same in-flight registry non-streaming `runCached` uses, so
    *   streaming and non-streaming calls for the same key coalesce
    *   against each other too), and `chunks` is a one-shot replay built
    *   once that promise resolves.
@@ -165,11 +184,7 @@ export class CacheOrchestrator {
     params: InternalCacheStreamParams<T>,
     hasTools: boolean,
   ): Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }> {
-    const resolvedKey = await this.resolveCacheKey(params.cacheKey);
-    const resolvedParams =
-      resolvedKey === params.cacheKey ? params : { ...params, cacheKey: resolvedKey };
-
-    const cached = await this.getCached(resolvedKey);
+    const { resolvedParams, cached } = await this.resolveKeyAndReadCache(params);
 
     if (cached.hit) {
       const value = cached.value as T;
@@ -177,16 +192,10 @@ export class CacheOrchestrator {
       return { chunks: buildReplayChunks(value, hasTools), finalResult: Promise.resolve(value) };
     }
 
-    const existing = this.inFlight.get(resolvedKey) as Promise<T> | undefined;
+    const existing = this.inFlight.get(resolvedParams.cacheKey) as Promise<T> | undefined;
 
     if (existing) {
-      const finalResult = withReservedUsage(
-        resolvedParams,
-        true,
-        () => existing,
-        params.signal,
-        (logMessage, error) => this.logRefundError(logMessage, error),
-      );
+      const finalResult = this.joinInFlight(resolvedParams, existing);
 
       // Mirror the no-op catch in withReservedUsageForStream: buildReplayChunksFromPromise
       // doesn't await this promise until `chunks` is iterated, so a caller that only reads
@@ -202,7 +211,7 @@ export class CacheOrchestrator {
 
   /**
    * Opens the shared stream for a cache miss and tracks its settled value
-   * in the in-flight map until it resolves or rejects. Writes to the cache
+   * in the in-flight registry until it resolves or rejects. Writes to the cache
    * on success only, matching `runAndCache`.
    *
    * Registers the in-flight promise synchronously, before anything async
@@ -224,13 +233,7 @@ export class CacheOrchestrator {
       rejectInFlight = reject;
     });
 
-    this.inFlight.set(params.cacheKey, inFlightResult);
-
-    void inFlightResult
-      .catch(() => {})
-      .finally(() => {
-        this.inFlight.delete(params.cacheKey);
-      });
+    this.inFlight.track(params.cacheKey, inFlightResult);
 
     const streamPromise = withReservedUsageForStream(
       params,
