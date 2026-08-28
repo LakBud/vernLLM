@@ -2,7 +2,6 @@ import { randomUUID } from 'crypto';
 
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
 import {
-  buildCircuitBreaker,
   makeEventReporter,
   resolveExecutor,
   warnIfModelUnsupported,
@@ -20,9 +19,9 @@ import {
   withReservedUsage,
   withReservedUsageForStream,
 } from './internal/execution/utils/usage.utils.js';
+import { buildExecutors } from './internal/executorFactory.js';
 import { createSafeLogger } from './internal/logger.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
-import { RateLimiter } from './rateLimit.js';
 import {
   InMemoryCacheAdapter,
   LLMError,
@@ -185,59 +184,25 @@ export class VernLLM {
         ? [options.fallback]
         : [];
 
-    const targets = [primaryTarget, ...declaredFallbacks];
-
-    this.executors = targets.map((target, i) => {
-      const isFallback = i > 0;
-      // `-1` for the primary, matching `FallbackAttempt.index`.
-      const name = target.name ?? (isFallback ? `fallback[${i - 1}]` : providerName);
-
-      // Built before the executor: onStateChange fires from inside the
-      // breaker itself, which the executor is merely handed a reference to.
-      const breaker = buildCircuitBreaker(
-        target.circuitBreaker,
-        name,
-        target.model,
-        options.onEvent,
-        this.logger,
-        this.middleware,
-        this.middlewareTimeoutMs,
-        isFallback,
-        target.client.supportsJsonObjectMode ?? true,
-      );
-
-      return new CallExecutor(name, target.client, target.model, {
-        maxRetries: target.maxRetries ?? options.maxRetries ?? 1,
-        timeoutMs: target.timeoutMs ?? options.timeoutMs ?? 25_000,
-        chunkIdleTimeoutMs: target.chunkIdleTimeoutMs ?? options.chunkIdleTimeoutMs ?? 30_000,
-        baseDelayMs: target.baseDelayMs ?? options.baseDelayMs ?? 500,
-        defaultMaxTokens: target.defaultMaxTokens ?? options.defaultMaxTokens ?? 1000,
-        defaultTemperature:
-          target.defaultTemperature === undefined
-            ? primaryDefaultTemperature
-            : target.defaultTemperature,
-        defaultReasoningEffort:
-          target.defaultReasoningEffort === undefined
-            ? primaryDefaultReasoningEffort
-            : target.defaultReasoningEffort,
-        defaultBudgetTokens:
-          target.defaultBudgetTokens === undefined
-            ? primaryDefaultBudgetTokens
-            : target.defaultBudgetTokens,
-        nonRetryableStatus: target.nonRetryableStatus ??
-          options.nonRetryableStatus ?? [400, 401, 403, 404, 422],
-        parseJson: options.parseJson,
-        logger: this.logger,
-        redact: options.redact,
-        onUsage: options.onUsage,
-        onUsageFailure: options.onUsageFailure,
-        onEvent: options.onEvent,
-        breaker,
-        limiter: target.rateLimit ? new RateLimiter(target.rateLimit) : undefined,
-        isFallback,
-        middleware: this.middleware,
-        middlewareTimeoutMs: this.middlewareTimeoutMs,
-      });
+    this.executors = buildExecutors(primaryTarget, declaredFallbacks, {
+      providerName,
+      primaryDefaultTemperature,
+      primaryDefaultReasoningEffort,
+      primaryDefaultBudgetTokens,
+      maxRetries: options.maxRetries,
+      timeoutMs: options.timeoutMs,
+      chunkIdleTimeoutMs: options.chunkIdleTimeoutMs,
+      baseDelayMs: options.baseDelayMs,
+      defaultMaxTokens: options.defaultMaxTokens,
+      nonRetryableStatus: options.nonRetryableStatus,
+      parseJson: options.parseJson,
+      redact: options.redact,
+      onUsage: options.onUsage,
+      onUsageFailure: options.onUsageFailure,
+      onEvent: options.onEvent,
+      logger: this.logger,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
     });
   }
 
@@ -404,6 +369,21 @@ export class VernLLM {
             });
           }
 
+          let meta: CallMeta | undefined;
+
+          // Captures `meta` from the `{ value, meta }` shape both
+          // `executeLogicalCall`/`executeLogicalStreamCall` return, so the
+          // stream/non-stream branches below only differ in which
+          // `withReservedUsage*`/`executeLogical*Call` pair they use, not
+          // in how the result is unpacked.
+          const captureMeta = async <V>(
+            resultPromise: Promise<{ value: V; meta?: CallMeta }>,
+          ): Promise<V> => {
+            const result = await resultPromise;
+            meta = result.meta;
+            return result.value;
+          };
+
           if (effectiveParams.stream) {
             // Same breaker/logging treatment as non-streaming, applied around
             // opening the stream; mid-stream failures are handled separately
@@ -414,21 +394,18 @@ export class VernLLM {
             // time we return below, though: `executeLogicalStreamCall` writes
             // it as a side effect on this same `effectiveParams` object once
             // the stream opens, which is also all `call()` itself waits for.
-            let meta: CallMeta | undefined;
-
             const value = await withReservedUsageForStream(
               effectiveParams,
-              async () => {
-                const logicalStreamCallResult = await executeLogicalStreamCall(
-                  this.logicalCallDependencies,
-                  effectiveParams,
-                  requestId,
-                  soleTarget,
-                  middlewareState,
-                );
-                meta = logicalStreamCallResult.meta;
-                return logicalStreamCallResult.value;
-              },
+              () =>
+                captureMeta(
+                  executeLogicalStreamCall(
+                    this.logicalCallDependencies,
+                    effectiveParams,
+                    requestId,
+                    soleTarget,
+                    middlewareState,
+                  ),
+                ),
               effectiveParams.signal,
               (logMessage, error) => this.logRefundError(logMessage, error),
             );
@@ -436,22 +413,19 @@ export class VernLLM {
             return { value, meta };
           }
 
-          let meta: CallMeta | undefined;
-
           const value = await withReservedUsage(
             effectiveParams,
             false,
-            async () => {
-              const logicalCallResult = await executeLogicalCall(
-                this.logicalCallDependencies,
-                effectiveParams,
-                requestId,
-                soleTarget,
-                middlewareState,
-              );
-              meta = logicalCallResult.meta;
-              return logicalCallResult.value;
-            },
+            () =>
+              captureMeta(
+                executeLogicalCall(
+                  this.logicalCallDependencies,
+                  effectiveParams,
+                  requestId,
+                  soleTarget,
+                  middlewareState,
+                ),
+              ),
             effectiveParams.signal,
             (logMessage, error) => this.logRefundError(logMessage, error),
           );
