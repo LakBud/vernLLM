@@ -2,18 +2,14 @@ import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBre
 import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
 import { createMiddlewareStateBag } from '../../types/middleware.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
+import { createBreakerGateway, type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { buildStreamResult } from './streamAccumulator.js';
 import { describeError, extractStatus, normalizeError } from './utils/errors.utils.js';
 import {
-  assertModelAndResponseFormatUnchanged,
-  assertNoDuplicateTools,
+  applyMiddlewareTransforms,
   DEFAULT_MIDDLEWARE_TIMEOUT_MS,
   emitEvent,
-  mergePatch,
-  middlewareLabel,
-  resolveEnabled,
-  runTransform,
 } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
 import { recoverDelay, retryWithBackoff, shouldRetry, withTimeout } from './utils/retry.utils.js';
@@ -22,7 +18,6 @@ import { parseWireToolCalls } from './utils/wire.utils.js';
 import type { Logger } from '../../logger.js';
 import type { RateLimiter } from '../../rateLimit.js';
 import type {
-  AttemptContext,
   CallParams,
   CallWithToolsResult,
   LLMClient,
@@ -138,113 +133,6 @@ export class CallExecutor {
     });
   }
 
-  /** Builds the `AttemptContext` for one attempt against this target. `attempt` is 0-based here, 1-based on the result. */
-  private buildEventContext(
-    requestId: string,
-    model: string,
-    attempt: number,
-    signal: AbortSignal | undefined,
-    state: MiddlewareStateBag,
-  ): AttemptContext {
-    return {
-      stage: 'attempt',
-      requestId,
-      requestedProvider: this.providerName,
-      requestedModel: model,
-      isFallbackAttempt: this.isFallback,
-      attempt: attempt + 1,
-      capabilities: { supportsJsonObjectMode: this.supportsJsonObjectMode },
-      signal,
-      state,
-      own: {},
-    };
-  }
-
-  /**
-   * Runs every applicable middleware's `transform` against `request`, in
-   * priority order, merging each patch in immediately so a later
-   * middleware sees what an earlier one already changed. Reports the
-   * `'middleware'` trace event for each `transform` that actually
-   * changed something, and for each `enabled` predicate that skipped its
-   * middleware.
-   */
-  private async applyMiddlewareTransforms(
-    request: WireCallRequest,
-    requestId: string,
-    model: string,
-    attempt: number,
-    signal: AbortSignal | undefined,
-    state: MiddlewareStateBag,
-  ): Promise<WireCallRequest> {
-    if (this.middleware.length === 0) return request;
-
-    const before = request;
-    let current = request;
-
-    const ordered = this.middleware
-      .map((middleware, index) => ({ middleware, index }))
-      .sort((a, b) => (a.middleware.priority ?? 0) - (b.middleware.priority ?? 0));
-
-    for (const { middleware, index } of ordered) {
-      const label = middlewareLabel(middleware, index);
-
-      const ctx = this.buildEventContext(requestId, model, attempt, signal, state);
-
-      const isEnabled = await resolveEnabled(
-        middleware,
-        ctx,
-        label,
-        this.middlewareTimeoutMs,
-        this.logger,
-      );
-
-      if (!isEnabled) {
-        if (middleware.enabled !== undefined) {
-          emitEvent(
-            { kind: 'middleware', requestId, middleware: label, hook: 'enabled_skip' },
-            ctx,
-            this.reportEvent,
-            this.middleware,
-            this.middlewareTimeoutMs,
-            this.logger,
-          );
-        }
-        continue;
-      }
-
-      if (!middleware.transform) continue;
-
-      const patch = await runTransform(
-        middleware,
-        structuredClone(current),
-        ctx,
-        label,
-        this.middlewareTimeoutMs,
-      );
-      const { request: merged, patchedFields } = mergePatch(current, patch);
-
-      if (patchedFields.length > 0) {
-        if (patch.tools !== undefined || patch.addTools?.length) {
-          assertNoDuplicateTools(merged, label);
-        }
-        emitEvent(
-          { kind: 'middleware', requestId, middleware: label, hook: 'transform', patchedFields },
-          ctx,
-          this.reportEvent,
-          this.middleware,
-          this.middlewareTimeoutMs,
-          this.logger,
-        );
-      }
-
-      current = merged;
-    }
-
-    assertModelAndResponseFormatUnchanged(before, current, 'chain');
-
-    return current;
-  }
-
   /**
    * Builds this target's wire request for `params` without dispatching
    * it or applying any middleware `transform`. Used by `VernLLM` to hand
@@ -309,11 +197,19 @@ export class CallExecutor {
     const model = params.model ?? this.model;
     const resolvedState = state ?? createMiddlewareStateBag();
     const attempts: RetryAttempt[] = [];
+    const gateway = createBreakerGateway({
+      breaker: this.breaker,
+      requestId,
+      model,
+      providerName: this.providerName,
+      isFallback: this.isFallback,
+      supportsJsonObjectMode: this.supportsJsonObjectMode,
+    });
 
     try {
       return await retryWithBackoff({
         fn: (attempt, onRequest) =>
-          this.executeCall(params, requestId, attempt, onRequest, resolvedState),
+          this.executeCall(params, requestId, attempt, onRequest, resolvedState, gateway),
         maxRetries: this.maxRetries,
         signal: params.signal,
         onAttempt,
@@ -336,7 +232,7 @@ export class CallExecutor {
             logger: this.logger,
             reportEvent: this.reportEvent,
             buildEventContext: (requestId, model, attempt, signal, state) =>
-              this.buildEventContext(requestId, model, attempt, signal, state),
+              gateway.buildAttemptContext(attempt, signal, state),
             extractStatus,
             normalizeError,
             emitEvent,
@@ -356,13 +252,9 @@ export class CallExecutor {
       if (this.countsTowardBreaker(normalized)) {
         // `attempts` only holds prior attempts that were retried past
         // (see above), so the attempt that actually exhausted the
-        // retries/broke the loop is one past that, 1-based.
-        this.breaker?.recordFailure(model, {
-          requestId,
-          state: resolvedState,
-          signal: params.signal,
-          attempt: attempts.length + 1,
-        });
+        // retries/broke the loop is one past that. `recordFailure`
+        // converts to 1-based itself.
+        gateway.recordFailure(attempts.length, params.signal, resolvedState);
       }
 
       this.logger.debug(`[VernLLM:${requestId}] error:\n${this.redactText(describeError(error))}`);
@@ -384,11 +276,19 @@ export class CallExecutor {
     const model = params.model ?? this.model;
     const resolvedState = state ?? createMiddlewareStateBag();
     const attempts: RetryAttempt[] = [];
+    const gateway = createBreakerGateway({
+      breaker: this.breaker,
+      requestId,
+      model,
+      providerName: this.providerName,
+      isFallback: this.isFallback,
+      supportsJsonObjectMode: this.supportsJsonObjectMode,
+    });
 
     try {
       return await retryWithBackoff({
         fn: (attempt, onRequest) =>
-          this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState),
+          this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState, gateway),
         maxRetries: this.maxRetries,
         signal: params.signal,
         onAttempt,
@@ -411,7 +311,7 @@ export class CallExecutor {
             logger: this.logger,
             reportEvent: this.reportEvent,
             buildEventContext: (requestId, model, attempt, signal, state) =>
-              this.buildEventContext(requestId, model, attempt, signal, state),
+              gateway.buildAttemptContext(attempt, signal, state),
             extractStatus,
             normalizeError,
             emitEvent,
@@ -428,12 +328,7 @@ export class CallExecutor {
 
       if (this.countsTowardBreaker(normalized)) {
         // See the matching comment in `run`.
-        this.breaker?.recordFailure(model, {
-          requestId,
-          state: resolvedState,
-          signal: params.signal,
-          attempt: attempts.length + 1,
-        });
+        gateway.recordFailure(attempts.length, params.signal, resolvedState);
       }
 
       this.logger.debug(
@@ -455,20 +350,25 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
-    onRequest?: OnRequest,
-    middlewareState?: MiddlewareStateBag,
+    onRequest: OnRequest | undefined,
+    middlewareState: MiddlewareStateBag | undefined,
+    gateway: BreakerGateway,
   ): Promise<T | CallWithToolsResult<T>> {
     const state = middlewareState ?? createMiddlewareStateBag();
     const built = this.requestBuilder.build(params);
     const { useJson, model } = built;
-    const request = await this.applyMiddlewareTransforms(
-      built.request,
+    const request = await applyMiddlewareTransforms({
+      request: built.request,
       requestId,
-      model,
       attempt,
-      params.signal,
+      signal: params.signal,
       state,
-    );
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+      buildContext: (attempt, signal, state) => gateway.buildAttemptContext(attempt, signal, state),
+    });
 
     onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
 
@@ -491,7 +391,7 @@ export class CallExecutor {
             waitedMs: acquired.waitedMs,
             reason: acquired.reason ?? 'rpm',
           },
-          this.buildEventContext(requestId, model, attempt, params.signal, state),
+          gateway.buildAttemptContext(attempt, params.signal, state),
           this.reportEvent,
           this.middleware,
           this.middlewareTimeoutMs,
@@ -528,11 +428,11 @@ export class CallExecutor {
         wireToolCalls,
         params,
         useJson,
-        model,
         usage,
         requestId,
         attempt,
         state,
+        gateway,
       );
     } finally {
       release?.();
@@ -574,22 +474,12 @@ export class CallExecutor {
     wireToolCalls: WireToolCall[] | undefined,
     params: CallParams<T>,
     useJson: boolean,
-    model: string,
     usage: TokenUsage | undefined,
     requestId: string,
     attempt: number,
     state: MiddlewareStateBag,
+    gateway: BreakerGateway,
   ): T | CallWithToolsResult<T> {
-    // `attempt` is 0-based internally here, 1-based on the public
-    // `AttemptContext`/`CircuitBreakerCallContext` contract (see
-    // `buildEventContext`).
-    const breakerContext: CircuitBreakerCallContext = {
-      requestId,
-      state,
-      signal: params.signal,
-      attempt: attempt + 1,
-    };
-
     try {
       // `.trim()` runs inside this try: a malformed response shape
       // (e.g. a non-string `content`) throws here and is normalized and
@@ -639,7 +529,7 @@ export class CallExecutor {
         const toolCalls = parseWireToolCalls(wireToolCalls);
 
         this.validateToolCallArguments(toolCalls, params.tools);
-        this.breaker?.recordSuccess(model, breakerContext);
+        gateway.recordSuccess(attempt, params.signal, state);
         this.reportUsage(usage);
 
         return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
@@ -649,14 +539,14 @@ export class CallExecutor {
       const textContent = content ?? '';
 
       if (!useJson) {
-        this.breaker?.recordSuccess(model, breakerContext);
+        gateway.recordSuccess(attempt, params.signal, state);
         this.reportUsage(usage);
 
         return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
       }
 
       const result = this.parseAndValidate<T>(textContent, params.schema);
-      this.breaker?.recordSuccess(model, breakerContext);
+      gateway.recordSuccess(attempt, params.signal, state);
       this.reportUsage(usage);
 
       return params.tools ? { type: 'content', content: result } : result;
@@ -695,8 +585,9 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
-    onRequest?: OnRequest,
-    middlewareState?: MiddlewareStateBag,
+    onRequest: OnRequest | undefined,
+    middlewareState: MiddlewareStateBag | undefined,
+    gateway: BreakerGateway,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
@@ -704,14 +595,18 @@ export class CallExecutor {
     const state = middlewareState ?? createMiddlewareStateBag();
     const built = this.requestBuilder.build(params);
     const { useJson, model } = built;
-    const request = await this.applyMiddlewareTransforms(
-      built.request,
+    const request = await applyMiddlewareTransforms({
+      request: built.request,
       requestId,
-      model,
       attempt,
-      params.signal,
+      signal: params.signal,
       state,
-    );
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+      buildContext: (attempt, signal, state) => gateway.buildAttemptContext(attempt, signal, state),
+    });
 
     onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
 
@@ -749,7 +644,7 @@ export class CallExecutor {
             waitedMs: acquired.waitedMs,
             reason: acquired.reason ?? 'rpm',
           },
-          this.buildEventContext(requestId, model, attempt, params.signal, state),
+          gateway.buildAttemptContext(attempt, params.signal, state),
           this.reportEvent,
           this.middleware,
           this.middlewareTimeoutMs,
@@ -811,12 +706,7 @@ export class CallExecutor {
         logger: this.logger,
         signal: params.signal,
         onStreamSuccess: (usage) => {
-          this.breaker?.recordSuccess(model, {
-            requestId,
-            state,
-            signal: params.signal,
-            attempt: attempt + 1,
-          });
+          gateway.recordSuccess(attempt, params.signal, state);
           releaseAtOpen?.(this.actualTokensFor(usage));
         },
         onStreamFailure: (normalized, usage) => {
@@ -824,12 +714,7 @@ export class CallExecutor {
           // breaker: otherwise a provider that hangs after one chunk
           // would always record a success and never open it.
           if (normalized.type === 'timeout') {
-            this.breaker?.recordFailure(model, {
-              requestId,
-              state,
-              signal: params.signal,
-              attempt: attempt + 1,
-            });
+            gateway.recordFailure(attempt, params.signal, state);
           }
 
           if (usage && normalized.type !== 'aborted') {
@@ -844,11 +729,11 @@ export class CallExecutor {
             wireToolCalls,
             params,
             useJson,
-            model,
             usage,
             requestId,
             attempt,
             state,
+            gateway,
           ),
       });
 

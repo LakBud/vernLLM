@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  applyMiddlewareTransforms,
   assertModelAndResponseFormatUnchanged,
   assertNoDuplicateTools,
   mergePatch,
@@ -11,7 +12,12 @@ import {
 } from '../../../../src/internal/execution/utils/middleware.utils.js';
 import { LLMError } from '../../../../src/types/errors.js';
 
-import type { AttemptContext } from '../../../../src/types/index.js';
+import type {
+  AttemptContext,
+  MiddlewareStateBag,
+  VernLLMEvent,
+  VernLLMMiddleware,
+} from '../../../../src/types/index.js';
 import type { WireCallRequest } from '../../../../src/types/middleware.js';
 
 const baseRequest: WireCallRequest = {
@@ -300,6 +306,189 @@ describe('runTransform', () => {
       type: 'timeout',
       code: 'middleware_timeout',
       retryable: false,
+    });
+  });
+});
+
+describe('applyMiddlewareTransforms', () => {
+  const state: MiddlewareStateBag = { get: () => undefined, set: () => {} };
+
+  function baseParams(overrides: Partial<Parameters<typeof applyMiddlewareTransforms>[0]> = {}) {
+    return {
+      request: baseRequest,
+      requestId: 'req-1',
+      attempt: 0,
+      signal: undefined,
+      state,
+      middleware: [],
+      middlewareTimeoutMs: 5000,
+      logger,
+      reportEvent: vi.fn(),
+      buildContext: (
+        attempt: number,
+        signal: AbortSignal | undefined,
+        contextState: MiddlewareStateBag,
+      ) => baseCtx({ attempt: attempt + 1, signal, state: contextState }),
+      ...overrides,
+    };
+  }
+
+  it('returns the request unchanged when there is no middleware', async () => {
+    const result = await applyMiddlewareTransforms(baseParams({ middleware: [] }));
+    expect(result).toBe(baseRequest);
+  });
+
+  it('runs transforms in priority order, ascending, ties broken by array order', async () => {
+    const order: string[] = [];
+    const middleware: VernLLMMiddleware[] = [
+      {
+        name: 'no-priority',
+        transform: () => {
+          order.push('no-priority');
+          return {};
+        },
+      },
+      {
+        name: 'low',
+        priority: 1,
+        transform: () => {
+          order.push('low');
+          return {};
+        },
+      },
+      {
+        name: 'high',
+        priority: 10,
+        transform: () => {
+          order.push('high');
+          return {};
+        },
+      },
+      {
+        name: 'zero',
+        priority: 0,
+        transform: () => {
+          order.push('zero');
+          return {};
+        },
+      },
+    ];
+
+    await applyMiddlewareTransforms(baseParams({ middleware }));
+
+    // `no-priority` and `zero` both resolve to priority 0, so array order
+    // breaks the tie between them.
+    expect(order).toEqual(['no-priority', 'zero', 'low', 'high']);
+  });
+
+  it("merges each patch in before the next middleware runs, so a later one sees an earlier one's change", async () => {
+    const seenTemperatures: (number | undefined)[] = [];
+    const middleware: VernLLMMiddleware[] = [
+      {
+        name: 'first',
+        priority: 0,
+        transform: (request) => {
+          seenTemperatures.push(request.temperature);
+          return { temperature: 0.5 };
+        },
+      },
+      {
+        name: 'second',
+        priority: 1,
+        transform: (request) => {
+          seenTemperatures.push(request.temperature);
+          return {};
+        },
+      },
+    ];
+
+    const result = await applyMiddlewareTransforms(baseParams({ middleware }));
+
+    expect(seenTemperatures).toEqual([undefined, 0.5]);
+    expect(result.temperature).toBe(0.5);
+  });
+
+  it('emits an enabled_skip event and skips the transform when enabled resolves false', async () => {
+    const reportEvent = vi.fn();
+    const transform = vi.fn(() => ({ temperature: 0.9 }));
+    const middleware: VernLLMMiddleware[] = [{ name: 'skip-me', enabled: false, transform }];
+
+    await applyMiddlewareTransforms(baseParams({ middleware, reportEvent }));
+
+    expect(transform).not.toHaveBeenCalled();
+    expect(reportEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'middleware',
+        middleware: 'skip-me',
+        hook: 'enabled_skip',
+      }) as VernLLMEvent,
+    );
+  });
+
+  it('does not emit enabled_skip when enabled was never set (implicit true)', async () => {
+    const reportEvent = vi.fn();
+    const middleware: VernLLMMiddleware[] = [{ name: 'always-on', transform: () => ({}) }];
+
+    await applyMiddlewareTransforms(baseParams({ middleware, reportEvent }));
+
+    expect(reportEvent).not.toHaveBeenCalled();
+  });
+
+  it('emits a transform event listing patchedFields when a transform actually changes something', async () => {
+    const reportEvent = vi.fn();
+    const middleware: VernLLMMiddleware[] = [
+      { name: 'set-temp', transform: () => ({ temperature: 0.3, max_tokens: 200 }) },
+    ];
+
+    await applyMiddlewareTransforms(baseParams({ middleware, reportEvent }));
+
+    expect(reportEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'middleware',
+        middleware: 'set-temp',
+        hook: 'transform',
+        patchedFields: expect.arrayContaining(['temperature', 'max_tokens']),
+      }) as VernLLMEvent,
+    );
+  });
+
+  it('does not emit a transform event when the patch changes nothing', async () => {
+    const reportEvent = vi.fn();
+    const middleware: VernLLMMiddleware[] = [{ name: 'noop', transform: () => ({}) }];
+
+    await applyMiddlewareTransforms(baseParams({ middleware, reportEvent }));
+
+    expect(reportEvent).not.toHaveBeenCalled();
+  });
+
+  it('throws when a transform introduces a duplicate tool name via addTools', async () => {
+    const requestWithTool: WireCallRequest = {
+      ...baseRequest,
+      tools: [{ type: 'function', function: { name: 'search', description: '', parameters: {} } }],
+    };
+    const middleware: VernLLMMiddleware[] = [
+      {
+        name: 'dup-tool',
+        transform: () => ({
+          addTools: [
+            { type: 'function', function: { name: 'search', description: '', parameters: {} } },
+          ],
+        }),
+      },
+    ];
+
+    await expect(
+      applyMiddlewareTransforms(baseParams({ request: requestWithTool, middleware })),
+    ).rejects.toMatchObject({ type: 'invalid_params', code: 'duplicate_tool_names' });
+  });
+
+  it('rejects if a transform changes model, via assertModelAndResponseFormatUnchanged', async () => {
+    const middleware: VernLLMMiddleware[] = [
+      { name: 'bad', transform: () => ({ model: 'gpt-5' }) as never },
+    ];
+
+    await expect(applyMiddlewareTransforms(baseParams({ middleware }))).rejects.toMatchObject({
+      type: 'invalid_params',
     });
   });
 });
