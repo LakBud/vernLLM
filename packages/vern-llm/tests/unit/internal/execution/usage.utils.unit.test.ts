@@ -1,9 +1,55 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
+  toTokenUsage,
   withReservedUsage,
   withReservedUsageForStream,
 } from '../../../../src/internal/execution/utils/usage.utils.js';
+
+describe('toTokenUsage', () => {
+  const meta = { requestId: 'req-1', model: 'gpt-test', providerName: 'openai', isFallback: false };
+
+  it('maps prompt/completion/total tokens straight through', () => {
+    const usage = toTokenUsage(
+      { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+      meta,
+    );
+
+    expect(usage).toMatchObject({ promptTokens: 10, completionTokens: 20, totalTokens: 30 });
+  });
+
+  it('defaults missing token counts to 0', () => {
+    const usage = toTokenUsage({}, meta);
+
+    expect(usage).toMatchObject({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  });
+
+  it('carries reasoningTokens through when present', () => {
+    const usage = toTokenUsage({ completion_tokens_details: { reasoning_tokens: 7 } }, meta);
+
+    expect(usage.reasoningTokens).toBe(7);
+  });
+
+  it('omits reasoningTokens entirely when absent, rather than setting it undefined', () => {
+    const usage = toTokenUsage({}, meta);
+
+    expect('reasoningTokens' in usage).toBe(false);
+  });
+
+  it('stamps requestId, model, provider, and usedFallback from meta', () => {
+    const usage = toTokenUsage(
+      {},
+      { requestId: 'req-2', model: 'claude-x', providerName: 'anthropic', isFallback: true },
+    );
+
+    expect(usage).toMatchObject({
+      requestId: 'req-2',
+      model: 'claude-x',
+      provider: 'anthropic',
+      usedFallback: true,
+    });
+  });
+});
 
 describe('withReservedUsage', () => {
   it('runs getResult and returns its value when no reserveUsage hook is given', async () => {

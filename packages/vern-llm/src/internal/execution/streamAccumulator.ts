@@ -1,8 +1,11 @@
-import { LLMError } from '../../types/errors.js';
+import { createBackpressureChannel } from './utils/chunkBuffer.utils.js';
 import { normalizeError } from './utils/errors.utils.js';
 import { withChunkIdleTimeout } from './utils/retry.utils.js';
+import { createToolCallAccumulator } from './utils/toolCallAccumulator.utils.js';
+import { toTokenUsage } from './utils/usage.utils.js';
 
 import type { Logger } from '../../logger.js';
+import type { LLMError } from '../../types/errors.js';
 import type {
   CallWithToolsResult,
   StreamChunk,
@@ -10,12 +13,6 @@ import type {
   WireStreamChunk,
   WireToolCall,
 } from '../../types/index.js';
-
-// Bound provider-controlled tool accumulation independently of the unread
-// chunk buffer: one stream can otherwise create unlimited map entries or
-// append unlimited argument text before finalization runs.
-const MAX_TOOL_CALLS = 10_000;
-const MAX_TOOL_ARGUMENTS_LENGTH = 1_000_000;
 
 /** Everything `buildStreamResult` needs beyond the raw iterator and first chunk. */
 export interface StreamAccumulatorOptions<T> {
@@ -56,6 +53,30 @@ export interface StreamAccumulatorOptions<T> {
     wireToolCalls: WireToolCall[] | undefined,
     usage: TokenUsage | undefined,
   ) => T | CallWithToolsResult<T>;
+}
+
+/**
+ * Best effort cleanup for a processing time throw (as opposed to
+ * `iterator.next()` rejecting, which usually means the adapter's own
+ * generator already cleaned up). Two independent layers, since neither
+ * is guaranteed to reach every SDK on its own: `iterator.return()`
+ * forwards standard IteratorClose behavior down through the adapter's
+ * `for await...of` to the SDK's own stream, as long as that stream
+ * implements `.return()`; `streamController.abort()` closes any SDK
+ * that instead honors the AbortSignal threaded through `createStream`
+ * for the life of the request. Cleanup failing itself is swallowed,
+ * since it isn't the error being reported.
+ */
+async function closeIterator(
+  iterator: AsyncIterator<WireStreamChunk>,
+  streamController: AbortController,
+): Promise<void> {
+  try {
+    await iterator.return?.();
+  } catch {
+    // Cleanup failing isn't the error being reported; swallow it.
+  }
+  streamController.abort();
 }
 
 /**
@@ -104,97 +125,15 @@ export function buildStreamResult<T>(
   // size (not "has anyone started iterating yet") is what caps memory,
   // since the pump can outrace the caller starting iteration.
   const MAX_BUFFERED_CHUNKS = 10_000;
-  const buffered: StreamChunk[] = [];
-  const pending: Array<{
-    resolve: (result: IteratorResult<StreamChunk>) => void;
-    reject: (error: unknown) => void;
-  }> = [];
-  let streamDone = false;
-  let streamError: unknown;
-  let hasLoggedEviction = false;
+  const channel = createBackpressureChannel<StreamChunk>({
+    capacity: MAX_BUFFERED_CHUNKS,
+    logger,
+    label: 'stream chunk',
+  });
+  const { push, finish, fail } = channel;
+  const chunks = channel.iterable;
 
-  const push = (chunk: StreamChunk) => {
-    const waiter = pending.shift();
-
-    if (waiter) {
-      waiter.resolve({ done: false, value: chunk });
-      return;
-    }
-
-    buffered.push(chunk);
-
-    if (buffered.length > MAX_BUFFERED_CHUNKS * 2) {
-      // Nothing else surfaces this: without a log, a caller that never
-      // read (or fell behind on) `chunks` has no way to tell eviction,
-      // not a provider or transport bug, is why chunks are missing.
-      // Logged once per stream, not on every crossing, so an ignored
-      // high-volume stream doesn't spam dozens of near-identical lines.
-      if (!hasLoggedEviction) {
-        hasLoggedEviction = true;
-        logger.warn(
-          `[VernLLM] stream chunk buffer exceeded cap (${MAX_BUFFERED_CHUNKS}), evicting ` +
-            `${buffered.length - MAX_BUFFERED_CHUNKS} oldest chunk(s); buffered=${buffered.length}. ` +
-            'The chunks iterable was never read (or fell far behind) for this stream.',
-        );
-      }
-
-      // Trim back down to the cap in one batch operation instead of
-      // `shift()`ing a single element off on every push once the cap is
-      // reached. A per-push `shift()` here is O(current length) in the
-      // worst case, cheap for a handful of calls, but that cost is
-      // paid on *every* push for the remainder of an ignored stream,
-      // and its real-world cost isn't a stable, engine-independent
-      // property: benchmarking this exact pattern at a similar backing
-      // -array size showed multi-second stalls for what should be
-      // sub-millisecond work. Letting the array grow to 2x the cap
-      // before trimming amortizes the O(n) `splice` across
-      // `MAX_BUFFERED_CHUNKS` pushes, so the average cost per push
-      // stays O(1) regardless of how far past the cap the array is
-      // allowed to grow before trimming.
-      buffered.splice(0, buffered.length - MAX_BUFFERED_CHUNKS);
-    }
-  };
-
-  const finish = () => {
-    streamDone = true;
-
-    for (const waiter of pending.splice(0)) {
-      waiter.resolve({ done: true, value: undefined });
-    }
-  };
-
-  const fail = (error: unknown) => {
-    streamDone = true;
-    streamError = error;
-
-    for (const waiter of pending.splice(0)) {
-      waiter.reject(error);
-    }
-  };
-
-  const chunks: AsyncIterable<StreamChunk> = {
-    [Symbol.asyncIterator]() {
-      return {
-        next(): Promise<IteratorResult<StreamChunk>> {
-          if (buffered.length) {
-            return Promise.resolve({ done: false, value: buffered.shift() as StreamChunk });
-          }
-
-          if (streamDone) {
-            return streamError
-              ? Promise.reject(streamError)
-              : Promise.resolve({ done: true, value: undefined });
-          }
-
-          return new Promise((resolve, reject) => {
-            pending.push({ resolve, reject });
-          });
-        },
-      };
-    },
-  };
-
-  const toolCallAcc = new Map<number, { id?: string; name?: string; args: string }>();
+  const toolCalls = createToolCallAccumulator();
 
   let textAcc = '';
   let usage: TokenUsage | undefined;
@@ -215,57 +154,9 @@ export function buildStreamResult<T>(
           textAcc += wireChunk.delta;
           push({ type: 'text-delta', delta: wireChunk.delta });
         } else if (wireChunk.type === 'tool_call_delta') {
-          let entry = toolCallAcc.get(wireChunk.index);
-
-          if (!entry) {
-            // Check before creating the entry so an unbounded sequence of
-            // provider-supplied indices cannot grow the map.
-            if (toolCallAcc.size >= MAX_TOOL_CALLS) {
-              throw new LLMError(
-                `Stream contained more than ${MAX_TOOL_CALLS} distinct tool calls`,
-                'validation',
-              );
-            }
-
-            entry = { args: '' };
-          }
-
-          const argumentsDelta = wireChunk.argumentsDelta ?? '';
-          // Check before concatenation: string growth is the other unbounded
-          // path, including when one delta is already very large.
-          if (entry.args.length + argumentsDelta.length > MAX_TOOL_ARGUMENTS_LENGTH) {
-            throw new LLMError(
-              `Tool call arguments exceeded the ${MAX_TOOL_ARGUMENTS_LENGTH}-character stream limit`,
-              'validation',
-            );
-          }
-
-          entry.id ??= wireChunk.id;
-          entry.name ??= wireChunk.name;
-          entry.args += argumentsDelta;
-          toolCallAcc.set(wireChunk.index, entry);
-
-          push({
-            type: 'tool_call_delta',
-            index: wireChunk.index,
-            id: wireChunk.id,
-            name: wireChunk.name,
-            argsDelta: wireChunk.argumentsDelta,
-            complete: wireChunk.complete,
-          });
+          push(toolCalls.apply(wireChunk));
         } else if (wireChunk.type === 'usage') {
-          const reasoningTokens = wireChunk.usage.completion_tokens_details?.reasoning_tokens;
-
-          usage = {
-            promptTokens: wireChunk.usage.prompt_tokens ?? 0,
-            completionTokens: wireChunk.usage.completion_tokens ?? 0,
-            totalTokens: wireChunk.usage.total_tokens ?? 0,
-            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-            requestId,
-            model,
-            provider: providerName,
-            usedFallback: isFallback,
-          };
+          usage = toTokenUsage(wireChunk.usage, { requestId, model, providerName, isFallback });
           push({ type: 'usage', usage });
         }
 
@@ -277,34 +168,7 @@ export function buildStreamResult<T>(
         );
       }
     } catch (error) {
-      // Best-effort cleanup for a processing-time throw (as opposed to
-      // `iterator.next()` rejecting, which usually means the adapter's
-      // own generator already cleaned up). Two independent layers,
-      // since neither is guaranteed to reach every SDK on its own:
-      //
-      // 1. `iterator.return()`: `iterator` is the async generator
-      //    returned by the adapter's `createStream`, and every
-      //    adapter's `createStream` body is a `for await...of` over
-      //    the SDK's raw stream. Calling `.return()` on a generator
-      //    suspended inside a `for await...of` forwards `.return()` to
-      //    the iterable being iterated, standard IteratorClose
-      //    behavior, so this one call closes the whole chain down to
-      //    the SDK's own stream, as long as the SDK's stream
-      //    implements `.return()` (true for every adapter here, see
-      //    the "propagates .return()" test in each adapter's stream
-      //    unit tests).
-      // 2. `streamController.abort()`: aborts the same signal every
-      //    adapter received for this call. SDKs that honor an
-      //    AbortSignal for the life of the request, arguably the more
-      //    common pattern than implementing custom `.return()`
-      //    forwarding, get closed this way even if layer 1 has nothing
-      //    to forward to.
-      try {
-        await iterator.return?.();
-      } catch {
-        // Cleanup failing isn't the error being reported; swallow it.
-      }
-      streamController.abort();
+      await closeIterator(iterator, streamController);
 
       const normalized = normalizeError(error, signal);
 
@@ -331,15 +195,7 @@ export function buildStreamResult<T>(
     }
 
     try {
-      const wireToolCalls: WireToolCall[] | undefined = toolCallAcc.size
-        ? [...toolCallAcc.entries()]
-            .sort(([indexA], [indexB]) => indexA - indexB)
-            .map(([, entry]) => ({
-              id: entry.id ?? '',
-              type: 'function' as const,
-              function: { name: entry.name ?? '', arguments: entry.args },
-            }))
-        : undefined;
+      const wireToolCalls: WireToolCall[] | undefined = toolCalls.toWireToolCalls();
 
       const finalized = options.finalize(textAcc, wireToolCalls, usage);
 

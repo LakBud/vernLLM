@@ -1,3 +1,5 @@
+import { toTokenUsage } from './utils/usage.utils.js';
+
 import type { Logger } from '../../logger.js';
 import type { LLMError } from '../../types/errors.js';
 import type { LLMClient, TokenUsage } from '../../types/index.js';
@@ -54,18 +56,7 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
   ): TokenUsage | undefined {
     if (!response.usage) return undefined;
 
-    const reasoningTokens = response.usage.completion_tokens_details?.reasoning_tokens;
-
-    return {
-      promptTokens: response.usage.prompt_tokens ?? 0,
-      completionTokens: response.usage.completion_tokens ?? 0,
-      totalTokens: response.usage.total_tokens ?? 0,
-      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-      requestId,
-      model,
-      provider: providerName,
-      usedFallback: isFallback,
-    };
+    return toTokenUsage(response.usage, { requestId, model, providerName, isFallback });
   }
 
   function actualTokensFor(usage: TokenUsage | undefined): number | undefined {
