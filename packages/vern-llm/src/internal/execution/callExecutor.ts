@@ -4,6 +4,7 @@ import { createMiddlewareStateBag } from '../../types/middleware.js';
 import { makeEventReporter } from '../circuitBreaker.utils.js';
 import { createBreakerGateway, type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
+import { finalizeResponse } from './responseFinalizer.js';
 import { buildStreamResult } from './streamAccumulator.js';
 import { createUsageReporter, type UsageReporter } from './usageReporter.js';
 import { describeError, extractStatus, normalizeError } from './utils/errors.utils.js';
@@ -15,7 +16,6 @@ import {
 import { defaultParseJson } from './utils/parse.utils.js';
 import { acquireRateLimit } from './utils/rateLimitDispatch.utils.js';
 import { recoverDelay, retryWithBackoff, shouldRetry, withTimeout } from './utils/retry.utils.js';
-import { parseWireToolCalls } from './utils/wire.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { RateLimiter } from '../../rateLimit.js';
@@ -27,11 +27,9 @@ import type {
   RetryAttempt,
   StreamChunk,
   TokenUsage,
-  ToolIssue,
   VernLLMEvent,
   VernLLMMiddleware,
   WireCallRequest,
-  WireToolCall,
 } from '../../types/index.js';
 
 /**
@@ -429,7 +427,7 @@ export class CallExecutor {
       const rawContent = response.choices?.[0]?.message?.content;
       const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
 
-      return this.finalizeResponse(
+      return finalizeResponse(
         rawContent,
         wireToolCalls,
         params,
@@ -438,7 +436,13 @@ export class CallExecutor {
         requestId,
         attempt,
         state,
-        gateway,
+        {
+          gateway,
+          usageReporter: this.usageReporter,
+          logger: this.logger,
+          redactText: (text) => this.redactText(text),
+          parseJson: this.parseJson,
+        },
       );
     } finally {
       release?.();
@@ -448,126 +452,6 @@ export class CallExecutor {
   /** Applies `redact` (if configured); otherwise returns `text` unchanged. */
   private redactText(text: string): string {
     return this.redact ? this.redact(text) : text;
-  }
-
-  /**
-   * Applies `redact` (if configured) to whatever the debug log is about
-   * to show: real content when there is any, otherwise the tool-call
-   * placeholder, which carries no user data and passes through
-   * `redact` unchanged in practice but is included for a caller whose
-   * `redact` does something structural (e.g. adding a marker) rather
-   * than just scrubbing PII.
-   */
-  private redactedOutput(
-    content: string | undefined,
-    wireToolCalls: WireToolCall[] | undefined,
-  ): string {
-    return this.redactText(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`);
-  }
-
-  /**
-   * Shapes a fully-arrived response (content and/or tool_calls, already
-   * extracted from the provider's payload) into `T` or a
-   * `CallWithToolsResult<T>`. Reused by the streaming path once it has
-   * buffered the full text/tool-call deltas, so there's no separate
-   * parsing/validation logic for streaming.
-   *
-   * Normalizes and reports usage failure on error itself, so every caller
-   * gets identical error handling without duplicating it.
-   */
-  private finalizeResponse<T>(
-    rawContent: string | null | undefined,
-    wireToolCalls: WireToolCall[] | undefined,
-    params: CallParams<T>,
-    useJson: boolean,
-    usage: TokenUsage | undefined,
-    requestId: string,
-    attempt: number,
-    state: MiddlewareStateBag,
-    gateway: BreakerGateway,
-  ): T | CallWithToolsResult<T> {
-    try {
-      // `.trim()` runs inside this try: a malformed response shape
-      // (e.g. a non-string `content`) throws here and is normalized and
-      // reported like any other post-response failure.
-      const content = rawContent?.trim();
-
-      if (!content && !wireToolCalls?.length) {
-        throw new LLMError('Empty LLM response', 'api', { code: 'empty_response' });
-      }
-
-      this.logger.debug(
-        `[VernLLM:${requestId}] output:\n${this.redactedOutput(content, wireToolCalls).slice(0, 800)}`,
-      );
-
-      if (wireToolCalls?.length) {
-        if (!params.tools) {
-          // Same class of problem as the other tool-contract codes below:
-          // a provider contract violation, not an HTTP failure, so this is
-          // `type: 'validation'` rather than `'api'`. Byte-for-byte
-          // identical on retry, so not retryable.
-          throw new LLMError(
-            'Provider returned tool_calls but no `tools` were sent with this call.',
-            'validation',
-            { code: 'unexpected_tool_calls' },
-          );
-        }
-
-        if (params.toolChoice === 'none') {
-          // `toolChoice: 'none'` is what lets `call()`'s type narrow to
-          // `ContentResult<T>` (see `ToolsDisabledCallParams`). A
-          // nonconforming provider/adapter returning tool_calls anyway
-          // would silently break that guarantee for the caller, so this
-          // is treated as a hard API-contract violation rather than
-          // passed through as a normal tool_calls result. The request
-          // itself is byte-for-byte identical on retry, so this repeats
-          // deterministically like the other tool-contract failures
-          // below: not retryable, and not the provider being unhealthy.
-          throw new LLMError(
-            "Provider returned tool_calls despite toolChoice: 'none'.",
-            'validation',
-            {
-              code: 'tool_choice_none_violated',
-            },
-          );
-        }
-
-        const toolCalls = parseWireToolCalls(wireToolCalls);
-
-        this.validateToolCallArguments(toolCalls, params.tools);
-        gateway.recordSuccess(attempt, params.signal, state);
-        this.usageReporter.reportSuccess(usage);
-
-        return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
-      }
-
-      // No tool_calls here, so content must be present.
-      const textContent = content ?? '';
-
-      if (!useJson) {
-        gateway.recordSuccess(attempt, params.signal, state);
-        this.usageReporter.reportSuccess(usage);
-
-        return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
-      }
-
-      const result = this.parseAndValidate<T>(textContent, params.schema);
-      gateway.recordSuccess(attempt, params.signal, state);
-      this.usageReporter.reportSuccess(usage);
-
-      return params.tools ? { type: 'content', content: result } : result;
-    } catch (error) {
-      // Normalized first so onUsageFailure always gets a real LLMError.
-      // Also covers aborted signals: normalizeError returns type
-      // 'aborted' in that case.
-      const normalized = normalizeError(error, params.signal);
-
-      if (usage && normalized.type !== 'aborted') {
-        this.usageReporter.reportFailure(usage, normalized, attempt);
-      }
-
-      throw normalized;
-    }
   }
 
   /**
@@ -729,7 +613,7 @@ export class CallExecutor {
           releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         finalize: (textAcc, wireToolCalls, usage) =>
-          this.finalizeResponse(
+          finalizeResponse(
             textAcc,
             wireToolCalls,
             params,
@@ -738,7 +622,13 @@ export class CallExecutor {
             requestId,
             attempt,
             state,
-            gateway,
+            {
+              gateway,
+              usageReporter: this.usageReporter,
+              logger: this.logger,
+              redactText: (text) => this.redactText(text),
+              parseJson: this.parseJson,
+            },
           ),
       });
 
@@ -751,104 +641,6 @@ export class CallExecutor {
       // open hands `release` off above and leaves this a no-op.
       release?.();
     }
-  }
-
-  /**
-   * Checks every `ToolCall` against the `tools` that were offered, catching
-   * a hallucinated tool name and a duplicate call id before either reaches
-   * the application's dispatch table, then runs each tool's
-   * `argumentsSchema`, if present.
-   *
-   * Contract failures (unknown name, duplicate id) are collected across
-   * every call and thrown together as one `type: 'validation'` error with
-   * `issues: ToolIssue[]`, since retrying a request that already has these
-   * errors cannot help (excluded from retry by `type`) and a caller fixing
-   * them wants to see every one, not just the first. Schema failures keep
-   * the original single-error, `type: 'validation'` shape rather than being
-   * folded into the aggregate, since they're a distinct failure kind from
-   * the contract failures above.
-   */
-  private validateToolCallArguments(
-    toolCalls: { id: string; name: string; arguments: unknown }[],
-    tools: NonNullable<CallParams<unknown>['tools']>,
-  ): void {
-    const known = new Map(tools.map((t) => [t.name, t]));
-    const seenIds = new Set<string>();
-    const toolIssues: ToolIssue[] = [];
-
-    for (const call of toolCalls) {
-      if (seenIds.has(call.id)) {
-        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'duplicate_tool_call_id' });
-      }
-      seenIds.add(call.id);
-
-      if (!known.has(call.name)) {
-        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'unknown_tool' });
-      }
-    }
-
-    if (toolIssues.length > 0) {
-      const unknownTool = toolIssues.find((i) => i.code === 'unknown_tool');
-      const primary = unknownTool
-        ? `Model requested tool "${unknownTool.name}", which was not in the tools offered ([${[...known.keys()].join(', ')}]).`
-        : `Duplicate tool call id "${toolIssues[0]!.toolCallId}" in the model's response.`;
-
-      // Most responses hit exactly one issue. When there's more than one,
-      // say so, since toolCalls[0]'s problem alone would otherwise read as
-      // the whole story.
-      const message =
-        toolIssues.length > 1
-          ? `${primary} (${toolIssues.length} tool call issues total, see error.issues.)`
-          : primary;
-
-      throw new LLMError(message, 'validation', {
-        code: unknownTool ? 'unknown_tool' : 'duplicate_tool_call_id',
-        issues: toolIssues,
-      });
-    }
-
-    for (const call of toolCalls) {
-      const definition = known.get(call.name);
-
-      if (!definition?.argumentsSchema) continue;
-
-      const result = definition.argumentsSchema.safeParse(call.arguments);
-
-      if (!result.success) {
-        throw new LLMError(
-          `Arguments for tool call "${call.name}" failed validation`,
-          'validation',
-          {
-            issues: result.error,
-          },
-        );
-      }
-    }
-  }
-
-  /** Parses response content as JSON and validates it against `schema` when supplied. */
-  private parseAndValidate<T>(content: string, schema?: CallParams<T>['schema']): T {
-    let parsed: unknown;
-
-    try {
-      parsed = this.parseJson(content);
-    } catch {
-      throw new LLMError('Invalid JSON response', 'parse');
-    }
-
-    if (parsed === null || parsed === undefined) {
-      throw new LLMError('Invalid JSON response', 'parse');
-    }
-
-    if (!schema) return parsed as T;
-
-    const result = schema.safeParse(parsed);
-
-    if (!result.success) {
-      throw new LLMError('Schema validation failed', 'validation', { issues: result.error });
-    }
-
-    return result.data;
   }
 
   /**
