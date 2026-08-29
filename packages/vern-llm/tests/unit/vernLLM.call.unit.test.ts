@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { LLMError } from '../../src/types/index.js';
+import { LLMError, type CallResult } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse, textResponse, FakeApiError, at } from '../helpers.js';
 
@@ -1113,6 +1113,61 @@ describe('VernLLM.call, reserveUsage/refundUsage', () => {
       }),
     ).rejects.toMatchObject({ type: 'aborted' });
 
+    expect(llm.getCircuitState()).toBe('closed');
+  });
+});
+
+describe('VernLLM.call, abort during wrap vs breaker trial slot', () => {
+  it('never claims the half-open trial slot when the signal aborts inside wrap, before assertBreakerClosed runs', async () => {
+    const controller = new AbortController();
+
+    const abortDuringWrap = {
+      // Scoped to only the one call that passes `controller.signal`, so
+      // the unrelated breaker-tripping call and the final trial call are
+      // untouched by this middleware entirely, not merely by an abort
+      // that happens to be a no-op for them.
+      enabled: (ctx: { signal?: AbortSignal }) => ctx.signal === controller.signal,
+      wrap: async (_request: unknown, next: () => Promise<CallResult>) => {
+        controller.abort();
+        return next();
+      },
+    };
+
+    const { client, create } = createMockClient([new Error('boom'), jsonResponse({ ok: true })]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 0 },
+      middleware: [abortDuringWrap],
+    });
+
+    // 1) One real failure trips the breaker open. No signal is aborted
+    // on this call, so `wrap` firing `controller.abort()` here is
+    // harmless: nothing downstream reads `controller.signal` yet.
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
+      type: 'unknown',
+    });
+    expect(llm.getCircuitState()).toBe('open');
+
+    // 2) A second call whose signal is aborted by the `wrap` middleware,
+    // before `assertBreakerClosed` is ever reached. It must fail with
+    // 'aborted', never dispatch to the provider, and must not touch the
+    // breaker at all.
+    await expect(
+      llm.call({ systemPrompt: 's', userContent: 'u', signal: controller.signal }),
+    ).rejects.toMatchObject({ type: 'aborted' });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(llm.getCircuitState()).toBe('open');
+
+    // 3) A genuine, non-aborted call still gets to be the real half-open
+    // trial (not rejected as 'circuit_trial_in_flight') and closes the
+    // circuit on success, proving step 2 never consumed the trial slot.
+    await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).resolves.toEqual({
+      ok: true,
+    });
+    expect(create).toHaveBeenCalledTimes(2);
     expect(llm.getCircuitState()).toBe('closed');
   });
 });
