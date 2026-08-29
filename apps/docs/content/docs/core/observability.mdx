@@ -5,7 +5,7 @@ description: One event stream for retries, circuit state transitions, and rate l
 
 ```ts title="observability-setup.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   onEvent: (event) => {
     switch (event.kind) {
@@ -45,7 +45,7 @@ call site, so a throwing handler can never break a call.
 
 ```ts title="observability-throwing-handler.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   onEvent: () => {
     throw new Error('boom'); // caught and logged, never surfaces to the caller

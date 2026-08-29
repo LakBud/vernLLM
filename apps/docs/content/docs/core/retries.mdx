@@ -5,7 +5,7 @@ description: Exponential backoff with jitter, Retry-After awareness, and what ge
 
 ```ts title="retries-setup.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   maxRetries: 3, // retries after the first attempt, so 4 attempts total
   baseDelayMs: 500, // base for exponential backoff between retries

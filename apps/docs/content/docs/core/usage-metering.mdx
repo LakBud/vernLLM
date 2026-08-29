@@ -16,7 +16,7 @@ release that reservation when a call fails after reservation succeeded.
 
 ```ts title="usage-metering-setup.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
 });
 
@@ -108,7 +108,7 @@ A typical billing flow uses both:
 
 ```ts title="billing-flow.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   onUsage: (usage) => {
     billing.record(usage);

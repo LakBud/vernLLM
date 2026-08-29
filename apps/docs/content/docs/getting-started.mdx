@@ -62,9 +62,9 @@ yarn add openai
 
 ```ts title="getting-started.ts"
 import OpenAI from 'openai';
-import { VernLLM } from 'vern-llm';
+import { VernLLM, fromOpenAI } from 'vern-llm';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 
 const llm = new VernLLM({
   client: openai,

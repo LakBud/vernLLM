@@ -5,7 +5,7 @@ description: Stop hammering a provider that's down
 
 ```ts title="circuit-breaker-setup.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   circuitBreaker: { threshold: 5, cooldownMs: 30_000 }, // or `true` for defaults
 });
@@ -91,7 +91,7 @@ target in declaration order.
 
 ```ts title="circuit-breaker-fallback-state.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   circuitBreaker: {
     threshold: 5,
@@ -139,7 +139,7 @@ explicit: it drives `gpt-4o` to the configured threshold with repeated failures 
 
 ```ts title="circuit-breaker-isolate-by-model.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   circuitBreaker: {
     threshold: 5,
@@ -185,7 +185,7 @@ the resolved model that triggered the transition:
 
 ```ts title="circuit-breaker-on-state-change.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   circuitBreaker: {
     threshold: 5,

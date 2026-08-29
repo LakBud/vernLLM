@@ -15,7 +15,7 @@ or Upstash when multiple processes need the same cache.
 import { InMemoryCacheAdapter } from 'vern-llm';
 
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   cache: new InMemoryCacheAdapter(1000), // maxSize limit; defaults to 1000
 });
@@ -108,7 +108,7 @@ Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys w
 import { NormalizedCacheAdapter } from 'vern-llm';
 
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   cache: new NormalizedCacheAdapter(), // wraps InMemoryCacheAdapter by default
 });
@@ -149,7 +149,7 @@ const cache = new TieredCacheAdapter(
   new UpstashCacheAdapter(), // L2: shared across processes, slower
 );
 
-const llm = new VernLLM({ client: openai, model: 'gpt-4o', cache });
+const llm = new VernLLM({ client: fromOpenAI(openai), model: 'gpt-4o', cache });
 ```
 
 `TieredCacheAdapter` forwards `resolveKey` to whichever tier implements it, preferring L1 since

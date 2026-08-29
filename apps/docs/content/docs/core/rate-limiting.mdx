@@ -5,7 +5,7 @@ description: Stay under a provider's requests/tokens/concurrency limits before t
 
 ```ts title="rate-limiting-setup.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   rateLimit: {
     requestsPerMinute: 500,
@@ -52,7 +52,7 @@ smaller request skip ahead.
 
 ```ts title="rate-limiting-queue-options.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   rateLimit: {
     requestsPerMinute: 60,
@@ -118,7 +118,7 @@ mix calls for:
 import { encode } from 'gpt-tokenizer';
 
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   rateLimit: {
     tokensPerMinute: 200_000,
@@ -141,7 +141,7 @@ buckets again:
 
 ```ts title="rate-limiting-with-retries.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   maxRetries: 3,
   rateLimit: { requestsPerMinute: 500 },
@@ -159,7 +159,7 @@ from starving another:
 
 ```ts title="rate-limiting-bulkhead.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   rateLimit: { maxConcurrent: 50 },
 
@@ -254,7 +254,7 @@ never had to wait (capacity was immediately available) does not emit this event.
 
 ```ts title="rate-limiting-observability.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
   onEvent: (event) => {
