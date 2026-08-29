@@ -60,7 +60,7 @@ jobs:
 
       - name: Trigger production publish
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_DISPATCH_TOKEN }}
           TAG: ${{ steps.pkg.outputs.tag }}
         run: |
           gh workflow run publish.yml \
