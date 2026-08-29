@@ -151,6 +151,32 @@ const llm = new VernLLM({
 If the first attempt fails and a retry is due, that retry queues for capacity exactly like the
 original attempt did.
 
+## Bulkhead isolation with fallback
+
+Each target in a `fallback` chain, primary and every fallback, gets its own `rateLimit`, entirely
+independent of every other target's. Setting `maxConcurrent` per target keeps one target's load
+from starving another:
+
+```ts title="rate-limiting-bulkhead.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: { maxConcurrent: 50 },
+
+  fallback: {
+    client: fromAnthropic(anthropic),
+    model: 'claude-sonnet-5',
+    rateLimit: { maxConcurrent: 10 },
+  },
+});
+```
+
+Without this, a burst against a struggling primary could consume every concurrency slot in a single
+shared pool, starving calls that would have gone to a healthy fallback instead. Because each
+target's limiter is its own, the fallback keeps its reserved capacity no matter how saturated the
+primary gets. `rateLimit` is one of the two options never inherited from the parent instance, see
+[Fields that don't inherit](/docs/core/provider-fallback#fields-that-dont-inherit).
+
 ## `stream: true`
 
 For a streaming call, capacity is held for the connection's entire lifetime and released only once
