@@ -6,6 +6,8 @@ import {
   isFallbackExhaustedError,
   isLLMError,
   LLMError,
+  metaRef,
+  type CallMeta,
   type VernLLMEvent,
 } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
@@ -616,6 +618,30 @@ describe('VernLLM, fallback', () => {
       to: 'fallback[0]',
       fromIndex: -1,
       toIndex: 0,
+    });
+  });
+});
+
+describe('metaRef', () => {
+  it('returns an empty box assignable to CallParams["meta"]', () => {
+    const ref = metaRef();
+
+    expect(ref).toEqual({});
+    expect(ref.current).toBeUndefined();
+  });
+
+  it('gets populated by call() the same way a hand rolled ref does', async () => {
+    const { client } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'primary-model' });
+
+    const ref = metaRef();
+    const result = await llm.call({ userContent: 'u', meta: ref });
+
+    expect(result).toEqual({ ok: true });
+    expect(ref.current).toMatchObject<Partial<CallMeta>>({
+      provider: 'primary',
+      model: 'primary-model',
+      usedFallback: false,
     });
   });
 });

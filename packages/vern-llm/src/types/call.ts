@@ -71,10 +71,18 @@ export interface ImageBlock {
 /** A single segment of multimodal `userContent`. */
 export type ContentBlock = TextBlock | ImageBlock;
 
-export interface CallParams<
+/**
+ * Every field of a call request except the `reserveUsage`/`refundUsage`
+ * hooks from `UsageHooks`. `CallParams` is this plus `UsageHooks`; the
+ * `Cached*` param types below are call sites that want the request shape
+ * without those two hooks (usage is metered once, at the `cachedCall`
+ * level, not per-request), and use this directly instead of re-deriving
+ * it with `Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>` each time.
+ */
+export interface LLMRequestShape<
   T = unknown,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
-> extends UsageHooks {
+> {
   systemPrompt?: string;
 
   /** Current user message, as text or multimodal content blocks. */
@@ -209,6 +217,9 @@ export interface CallParams<
   meta?: { current?: CallMeta };
 }
 
+export interface CallParams<T = unknown, Tools extends readonly ToolDefinition[] = ToolDefinition[]>
+  extends LLMRequestShape<T, Tools>, UsageHooks {}
+
 /**
  * A `CallParams` variant where tool calling is explicitly enabled.
  *
@@ -318,7 +329,7 @@ export interface CachedCallInput extends UsageHooks {
  * the caching docs for why.
  */
 export type CachedCallParams<T> = CachedCallInput & {
-  call: Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>;
+  call: LLMRequestShape<T>;
 };
 
 /**
@@ -335,7 +346,9 @@ export type CachedToolCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = CachedCallInput & {
-  call: Omit<ToolEnabledCallParams<T, Tools>, 'reserveUsage' | 'refundUsage'>;
+  call: LLMRequestShape<T, Tools> & {
+    tools: NonNullable<LLMRequestShape<T, Tools>['tools']>;
+  };
 };
 
 /**
@@ -348,7 +361,7 @@ export type CachedConditionalToolCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = CachedCallInput & {
-  call: Omit<ConditionalToolCallParams<T, Tools>, 'reserveUsage' | 'refundUsage'>;
+  call: LLMRequestShape<T, Tools> & { tools: Tools | undefined };
 };
 
 /** Cached conditional tool-call parameters whose non-tool result is plain text. */
@@ -363,7 +376,10 @@ export type CachedConditionalStringToolCallParams<
  * `cachedCall()` overload that returns a plain `string`.
  */
 export type CachedJsonModeDisabledCallParams = CachedCallInput & {
-  call: Omit<JsonModeDisabledCallParams, 'reserveUsage' | 'refundUsage'>;
+  call: Omit<LLMRequestShape<unknown>, 'jsonSchema'> & {
+    jsonMode: false;
+    jsonSchema?: never;
+  };
 };
 
 /**
@@ -371,5 +387,8 @@ export type CachedJsonModeDisabledCallParams = CachedCallInput & {
  * Selects the `cachedCall()` overload that returns a `JsonValue`.
  */
 export type CachedJsonModeEnabledCallParams = CachedCallInput & {
-  call: Omit<JsonModeEnabledCallParams, 'reserveUsage' | 'refundUsage'>;
+  call: Omit<LLMRequestShape<JsonValue>, 'schema'> & {
+    jsonMode: true;
+    schema?: never;
+  };
 };

@@ -190,8 +190,9 @@ await llm.cachedCall({
 ```
 
 `call`'s type on `CachedCallParams`, `CachedToolCallParams`, `CachedStreamCallParams`, and
-`CachedStreamToolCallParams` now omits `reserveUsage`/`refundUsage` entirely
-(`Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>`), so this is a compile error instead:
+`CachedStreamToolCallParams` excludes `reserveUsage`/`refundUsage` entirely (it's built from
+`LLMRequestShape<T>`, the request-only base `CallParams` itself extends), so this is a compile
+error instead:
 
 ```ts
 // After: reserveUsage/refundUsage move to the top level
