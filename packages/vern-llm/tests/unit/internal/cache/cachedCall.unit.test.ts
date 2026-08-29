@@ -6,12 +6,21 @@ import { createMockClient, jsonResponse } from '../../../helpers.js';
 
 import type {
   CachedCallParams,
+  CachedConditionalToolCallParams,
   CachedJsonModeDisabledCallParams,
   CachedJsonModeEnabledCallParams,
   CachedStreamCallParams,
+  CachedStreamConditionalToolCallParams,
+  CachedStreamJsonModeDisabledCallParams,
+  CachedStreamJsonModeEnabledCallParams,
   CachedStreamToolCallParams,
+  CachedToolCallParams,
   CallMeta,
+  LLMRequestShape,
 } from '../../../../src/types/index.js';
+import type { ToolDefinition } from '../../../../src/types/tools.js';
+
+type WeatherTool = ToolDefinition<'getWeather', { city: string }>;
 
 describe('CachedJsonModeDisabledCallParams/CachedJsonModeEnabledCallParams, reserveUsage/refundUsage exclusion', () => {
   it('omits reserveUsage/refundUsage from `call`, same as the non-jsonMode aliases', () => {
@@ -28,6 +37,43 @@ describe('CachedStreamCallParams/CachedStreamToolCallParams, reserveUsage/refund
     expectTypeOf<CachedStreamCallParams<string>['call']>().not.toHaveProperty('refundUsage');
     expectTypeOf<CachedStreamToolCallParams<string>['call']>().not.toHaveProperty('reserveUsage');
     expectTypeOf<CachedStreamToolCallParams<string>['call']>().not.toHaveProperty('refundUsage');
+  });
+});
+
+describe('LLMRequestShape, reserveUsage/refundUsage exclusion', () => {
+  it('the base shape itself has no reserveUsage/refundUsage, since CallParams adds those via UsageHooks', () => {
+    expectTypeOf<LLMRequestShape<string>>().not.toHaveProperty('reserveUsage');
+    expectTypeOf<LLMRequestShape<string>>().not.toHaveProperty('refundUsage');
+  });
+
+  it('the remaining conditional-tool and JSON-mode cached variants exclude them too', () => {
+    expectTypeOf<CachedConditionalToolCallParams<string>['call']>().not.toHaveProperty(
+      'reserveUsage',
+    );
+    expectTypeOf<CachedConditionalToolCallParams<string>['call']>().not.toHaveProperty(
+      'refundUsage',
+    );
+    expectTypeOf<CachedStreamConditionalToolCallParams<string>['call']>().not.toHaveProperty(
+      'reserveUsage',
+    );
+    expectTypeOf<CachedStreamConditionalToolCallParams<string>['call']>().not.toHaveProperty(
+      'refundUsage',
+    );
+    expectTypeOf<CachedStreamJsonModeDisabledCallParams['call']>().not.toHaveProperty(
+      'reserveUsage',
+    );
+    expectTypeOf<CachedStreamJsonModeEnabledCallParams['call']>().not.toHaveProperty('refundUsage');
+  });
+});
+
+describe('LLMRequestShape, Tools generic preservation', () => {
+  it("carries the supplied Tools generic through to `call.tools`'s element type on the tool-enabled cached variants", () => {
+    expectTypeOf<
+      CachedToolCallParams<string, [WeatherTool]>['call']['tools'][number]
+    >().toEqualTypeOf<WeatherTool>();
+    expectTypeOf<
+      CachedStreamToolCallParams<string, [WeatherTool]>['call']['tools'][number]
+    >().toEqualTypeOf<WeatherTool>();
   });
 });
 

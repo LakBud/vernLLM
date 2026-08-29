@@ -189,10 +189,13 @@ await llm.cachedCall({
 });
 ```
 
-`call`'s type on `CachedCallParams`, `CachedToolCallParams`, `CachedStreamCallParams`, and
-`CachedStreamToolCallParams` excludes `reserveUsage`/`refundUsage` entirely (it's built from
-`LLMRequestShape<T>`, the request-only base `CallParams` itself extends), so this is a compile
-error instead:
+`call`'s type on every cached call params variant, `CachedCallParams`, `CachedToolCallParams<T,
+Tools>`, `CachedConditionalToolCallParams<T, Tools>`, `CachedJsonModeDisabledCallParams`,
+`CachedJsonModeEnabledCallParams`, and their streaming counterparts `CachedStreamCallParams`,
+`CachedStreamToolCallParams<T, Tools>`, `CachedStreamConditionalToolCallParams<T, Tools>`,
+`CachedStreamJsonModeDisabledCallParams`, `CachedStreamJsonModeEnabledCallParams`, excludes
+`reserveUsage`/`refundUsage` entirely (each is built from `LLMRequestShape<T, Tools>`, the
+request-only base `CallParams` itself extends), so this is a compile error instead:
 
 ```ts
 // After: reserveUsage/refundUsage move to the top level
