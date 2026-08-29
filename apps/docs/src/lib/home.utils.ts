@@ -163,24 +163,24 @@ export const annotations = [
 ];
 export const faqItems = [
   {
-    question: 'Why use VernLLM instead of calling the client directly?',
+    question: 'What problem does VernLLM solve?',
     answer:
-      'Every project calling an LLM API ends up writing the same defensive code: retry logic, timeouts, a circuit breaker, a cache layer, usually copied between projects and slightly wrong each time. VernLLM gives you those primitives with sensible defaults out of the box, so you keep your existing client and just wrap it.',
+      'LLM calls fail in ways plain SDK calls do not handle: timeouts, rate limit errors, a provider having an outage, or a request that just hangs. VernLLM adds retries with backoff, a circuit breaker, provider fallback, rate limiting, and caching around your existing client, so a single bad call does not take down your app.',
   },
   {
-    question: 'Do I need to change how I call my LLM client?',
+    question: 'Why use VernLLM instead of calling the client directly?',
     answer:
-      'No. VernLLM wraps the client you already have, OpenAI, Anthropic, Gemini, Bedrock, or anything OpenAI-compatible, so you keep your existing setup and just route calls through it.',
+      'Calling the client directly means you own retries, timeouts, circuit breaking, and caching yourself, code most teams end up rewriting per project. VernLLM ships those as configurable options on one class, so you keep your existing provider client and wrap it instead of reimplementing the resilience layer.',
   },
   {
     question: 'Can I bring my own cache backend?',
     answer:
-      'Yes. cachedCall works with any adapter implementing get/set (delete is optional), so you can plug in Redis, a database, or your own store instead of the built-in in-memory cache.',
+      'Yes. cachedCall accepts any adapter implementing get/set (delete is optional), so Redis, a database, or a custom store can replace the built-in in-memory cache without changing how you call it.',
   },
   {
     question: 'Can I hook into or modify requests before they go out?',
     answer:
-      'Yes, via middleware. transform lets you redact or change an outgoing request before it is sent, and wrap lets you observe or short-circuit one whole logical call, retries and fallback included, for logging, tracing, or cost tracking.',
+      'Yes, through middleware. transform edits or redacts an outgoing request before it is sent, and wrap runs around a whole logical call, retries and fallback attempts included, for logging, tracing, or cost tracking.',
   },
   {
     question: 'Is it typed?',
@@ -190,16 +190,6 @@ export const faqItems = [
   {
     question: 'How many dependencies does it add to my project?',
     answer:
-      'Zero runtime dependencies. VernLLM does not bundle Zod or provider SDKs; it relies on compatible interfaces instead, so you bring your own provider clients and schema validators while keeping your dependency tree minimal.',
-  },
-  {
-    question: 'How big is the bundle?',
-    answer:
-      '72+ kB minified, 21+ kB minified and gzipped. Small enough to drop into a project without thinking twice about it.',
-  },
-  {
-    question: 'Is it open source?',
-    answer:
-      'Yes, VernLLM is MIT licensed and open source. Use it in personal or commercial projects, fork it, or contribute back on GitHub.',
+      'Zero runtime dependencies. VernLLM does not bundle Zod or provider SDKs, it relies on compatible interfaces instead, so you bring your own provider clients and schema validators while keeping your dependency tree minimal.',
   },
 ];

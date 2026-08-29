@@ -132,7 +132,7 @@ export function MotionAccordion({ items, gap = 10, className }: MotionAccordionP
   const rawId = React.useId();
   const baseId = `accordion-${rawId.replace(/:/g, '')}`;
 
-  const [openIndex, setOpenIndex] = React.useState<number | null>(null);
+  const [openIndex, setOpenIndex] = React.useState<number | null>(0);
 
   const toggle = (i: number) => setOpenIndex((prev) => (prev === i ? null : i));
 
