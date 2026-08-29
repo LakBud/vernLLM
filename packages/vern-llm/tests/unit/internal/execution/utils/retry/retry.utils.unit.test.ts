@@ -804,7 +804,7 @@ describe('retryWithBackoff', () => {
         normalizeError,
         fn,
         maxRetries: 2,
-        attempts: attempts as never,
+        attempts,
         shouldRetryAttempt: () => true,
         recoverDelayForAttempt: immediateRecoverDelay(),
       }),

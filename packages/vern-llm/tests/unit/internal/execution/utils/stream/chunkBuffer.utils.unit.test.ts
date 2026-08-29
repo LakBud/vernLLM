@@ -187,4 +187,23 @@ describe('createBackpressureChannel, terminal error propagation', () => {
     await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
     await expect(iterator.next()).rejects.toThrow('boom');
   });
+
+  it.each([undefined, '', 0, null, false] as const)(
+    'rejects with a falsy failure value (%p) instead of resolving done: true',
+    async (falsyError) => {
+      const channel = createBackpressureChannel<number>({
+        capacity: 10,
+        logger: testLogger(),
+        label: 'item',
+      });
+      const iterator = channel.iterable[Symbol.asyncIterator]();
+      const pending = iterator.next();
+
+      channel.fail(falsyError);
+
+      await expect(pending).rejects.toBe(falsyError);
+      // A subsequent pull after already-failed must also reject, not resolve done.
+      await expect(iterator.next()).rejects.toBe(falsyError);
+    },
+  );
 });

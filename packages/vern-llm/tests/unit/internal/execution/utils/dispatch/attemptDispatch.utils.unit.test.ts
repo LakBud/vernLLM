@@ -138,10 +138,14 @@ describe('prepareAttempt', () => {
 
   it("estimates capacity from the fully built (post-transform) request, not the caller's params", async () => {
     const limiter = fakeLimiter({ release: vi.fn(), waitedMs: 0 });
+    const transformedRequest: WireCallRequest = { ...wireRequest, max_tokens: 999 };
+    const middleware: VernLLMMiddleware[] = [
+      { transform: () => ({ max_tokens: transformedRequest.max_tokens }) },
+    ];
 
-    await prepareAttempt(baseParams({ limiter }));
+    await prepareAttempt(baseParams({ limiter, middleware }));
 
-    expect(limiter.estimate).toHaveBeenCalledWith(wireRequest);
+    expect(limiter.estimate).toHaveBeenCalledWith(transformedRequest);
     expect(limiter.acquire).toHaveBeenCalledWith(42, undefined);
   });
 });

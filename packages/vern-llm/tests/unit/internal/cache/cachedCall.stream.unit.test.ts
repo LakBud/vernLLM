@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
   LLMError,
+  type CallMeta,
   type StreamChunk,
   type VernLLMMiddleware,
   type WireStreamChunk,
@@ -689,5 +690,95 @@ describe('VernLLM.cachedCall, stream: true', () => {
     expect(await drain((second as { chunks: AsyncIterable<StreamChunk> }).chunks)).toEqual([
       { type: 'text-delta', delta: 'recovered' },
     ]);
+  });
+});
+
+describe('VernLLM.cachedCall, stream: true, call.meta out-parameter', () => {
+  it('sets meta.current for a cache miss trigger once finalResult settles', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hi' }]]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+    const meta: { current?: CallMeta } = {};
+
+    const { finalResult } = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true, meta },
+    });
+
+    // Not set yet: the target is only known once `finalResult` settles
+    // in the cachedCall wrapper (unlike a direct `call()`, where it's
+    // set once the returned promise itself resolves).
+    await finalResult;
+
+    expect(meta.current).toMatchObject({ provider: 'primary', model: 'test-model' });
+  });
+
+  it("also sets a concurrent joiner's own meta.current once finalResult settles, not just the trigger's", async () => {
+    let resolveSecondChunk!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      resolveSecondChunk = resolve;
+    });
+
+    const { client } = createMockStreamingClient([
+      () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta' as const, delta: 'hi' };
+          await gate;
+          yield { type: 'text-delta' as const, delta: ' there' };
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const triggerMeta: { current?: CallMeta } = {};
+    const joinerMeta: { current?: CallMeta } = {};
+
+    // Both start before the trigger's stream has fully completed
+    // (gated on `gate`), so the second call genuinely joins the
+    // first's in-flight entry instead of hitting an already-cached
+    // value.
+    const trigger = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true, meta: triggerMeta },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const joiner = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true, meta: joinerMeta },
+    });
+
+    const [triggerResult, joinerResult] = await Promise.all([trigger, joiner]);
+
+    resolveSecondChunk();
+
+    await Promise.all([triggerResult.finalResult, joinerResult.finalResult]);
+
+    expect(triggerMeta.current).toMatchObject({ provider: 'primary', model: 'test-model' });
+    expect(joinerMeta.current).toEqual(triggerMeta.current);
+  });
+
+  it('leaves meta.current undefined on a true cache hit, since nothing was spent', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hi' }]]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const first = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true },
+    });
+    await first.finalResult;
+
+    const hitMeta: { current?: CallMeta } = {};
+    const second = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true, meta: hitMeta },
+    });
+    await second.finalResult;
+
+    expect(hitMeta.current).toBeUndefined();
   });
 });

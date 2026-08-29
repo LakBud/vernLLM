@@ -91,4 +91,23 @@ describe('createInFlightRegistry, track', () => {
 
     expect(registry.get('key')).toBe(second);
   });
+
+  it('does not delete a replacement entry when an older, already-superseded promise settles later', async () => {
+    const registry = createInFlightRegistry<string>();
+    let resolveFirst!: (v: string) => void;
+    const first = new Promise<string>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<string>(() => {});
+
+    registry.track('key', first);
+    registry.track('key', second);
+
+    resolveFirst('first value');
+    await first;
+    // Cleanup runs one microtask after `first` itself settles.
+    await Promise.resolve();
+
+    expect(registry.get('key')).toBe(second);
+  });
 });

@@ -594,12 +594,14 @@ export class VernLLM {
       this.cachedCallInnerParams.set(innerParams, middlewareState);
       return this.call(innerParams).finally(() => {
         // `this.call()` writes into `metaHolder`, the internal holder
-        // shared across trigger/joiners for this cache key. A
-        // caller-supplied `meta` on the inner `call` params (this
-        // function's own `params`, not the one passed to `this.call()`)
-        // is a separate out-parameter contract callers may still be
-        // relying on, so forward the written value there too instead
-        // of silently dropping it.
+        // shared across trigger/joiners for this cache key. Forwards it
+        // into *this* invocation's own `callerMeta` out-parameter
+        // immediately, which is only ever this function's caller when
+        // `callWrapped` runs at all: the trigger for this cache key.
+        // A joiner never runs its own `callWrapped` (it joins the
+        // trigger's already in-flight call instead, see
+        // `CacheOrchestrator`), so its `callerMeta` is forwarded
+        // separately below, once the joiner's own await resolves.
         if (callerMeta) callerMeta.current = metaHolder.current;
         this.cachedCallInnerParams.delete(innerParams);
       });
@@ -640,11 +642,27 @@ export class VernLLM {
 
       const streamResult = wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
 
-      // Released once the real outcome is known, not just once the
-      // stream opens, since a joiner can still arrive in between. Uses
-      // `.then(fn, fn)`, not `.finally(fn)`, so a mid-stream rejection
-      // doesn't leave an unhandled promise behind.
-      void streamResult.finalResult.then(releaseMetaHolder, releaseMetaHolder);
+      // Runs once the real outcome is known, whether that's this
+      // invocation's own stream (the trigger) or one it joined (a
+      // joiner never opens its own stream, see
+      // `CacheOrchestrator.runCachedStream`). Uses `.then(fn, fn)`, not
+      // `.finally(fn)`, so a mid-stream rejection doesn't leave an
+      // unhandled promise behind.
+      //
+      // Also forwards `metaHolder.current` into `callerMeta` here. For
+      // the trigger this duplicates (harmlessly) what `callWrapped`'s
+      // own finally already did the moment its stream opened; for a
+      // joiner, this is the only place its `callerMeta` ever gets set,
+      // since it never runs `callWrapped` itself. Reaching this point
+      // guarantees a target already answered (`metaHolder.current` is
+      // populated) or the whole call failed (it correctly stays
+      // `undefined`).
+      const onStreamSettled = () => {
+        if (callerMeta) callerMeta.current = metaHolder.current;
+        releaseMetaHolder();
+      };
+
+      void streamResult.finalResult.then(onStreamSettled, onStreamSettled);
 
       return streamResult;
     }
@@ -666,6 +684,18 @@ export class VernLLM {
           return { value, meta: metaHolder.current };
         },
       );
+
+      // Forwards `metaHolder.current` into this invocation's own
+      // `callerMeta`, trigger or joiner alike. By the time the above
+      // `runOperation`/`runCached` awaits resolve for *any* caller
+      // (trigger or joiner), the trigger's own `callWrapped` has
+      // already settled internally, whether this call joined that
+      // promise directly (`CacheOrchestrator.joinInFlight`) or ran it
+      // itself, so `metaHolder.current` is already populated by then.
+      // For the trigger this duplicates (harmlessly) what
+      // `callWrapped`'s own finally already did; for a joiner, this is
+      // the only place its `callerMeta` ever gets set.
+      if (callerMeta) callerMeta.current = metaHolder.current;
 
       return wrapped.value as T | CallWithToolsResult<T>;
     } finally {

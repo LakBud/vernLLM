@@ -50,6 +50,7 @@ export function createBackpressureChannel<T>(
     reject: (error: unknown) => void;
   }> = [];
   let done = false;
+  let failed = false;
   let failure: unknown;
   let hasLoggedEviction = false;
 
@@ -105,6 +106,7 @@ export function createBackpressureChannel<T>(
 
   function fail(error: unknown): void {
     done = true;
+    failed = true;
     failure = error;
 
     for (const waiter of pending.splice(0)) {
@@ -121,7 +123,7 @@ export function createBackpressureChannel<T>(
           }
 
           if (done) {
-            return failure
+            return failed
               ? Promise.reject(failure)
               : Promise.resolve({ done: true, value: undefined });
           }

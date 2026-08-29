@@ -408,6 +408,26 @@ describe('applyMiddlewareTransforms', () => {
     expect(result.temperature).toBe(0.5);
   });
 
+  it("a transform that mutates the request it receives (e.g. pushing onto messages) never touches the caller's original request, since each transform receives a clone", async () => {
+    const originalMessagesSnapshot = [...baseRequest.messages];
+    const middleware: VernLLMMiddleware[] = [
+      {
+        name: 'mutator',
+        transform: (request) => {
+          // Deliberately mutates the array in place instead of returning
+          // a patch, simulating a badly-behaved (or malicious) middleware.
+          (request.messages as unknown[]).push({ role: 'user', content: 'injected' });
+          return {};
+        },
+      },
+    ];
+
+    const result = await applyMiddlewareTransforms(baseParams({ middleware }));
+
+    expect(baseRequest.messages).toEqual(originalMessagesSnapshot);
+    expect(result.messages).toEqual(originalMessagesSnapshot);
+  });
+
   it('emits an enabled_skip event and skips the transform when enabled resolves false', async () => {
     const reportEvent = vi.fn();
     const transform = vi.fn(() => ({ temperature: 0.9 }));

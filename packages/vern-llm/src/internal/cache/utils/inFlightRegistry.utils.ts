@@ -37,7 +37,13 @@ export function createInFlightRegistry<T>(): InFlightRegistry<T> {
     void promise
       .catch(() => {})
       .finally(() => {
-        inFlight.delete(key);
+        // Only remove this entry if it's still the one registered under
+        // `key`: a newer `track()` call for the same key may have
+        // already replaced it, and that replacement must survive this
+        // (older) promise settling later.
+        if (inFlight.get(key) === promise) {
+          inFlight.delete(key);
+        }
       });
 
     return promise;
