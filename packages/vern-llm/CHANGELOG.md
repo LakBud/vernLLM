@@ -1,5 +1,38 @@
 # vern-llm
 
+## 2.5.0
+
+### Minor Changes
+
+- 03bb03d: Computed backoff now differs by failure type when no `Retry-After` header is present. A rate-limited (429) response backs off hardest, a server error (500 through 599) backs off somewhat more than the default curve, and every other retryable failure keeps the default curve. `getBackoffDelay` gains two new optional parameters, `rateLimited` and `serverError`, both defaulting to `false`, so any existing caller passing neither keeps today's exact behavior.
+- 1356095: `call()` and `cachedCall()` now accept an optional `deadlineMs`, a total time budget for the whole logical call spanning every retry and every fallback target, unlike `timeoutMs` which resets on each attempt. Once `deadlineMs` elapses, the call is aborted with `LLMError('aborted', { code: 'deadline_exceeded' })`, distinguishable from an abort caused by a caller-supplied `signal`. Purely additive: omitting `deadlineMs` leaves existing behavior unchanged.
+- d633815: Adds middleware support via a new `middleware` option on `VernLLMOptions`. Each entry can `transform` the outgoing wire request per attempt (patches, not full replacement; `addMessages`/`addTools` append without clobbering another middleware's own additions), `wrap` one whole logical call exactly once regardless of how many retries or fallback targets ran underneath it (with the ability to short-circuit the real call entirely), observe the same events reported on `onEvent` via its own `onEvent`, and gate itself per call via `enabled`. `wrap` and `transform` compose across several middleware in `priority` order, and can coordinate through a typed, collision-proof `ctx.state` (see the new `createStateKey`). A new `createMiddleware` helper adds an `onError` convenience on top of `wrap` for the common "I only care about failures" case. A new `middlewareTimeoutMs` option (default 5000) bounds `transform` and a function `enabled`; values `<= 0` disable the timeout (unbounded). `wrap` itself is intentionally never bounded by it, since it legitimately spans the whole call.
+
+  `MiddlewareContext` is now a discriminated union, `AttemptContext | PreDispatchContext`, tagged by `ctx.stage`. `transform`'s own `ctx` narrows to `AttemptContext` (`requestedProvider`/`requestedModel`/`isFallbackAttempt`/`attempt`, all accurate to the real target for that attempt). `wrap`'s own `ctx` (and `createMiddleware`'s `onError`, built from `wrap` internally) narrows to `PreDispatchContext`, which only carries `primaryProvider`/`primaryModel`: there is no real target yet when `wrap` runs, so the placeholder `isFallbackAttempt`/`attempt` fields from the previous single-shape `MiddlewareContext` are gone rather than silently always reporting `false`/`1`. `enabled` and `onEvent` are called from both stages, so they keep receiving the full `MiddlewareContext` union and narrow on `ctx.stage` when they need a stage-specific field. `dispatchEventToMiddleware` also now catches a rejected async `onEvent`, not just a synchronous throw, logging it the same way instead of leaving an unhandled rejection.
+
+  Purely additive to `VernLLMOptions`/`call()`/`cachedCall()` themselves: `middleware` defaults to an empty array, and no existing option or method changes shape. `MiddlewareContext`'s own shape does change, as described above. The only migration needed is a `wrap`/`onError` implementation that read `ctx.requestedProvider`/`requestedModel`/`isFallbackAttempt`/`attempt` directly, which should switch to `ctx.primaryProvider`/`primaryModel` (or read `result.meta` after `next()` resolves for the real target).
+
+### Patch Changes
+
+- 0b8653d: Retry After parsing now checks millisecond headers (`Retry-After-Ms`, `X-Retry-After-Ms`) some providers send in addition to the standard `Retry-After` header, accepts a decimal seconds value, and treats a negative delta or a past HTTP date as absent instead of clamping it to an immediate 0ms retry.
+- 583eac0: Two type-only additions from the CallExecutor refactor plan, no behavior change.
+
+  Added `metaRef()`, a small helper that returns `{}` typed as `{ current?: CallMeta }`, for use as
+  `CallParams['meta']`. Saves writing that type out by hand when reading the target that answered
+  off `call()`'s `meta` out-parameter. A hand-written `{ current?: CallMeta }` literal still works
+  exactly the same.
+
+  Added `LLMRequestShape<T, Tools>`, the request-only fields a call takes, without the
+  `reserveUsage`/`refundUsage` hooks from `UsageHooks`. `CallParams<T, Tools>` is now defined as
+  `LLMRequestShape<T, Tools> & UsageHooks`, and `CachedCallParams`, `CachedToolCallParams`,
+  `CachedConditionalToolCallParams`, `CachedJsonModeDisabledCallParams`,
+  `CachedJsonModeEnabledCallParams`, `CachedStreamCallParams`, `CachedStreamToolCallParams`,
+  `CachedStreamConditionalToolCallParams`, `CachedStreamJsonModeDisabledCallParams`, and
+  `CachedStreamJsonModeEnabledCallParams` are now derived from `LLMRequestShape` directly instead of
+  each separately re-deriving `Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>`. No field on any
+  of these types changes shape; `LLMRequestShape` is also exported for anyone who wants the request
+  shape on its own.
+
 ## 2.4.2
 
 ### Patch Changes
@@ -31,26 +64,26 @@
   `ToolDefinition` is generic over the tool's `name` and its `argumentsSchema`'s inferred argument type. A new `defineTool()` helper preserves a tool's literal `name` (without requiring `as const`), which is what lets a `ToolCall` be matched back to the tool that produced it:
 
   ```ts
-  import { z } from 'zod';
-  import { defineTool } from 'vern-llm';
+  import { z } from "zod";
+  import { defineTool } from "vern-llm";
 
   const weatherTool = defineTool({
-    name: 'get_weather',
-    description: 'Gets the current weather for a city',
+    name: "get_weather",
+    description: "Gets the current weather for a city",
     parameters: {
-      type: 'object',
-      properties: { city: { type: 'string' } },
-      required: ['city'],
+      type: "object",
+      properties: { city: { type: "string" } },
+      required: ["city"],
     },
     argumentsSchema: z.object({ city: z.string() }),
   });
 
   const result = await llm.call({
-    userContent: 'What is the weather?',
+    userContent: "What is the weather?",
     tools: [weatherTool],
   });
 
-  if (result.type === 'tool_calls') {
+  if (result.type === "tool_calls") {
     const call = result.toolCalls[0];
     call.arguments.city; // typed as string, no cast or re-parse needed
   }
@@ -147,7 +180,7 @@
   ```ts title="null-override-and-forced-tool-choice.ts"
   const llm = new VernLLM({
     client: fromAnthropic(anthropic),
-    model: 'claude-sonnet-4-6',
+    model: "claude-sonnet-4-6",
     defaultBudgetTokens: 1024, // reasoning on by default
   });
 
@@ -155,17 +188,17 @@
   // toolChoice + budgetTokens (from the instance default) is a real
   // Anthropic-side conflict.
   await llm.call({
-    userContent: 'summarize',
+    userContent: "summarize",
     tools: [summarizeTool],
-    toolChoice: { name: 'summarize' },
+    toolChoice: { name: "summarize" },
   });
 
   // Fixed: explicitly opt this one call out of the instance-level reasoning
   // default instead of dropping it for every call.
   await llm.call({
-    userContent: 'summarize',
+    userContent: "summarize",
     tools: [summarizeTool],
-    toolChoice: { name: 'summarize' },
+    toolChoice: { name: "summarize" },
     budgetTokens: null,
   });
   ```
@@ -210,14 +243,14 @@
   (anything with `.send()`), and detects which one it got. No wrapper is required for the latter:
 
   ```ts
-  import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
-  import { VernLLM, fromBedrock } from 'vern-llm';
+  import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
+  import { VernLLM, fromBedrock } from "vern-llm";
 
-  const client = new BedrockRuntimeClient({ region: 'us-east-1' });
+  const client = new BedrockRuntimeClient({ region: "us-east-1" });
 
   const llm = new VernLLM({
     client: fromBedrock(client),
-    model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
   });
   ```
 
@@ -245,7 +278,7 @@
 
   ```ts
   const response = await llm.call({
-    userContent: 'Hello',
+    userContent: "Hello",
     jsonMode: false,
   });
   // response: unknown, but really a string
@@ -255,13 +288,13 @@
 
   ```ts
   const response = await llm.call({
-    userContent: 'Hello',
+    userContent: "Hello",
     jsonMode: false,
   });
   // response: string
 
   const parsed = await llm.call({
-    userContent: 'Hello',
+    userContent: "Hello",
     jsonMode: true,
   });
   // parsed: JsonValue
@@ -270,7 +303,13 @@
   `JsonValue` is a new exported type for any valid JSON shape:
 
   ```ts
-  type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+  type JsonValue =
+    | string
+    | number
+    | boolean
+    | null
+    | JsonValue[]
+    | { [key: string]: JsonValue };
   ```
 
   A call site that also sets `schema` still gets `T` inferred from the schema, exactly as before. This overload change only affects calls that don't use `schema`. Streaming calls (`stream: true`) get the same treatment: `finalResult` now resolves to `string`/`JsonValue` instead of `unknown` for the same two `jsonMode` cases, for both `call()` and `cachedCall()`.
@@ -278,18 +317,18 @@
   `ConversationTurn` assistant `content` now also accepts a parsed `JsonValue`, so a `jsonMode: true` result can be pushed straight into `history` without stringifying it yourself:
 
   ```ts
-  import type { ConversationTurn } from 'vern-llm';
+  import type { ConversationTurn } from "vern-llm";
 
   const history: ConversationTurn[] = [];
 
   const parsed = await llm.call({
-    userContent: 'Give me a JSON summary.',
+    userContent: "Give me a JSON summary.",
     jsonMode: true,
   });
 
   history.push(
-    { role: 'user', content: 'Give me a JSON summary.' },
-    { role: 'assistant', content: parsed },
+    { role: "user", content: "Give me a JSON summary." },
+    { role: "assistant", content: parsed }
   );
   ```
 
@@ -326,14 +365,14 @@
   `.models` internally:
 
   ```ts
-  import { GoogleGenAI } from '@google/genai';
-  import { VernLLM, fromGemini } from 'vern-llm';
+  import { GoogleGenAI } from "@google/genai";
+  import { VernLLM, fromGemini } from "vern-llm";
 
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
   const llm = new VernLLM({
     client: fromGemini(ai),
-    model: 'gemini-2.5-flash',
+    model: "gemini-2.5-flash",
   });
   ```
 
@@ -363,7 +402,7 @@
 
   ```ts
   try {
-    await llm.call({ userContent: 'Hello' });
+    await llm.call({ userContent: "Hello" });
   } catch (err) {
     if (isLLMError(err)) {
       for (const attempt of err.attempts ?? []) {
@@ -430,10 +469,10 @@ undefined` matched neither the tools-enabled nor the tools-disabled overload, so
   params object in a named, reusable variable without hitting that trap:
 
   ```ts
-  import { defineCallParams } from 'vern-llm';
+  import { defineCallParams } from "vern-llm";
 
   const params = defineCallParams({
-    userContent: 'What is the weather?',
+    userContent: "What is the weather?",
     tools: someCondition ? [weatherTool] : undefined,
   });
 
@@ -505,7 +544,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   `issues` gained real types instead of being blanket `unknown`. `LLMErrorIssuesByCode` maps every code that carries structured data to its exact shape, and a new `hasIssues(err, code)` type guard narrows `err.issues` off that same `code` with no manual cast:
 
   ```ts
-  if (isLLMError(err) && hasIssues(err, 'duplicate_tool_names')) {
+  if (isLLMError(err) && hasIssues(err, "duplicate_tool_names")) {
     console.log(err.issues.names); // string[], fully typed
   }
   ```
@@ -619,9 +658,9 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: 'gpt-4o',
+    model: "gpt-4o",
     debug: true,
-    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED]'),
+    redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED]"),
   });
   ```
 
@@ -638,7 +677,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   ```ts
   new VernLLM({
     client,
-    model: 'gpt-4o',
+    model: "gpt-4o",
     rateLimit: { requestsPerMinute: 500, maxConcurrent: 20 },
   });
   ```
@@ -666,10 +705,10 @@ undefined`'s type is already the union the ternary computes, not a literal that 
   ```ts
   const llm = new VernLLM({
     client: openai,
-    model: 'gpt-4o',
+    model: "gpt-4o",
     fallback: [
-      { client: anthropic, model: 'claude-sonnet-5', name: 'anthropic' },
-      { client: gemini, model: 'gemini-2.5-flash', name: 'gemini' },
+      { client: anthropic, model: "claude-sonnet-5", name: "anthropic" },
+      { client: gemini, model: "gemini-2.5-flash", name: "gemini" },
     ],
   });
   ```
