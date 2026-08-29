@@ -179,6 +179,34 @@ export async function runFallbackChain<R>(
 }
 
 /**
+ * Builds the `CallResult.meta` block from a `runFallbackChain` outcome
+ * and, when `params.meta` was given, writes it into `meta.current`.
+ * Shared by `executeLogicalCall` and `executeLogicalStreamCall`, which
+ * differ only in what they pass as `runFallbackChain`'s `attempt`.
+ */
+function buildCallResult<R>(
+  outcome: FallbackChainOutcome<R>,
+  params: Pick<CallParams<unknown>, 'model' | 'meta'>,
+): CallResult<R> {
+  const meta = {
+    provider: outcome.executor.providerName,
+    model: params.model ?? outcome.executor.model,
+    fallbackIndex: outcome.index - 1,
+    usedFallback: outcome.index > 0,
+    attempts: outcome.attemptCount,
+  };
+
+  // `params` here is the same object `VernLLM.call()` received from the
+  // caller, not a clone, so this write is visible on the caller's own
+  // `meta` out-parameter too.
+  if (params.meta) {
+    params.meta.current = meta;
+  }
+
+  return { value: outcome.result, meta };
+}
+
+/**
  * The fallback-chain + retry core of one logical, non-streaming call,
  * with no middleware `wrap` of its own: callers (`VernLLM.call()`
  * directly, or `cachedCall()`'s cache-miss path) each wrap this in
@@ -201,19 +229,7 @@ export async function executeLogicalCall<T>(
     soleTarget,
   );
 
-  const meta = {
-    provider: fallbackChainOutcome.executor.providerName,
-    model: params.model ?? fallbackChainOutcome.executor.model,
-    fallbackIndex: fallbackChainOutcome.index - 1,
-    usedFallback: fallbackChainOutcome.index > 0,
-    attempts: fallbackChainOutcome.attemptCount,
-  };
-
-  if (params.meta) {
-    params.meta.current = meta;
-  }
-
-  return { value: fallbackChainOutcome.result, meta };
+  return buildCallResult(fallbackChainOutcome, params);
 }
 
 /** Streaming counterpart to `executeLogicalCall`. See its docs. */
@@ -238,25 +254,5 @@ export async function executeLogicalStreamCall<T>(
     soleTarget,
   );
 
-  const streamResult = fallbackChainOutcome.result;
-
-  const meta = {
-    provider: fallbackChainOutcome.executor.providerName,
-    model: params.model ?? fallbackChainOutcome.executor.model,
-    fallbackIndex: fallbackChainOutcome.index - 1,
-    usedFallback: fallbackChainOutcome.index > 0,
-    attempts: fallbackChainOutcome.attemptCount,
-  };
-
-  // `params` here is the same object `VernLLM.call()` received from the
-  // caller, not a clone, so this write is visible on the caller's own
-  // `meta` out-parameter too: by the time `call()` finishes awaiting this
-  // function and returns `{ chunks, finalResult }`, `params.meta.current`
-  // has already been set, even though the caller didn't have to unwrap a
-  // `wrap`'s `next()` to get it.
-  if (params.meta) {
-    params.meta.current = meta;
-  }
-
-  return { value: streamResult, meta };
+  return buildCallResult(fallbackChainOutcome, params);
 }

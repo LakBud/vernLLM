@@ -1,4 +1,4 @@
-import type { Logger } from '../logger.js';
+import type { Logger } from '../../logger.js';
 
 /**
  * Wraps a `Logger` so a throwing implementation can never break the call

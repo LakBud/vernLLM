@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   resolveExecutor,
   warnIfModelUnsupported,
-} from '../../../src/internal/circuitBreaker.utils.js';
+} from '../../../../src/internal/utils/circuitBreaker.utils.js';
 
-import type { CallExecutor } from '../../../src/internal/execution/callExecutor.js';
-import type { Logger } from '../../../src/logger.js';
+import type { CallExecutor } from '../../../../src/internal/execution/callExecutor.js';
+import type { Logger } from '../../../../src/logger.js';
 
 function fakeExecutor(providerName: string): CallExecutor {
   return { providerName } as unknown as CallExecutor;

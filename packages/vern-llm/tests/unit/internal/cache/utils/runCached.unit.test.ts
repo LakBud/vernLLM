@@ -6,9 +6,9 @@ import {
   NormalizedCacheAdapter,
   TieredCacheAdapter,
   LLMError,
-} from '../../../../src/types/index.js';
-import { VernLLM } from '../../../../src/vernLLM.js';
-import { asTestable, createMockClient, jsonResponse } from '../../../helpers.js';
+} from '../../../../../src/types/index.js';
+import { VernLLM } from '../../../../../src/vernLLM.js';
+import { asTestable, createMockClient, jsonResponse } from '../../../../helpers.js';
 
 describe('InMemoryCacheAdapter', () => {
   afterEach(() => {
@@ -512,7 +512,7 @@ describe('VernLLM.runCached (internal)', () => {
       asTestable(llm).runCached({ cacheKey: 'HELLO world', ttl: 60, fn }),
     ];
 
-    for (let i = 0; i < 5; i++) await Promise.resolve();
+    for (let i = 0; i < 15; i++) await Promise.resolve();
     expect(fn).toHaveBeenCalledTimes(1); // would be 3 without resolveKey
 
     resolveFn('shared result');

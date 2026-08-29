@@ -3,18 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   runOperation,
   type RunOperationDependencies,
-} from '../../../../src/internal/execution/runOperation.js';
-import { LLMError } from '../../../../src/types/errors.js';
-import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
+} from '../../../../../src/internal/execution/runOperation.js';
+import { LLMError } from '../../../../../src/types/errors.js';
+import { createMiddlewareStateBag } from '../../../../../src/types/middleware.js';
 
-import type { CallExecutor } from '../../../../src/internal/execution/callExecutor.js';
-import type { Logger } from '../../../../src/logger.js';
+import type { CallExecutor } from '../../../../../src/internal/execution/callExecutor.js';
+import type { Logger } from '../../../../../src/logger.js';
 import type {
   CallParams,
   CallResult,
   VernLLMEvent,
   VernLLMMiddleware,
-} from '../../../../src/types/index.js';
+} from '../../../../../src/types/index.js';
 
 /**
  * Only `providerName`, `model`, and `previewRequest` are ever touched by

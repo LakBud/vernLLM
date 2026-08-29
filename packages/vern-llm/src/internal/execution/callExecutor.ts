@@ -1,73 +1,32 @@
 import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
-import { LLMError, toRequestSnapshot, type LLMRequestSnapshot } from '../../types/errors.js';
-import { createMiddlewareStateBag } from '../../types/middleware.js';
-import { makeEventReporter } from '../circuitBreaker.utils.js';
+import { LLMError } from '../../types/errors.js';
+import { makeEventReporter } from '../utils/circuitBreaker.utils.js';
+import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
+import { finalizeResponse } from './responseFinalizer.js';
 import { buildStreamResult } from './streamAccumulator.js';
-import { describeError, extractStatus, normalizeError } from './utils/errors.utils.js';
-import {
-  assertModelAndResponseFormatUnchanged,
-  assertNoDuplicateTools,
-  DEFAULT_MIDDLEWARE_TIMEOUT_MS,
-  emitEvent,
-  mergePatch,
-  middlewareLabel,
-  resolveEnabled,
-  runTransform,
-} from './utils/middleware.utils.js';
+import { createUsageReporter, type UsageReporter } from './usageReporter.js';
+import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
+import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
+import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
-import {
-  extractRetryAfterMs,
-  getBackoffDelay,
-  waitForRetry,
-  withTimeout,
-} from './utils/retry.utils.js';
-import { parseWireToolCalls } from './utils/wire.utils.js';
+import { withTimeout } from './utils/retry/retry.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { RateLimiter } from '../../rateLimit.js';
 import type {
-  AttemptContext,
   CallParams,
   CallWithToolsResult,
   LLMClient,
   MiddlewareStateBag,
-  RetryAttempt,
   StreamChunk,
   TokenUsage,
-  ToolIssue,
   VernLLMEvent,
   VernLLMMiddleware,
   WireCallRequest,
-  WireToolCall,
 } from '../../types/index.js';
 
-/**
- * `executeCall`/`executeStreamCall` call `onRequest` with a fully built
- * `LLMRequestSnapshot`, right after the outgoing payload is built and
- * before dispatch (rate limiting, `client.chat.completions.create`, etc).
- * Building the complete, cloned snapshot at this point, not later once an
- * attempt has failed, matters for two reasons: `startedAt` should mean
- * "when the attempt started", not "when the failure was handled", and
- * some adapters mutate the outgoing request object during dispatch itself
- * (e.g. `fromGemini` sets `request.config` in place inside `create()`),
- * so waiting until the catch block to snapshot could capture a payload
- * that had already changed since it was actually sent.
- */
-type OnRequest = (snapshot: LLMRequestSnapshot) => void;
-
-/**
- * Identity function with its own parameter, used only to sidestep a TS
- * quirk: a `let` reassigned solely inside a nested closure (like
- * `retryWithBackoff`'s `onRequest`) gets narrowed to `undefined` at the
- * point it was last synchronously assigned, which would otherwise make
- * `lastRequestForAttempt` read as `never` at the point it's used below.
- */
-function passThroughRequestSnapshot(
-  snapshot: LLMRequestSnapshot | undefined,
-): LLMRequestSnapshot | undefined {
-  return snapshot;
-}
+export type { OnRequest };
 
 /** Everything one `CallExecutor` needs beyond the client and model. */
 export interface CallExecutorOptions {
@@ -112,8 +71,7 @@ export class CallExecutor {
   private readonly parseJson: (content: string) => unknown;
   private readonly logger: Logger;
   private readonly redact?: (text: string) => string;
-  private readonly onUsage?: (usage: TokenUsage) => void;
-  private readonly onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
+  private readonly usageReporter: UsageReporter;
   private readonly reportEvent: (event: VernLLMEvent) => void;
   private readonly breaker?: CircuitBreaker;
   private readonly limiter?: RateLimiter;
@@ -137,8 +95,6 @@ export class CallExecutor {
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
     this.redact = options.redact;
-    this.onUsage = options.onUsage;
-    this.onUsageFailure = options.onUsageFailure;
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
     this.breaker = options.breaker;
     this.limiter = options.limiter;
@@ -146,6 +102,14 @@ export class CallExecutor {
     this.middleware = options.middleware ?? [];
     this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
     this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
+    this.usageReporter = createUsageReporter({
+      providerName: this.providerName,
+      isFallback: this.isFallback,
+      maxRetries: this.maxRetries,
+      onUsage: options.onUsage,
+      onUsageFailure: options.onUsageFailure,
+      logger: this.logger,
+    });
     this.requestBuilder = new RequestBuilder({
       model,
       defaultMaxTokens: options.defaultMaxTokens,
@@ -154,113 +118,6 @@ export class CallExecutor {
       defaultBudgetTokens: options.defaultBudgetTokens,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
     });
-  }
-
-  /** Builds the `AttemptContext` for one attempt against this target. `attempt` is 0-based here, 1-based on the result. */
-  private buildEventContext(
-    requestId: string,
-    model: string,
-    attempt: number,
-    signal: AbortSignal | undefined,
-    state: MiddlewareStateBag,
-  ): AttemptContext {
-    return {
-      stage: 'attempt',
-      requestId,
-      requestedProvider: this.providerName,
-      requestedModel: model,
-      isFallbackAttempt: this.isFallback,
-      attempt: attempt + 1,
-      capabilities: { supportsJsonObjectMode: this.supportsJsonObjectMode },
-      signal,
-      state,
-      own: {},
-    };
-  }
-
-  /**
-   * Runs every applicable middleware's `transform` against `request`, in
-   * priority order, merging each patch in immediately so a later
-   * middleware sees what an earlier one already changed. Reports the
-   * `'middleware'` trace event for each `transform` that actually
-   * changed something, and for each `enabled` predicate that skipped its
-   * middleware.
-   */
-  private async applyMiddlewareTransforms(
-    request: WireCallRequest,
-    requestId: string,
-    model: string,
-    attempt: number,
-    signal: AbortSignal | undefined,
-    state: MiddlewareStateBag,
-  ): Promise<WireCallRequest> {
-    if (this.middleware.length === 0) return request;
-
-    const before = request;
-    let current = request;
-
-    const ordered = this.middleware
-      .map((middleware, index) => ({ middleware, index }))
-      .sort((a, b) => (a.middleware.priority ?? 0) - (b.middleware.priority ?? 0));
-
-    for (const { middleware, index } of ordered) {
-      const label = middlewareLabel(middleware, index);
-
-      const ctx = this.buildEventContext(requestId, model, attempt, signal, state);
-
-      const isEnabled = await resolveEnabled(
-        middleware,
-        ctx,
-        label,
-        this.middlewareTimeoutMs,
-        this.logger,
-      );
-
-      if (!isEnabled) {
-        if (middleware.enabled !== undefined) {
-          emitEvent(
-            { kind: 'middleware', requestId, middleware: label, hook: 'enabled_skip' },
-            ctx,
-            this.reportEvent,
-            this.middleware,
-            this.middlewareTimeoutMs,
-            this.logger,
-          );
-        }
-        continue;
-      }
-
-      if (!middleware.transform) continue;
-
-      const patch = await runTransform(
-        middleware,
-        structuredClone(current),
-        ctx,
-        label,
-        this.middlewareTimeoutMs,
-      );
-      const { request: merged, patchedFields } = mergePatch(current, patch);
-
-      if (patchedFields.length > 0) {
-        if (patch.tools !== undefined || patch.addTools?.length) {
-          assertNoDuplicateTools(merged, label);
-        }
-        emitEvent(
-          { kind: 'middleware', requestId, middleware: label, hook: 'transform', patchedFields },
-          ctx,
-          this.reportEvent,
-          this.middleware,
-          this.middlewareTimeoutMs,
-          this.logger,
-        );
-      }
-
-      current = merged;
-    }
-
-    assertModelAndResponseFormatUnchanged(before, current, 'chain');
-
-    return current;
   }
 
   /**
@@ -324,47 +181,29 @@ export class CallExecutor {
     onAttempt?: () => void,
     state?: MiddlewareStateBag,
   ): Promise<T | CallWithToolsResult<T>> {
-    const model = params.model ?? this.model;
-    const resolvedState = state ?? createMiddlewareStateBag();
-    const attempts: RetryAttempt[] = [];
-
-    try {
-      return await this.retryWithBackoff(
-        (attempt, onRequest) =>
-          this.executeCall(params, requestId, attempt, onRequest, resolvedState),
-        requestId,
-        model,
-        resolvedState,
-        params.signal,
-        onAttempt,
-        attempts,
-      );
-    } catch (error) {
-      // `attempts` only holds prior attempts that were actually retried
-      // past. It's `[]` when nothing was retried, so normalize that to
-      // `undefined` per `LLMError.attempts`'s contract.
-      const normalized = normalizeError(
-        error,
-        params.signal,
-        attempts.length > 0 ? attempts : undefined,
-      );
-
-      if (this.countsTowardBreaker(normalized)) {
-        // `attempts` only holds prior attempts that were retried past
-        // (see above), so the attempt that actually exhausted the
-        // retries/broke the loop is one past that, 1-based.
-        this.breaker?.recordFailure(model, {
-          requestId,
-          state: resolvedState,
-          signal: params.signal,
-          attempt: attempts.length + 1,
-        });
-      }
-
-      this.logger.debug(`[VernLLM:${requestId}] error:\n${this.redactText(describeError(error))}`);
-
-      throw normalized;
-    }
+    return runAttemptLoop({
+      fn: (attempt, onRequest, resolvedState, gateway) =>
+        this.executeCall(params, requestId, attempt, onRequest, resolvedState, gateway),
+      requestId,
+      model: params.model ?? this.model,
+      providerName: this.providerName,
+      isFallback: this.isFallback,
+      supportsJsonObjectMode: this.supportsJsonObjectMode,
+      breaker: this.breaker,
+      maxRetries: this.maxRetries,
+      baseDelayMs: this.baseDelayMs,
+      nonRetryableStatus: this.nonRetryableStatus,
+      signal: params.signal,
+      onAttempt,
+      state,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+      logLabel: 'error',
+      redactText: (text) => this.redactText(text),
+      countsTowardBreaker: (error) => this.countsTowardBreaker(error),
+    });
   }
 
   /** Streaming counterpart to `run`. Mirrors the old streaming branch of `VernLLM.call`. */
@@ -377,45 +216,29 @@ export class CallExecutor {
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
-    const model = params.model ?? this.model;
-    const resolvedState = state ?? createMiddlewareStateBag();
-    const attempts: RetryAttempt[] = [];
-
-    try {
-      return await this.retryWithBackoff(
-        (attempt, onRequest) =>
-          this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState),
-        requestId,
-        model,
-        resolvedState,
-        params.signal,
-        onAttempt,
-        attempts,
-      );
-    } catch (error) {
-      // See the matching comment in `run`.
-      const normalized = normalizeError(
-        error,
-        params.signal,
-        attempts.length > 0 ? attempts : undefined,
-      );
-
-      if (this.countsTowardBreaker(normalized)) {
-        // See the matching comment in `run`.
-        this.breaker?.recordFailure(model, {
-          requestId,
-          state: resolvedState,
-          signal: params.signal,
-          attempt: attempts.length + 1,
-        });
-      }
-
-      this.logger.debug(
-        `[VernLLM:${requestId}] stream-open error:\n${this.redactText(describeError(error))}`,
-      );
-
-      throw normalized;
-    }
+    return runAttemptLoop({
+      fn: (attempt, onRequest, resolvedState, gateway) =>
+        this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState, gateway),
+      requestId,
+      model: params.model ?? this.model,
+      providerName: this.providerName,
+      isFallback: this.isFallback,
+      supportsJsonObjectMode: this.supportsJsonObjectMode,
+      breaker: this.breaker,
+      maxRetries: this.maxRetries,
+      baseDelayMs: this.baseDelayMs,
+      nonRetryableStatus: this.nonRetryableStatus,
+      signal: params.signal,
+      onAttempt,
+      state,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+      logLabel: 'stream-open error',
+      redactText: (text) => this.redactText(text),
+      countsTowardBreaker: (error) => this.countsTowardBreaker(error),
+    });
   }
 
   /**
@@ -429,50 +252,35 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
-    onRequest?: OnRequest,
-    middlewareState?: MiddlewareStateBag,
+    onRequest: OnRequest | undefined,
+    middlewareState: MiddlewareStateBag | undefined,
+    gateway: BreakerGateway,
   ): Promise<T | CallWithToolsResult<T>> {
-    const state = middlewareState ?? createMiddlewareStateBag();
-    const built = this.requestBuilder.build(params);
-    const { useJson, model } = built;
-    const request = await this.applyMiddlewareTransforms(
-      built.request,
-      requestId,
-      model,
-      attempt,
-      params.signal,
-      state,
-    );
-
-    onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
-
     // A retry is a real request, so capacity is acquired per attempt
     // (inside the retry loop, via `executeCall` being re-invoked), not
     // once for the whole call.
-    let release: ((actualTokens?: number) => void) | undefined;
-
-    if (this.limiter) {
-      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
-      release = acquired.release;
-
-      if (acquired.waitedMs > 0) {
-        emitEvent(
-          {
-            kind: 'rate_limited',
-            requestId,
-            provider: this.providerName,
-            model,
-            waitedMs: acquired.waitedMs,
-            reason: acquired.reason ?? 'rpm',
-          },
-          this.buildEventContext(requestId, model, attempt, params.signal, state),
-          this.reportEvent,
-          this.middleware,
-          this.middlewareTimeoutMs,
-          this.logger,
-        );
-      }
-    }
+    const {
+      request,
+      model,
+      useJson,
+      state,
+      release: acquiredRelease,
+    } = await prepareAttempt({
+      params,
+      requestId,
+      attempt,
+      onRequest,
+      middlewareState,
+      gateway,
+      requestBuilder: this.requestBuilder,
+      providerName: this.providerName,
+      limiter: this.limiter,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+    });
+    let release = acquiredRelease;
 
     try {
       const response = await withTimeout(
@@ -483,11 +291,11 @@ export class CallExecutor {
 
       // Extracted right after the response arrives, before anything else
       // touches it, so a post-response failure still gets its usage reported.
-      const usage = this.extractUsage(response, requestId, model);
+      const usage = this.usageReporter.extract(response, requestId, model);
 
       // Reconcile against real usage, then hand off so `finally` below
       // can't release a second time.
-      release?.(this.actualTokensFor(usage));
+      release?.(this.usageReporter.actualTokensFor(usage));
       release = undefined;
 
       // Raw and unvalidated on purpose. Extraction (including `.trim()`,
@@ -497,16 +305,22 @@ export class CallExecutor {
       const rawContent = response.choices?.[0]?.message?.content;
       const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
 
-      return this.finalizeResponse(
+      return finalizeResponse(
         rawContent,
         wireToolCalls,
         params,
         useJson,
-        model,
         usage,
         requestId,
         attempt,
         state,
+        {
+          gateway,
+          usageReporter: this.usageReporter,
+          logger: this.logger,
+          redactText: (text) => this.redactText(text),
+          parseJson: this.parseJson,
+        },
       );
     } finally {
       release?.();
@@ -516,136 +330,6 @@ export class CallExecutor {
   /** Applies `redact` (if configured); otherwise returns `text` unchanged. */
   private redactText(text: string): string {
     return this.redact ? this.redact(text) : text;
-  }
-
-  /**
-   * Applies `redact` (if configured) to whatever the debug log is about
-   * to show: real content when there is any, otherwise the tool-call
-   * placeholder, which carries no user data and passes through
-   * `redact` unchanged in practice but is included for a caller whose
-   * `redact` does something structural (e.g. adding a marker) rather
-   * than just scrubbing PII.
-   */
-  private redactedOutput(
-    content: string | undefined,
-    wireToolCalls: WireToolCall[] | undefined,
-  ): string {
-    return this.redactText(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`);
-  }
-
-  /**
-   * Shapes a fully-arrived response (content and/or tool_calls, already
-   * extracted from the provider's payload) into `T` or a
-   * `CallWithToolsResult<T>`. Reused by the streaming path once it has
-   * buffered the full text/tool-call deltas, so there's no separate
-   * parsing/validation logic for streaming.
-   *
-   * Normalizes and reports usage failure on error itself, so every caller
-   * gets identical error handling without duplicating it.
-   */
-  private finalizeResponse<T>(
-    rawContent: string | null | undefined,
-    wireToolCalls: WireToolCall[] | undefined,
-    params: CallParams<T>,
-    useJson: boolean,
-    model: string,
-    usage: TokenUsage | undefined,
-    requestId: string,
-    attempt: number,
-    state: MiddlewareStateBag,
-  ): T | CallWithToolsResult<T> {
-    // `attempt` is 0-based internally here, 1-based on the public
-    // `AttemptContext`/`CircuitBreakerCallContext` contract (see
-    // `buildEventContext`).
-    const breakerContext: CircuitBreakerCallContext = {
-      requestId,
-      state,
-      signal: params.signal,
-      attempt: attempt + 1,
-    };
-
-    try {
-      // `.trim()` runs inside this try: a malformed response shape
-      // (e.g. a non-string `content`) throws here and is normalized and
-      // reported like any other post-response failure.
-      const content = rawContent?.trim();
-
-      if (!content && !wireToolCalls?.length) {
-        throw new LLMError('Empty LLM response', 'api', { code: 'empty_response' });
-      }
-
-      this.logger.debug(
-        `[VernLLM:${requestId}] output:\n${this.redactedOutput(content, wireToolCalls).slice(0, 800)}`,
-      );
-
-      if (wireToolCalls?.length) {
-        if (!params.tools) {
-          // Same class of problem as the other tool-contract codes below:
-          // a provider contract violation, not an HTTP failure, so this is
-          // `type: 'validation'` rather than `'api'`. Byte-for-byte
-          // identical on retry, so not retryable.
-          throw new LLMError(
-            'Provider returned tool_calls but no `tools` were sent with this call.',
-            'validation',
-            { code: 'unexpected_tool_calls' },
-          );
-        }
-
-        if (params.toolChoice === 'none') {
-          // `toolChoice: 'none'` is what lets `call()`'s type narrow to
-          // `ContentResult<T>` (see `ToolsDisabledCallParams`). A
-          // nonconforming provider/adapter returning tool_calls anyway
-          // would silently break that guarantee for the caller, so this
-          // is treated as a hard API-contract violation rather than
-          // passed through as a normal tool_calls result. The request
-          // itself is byte-for-byte identical on retry, so this repeats
-          // deterministically like the other tool-contract failures
-          // below: not retryable, and not the provider being unhealthy.
-          throw new LLMError(
-            "Provider returned tool_calls despite toolChoice: 'none'.",
-            'validation',
-            {
-              code: 'tool_choice_none_violated',
-            },
-          );
-        }
-
-        const toolCalls = parseWireToolCalls(wireToolCalls);
-
-        this.validateToolCallArguments(toolCalls, params.tools);
-        this.breaker?.recordSuccess(model, breakerContext);
-        this.reportUsage(usage);
-
-        return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
-      }
-
-      // No tool_calls here, so content must be present.
-      const textContent = content ?? '';
-
-      if (!useJson) {
-        this.breaker?.recordSuccess(model, breakerContext);
-        this.reportUsage(usage);
-
-        return params.tools ? { type: 'content', content: textContent as T } : (textContent as T);
-      }
-
-      const result = this.parseAndValidate<T>(textContent, params.schema);
-      this.breaker?.recordSuccess(model, breakerContext);
-      this.reportUsage(usage);
-
-      return params.tools ? { type: 'content', content: result } : result;
-    } catch (error) {
-      // Normalized first so onUsageFailure always gets a real LLMError.
-      // Also covers aborted signals: normalizeError returns type
-      // 'aborted' in that case.
-      const normalized = normalizeError(error, params.signal);
-
-      if (usage && normalized.type !== 'aborted') {
-        this.reportUsageFailure(usage, normalized, attempt);
-      }
-
-      throw normalized;
-    }
   }
 
   /**
@@ -669,26 +353,16 @@ export class CallExecutor {
     params: CallParams<T>,
     requestId: string,
     attempt: number,
-    onRequest?: OnRequest,
-    middlewareState?: MiddlewareStateBag,
+    onRequest: OnRequest | undefined,
+    middlewareState: MiddlewareStateBag | undefined,
+    gateway: BreakerGateway,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
-    const state = middlewareState ?? createMiddlewareStateBag();
-    const built = this.requestBuilder.build(params);
-    const { useJson, model } = built;
-    const request = await this.applyMiddlewareTransforms(
-      built.request,
-      requestId,
-      model,
-      attempt,
-      params.signal,
-      state,
-    );
-
-    onRequest?.(toRequestSnapshot(this.providerName, model, request, undefined, Date.now()));
-
+    // A stream holds a real connection for its whole life, so its
+    // capacity is released on completion (in `buildStreamResult`), not
+    // once opening succeeds.
     const completions = this.client.chat.completions;
 
     if (!completions.createStream) {
@@ -704,33 +378,28 @@ export class CallExecutor {
 
     const createStream = completions.createStream.bind(completions);
 
-    // A stream holds a real connection for its whole life, so its
-    // capacity is released on completion (in `buildStreamResult`), not
-    // once opening succeeds.
-    let release: ((actualTokens?: number) => void) | undefined;
-
-    if (this.limiter) {
-      const acquired = await this.limiter.acquire(this.limiter.estimate(request), params.signal);
-      release = acquired.release;
-
-      if (acquired.waitedMs > 0) {
-        emitEvent(
-          {
-            kind: 'rate_limited',
-            requestId,
-            provider: this.providerName,
-            model,
-            waitedMs: acquired.waitedMs,
-            reason: acquired.reason ?? 'rpm',
-          },
-          this.buildEventContext(requestId, model, attempt, params.signal, state),
-          this.reportEvent,
-          this.middleware,
-          this.middlewareTimeoutMs,
-          this.logger,
-        );
-      }
-    }
+    const {
+      request,
+      model,
+      useJson,
+      state,
+      release: acquiredRelease,
+    } = await prepareAttempt({
+      params,
+      requestId,
+      attempt,
+      onRequest,
+      middlewareState,
+      gateway,
+      requestBuilder: this.requestBuilder,
+      providerName: this.providerName,
+      limiter: this.limiter,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      logger: this.logger,
+      reportEvent: this.reportEvent,
+    });
+    let release = acquiredRelease;
 
     // One controller for the entire stream, not just opening it. Adapters
     // already thread this signal into their transport for the life of the
@@ -785,44 +454,40 @@ export class CallExecutor {
         logger: this.logger,
         signal: params.signal,
         onStreamSuccess: (usage) => {
-          this.breaker?.recordSuccess(model, {
-            requestId,
-            state,
-            signal: params.signal,
-            attempt: attempt + 1,
-          });
-          releaseAtOpen?.(this.actualTokensFor(usage));
+          gateway.recordSuccess(attempt, params.signal, state);
+          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         onStreamFailure: (normalized, usage) => {
           // Idle timeout is the one mid-stream failure that trips the
           // breaker: otherwise a provider that hangs after one chunk
           // would always record a success and never open it.
           if (normalized.type === 'timeout') {
-            this.breaker?.recordFailure(model, {
-              requestId,
-              state,
-              signal: params.signal,
-              attempt: attempt + 1,
-            });
+            gateway.recordFailure(attempt, params.signal, state);
           }
 
           if (usage && normalized.type !== 'aborted') {
-            this.reportUsageFailure(usage, normalized, attempt, true);
+            this.usageReporter.reportFailure(usage, normalized, attempt, true);
           }
 
-          releaseAtOpen?.(this.actualTokensFor(usage));
+          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         finalize: (textAcc, wireToolCalls, usage) =>
-          this.finalizeResponse(
+          finalizeResponse(
             textAcc,
             wireToolCalls,
             params,
             useJson,
-            model,
             usage,
             requestId,
             attempt,
             state,
+            {
+              gateway,
+              usageReporter: this.usageReporter,
+              logger: this.logger,
+              redactText: (text) => this.redactText(text),
+              parseJson: this.parseJson,
+            },
           ),
       });
 
@@ -835,327 +500,6 @@ export class CallExecutor {
       // open hands `release` off above and leaves this a no-op.
       release?.();
     }
-  }
-
-  /**
-   * Checks every `ToolCall` against the `tools` that were offered, catching
-   * a hallucinated tool name and a duplicate call id before either reaches
-   * the application's dispatch table, then runs each tool's
-   * `argumentsSchema`, if present.
-   *
-   * Contract failures (unknown name, duplicate id) are collected across
-   * every call and thrown together as one `type: 'validation'` error with
-   * `issues: ToolIssue[]`, since retrying a request that already has these
-   * errors cannot help (excluded from retry by `type`) and a caller fixing
-   * them wants to see every one, not just the first. Schema failures keep
-   * the original single-error, `type: 'validation'` shape rather than being
-   * folded into the aggregate, since they're a distinct failure kind from
-   * the contract failures above.
-   */
-  private validateToolCallArguments(
-    toolCalls: { id: string; name: string; arguments: unknown }[],
-    tools: NonNullable<CallParams<unknown>['tools']>,
-  ): void {
-    const known = new Map(tools.map((t) => [t.name, t]));
-    const seenIds = new Set<string>();
-    const toolIssues: ToolIssue[] = [];
-
-    for (const call of toolCalls) {
-      if (seenIds.has(call.id)) {
-        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'duplicate_tool_call_id' });
-      }
-      seenIds.add(call.id);
-
-      if (!known.has(call.name)) {
-        toolIssues.push({ name: call.name, toolCallId: call.id, code: 'unknown_tool' });
-      }
-    }
-
-    if (toolIssues.length > 0) {
-      const unknownTool = toolIssues.find((i) => i.code === 'unknown_tool');
-      const primary = unknownTool
-        ? `Model requested tool "${unknownTool.name}", which was not in the tools offered ([${[...known.keys()].join(', ')}]).`
-        : `Duplicate tool call id "${toolIssues[0]!.toolCallId}" in the model's response.`;
-
-      // Most responses hit exactly one issue. When there's more than one,
-      // say so, since toolCalls[0]'s problem alone would otherwise read as
-      // the whole story.
-      const message =
-        toolIssues.length > 1
-          ? `${primary} (${toolIssues.length} tool call issues total, see error.issues.)`
-          : primary;
-
-      throw new LLMError(message, 'validation', {
-        code: unknownTool ? 'unknown_tool' : 'duplicate_tool_call_id',
-        issues: toolIssues,
-      });
-    }
-
-    for (const call of toolCalls) {
-      const definition = known.get(call.name);
-
-      if (!definition?.argumentsSchema) continue;
-
-      const result = definition.argumentsSchema.safeParse(call.arguments);
-
-      if (!result.success) {
-        throw new LLMError(
-          `Arguments for tool call "${call.name}" failed validation`,
-          'validation',
-          {
-            issues: result.error,
-          },
-        );
-      }
-    }
-  }
-
-  /**
-   * Runs `fn`, retrying with backoff according to `shouldRetry`. When
-   * `attempts` is given, every failed attempt that is actually followed by
-   * a retry is recorded, in order. This mirrors `LLMError.attempts`'s
-   * contract: every attempt made before this error was thrown. The
-   * terminal failure is never pushed since it isn't a prior attempt, it
-   * is the error being thrown. `attempts` stays empty when nothing was
-   * retried, so no separate bookkeeping is needed at the call sites.
-   * Each failure is recorded as a snapshot (`LLMError.toSnapshot()`),
-   * not the live `LLMError`, per `RetryAttempt`'s contract.
-   */
-  private async retryWithBackoff<T>(
-    fn: (attempt: number, onRequest: OnRequest) => Promise<T>,
-    requestId: string,
-    model: string,
-    state: MiddlewareStateBag,
-    signal?: AbortSignal,
-    onAttempt?: () => void,
-    attempts?: RetryAttempt[],
-  ): Promise<T> {
-    let lastError: unknown;
-    let lastRequestForAttempt: LLMRequestSnapshot | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      // Reset before this iteration's own onRequest can run. If this
-      // attempt fails before onRequest is ever called (e.g. thrown by
-      // recoverDelay or onAttempt, before fn/onRequest runs), the
-      // previous attempt's request must not be misattributed to this
-      // attempt's index below.
-      lastRequestForAttempt = undefined;
-
-      try {
-        if (attempt > 0) {
-          await this.recoverDelay(requestId, model, attempt, lastError, state, signal);
-        }
-
-        onAttempt?.();
-        return await fn(attempt, (req) => {
-          lastRequestForAttempt = req;
-        });
-      } catch (error) {
-        lastError = error;
-
-        const willRetry = attempt < this.maxRetries && this.shouldRetry(error, signal);
-        if (!willRetry) break;
-
-        attempts?.push({
-          index: attempt,
-          error: normalizeError(error, signal).toSnapshot(),
-          request: passThroughRequestSnapshot(lastRequestForAttempt),
-        });
-      }
-    }
-
-    throw lastError;
-  }
-
-  /**
-   * Pulls `TokenUsage` out of a raw response, if the provider reported it.
-   * Extraction doesn't depend on what happens to the response afterward, so
-   * a malformed body can still yield usage if the provider's usage block
-   * itself came through intact.
-   */
-  private extractUsage(
-    response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
-    requestId: string,
-    model: string,
-  ): TokenUsage | undefined {
-    if (!response.usage) return undefined;
-
-    const reasoningTokens = response.usage.completion_tokens_details?.reasoning_tokens;
-
-    return {
-      promptTokens: response.usage.prompt_tokens ?? 0,
-      completionTokens: response.usage.completion_tokens ?? 0,
-      totalTokens: response.usage.total_tokens ?? 0,
-      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-      requestId,
-      model,
-      provider: this.providerName,
-      usedFallback: this.isFallback,
-    };
-  }
-
-  /**
-   * The token count to reconcile the rate limiter against for a finished
-   * attempt: `totalTokens` when reported, otherwise the sum of prompt and
-   * completion tokens, matching `reportUsageFailure`'s own fallback below
-   * for a hand-rolled client that reports the parts but omits the total.
-   */
-  private actualTokensFor(usage: TokenUsage | undefined): number | undefined {
-    if (!usage) return undefined;
-    return usage.totalTokens || usage.promptTokens + usage.completionTokens;
-  }
-
-  /** Reports token usage for a successful call, swallowing and logging any error `onUsage` throws. */
-  private reportUsage(usage: TokenUsage | undefined): void {
-    if (!usage || !this.onUsage) return;
-
-    try {
-      this.onUsage(usage);
-    } catch (error) {
-      this.logger.error('[VernLLM] onUsage failed', {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
-    }
-  }
-
-  /**
-   * Reports token usage spent on an attempt that then failed, so it isn't
-   * dropped alongside the error. Covers any error thrown after usage
-   * extraction, since all of them happen only after a response (real
-   * spend) already arrived. Swallows and logs any error `onUsageFailure`
-   * itself throws.
-   */
-  private reportUsageFailure(
-    usage: TokenUsage,
-    error: LLMError,
-    attempt: number,
-    terminal = false,
-  ): void {
-    // Falls back to promptTokens + completionTokens if totalTokens is 0
-    // (e.g. a hand-rolled client that omits the total), so the log
-    // doesn't understate real spend.
-    const displayTokens = usage.totalTokens || usage.promptTokens + usage.completionTokens;
-
-    // A mid-stream failure is terminal for that call (no further attempts
-    // for this stream), unlike a stream-open failure where attempt N+1 may
-    // still follow. Label them differently so the log doesn't imply a
-    // retry that isn't coming.
-    const attemptText = terminal
-      ? 'mid-stream failure (terminal, no further attempts)'
-      : `attempt ${attempt + 1}/${this.maxRetries + 1}`;
-
-    this.logger.warn(
-      `[VernLLM:${usage.requestId}] usage failure, ${attemptText}: ` +
-        `type=${error.type} tokens=${displayTokens}`,
-    );
-
-    if (!this.onUsageFailure) return;
-
-    try {
-      this.onUsageFailure(usage, error);
-    } catch (hookError) {
-      this.logger.error('[VernLLM] onUsageFailure failed', {
-        message: hookError instanceof Error ? hookError.message : 'unknown',
-      });
-    }
-  }
-
-  /** Parses response content as JSON and validates it against `schema` when supplied. */
-  private parseAndValidate<T>(content: string, schema?: CallParams<T>['schema']): T {
-    let parsed: unknown;
-
-    try {
-      parsed = this.parseJson(content);
-    } catch {
-      throw new LLMError('Invalid JSON response', 'parse');
-    }
-
-    if (parsed === null || parsed === undefined) {
-      throw new LLMError('Invalid JSON response', 'parse');
-    }
-
-    if (!schema) return parsed as T;
-
-    const result = schema.safeParse(parsed);
-
-    if (!result.success) {
-      throw new LLMError('Schema validation failed', 'validation', { issues: result.error });
-    }
-
-    return result.data;
-  }
-
-  /**
-   * Waits out the backoff delay for a retry attempt, honoring a
-   * Retry-After header on the failed attempt's error when present. When
-   * no Retry-After is present, a rate-limited (429) response backs off
-   * hardest, a server error (500 through 599) backs off somewhat more
-   * than the default curve, and every other retryable failure keeps the
-   * default curve. Both Retry-After and plain exponential backoff are
-   * capped at the same max delay (see `DEFAULT_MAX_DELAY_MS` in
-   * `retry.utils.ts`).
-   */
-  private async recoverDelay(
-    requestId: string,
-    model: string,
-    attempt: number,
-    error: unknown,
-    state: MiddlewareStateBag,
-    signal?: AbortSignal,
-  ) {
-    const retryAfterMs = extractRetryAfterMs(error);
-    const status = extractStatus(error);
-    const delay =
-      retryAfterMs ??
-      getBackoffDelay(
-        this.baseDelayMs,
-        attempt,
-        undefined,
-        status === 429,
-        status !== undefined && status >= 500 && status <= 599,
-      );
-    const retryAfterHonored = retryAfterMs !== undefined;
-
-    this.logger.warn(
-      `[VernLLM:${requestId}] recovery attempt ${attempt}/${this.maxRetries}, waiting ${Math.ceil(delay)}ms` +
-        (retryAfterHonored ? ' (honoring Retry-After)' : ''),
-    );
-
-    emitEvent(
-      {
-        kind: 'retry',
-        requestId,
-        provider: this.providerName,
-        model,
-        attempt,
-        maxRetries: this.maxRetries,
-        delayMs: delay,
-        retryAfterHonored,
-        error: normalizeError(error, signal),
-      },
-      this.buildEventContext(requestId, model, attempt, signal, state),
-      this.reportEvent,
-      this.middleware,
-      this.middlewareTimeoutMs,
-      this.logger,
-    );
-
-    await waitForRetry(delay, signal);
-  }
-
-  /** Decides whether a failed attempt is worth retrying. */
-  private shouldRetry(error: unknown, signal?: AbortSignal): boolean {
-    if (signal?.aborted) return false;
-
-    // `LLMError.retryable` already covers the deterministic cases: parse/
-    // validation/invalid_params/aborted types, the tool contract codes,
-    // and the local rate-limit codes. Only `nonRetryableStatus`, specific
-    // to this call, isn't part of that general-purpose property.
-    if (error instanceof LLMError && !error.retryable) return false;
-
-    const status = extractStatus(error);
-
-    return !(status !== undefined && this.nonRetryableStatus.includes(status));
   }
 
   /**

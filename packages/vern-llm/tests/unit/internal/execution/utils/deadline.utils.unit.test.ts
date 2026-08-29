@@ -4,8 +4,8 @@ import {
   DEADLINE_REASON,
   setupDeadline,
   stampDeadlineCode,
-} from '../../../../src/internal/execution/utils/deadline.utils.js';
-import { LLMError } from '../../../../src/types/errors.js';
+} from '../../../../../src/internal/execution/utils/deadline.utils.js';
+import { LLMError } from '../../../../../src/types/errors.js';
 
 describe('setupDeadline', () => {
   it('passes the caller signal through unchanged, with no timer, when deadlineMs is omitted', () => {

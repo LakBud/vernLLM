@@ -1,12 +1,6 @@
 import { randomUUID } from 'crypto';
 
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
-import {
-  buildCircuitBreaker,
-  makeEventReporter,
-  resolveExecutor,
-  warnIfModelUnsupported,
-} from './internal/circuitBreaker.utils.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
 import {
   executeLogicalCall,
@@ -19,10 +13,15 @@ import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './internal/execution/utils/middle
 import {
   withReservedUsage,
   withReservedUsageForStream,
-} from './internal/execution/utils/usage.utils.js';
-import { createSafeLogger } from './internal/logger.utils.js';
+} from './internal/execution/utils/response/usage.utils.js';
+import { buildExecutors } from './internal/executorFactory.js';
+import {
+  makeEventReporter,
+  resolveExecutor,
+  warnIfModelUnsupported,
+} from './internal/utils/circuitBreaker.utils.js';
+import { createSafeLogger } from './internal/utils/logger.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
-import { RateLimiter } from './rateLimit.js';
 import {
   InMemoryCacheAdapter,
   LLMError,
@@ -185,59 +184,25 @@ export class VernLLM {
         ? [options.fallback]
         : [];
 
-    const targets = [primaryTarget, ...declaredFallbacks];
-
-    this.executors = targets.map((target, i) => {
-      const isFallback = i > 0;
-      // `-1` for the primary, matching `FallbackAttempt.index`.
-      const name = target.name ?? (isFallback ? `fallback[${i - 1}]` : providerName);
-
-      // Built before the executor: onStateChange fires from inside the
-      // breaker itself, which the executor is merely handed a reference to.
-      const breaker = buildCircuitBreaker(
-        target.circuitBreaker,
-        name,
-        target.model,
-        options.onEvent,
-        this.logger,
-        this.middleware,
-        this.middlewareTimeoutMs,
-        isFallback,
-        target.client.supportsJsonObjectMode ?? true,
-      );
-
-      return new CallExecutor(name, target.client, target.model, {
-        maxRetries: target.maxRetries ?? options.maxRetries ?? 1,
-        timeoutMs: target.timeoutMs ?? options.timeoutMs ?? 25_000,
-        chunkIdleTimeoutMs: target.chunkIdleTimeoutMs ?? options.chunkIdleTimeoutMs ?? 30_000,
-        baseDelayMs: target.baseDelayMs ?? options.baseDelayMs ?? 500,
-        defaultMaxTokens: target.defaultMaxTokens ?? options.defaultMaxTokens ?? 1000,
-        defaultTemperature:
-          target.defaultTemperature === undefined
-            ? primaryDefaultTemperature
-            : target.defaultTemperature,
-        defaultReasoningEffort:
-          target.defaultReasoningEffort === undefined
-            ? primaryDefaultReasoningEffort
-            : target.defaultReasoningEffort,
-        defaultBudgetTokens:
-          target.defaultBudgetTokens === undefined
-            ? primaryDefaultBudgetTokens
-            : target.defaultBudgetTokens,
-        nonRetryableStatus: target.nonRetryableStatus ??
-          options.nonRetryableStatus ?? [400, 401, 403, 404, 422],
-        parseJson: options.parseJson,
-        logger: this.logger,
-        redact: options.redact,
-        onUsage: options.onUsage,
-        onUsageFailure: options.onUsageFailure,
-        onEvent: options.onEvent,
-        breaker,
-        limiter: target.rateLimit ? new RateLimiter(target.rateLimit) : undefined,
-        isFallback,
-        middleware: this.middleware,
-        middlewareTimeoutMs: this.middlewareTimeoutMs,
-      });
+    this.executors = buildExecutors(primaryTarget, declaredFallbacks, {
+      providerName,
+      primaryDefaultTemperature,
+      primaryDefaultReasoningEffort,
+      primaryDefaultBudgetTokens,
+      maxRetries: options.maxRetries,
+      timeoutMs: options.timeoutMs,
+      chunkIdleTimeoutMs: options.chunkIdleTimeoutMs,
+      baseDelayMs: options.baseDelayMs,
+      defaultMaxTokens: options.defaultMaxTokens,
+      nonRetryableStatus: options.nonRetryableStatus,
+      parseJson: options.parseJson,
+      redact: options.redact,
+      onUsage: options.onUsage,
+      onUsageFailure: options.onUsageFailure,
+      onEvent: options.onEvent,
+      logger: this.logger,
+      middleware: this.middleware,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
     });
   }
 
@@ -404,6 +369,21 @@ export class VernLLM {
             });
           }
 
+          let meta: CallMeta | undefined;
+
+          // Captures `meta` from the `{ value, meta }` shape both
+          // `executeLogicalCall`/`executeLogicalStreamCall` return, so the
+          // stream/non-stream branches below only differ in which
+          // `withReservedUsage*`/`executeLogical*Call` pair they use, not
+          // in how the result is unpacked.
+          const captureMeta = async <V>(
+            resultPromise: Promise<{ value: V; meta?: CallMeta }>,
+          ): Promise<V> => {
+            const result = await resultPromise;
+            meta = result.meta;
+            return result.value;
+          };
+
           if (effectiveParams.stream) {
             // Same breaker/logging treatment as non-streaming, applied around
             // opening the stream; mid-stream failures are handled separately
@@ -414,21 +394,18 @@ export class VernLLM {
             // time we return below, though: `executeLogicalStreamCall` writes
             // it as a side effect on this same `effectiveParams` object once
             // the stream opens, which is also all `call()` itself waits for.
-            let meta: CallMeta | undefined;
-
             const value = await withReservedUsageForStream(
               effectiveParams,
-              async () => {
-                const logicalStreamCallResult = await executeLogicalStreamCall(
-                  this.logicalCallDependencies,
-                  effectiveParams,
-                  requestId,
-                  soleTarget,
-                  middlewareState,
-                );
-                meta = logicalStreamCallResult.meta;
-                return logicalStreamCallResult.value;
-              },
+              () =>
+                captureMeta(
+                  executeLogicalStreamCall(
+                    this.logicalCallDependencies,
+                    effectiveParams,
+                    requestId,
+                    soleTarget,
+                    middlewareState,
+                  ),
+                ),
               effectiveParams.signal,
               (logMessage, error) => this.logRefundError(logMessage, error),
             );
@@ -436,22 +413,19 @@ export class VernLLM {
             return { value, meta };
           }
 
-          let meta: CallMeta | undefined;
-
           const value = await withReservedUsage(
             effectiveParams,
             false,
-            async () => {
-              const logicalCallResult = await executeLogicalCall(
-                this.logicalCallDependencies,
-                effectiveParams,
-                requestId,
-                soleTarget,
-                middlewareState,
-              );
-              meta = logicalCallResult.meta;
-              return logicalCallResult.value;
-            },
+            () =>
+              captureMeta(
+                executeLogicalCall(
+                  this.logicalCallDependencies,
+                  effectiveParams,
+                  requestId,
+                  soleTarget,
+                  middlewareState,
+                ),
+              ),
             effectiveParams.signal,
             (logMessage, error) => this.logRefundError(logMessage, error),
           );
@@ -620,12 +594,14 @@ export class VernLLM {
       this.cachedCallInnerParams.set(innerParams, middlewareState);
       return this.call(innerParams).finally(() => {
         // `this.call()` writes into `metaHolder`, the internal holder
-        // shared across trigger/joiners for this cache key. A
-        // caller-supplied `meta` on the inner `call` params (this
-        // function's own `params`, not the one passed to `this.call()`)
-        // is a separate out-parameter contract callers may still be
-        // relying on, so forward the written value there too instead
-        // of silently dropping it.
+        // shared across trigger/joiners for this cache key. Forwards it
+        // into *this* invocation's own `callerMeta` out-parameter
+        // immediately, which is only ever this function's caller when
+        // `callWrapped` runs at all: the trigger for this cache key.
+        // A joiner never runs its own `callWrapped` (it joins the
+        // trigger's already in-flight call instead, see
+        // `CacheOrchestrator`), so its `callerMeta` is forwarded
+        // separately below, once the joiner's own await resolves.
         if (callerMeta) callerMeta.current = metaHolder.current;
         this.cachedCallInnerParams.delete(innerParams);
       });
@@ -666,11 +642,27 @@ export class VernLLM {
 
       const streamResult = wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
 
-      // Released once the real outcome is known, not just once the
-      // stream opens, since a joiner can still arrive in between. Uses
-      // `.then(fn, fn)`, not `.finally(fn)`, so a mid-stream rejection
-      // doesn't leave an unhandled promise behind.
-      void streamResult.finalResult.then(releaseMetaHolder, releaseMetaHolder);
+      // Runs once the real outcome is known, whether that's this
+      // invocation's own stream (the trigger) or one it joined (a
+      // joiner never opens its own stream, see
+      // `CacheOrchestrator.runCachedStream`). Uses `.then(fn, fn)`, not
+      // `.finally(fn)`, so a mid-stream rejection doesn't leave an
+      // unhandled promise behind.
+      //
+      // Also forwards `metaHolder.current` into `callerMeta` here. For
+      // the trigger this duplicates (harmlessly) what `callWrapped`'s
+      // own finally already did the moment its stream opened; for a
+      // joiner, this is the only place its `callerMeta` ever gets set,
+      // since it never runs `callWrapped` itself. Reaching this point
+      // guarantees a target already answered (`metaHolder.current` is
+      // populated) or the whole call failed (it correctly stays
+      // `undefined`).
+      const onStreamSettled = () => {
+        if (callerMeta) callerMeta.current = metaHolder.current;
+        releaseMetaHolder();
+      };
+
+      void streamResult.finalResult.then(onStreamSettled, onStreamSettled);
 
       return streamResult;
     }
@@ -692,6 +684,18 @@ export class VernLLM {
           return { value, meta: metaHolder.current };
         },
       );
+
+      // Forwards `metaHolder.current` into this invocation's own
+      // `callerMeta`, trigger or joiner alike. By the time the above
+      // `runOperation`/`runCached` awaits resolve for *any* caller
+      // (trigger or joiner), the trigger's own `callWrapped` has
+      // already settled internally, whether this call joined that
+      // promise directly (`CacheOrchestrator.joinInFlight`) or ran it
+      // itself, so `metaHolder.current` is already populated by then.
+      // For the trigger this duplicates (harmlessly) what
+      // `callWrapped`'s own finally already did; for a joiner, this is
+      // the only place its `callerMeta` ever gets set.
+      if (callerMeta) callerMeta.current = metaHolder.current;
 
       return wrapped.value as T | CallWithToolsResult<T>;
     } finally {

@@ -4,6 +4,7 @@ import {
   middlewareLabel,
   resolveEnabled,
 } from './utils/middleware.utils.js';
+import { createOnceAsync } from './utils/once.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type {
@@ -127,37 +128,12 @@ export async function runOperation(
 
       if (!middleware.wrap) return inner();
 
-      let calledNext = false;
-      let resolvedResult: CallResult | undefined;
-      let nextPromise: Promise<CallResult> | undefined;
-
-      // Not `async`: the synchronous `nextPromise` check must run before
-      // any `await`, so two next() calls issued back-to-back with no
-      // `await` between them (e.g. `Promise.all([next(), next()])`)
-      // still see the first call's promise already assigned, not just
-      // two calls that are individually awaited in sequence.
-      const nextFn = (): Promise<CallResult> => {
-        if (nextPromise) return nextPromise;
-        calledNext = true;
-        nextPromise = inner().then((result) => {
-          resolvedResult = result;
-          return result;
-        });
-        // `wrap` may call `nextFn()` and then never await (or stop
-        // awaiting) the returned promise, e.g. after it decides to
-        // short-circuit. Attach a no-op rejection observer on a
-        // separate handle so that discarded failure doesn't surface
-        // as an unhandled rejection; the promise returned to callers
-        // below is untouched, so its own rejection still propagates
-        // normally to anyone who does await it.
-        nextPromise.catch(() => {});
-        return nextPromise;
-      };
+      const onceNext = createOnceAsync(inner);
 
       try {
-        const result = await middleware.wrap(request, nextFn, ctx);
+        const result = await middleware.wrap(request, onceNext.call, ctx);
 
-        if (!calledNext) {
+        if (!onceNext.wasCalled()) {
           emitEvent(
             { kind: 'middleware', requestId, middleware: label, hook: 'wrap_short_circuit' },
             ctx,
@@ -170,6 +146,8 @@ export async function runOperation(
 
         return result;
       } catch (error) {
+        const resolvedResult = onceNext.resolvedValue();
+
         if (resolvedResult !== undefined) {
           // Rule 3: thrown strictly after next() already resolved
           // successfully. A bug in post-processing can never turn a

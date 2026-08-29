@@ -1,4 +1,45 @@
-import { LLMError, type StreamChunk, type UsageHooks } from '../../../types/index.js';
+import {
+  LLMError,
+  type StreamChunk,
+  type TokenUsage,
+  type UsageHooks,
+} from '../../../../types/index.js';
+
+/** Usage shape shared by a non-streaming response and a stream's `usage` chunk. Both wire types agree field for field. */
+export interface WireUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  completion_tokens_details?: { reasoning_tokens?: number };
+}
+
+/** Call-level fields stamped onto every `TokenUsage`, not carried by the wire usage itself. */
+export interface TokenUsageMeta {
+  requestId: string;
+  model: string;
+  providerName: string;
+  isFallback: boolean;
+}
+
+/**
+ * Maps a provider's wire usage block to `TokenUsage`. Shared by
+ * `usageReporter.extract` (non-streaming) and `buildStreamResult` (the
+ * `usage` stream chunk), since both wire shapes are identical.
+ */
+export function toTokenUsage(wireUsage: WireUsage, meta: TokenUsageMeta): TokenUsage {
+  const reasoningTokens = wireUsage.completion_tokens_details?.reasoning_tokens;
+
+  return {
+    promptTokens: wireUsage.prompt_tokens ?? 0,
+    completionTokens: wireUsage.completion_tokens ?? 0,
+    totalTokens: wireUsage.total_tokens ?? 0,
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    requestId: meta.requestId,
+    model: meta.model,
+    provider: meta.providerName,
+    usedFallback: meta.isFallback,
+  };
+}
 
 /**
  * Calls `params.reserveUsage`, if present, mapping any failure to a

@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest';
 import {
   describeError,
   normalizeError,
-} from '../../../../src/internal/execution/utils/errors.utils.js';
-import { LLMError } from '../../../../src/types/errors.js';
+} from '../../../../../src/internal/execution/utils/errors.utils.js';
+import { LLMError } from '../../../../../src/types/errors.js';
 
 describe('normalizeError', () => {
   it('returns an aborted LLMError when the signal is already aborted, regardless of the error', () => {

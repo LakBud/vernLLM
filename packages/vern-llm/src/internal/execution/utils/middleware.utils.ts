@@ -2,6 +2,7 @@ import {
   LLMError,
   type AttemptContext,
   type MiddlewareContext,
+  type MiddlewareStateBag,
   type VernLLMEvent,
   type VernLLMMiddleware,
   type WireCallRequest,
@@ -210,6 +211,118 @@ export function assertModelAndResponseFormatUnchanged(
       'invalid_params',
     );
   }
+}
+
+/** Everything `applyMiddlewareTransforms` needs beyond the request itself. */
+export interface ApplyMiddlewareTransformsParams {
+  request: WireCallRequest;
+  requestId: string;
+  attempt: number;
+  signal: AbortSignal | undefined;
+  state: MiddlewareStateBag;
+  middleware: VernLLMMiddleware[];
+  middlewareTimeoutMs: number;
+  logger: Logger;
+  reportEvent: (event: VernLLMEvent) => void;
+  buildContext: (
+    attempt: number,
+    signal: AbortSignal | undefined,
+    state: MiddlewareStateBag,
+  ) => AttemptContext;
+}
+
+/**
+ * Runs every applicable middleware's `transform` against `request`, in
+ * priority order, merging each patch in immediately so a later
+ * middleware sees what an earlier one already changed. Reports the
+ * `'middleware'` trace event for each `transform` that actually changed
+ * something, and for each `enabled` predicate that skipped its
+ * middleware. `buildContext` builds the shared `AttemptContext` for this
+ * attempt, so this function doesn't need to know how one gets built.
+ */
+export async function applyMiddlewareTransforms(
+  params: ApplyMiddlewareTransformsParams,
+): Promise<WireCallRequest> {
+  const {
+    request,
+    requestId,
+    attempt,
+    signal,
+    state,
+    middleware,
+    middlewareTimeoutMs,
+    logger,
+    reportEvent,
+    buildContext,
+  } = params;
+
+  if (middleware.length === 0) return request;
+
+  const before = request;
+  let current = request;
+
+  const ordered = middleware
+    .map((middlewareEntry, index) => ({ middlewareEntry, index }))
+    .sort((a, b) => (a.middlewareEntry.priority ?? 0) - (b.middlewareEntry.priority ?? 0));
+
+  for (const { middlewareEntry, index } of ordered) {
+    const label = middlewareLabel(middlewareEntry, index);
+
+    const ctx = buildContext(attempt, signal, state);
+
+    const isEnabled = await resolveEnabled(
+      middlewareEntry,
+      ctx,
+      label,
+      middlewareTimeoutMs,
+      logger,
+    );
+
+    if (!isEnabled) {
+      if (middlewareEntry.enabled !== undefined) {
+        emitEvent(
+          { kind: 'middleware', requestId, middleware: label, hook: 'enabled_skip' },
+          ctx,
+          reportEvent,
+          middleware,
+          middlewareTimeoutMs,
+          logger,
+        );
+      }
+      continue;
+    }
+
+    if (!middlewareEntry.transform) continue;
+
+    const patch = await runTransform(
+      middlewareEntry,
+      structuredClone(current),
+      ctx,
+      label,
+      middlewareTimeoutMs,
+    );
+    const { request: merged, patchedFields } = mergePatch(current, patch);
+
+    if (patchedFields.length > 0) {
+      if (patch.tools !== undefined || patch.addTools?.length) {
+        assertNoDuplicateTools(merged, label);
+      }
+      emitEvent(
+        { kind: 'middleware', requestId, middleware: label, hook: 'transform', patchedFields },
+        ctx,
+        reportEvent,
+        middleware,
+        middlewareTimeoutMs,
+        logger,
+      );
+    }
+
+    current = merged;
+  }
+
+  assertModelAndResponseFormatUnchanged(before, current, 'chain');
+
+  return current;
 }
 
 /**
