@@ -2,9 +2,8 @@ import type {
   CachedCallInput,
   CallParams,
   ConditionalStringToolCallParams,
-  ConditionalToolCallParams,
   JsonValue,
-  ToolEnabledCallParams,
+  LLMRequestShape,
 } from './call.js';
 import type { ToolDefinition } from './tools.js';
 import type { TokenUsage } from './usage.js';
@@ -136,7 +135,7 @@ export type WireStreamChunk =
  * `CachedCallParams` for why they belong at the top level here too.
  */
 export type CachedStreamCallParams<T> = CachedCallInput & {
-  call: Omit<StreamEnabledCallParams<T>, 'reserveUsage' | 'refundUsage'>;
+  call: LLMRequestShape<T> & { stream: true };
 };
 
 /**
@@ -150,10 +149,10 @@ export type CachedStreamToolCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = CachedCallInput & {
-  call: Omit<
-    StreamEnabledCallParams<T, Tools> & ToolEnabledCallParams<T, Tools>,
-    'reserveUsage' | 'refundUsage'
-  >;
+  call: LLMRequestShape<T, Tools> & {
+    stream: true;
+    tools: NonNullable<LLMRequestShape<T, Tools>['tools']>;
+  };
 };
 
 /**
@@ -167,10 +166,7 @@ export type CachedStreamConditionalToolCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = CachedCallInput & {
-  call: Omit<
-    StreamEnabledCallParams<T, Tools> & ConditionalToolCallParams<T, Tools>,
-    'reserveUsage' | 'refundUsage'
-  >;
+  call: LLMRequestShape<T, Tools> & { stream: true; tools: Tools | undefined };
 };
 
 /** Cached streaming conditional tool-call parameters whose non-tool result is text. */
@@ -186,7 +182,11 @@ export type CachedStreamConditionalStringToolCallParams<
  * cached value (on a hit) is a plain `string`.
  */
 export type CachedStreamJsonModeDisabledCallParams = CachedCallInput & {
-  call: Omit<StreamJsonModeDisabledCallParams, 'reserveUsage' | 'refundUsage'>;
+  call: Omit<LLMRequestShape<unknown>, 'jsonSchema'> & {
+    stream: true;
+    jsonMode: false;
+    jsonSchema?: never;
+  };
 };
 
 /**
@@ -195,5 +195,9 @@ export type CachedStreamJsonModeDisabledCallParams = CachedCallInput & {
  * miss) or cached value (on a hit) is a `JsonValue`.
  */
 export type CachedStreamJsonModeEnabledCallParams = CachedCallInput & {
-  call: Omit<StreamJsonModeEnabledCallParams, 'reserveUsage' | 'refundUsage'>;
+  call: Omit<LLMRequestShape<JsonValue>, 'schema'> & {
+    stream: true;
+    jsonMode: true;
+    schema?: never;
+  };
 };

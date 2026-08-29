@@ -205,9 +205,9 @@ For a non-streaming call, `meta` is an optional out-parameter that's populated s
 reaching back into `onUsage`:
 
 ```ts title="provider-fallback-meta.ts"
-import type { CallMeta } from 'vern-llm';
+import { metaRef } from 'vern-llm';
 
-const meta: { current?: CallMeta } = {};
+const meta = metaRef();
 const result = await llm.call({ userContent: '...', meta });
 
 meta.current;
@@ -223,6 +223,10 @@ meta.current;
 The same holds for `stream: true`: the target is chosen once the stream opens, which is also the
 point `call()` returns `{ chunks, finalResult }`, so `meta.current` is already populated by then.
 `onUsage` reports the same information asynchronously and works the same way for both.
+
+`metaRef()` is just a small helper that returns `{}`, typed as `{ current?: CallMeta }`, so you
+don't need to write that type out by hand. A plain `const meta: { current?: CallMeta } = {}`
+literal still works exactly the same, since `meta` on `CallParams` hasn't changed shape.
 
 ## Observing the chain
 

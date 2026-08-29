@@ -178,3 +178,17 @@ export class FallbackExhaustedError extends LLMError {
 export function isFallbackExhaustedError(err: unknown): err is FallbackExhaustedError {
   return err instanceof FallbackExhaustedError;
 }
+
+/**
+ * Creates an empty ref box to pass as `CallParams['meta']`, so a caller can
+ * read the `CallMeta` written by `call()` on the same line as the result
+ * instead of pre-declaring a `{ current?: CallMeta }` by hand.
+ *
+ * @example
+ * const meta = metaRef();
+ * const result = await vern.call({ userContent: '...', meta });
+ * meta.current?.provider;
+ */
+export function metaRef(): { current?: CallMeta } {
+  return {};
+}

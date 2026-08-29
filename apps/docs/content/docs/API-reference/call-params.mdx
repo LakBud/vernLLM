@@ -233,7 +233,9 @@ Provider-specific `jsonSchema` and `tools` compatibility is documented in [Combi
   </Card>
   <Card title="meta">
     `{ current?: CallMeta }`, optional. With `fallback`, reports which target answered after
-    `call()` resolves. Ignored for streaming calls. See
+    `call()` resolves, for `stream: true` that's once `call()` returns `{ chunks, finalResult }`,
+    not once the stream finishes. Build one with the `metaRef()` helper instead of writing the
+    type out by hand. See
     [Knowing which target answered](/docs/core/provider-fallback#knowing-which-target-answered).
   </Card>
 </Cards>
