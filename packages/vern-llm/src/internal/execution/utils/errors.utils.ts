@@ -1,5 +1,5 @@
 import { LLMError, type LLMErrorCode, type RetryAttempt } from '../../../types/errors.js';
-import { extractRetryAfterMs } from './retry.utils.js';
+import { extractRetryAfterMs } from './retry/retry.utils.js';
 
 /**
  * Looks inside an unknown error value and pulls out an http status code

@@ -1,16 +1,16 @@
 import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import { LLMError } from '../../types/errors.js';
-import { makeEventReporter } from '../circuitBreaker.utils.js';
+import { makeEventReporter } from '../utils/circuitBreaker.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { finalizeResponse } from './responseFinalizer.js';
 import { buildStreamResult } from './streamAccumulator.js';
 import { createUsageReporter, type UsageReporter } from './usageReporter.js';
-import { prepareAttempt, type OnRequest } from './utils/attemptDispatch.utils.js';
-import { runAttemptLoop } from './utils/attemptLoop.utils.js';
+import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
+import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
 import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
-import { withTimeout } from './utils/retry.utils.js';
+import { withTimeout } from './utils/retry/retry.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { RateLimiter } from '../../rateLimit.js';

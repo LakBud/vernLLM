@@ -1,4 +1,7 @@
-import { withReservedUsage, withReservedUsageForStream } from '../execution/utils/usage.utils.js';
+import {
+  withReservedUsage,
+  withReservedUsageForStream,
+} from '../execution/utils/response/usage.utils.js';
 import { createInFlightRegistry } from './utils/inFlightRegistry.utils.js';
 import { buildReplayChunks, buildReplayChunksFromPromise } from './utils/replay.utils.js';
 

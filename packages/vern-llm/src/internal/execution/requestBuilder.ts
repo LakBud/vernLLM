@@ -5,7 +5,7 @@ import {
   turnToWireMessages,
   validateHistory,
   validateTools,
-} from './utils/requestShape.utils.js';
+} from './utils/request/requestShape.utils.js';
 import { toWireTools } from './utils/wire.utils.js';
 
 import type { CallParams, WireMessage } from '../../types/index.js';

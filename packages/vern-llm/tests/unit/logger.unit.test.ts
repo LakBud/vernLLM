@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { createSafeLogger } from '../../src/internal/logger.utils.js';
+import { createSafeLogger } from '../../src/internal/utils/logger.utils.js';
 import { ConsoleLogger } from '../../src/logger.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';

@@ -1,8 +1,8 @@
-import { createBackpressureChannel } from './utils/chunkBuffer.utils.js';
 import { normalizeError } from './utils/errors.utils.js';
-import { withChunkIdleTimeout } from './utils/retry.utils.js';
-import { createToolCallAccumulator } from './utils/toolCallAccumulator.utils.js';
-import { toTokenUsage } from './utils/usage.utils.js';
+import { toTokenUsage } from './utils/response/usage.utils.js';
+import { withChunkIdleTimeout } from './utils/retry/retry.utils.js';
+import { createBackpressureChannel } from './utils/stream/chunkBuffer.utils.js';
+import { createToolCallAccumulator } from './utils/stream/toolCallAccumulator.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { LLMError } from '../../types/errors.js';

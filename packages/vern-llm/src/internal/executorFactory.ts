@@ -1,6 +1,6 @@
 import { RateLimiter } from '../rateLimit.js';
-import { buildCircuitBreaker } from './circuitBreaker.utils.js';
 import { CallExecutor } from './execution/callExecutor.js';
+import { buildCircuitBreaker } from './utils/circuitBreaker.utils.js';
 
 import type { Logger } from '../logger.js';
 import type { LLMError } from '../types/errors.js';

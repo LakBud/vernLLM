@@ -1,5 +1,5 @@
 import { normalizeError } from './utils/errors.utils.js';
-import { shapeResponse } from './utils/responseShape.utils.js';
+import { shapeResponse } from './utils/response/responseShape.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type {

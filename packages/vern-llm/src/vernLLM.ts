@@ -1,11 +1,6 @@
 import { randomUUID } from 'crypto';
 
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
-import {
-  makeEventReporter,
-  resolveExecutor,
-  warnIfModelUnsupported,
-} from './internal/circuitBreaker.utils.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
 import {
   executeLogicalCall,
@@ -18,9 +13,14 @@ import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './internal/execution/utils/middle
 import {
   withReservedUsage,
   withReservedUsageForStream,
-} from './internal/execution/utils/usage.utils.js';
+} from './internal/execution/utils/response/usage.utils.js';
 import { buildExecutors } from './internal/executorFactory.js';
-import { createSafeLogger } from './internal/logger.utils.js';
+import {
+  makeEventReporter,
+  resolveExecutor,
+  warnIfModelUnsupported,
+} from './internal/utils/circuitBreaker.utils.js';
+import { createSafeLogger } from './internal/utils/logger.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import {
   InMemoryCacheAdapter,

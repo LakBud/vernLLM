@@ -1,4 +1,4 @@
-import { toTokenUsage } from './utils/usage.utils.js';
+import { toTokenUsage } from './utils/response/usage.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { LLMError } from '../../types/errors.js';
