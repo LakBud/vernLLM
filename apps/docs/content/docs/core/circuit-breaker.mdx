@@ -97,6 +97,37 @@ const llm = new VernLLM({
 A reopened circuit restarts the cooldown from that moment. The threshold does not need to be
 reached again, since a failed trial phase is enough to reopen the circuit on its own.
 
+## Cooldown backoff
+
+`cooldownBackoff` grows `cooldownMs` on each repeat open instead of the same fixed wait every time.
+
+```ts title="circuit-breaker-cooldown-backoff.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+    cooldownBackoff: { multiplier: 2, maxMs: 5 * 60_000 },
+  },
+});
+```
+
+`{ multiplier, maxMs }` scales the cooldown by `multiplier` on each repeat open, capped at `maxMs`
+(default `Infinity`). A repeat open counts a trial that failed back to open, not the first open from
+a closed circuit.
+
+For anything beyond exponential growth (jitter, a linear ramp), pass a function instead:
+
+```ts title="circuit-breaker-cooldown-backoff-custom.ts"
+circuitBreaker: {
+  cooldownBackoff: (reopenCount, baseCooldownMs) => baseCooldownMs + reopenCount * 5_000,
+},
+```
+
+The growth resets once the circuit recovers. A successful trial or a manual `closeCircuit()` sets
+the repeat count back to 0.
+
 ## Scope
 
 Each `VernLLM` instance owns its own circuit breaker. State is never shared across instances. If

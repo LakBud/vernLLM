@@ -1,7 +1,13 @@
 export { VernLLM } from './vernLLM.js';
 export { defineCallParams, defineCachedCallParams } from './paramsHelpers.js';
 export { createMiddleware, type CreateMiddlewareOptions } from './types/createMiddleware.js';
-export { CircuitBreaker, type CircuitBreakerOptions, type CircuitState } from './circuitBreaker.js';
+export {
+  CircuitBreaker,
+  type CircuitBreakerOptions,
+  type CircuitState,
+  type CooldownBackoff,
+  type ExponentialBackoffOptions,
+} from './circuitBreaker.js';
 export {
   RateLimiter,
   defaultEstimateTokens,
