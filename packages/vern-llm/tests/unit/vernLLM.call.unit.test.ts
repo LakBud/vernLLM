@@ -386,6 +386,10 @@ describe('VernLLM.call, retry & backoff', () => {
     ]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 2, baseDelayMs: 100 });
 
+    // Pin full jitter at its ceiling so the waits below are deterministic
+    // (full jitter's floor is 0, so an unpinned draw could resolve early).
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+
     const promise = llm.call({ systemPrompt: 's', userContent: 'u' });
 
     // attempt 0 fails immediately (no delay before the first attempt)
@@ -399,6 +403,8 @@ describe('VernLLM.call, retry & backoff', () => {
 
     const result = await promise;
     expect(result).toEqual({ ok: true });
+
+    randomSpy.mockRestore();
   });
 
   it('accumulates one attempts entry per retried-past failure when a call eventually succeeds then fails later', async () => {

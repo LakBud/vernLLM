@@ -1,3 +1,4 @@
+import { fullJitter } from './internal/execution/utils/retry/retry.utils.js';
 import { LLMError, type LLMErrorCode } from './types/errors.js';
 
 import type { MiddlewareStateBag } from './types/middleware.js';
@@ -88,12 +89,11 @@ export interface ExponentialBackoffOptions {
 }
 
 /**
- * Not exported. Internal shorthand only. Applies equal jitter
- * unconditionally, same formula as retry backoff (`getBackoffDelay`),
- * so several client instances don't reopen in lockstep. A caller wanting
- * the exact deterministic value uses the `CooldownBackoff` function form
- * instead, same escape hatch as any other shape beyond exponential
- * growth.
+ * Not exported. Internal shorthand only. Applies full jitter, same
+ * formula as retry backoff (`getBackoffDelay`), so several client
+ * instances don't reopen in lockstep. See AWS's backoff and jitter
+ * writeup for why full jitter is used. A caller wanting the exact
+ * deterministic value uses the `CooldownBackoff` function form instead.
  */
 function buildCooldownBackoff(
   option: ExponentialBackoffOptions | CooldownBackoff | undefined,
@@ -104,7 +104,7 @@ function buildCooldownBackoff(
   const { multiplier, maxMs = Infinity } = option;
   return (reopenCount, baseCooldownMs) => {
     const exp = Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
-    return exp / 2 + Math.random() * (exp / 2);
+    return fullJitter(exp);
   };
 }
 

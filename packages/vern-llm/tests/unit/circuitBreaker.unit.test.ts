@@ -432,26 +432,49 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     vi.useRealTimers();
   });
 
-  it('the shorthand always applies jitter: falls in [exp/2, exp], not the exact value', () => {
+  it('the shorthand always applies full jitter: falls in [0, exp], not the exact value', () => {
     vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.3);
     const cb = new CircuitBreaker({
       threshold: 1,
       cooldownMs: 1000,
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, jittered to [500, 1000].
+    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, full jitter
+    // with random() pinned at 0.3 gives exactly 300ms.
     cb.recordFailure();
-    // Below the floor of the jittered range: never admitted.
-    vi.advanceTimersByTime(499);
+    vi.advanceTimersByTime(299);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    // Past the ceiling of the jittered range: always admitted, regardless of the actual roll.
-    vi.advanceTimersByTime(501);
+    vi.advanceTimersByTime(1);
     expect(() => cb.assertClosed()).not.toThrow();
     expect(cb.getState()).toBe('half-open');
 
+    randomSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('full jitter can draw a value below the old half-jitter floor', () => {
+    vi.useFakeTimers();
+    // Pin random() well under 0.5: under half/equal jitter this value
+    // would have been impossible, since the floor was exp/2.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.1);
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 2 },
+    });
+
+    // exp = 1000, full jitter at random()=0.1 gives 100ms, well below
+    // the old 500ms floor.
+    cb.recordFailure();
+    vi.advanceTimersByTime(100);
+    expect(() => cb.assertClosed()).not.toThrow();
+    expect(cb.getState()).toBe('half-open');
+
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -475,8 +498,8 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     }
 
     // Every check above happened at the same elapsed time (0ms since
-    // open, no time advanced between calls). The jittered range here
-    // spans several whole seconds ([5000, 10000]ms), so if the cooldown
+    // open, no time advanced between calls). The full-jitter range here
+    // spans several whole seconds ([0, 10000]ms), so if the cooldown
     // were resampled per check, the reported "Retry in Xs" would very
     // likely differ across the 20 draws. Sampled once and cached, every
     // check reports the identical wait.
@@ -507,71 +530,76 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
 
   it('the { multiplier, maxMs } shorthand grows the jittered range across three reopen cycles', () => {
     vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const cb = new CircuitBreaker({
       threshold: 1,
       cooldownMs: 1000,
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, jittered range [500, 1000].
+    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, full jitter at
+    // random()=0.5 gives exactly 500ms.
     cb.recordFailure();
     vi.advanceTimersByTime(499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(501); // total 1000, past the ceiling
+    vi.advanceTimersByTime(1); // total 500
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
-    // Trial fails: reopenCount 1, exp = 1000 * 2^1 = 2000, jittered range [1000, 2000].
+    // Trial fails: reopenCount 1, exp = 1000 * 2^1 = 2000, jittered to 1000ms.
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
     vi.advanceTimersByTime(999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(1001); // total 2000, past the ceiling
+    vi.advanceTimersByTime(1); // total 1000
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
-    // Trial fails again: reopenCount 2, exp = 1000 * 2^2 = 4000, jittered range [2000, 4000].
+    // Trial fails again: reopenCount 2, exp = 1000 * 2^2 = 4000, jittered to 2000ms.
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
     vi.advanceTimersByTime(1999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2001); // total 4000, past the ceiling
+    vi.advanceTimersByTime(1); // total 2000
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
   it('maxMs caps the growth, including the jittered range', () => {
     vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const cb = new CircuitBreaker({
       threshold: 1,
       cooldownMs: 1000,
       cooldownBackoff: { multiplier: 10, maxMs: 5000 },
     });
 
-    // First open: reopenCount 0, exp = 1000 * 10^0 = 1000, admit by 1000ms.
+    // First open: reopenCount 0, exp = 1000 * 10^0 = 1000, jittered to 500ms.
     cb.recordFailure();
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(500);
     cb.assertClosed();
 
     // Trial fails: reopenCount 1, uncapped exp would be 10000, capped to
-    // 5000, jittered range [2500, 5000].
+    // 5000, jittered (at random()=0.5) to 2500ms.
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
     vi.advanceTimersByTime(2499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2501); // total 5000, past the capped ceiling
+    vi.advanceTimersByTime(1); // total 2500, the capped-and-jittered value
     expect(() => cb.assertClosed()).not.toThrow();
 
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -618,36 +646,39 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
 
   it('recordSuccess resets reopenCount, so a later reopen starts the backoff over', () => {
     vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const cb = new CircuitBreaker({
       threshold: 1,
       cooldownMs: 1000,
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // Open, reopen once via a failed trial (reopenCount -> 1, jittered
-    // range [1000, 2000]), then recover with a successful trial, which
-    // should reset reopenCount.
+    // Open, reopen once via a failed trial (reopenCount -> 1, jittered to
+    // 1000ms at random()=0.5), then recover with a successful trial,
+    // which should reset reopenCount.
     cb.recordFailure();
-    vi.advanceTimersByTime(1000); // reopenCount 0 ceiling
+    vi.advanceTimersByTime(500); // reopenCount 0, jittered value
     cb.assertClosed();
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(2000); // reopenCount 1 ceiling
+    vi.advanceTimersByTime(1000); // reopenCount 1, jittered value
     cb.assertClosed();
     cb.recordSuccess();
     expect(cb.getState()).toBe('closed');
 
     // Trip again: reopenCount should be back to 0, so the jittered
-    // range is [500, 1000] again, not a continuation of the earlier
-    // growth ([1000, 2000] or beyond).
+    // value is 500ms again, not a continuation of the earlier growth
+    // (1000ms or beyond).
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
     vi.advanceTimersByTime(499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(501); // total 1000, past the reset ceiling
+    vi.advanceTimersByTime(1); // total 500, past the reset ceiling
     expect(() => cb.assertClosed()).not.toThrow();
+
+    randomSpy.mockRestore();
 
     vi.useRealTimers();
   });

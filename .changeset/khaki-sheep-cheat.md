@@ -22,10 +22,10 @@ const llm = new VernLLM({
 ```
 
 `{ multiplier, maxMs }` is shorthand for exponential growth, the shape most callers reach for, and
-always applies equal jitter (half the computed cooldown fixed, half randomized), so several client
-instances don't reopen in lockstep. A `CooldownBackoff` function, `(reopenCount, baseCooldownMs) =>
-number`, is the escape hatch for anything else, a linear ramp or an exact deterministic value, and
-is never jittered automatically. `reopenCount` only increments on a trial that failed back to open,
-not on the first open from closed.
+always applies full jitter (randomized anywhere between zero and the full computed cooldown), so
+several client instances don't reopen in lockstep. A `CooldownBackoff` function, `(reopenCount,
+baseCooldownMs) => number`, is the escape hatch for anything else, a linear ramp or an exact
+deterministic value, and is never jittered automatically. `reopenCount` only increments on a trial
+that failed back to open, not on the first open from closed.
 
 Omitted (the default), `cooldownMs` stays fixed, exactly reproducing today's behavior.

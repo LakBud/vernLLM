@@ -117,10 +117,12 @@ const llm = new VernLLM({
 (default `Infinity`). A repeat open counts a trial that failed back to open, not the first open from
 a closed circuit.
 
-The shorthand always applies equal jitter (half the computed cooldown is fixed, the other half
-randomized), so several client instances don't reopen in lockstep. For anything beyond exponential
-growth, or an exact deterministic value, pass a function instead. A custom function is never
-jittered automatically:
+The shorthand always applies full jitter (the computed cooldown is randomized anywhere between zero
+and its full value), so several client instances don't reopen in lockstep. See AWS's
+[Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
+for why full jitter is preferred over equal jitter. For anything beyond exponential growth, or an
+exact deterministic value, pass a function instead. A custom function is never jittered
+automatically:
 
 ```ts title="circuit-breaker-cooldown-backoff-custom.ts"
 const llm = new VernLLM({
