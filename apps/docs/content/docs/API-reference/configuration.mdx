@@ -134,8 +134,14 @@ acts on the target's own configured model rather than an unlabeled bucket.
 `halfOpenProbes` (default 1) and `halfOpenSuccessRatio` (default 1) control how many trial calls
 run during the half-open window and what fraction must succeed to close the circuit again.
 
-`cooldownBackoff` grows `cooldownMs` on each repeat open instead of a fixed wait. Omitted (the
-default) means `cooldownMs` stays fixed.
+`cooldownBackoff` accepts `ExponentialBackoffOptions | CooldownBackoff`:
+
+- `ExponentialBackoffOptions`: `{ multiplier: number; maxMs?: number }`. Scales `cooldownMs` by
+  `multiplier` on each repeat open, capped at `maxMs` (default `Infinity`).
+- `CooldownBackoff`: `(reopenCount: number, baseCooldownMs: number) => number`, an escape hatch for
+  anything beyond exponential growth (jitter, a linear ramp).
+
+Omitted (the default), `cooldownMs` stays fixed.
 
 See [Circuit Breaker](/docs/core/circuit-breaker) for failure conditions, half-open
 behavior, cooldown backoff, per-model isolation, and state inspection.
