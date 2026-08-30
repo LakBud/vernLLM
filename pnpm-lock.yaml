@@ -19,7 +19,7 @@ overrides:
   '@hono/node-server': ^1.19.17
   mermaid: ^11.16.1
   dompurify: ^3.4.13
-  diff: ^8.0.3
+  diff: ^8.0.4
   js-yaml: ^4.3.1
   read-yaml-file>js-yaml: ^3.15.1
 
