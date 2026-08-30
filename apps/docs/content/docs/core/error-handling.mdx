@@ -220,10 +220,13 @@ For `stream: true` calls, `detectSoftFailure` runs at the same point, once the s
 accumulated, and a soft failure rejects `finalResult` the same as any other post-stream failure.
 
 <Callout type="info">
-  A streaming soft failure counts toward the circuit breaker too, the same as a non-streaming one.
-  Even though the streaming attempt has already returned successfully from VernLLM's own retry loop
-  by the time the final result is shaped, a finalize-time failure (including one from
-  `detectSoftFailure`) is still recorded against the breaker directly.
+  A streaming soft failure counts toward the circuit breaker too, the same as a non-streaming one,
+  gated by the same `countsTowardBreaker` policy the non-streaming path already applies (see
+  [`retryable`](#retryable) below). A code excluded from breaker accounting, such as
+  `quota_exceeded`, still won't count even when returned from `detectSoftFailure`. Even though the
+  streaming attempt has already returned successfully from VernLLM's own retry loop by the time the
+  final result is shaped, a finalize-time failure that does count is still recorded against the
+  breaker directly.
 </Callout>
 
 `fallback` targets each accept their own `detectSoftFailure`. A target that leaves it unset
@@ -383,6 +386,14 @@ It is `false` when:
   `tool_choice_none_violated`, `unexpected_tool_calls`)
 - `code` is one of the local rate limit codes (`rate_limit_queue_full`,
   `rate_limit_queue_timeout`, `rate_limit_capacity_exceeded`)
+
+<Callout type="info">
+  `retryable` and `LLMError.countsTowardBreaker` answer different questions and can disagree.
+  `quota_exceeded` is retryable (`true`) but excluded from circuit breaker accounting, since a
+  caller or account level limit says nothing about whether the provider itself is healthy. See
+  [Circuit Breaker](/docs/core/circuit-breaker#what-counts-as-a-failure) for the full list of what's
+  excluded from breaker accounting specifically.
+</Callout>
 
 `FallbackExhaustedError` overrides this to defer to the last attempted target's own `retryable`,
 since `type: 'fallback_exhausted'` by itself says nothing about whether retrying could help.
