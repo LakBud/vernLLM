@@ -17,7 +17,7 @@ export class RollingRatio {
   private bucketStartMs = Date.now();
   private readonly bucketWidthMs: number;
 
-  constructor(private readonly windowMs: number) {
+  constructor(windowMs: number) {
     if (!Number.isFinite(windowMs) || windowMs <= 0) {
       throw new RangeError(`RollingRatio: windowMs must be a finite number > 0, got ${windowMs}`);
     }

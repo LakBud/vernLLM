@@ -136,11 +136,8 @@ export class RollingTripping implements TrippingPolicy {
     private readonly minCalls: number,
     private readonly failureRatio: number,
   ) {
-    if (!Number.isFinite(windowMs) || windowMs <= 0) {
-      throw new RangeError(
-        `RollingTripping: windowMs must be a finite number > 0, got ${windowMs}`,
-      );
-    }
+    // Fail at construction rather than on the first recorded outcome.
+    new RollingRatio(windowMs);
   }
 
   private ratioFor(key: string): RollingRatio {
