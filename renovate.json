@@ -4,6 +4,8 @@
   "dependencyDashboard": true,
   "dependencyDashboardApproval": false,
 
+  "minimumReleaseAge": "1 day",
+
   "rangeStrategy": "bump",
 
   "timezone": "Europe/Oslo",
