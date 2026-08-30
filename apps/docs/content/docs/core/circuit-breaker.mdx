@@ -70,15 +70,32 @@ A response that arrives successfully can still be turned into a circuit breaker 
 When the cooldown elapses, the next call to check the breaker through `assertClosed` transitions the
 state from `open` to `half-open` and is allowed through as a trial.
 
-Only one trial call is allowed through during each half open window. Any other call that checks the
-breaker while a trial is outstanding is rejected immediately with `LLMError('circuit_open')`
-without waiting for the trial to finish. This also applies when several calls check the breaker at
-approximately the same time after the cooldown expires.
+`halfOpenProbes` sets how many trial calls are allowed through during each half open window, default 1.
 
-A successful trial closes the circuit and resets the failure count to zero.
+Any call beyond that count that checks the breaker while every trial slot is claimed is rejected
+immediately with `LLMError('circuit_open')`, without waiting for the outstanding trials to finish.
+This also applies when several calls check the breaker at approximately the same time after the
+cooldown expires.
 
-A failed trial reopens the circuit immediately and restarts the cooldown from that moment. The
-threshold does not need to be reached again because one failed trial is enough to reopen the circuit.
+`halfOpenSuccessRatio` sets the fraction of `halfOpenProbes` that must succeed to close the circuit,
+default 1 (every trial must succeed). The circuit stays half-open until every admitted trial has
+reported a result, then closes if the success ratio was met, or reopens otherwise.
+
+```ts title="circuit-breaker-multi-probe.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+    halfOpenProbes: 3,
+    halfOpenSuccessRatio: 2 / 3, // 2 of 3 trials succeeding closes the circuit
+  },
+});
+```
+
+A reopened circuit restarts the cooldown from that moment. The threshold does not need to be
+reached again, since a failed trial phase is enough to reopen the circuit on its own.
 
 ## Scope
 
