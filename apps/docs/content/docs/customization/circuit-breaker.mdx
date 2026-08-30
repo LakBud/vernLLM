@@ -19,12 +19,22 @@ VernLLM ships `ConsecutiveTripping` and `RollingTripping` out of the box, select
 
 ```ts
 interface TrippingPolicy {
-  onSuccess(): void;
-  /** Returns true if this failure should open the circuit. */
-  onFailure(): boolean;
-  reset(): void;
+  onSuccess(key: string): void;
+  /** Returns true if this failure should open the circuit for `key`. */
+  onFailure(key: string): boolean;
+  reset(key: string): void;
+  /** Called when `key`'s bucket is discarded (closed and idle, under isolateByModel). Optional. */
+  forget?(key: string): void;
 }
 ```
+
+`key` is the resolved model under `isolateByModel`, or one fixed shared key otherwise. VernLLM
+always constructs exactly one instance of your policy and calls it with the right `key`, so whether
+your policy ends up isolated per model or shared across all of them depends entirely on what your
+own implementation does with `key`, not on anything you have to configure.
+
+If you don't care about `isolateByModel`, ignore `key` entirely and track one flat counter, the
+simplest version:
 
 ```ts title="slow-call-tripping.ts"
 import { VernLLM, type TrippingPolicy } from 'vern-llm';
@@ -52,22 +62,46 @@ const llm = new VernLLM({
 ```
 
 No base class or builder required. TypeScript checks the shape structurally, so a plain object
-literal satisfying the three methods works exactly as well as a class instance.
+literal satisfying the interface works exactly as well as a class instance.
 
 <Callout>
-  `onFailure()`'s return value is the only thing that decides whether the circuit opens. `reset()`
-  is called on recovery: a successful trial, or a manual `closeCircuit()`. Neither `onStateChange`,
-  the `circuit_state` event, nor the open-circuit error message read anything from your policy
-  directly, they report a true consecutive-failure count that `CircuitBreaker` tracks on its own,
-  independent of whatever your `onFailure()` bases its decision on.
+  `onFailure(key)`'s return value is the only thing that decides whether `key`'s circuit opens.
+  `reset(key)` is called on recovery: a successful trial, or a manual `closeCircuit()`. Neither
+  `onStateChange`, the `circuit_state` event, nor the open-circuit error message read anything from
+  your policy directly, they report a true consecutive-failure count that `CircuitBreaker` tracks on
+  its own, per bucket, independent of whatever your `onFailure()` bases its decision on.
 </Callout>
 
-<Callout type="warn">
-  Under `isolateByModel`, the built-in `{ kind: 'consecutive' }`/`{ kind: 'rolling' }` shorthands
-  each get a fresh instance per model. A hand built `TrippingPolicy` doesn't: there's no generic way
-  to clone an arbitrary object satisfying the interface, so the same instance is shared across every
-  model's bucket. Use the shorthand form if independent per-model state matters.
-</Callout>
+If you do want `isolateByModel` to give your custom policy real per-model isolation, track state
+per `key` instead of flat, the same way the built in `ConsecutiveTripping`/`RollingTripping` do
+internally:
+
+```ts title="per-model-custom-tripping.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: {
+    cooldownMs: 30_000,
+    isolateByModel: true,
+    tripping: (() => {
+      const failuresByKey = new Map<string, number>();
+      const threshold = 5;
+      return {
+        onSuccess: (key) => failuresByKey.set(key, 0),
+        onFailure: (key) => {
+          const next = (failuresByKey.get(key) ?? 0) + 1;
+          failuresByKey.set(key, next);
+          return next >= threshold;
+        },
+        reset: (key) => failuresByKey.set(key, 0),
+        // Optional: drops that model's entry once its bucket goes idle,
+        // so the map doesn't grow forever across many distinct models.
+        forget: (key) => failuresByKey.delete(key),
+      };
+    })(),
+  },
+});
+```
 
 <Callout>
   See [Tripping policy](/docs/core/circuit-breaker#tripping-policy) in Core for the built-in

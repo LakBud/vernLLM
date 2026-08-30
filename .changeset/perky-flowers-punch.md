@@ -24,8 +24,24 @@ const llm = new VernLLM({
 `{ kind: 'consecutive', threshold }` (the default, matching `threshold` on its own) opens after
 that many failures in a row. `{ kind: 'rolling', windowMs, minCalls, failureRatio }` opens once at
 least `minCalls` calls have landed in the trailing `windowMs` and the failure ratio among them
-reaches `failureRatio`. A hand built `TrippingPolicy` (`onSuccess`/`onFailure`/`reset`) is the
-escape hatch for anything else, no class required, a plain object satisfying the interface works.
+reaches `failureRatio`. A hand built `TrippingPolicy` is the escape hatch for anything else, no
+class required, a plain object satisfying the interface works:
+
+```ts
+interface TrippingPolicy {
+  onSuccess(key: string): void;
+  onFailure(key: string): boolean; // true opens the circuit for key
+  reset(key: string): void;
+  forget?(key: string): void; // optional: called when key's bucket is discarded
+}
+```
+
+`key` is the resolved model under `isolateByModel`, or one fixed shared key otherwise. Exactly one
+instance of a policy is ever constructed, so `isolateByModel` isolation comes entirely from `key`:
+a policy that tracks its own state per key gets real per-model isolation automatically, no special
+handling needed, the same way the two built-in policies already do internally. A policy that
+ignores `key` and tracks one flat counter stays intentionally shared across every model, a choice
+the policy makes rather than a limitation of `isolateByModel` itself.
 
 `onStateChange`, the `circuit_state` event, and the open-circuit error message still report a true
 consecutive-failure count regardless of which policy is configured, since that count is tracked

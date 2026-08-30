@@ -150,10 +150,11 @@ const llm = new VernLLM({
 });
 ```
 
-For anything else, pass a `TrippingPolicy`: an object with `onSuccess()`, `onFailure()` (returning
-whether this failure should open the circuit), and `reset()`. No class is required, a plain object
-satisfying the interface works. See [Circuit Breaker → Customization](/docs/customization/circuit-breaker)
-for a worked example.
+For anything else, pass a `TrippingPolicy`: an object with `onSuccess(key)`, `onFailure(key)`
+(returning whether this failure should open the circuit), and `reset(key)`. No class is required, a
+plain object satisfying the interface works. `key` is the resolved model under `isolateByModel`, or
+one fixed shared key otherwise. See [Circuit Breaker →
+Customization](/docs/customization/circuit-breaker) for a worked example.
 
 <Callout type="info">
   `onStateChange`, the `circuit_state` event, and the open circuit error message always report a
@@ -162,11 +163,14 @@ for a worked example.
   is a real fact about the bucket, not the reason it tripped.
 </Callout>
 
-`isolateByModel` gives each model its own independent tripping state. The two built in shorthands
-each construct a fresh policy instance per model bucket. A hand built `TrippingPolicy` is the one
-exception: there is no generic way to clone an arbitrary object satisfying the interface, so the
-same instance is shared across every model's bucket. Use the shorthand form when independent per
-model state matters.
+`isolateByModel` gives each model its own independent tripping state, for the two built in
+shorthands and for a custom `TrippingPolicy` alike, since `key` is what carries the isolation: a
+single policy instance is always shared, but every call passes the resolved model as `key`, so a
+policy that tracks its own state per key gets real per-model isolation automatically, no factory or
+special handling needed. A custom policy that ignores `key` and tracks one flat counter stays
+intentionally shared across every model, that's a choice the policy makes, not a limitation of
+`isolateByModel` itself. See [Circuit Breaker → Customization](/docs/customization/circuit-breaker)
+for both patterns.
 
 ## Scope
 

@@ -52,7 +52,9 @@ export interface CircuitBreakerOptions {
    * many failures in a row. `{ kind: 'rolling', windowMs, minCalls,
    * failureRatio }` opens once at least `minCalls` calls have landed in
    * the trailing `windowMs` and the failure ratio reaches `failureRatio`.
-   * A `TrippingPolicy` covers anything else.
+   * A `TrippingPolicy` covers anything else, one instance shared across
+   * every model automatically under `isolateByModel`, since it tracks its
+   * own state per key rather than owning one flat counter.
    */
   tripping?: TrippingOption;
 }
@@ -81,55 +83,85 @@ function buildCooldownBackoff(
   };
 }
 
-/** Decides when a bucket's failures should open the circuit. */
+/**
+ * Decides when a bucket's failures should open the circuit. Keyed by
+ * `key` (a resolved model, or the shared bucket's key when
+ * `isolateByModel` is off) rather than holding one flat counter, so a
+ * single `TrippingPolicy` instance is always safe to share across every
+ * bucket: `CircuitBreaker` never needs to clone or construct a fresh one
+ * per model, `isolateByModel` isolation falls out of `key` alone.
+ */
 export interface TrippingPolicy {
-  onSuccess(): void;
-  /** Returns true if this failure should open the circuit. */
-  onFailure(): boolean;
-  reset(): void;
+  onSuccess(key: string): void;
+  /** Returns true if this failure should open the circuit for `key`. */
+  onFailure(key: string): boolean;
+  reset(key: string): void;
+  /**
+   * Called when `key`'s bucket is discarded (closed and idle, under
+   * `isolateByModel`), so a keyed policy can release that key's state.
+   * Optional: omit if there's nothing to release.
+   */
+  forget?(key: string): void;
 }
 
 export class ConsecutiveTripping implements TrippingPolicy {
-  private failures = 0;
+  private failuresByKey = new Map<string, number>();
 
   constructor(private readonly threshold: number) {}
 
-  onSuccess(): void {
-    this.failures = 0;
+  onSuccess(key: string): void {
+    this.failuresByKey.set(key, 0);
   }
 
-  onFailure(): boolean {
-    this.failures += 1;
-    return this.failures >= this.threshold;
+  onFailure(key: string): boolean {
+    const next = (this.failuresByKey.get(key) ?? 0) + 1;
+    this.failuresByKey.set(key, next);
+    return next >= this.threshold;
   }
 
-  reset(): void {
-    this.failures = 0;
+  reset(key: string): void {
+    this.failuresByKey.set(key, 0);
+  }
+
+  forget(key: string): void {
+    this.failuresByKey.delete(key);
   }
 }
 
 export class RollingTripping implements TrippingPolicy {
-  private readonly ratio: RollingRatio;
+  private ratiosByKey = new Map<string, RollingRatio>();
 
   constructor(
-    windowMs: number,
+    private readonly windowMs: number,
     private readonly minCalls: number,
     private readonly failureRatio: number,
-  ) {
-    this.ratio = new RollingRatio(windowMs);
+  ) {}
+
+  private ratioFor(key: string): RollingRatio {
+    let ratio = this.ratiosByKey.get(key);
+    if (!ratio) {
+      ratio = new RollingRatio(this.windowMs);
+      this.ratiosByKey.set(key, ratio);
+    }
+    return ratio;
   }
 
-  onSuccess(): void {
-    this.ratio.record(false);
+  onSuccess(key: string): void {
+    this.ratioFor(key).record(false);
   }
 
-  onFailure(): boolean {
-    this.ratio.record(true);
-    return this.ratio.getCount() >= this.minCalls && this.ratio.getRatio() >= this.failureRatio;
+  onFailure(key: string): boolean {
+    const ratio = this.ratioFor(key);
+    ratio.record(true);
+    return ratio.getCount() >= this.minCalls && ratio.getRatio() >= this.failureRatio;
   }
 
-  reset(): void {
-    this.ratio.reset();
+  reset(key: string): void {
+    this.ratiosByKey.delete(key);
+  }
+
+  forget(key: string): void {
+    this.ratiosByKey.delete(key);
   }
 }
 
@@ -139,15 +171,13 @@ type TrippingOption =
   | { kind: 'rolling'; windowMs: number; minCalls: number; failureRatio: number }
   | TrippingPolicy;
 
-/** Builds a factory, not a single instance, since each bucket needs its own tripping state. */
-function buildTrippingFactory(option: TrippingOption): () => TrippingPolicy {
-  if ('onFailure' in option) {
-    return () => option;
-  }
+/** Resolves the shorthand into a real `TrippingPolicy`. One instance total, shared safely across every bucket since it's keyed. */
+function buildTripping(option: TrippingOption): TrippingPolicy {
+  if ('onFailure' in option) return option;
 
   return option.kind === 'consecutive'
-    ? () => new ConsecutiveTripping(option.threshold)
-    : () => new RollingTripping(option.windowMs, option.minCalls, option.failureRatio);
+    ? new ConsecutiveTripping(option.threshold)
+    : new RollingTripping(option.windowMs, option.minCalls, option.failureRatio);
 }
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
@@ -157,8 +187,6 @@ interface CircuitBucket {
   state: CircuitState;
   /** True consecutive failures since the last success. Reporting only, independent of `tripping`. */
   consecutiveFailures: number;
-  /** Owns the actual trip decision. See `TrippingPolicy`. */
-  tripping: TrippingPolicy;
   openedAt: number;
   /** Non null only while `state` is half-open. */
   trial: { slotsRemaining: number; successes: number; failures: number } | null;
@@ -170,11 +198,10 @@ interface CircuitBucket {
   cooldownMsForOpen: number;
 }
 
-function newBucket(trippingFactory: () => TrippingPolicy): CircuitBucket {
+function newBucket(): CircuitBucket {
   return {
     state: 'closed',
     consecutiveFailures: 0,
-    tripping: trippingFactory(),
     openedAt: 0,
     trial: null,
     reopenCount: 0,
@@ -183,11 +210,31 @@ function newBucket(trippingFactory: () => TrippingPolicy): CircuitBucket {
   };
 }
 
-/** Key a bucket lookup falls into when the call omitted `model` under `isolateByModel`. */
+/** Key a bucket lookup falls into when the call omitted `model` under `isolateByModel`. Also the `tripping` key for the single shared bucket when `isolateByModel` is off. */
 const UNLABELED_MODEL = '';
+
+/** Resolves the map key for a model, collapsing an omitted `model` to `UNLABELED_MODEL`. Pure, no `this` needed. */
+function keyFor(model: string | undefined): string {
+  return model ?? UNLABELED_MODEL;
+}
 
 /** Maps a call's `state` to the trial object it claimed a slot in, so a stale permit can be told apart from a current one. */
 const trialPermits = new WeakMap<object, object>();
+
+/** True if this outcome's call claimed a permit for `bucket`'s current trial. No `context` always counts, matching pre-permit-tracking behavior. */
+function claimsCurrentTrial(
+  bucket: CircuitBucket,
+  context: CircuitBreakerCallContext | undefined,
+): boolean {
+  if (!context) return true;
+  return trialPermits.get(context.state) === bucket.trial;
+}
+
+/** Records `code` (or `'unknown'` if omitted) against `bucket.failuresByReason`. */
+function attributeFailure(bucket: CircuitBucket, code: LLMErrorCode | undefined): void {
+  const key = code ?? 'unknown';
+  bucket.failuresByReason.set(key, (bucket.failuresByReason.get(key) ?? 0) + 1);
+}
 
 /**
  * Per retry VernLLM-instance circuit breaker. Tracks consecutive failures
@@ -203,11 +250,11 @@ export class CircuitBreaker {
   private readonly halfOpenProbes: number;
   private readonly halfOpenSuccessRatio: number;
   private readonly cooldownBackoff?: CooldownBackoff;
-  /** Builds a fresh `TrippingPolicy` per bucket. */
-  private readonly trippingFactory: () => TrippingPolicy;
+  /** One instance, keyed per model internally. See `TrippingPolicy`. */
+  private readonly tripping: TrippingPolicy;
 
   // Exactly one of these is used, chosen once at construction by `isolateByModel`.
-  private readonly sharedBucket: CircuitBucket;
+  private readonly sharedBucket: CircuitBucket = newBucket();
   private readonly bucketsByModel = new Map<string, CircuitBucket>();
 
   constructor(options: CircuitBreakerOptions = {}) {
@@ -223,10 +270,9 @@ export class CircuitBreaker {
     this.halfOpenSuccessRatio = Number.isFinite(rawRatio) ? Math.min(1, Math.max(0, rawRatio!)) : 1;
 
     this.cooldownBackoff = buildCooldownBackoff(options.cooldownBackoff);
-    this.trippingFactory = buildTrippingFactory(
+    this.tripping = buildTripping(
       options.tripping ?? { kind: 'consecutive', threshold: this.threshold },
     );
-    this.sharedBucket = newBucket(this.trippingFactory);
   }
 
   /**
@@ -276,7 +322,7 @@ export class CircuitBreaker {
       return;
     }
 
-    if (bucket.state === 'half-open' && bucket.trial && this.claimsCurrentTrial(bucket, context)) {
+    if (bucket.state === 'half-open' && bucket.trial && claimsCurrentTrial(bucket, context)) {
       bucket.trial.successes += 1;
       this.settleTrialIfComplete(bucket, model, context);
       return;
@@ -286,14 +332,14 @@ export class CircuitBreaker {
     if (bucket.state === 'half-open') return;
 
     bucket.consecutiveFailures = 0;
-    bucket.tripping.onSuccess();
+    this.tripping.onSuccess(this.trippingKeyFor(model));
     bucket.trial = null;
     bucket.reopenCount = 0;
     bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
-      this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
+      this.forgetModel(model);
     }
   }
 
@@ -301,9 +347,9 @@ export class CircuitBreaker {
   recordFailure(model?: string, context?: CircuitBreakerCallContext, code?: LLMErrorCode): void {
     const bucket = this.ensureBucketFor(model);
 
-    if (bucket.state === 'half-open' && bucket.trial && this.claimsCurrentTrial(bucket, context)) {
+    if (bucket.state === 'half-open' && bucket.trial && claimsCurrentTrial(bucket, context)) {
       bucket.trial.failures += 1;
-      this.attributeFailure(bucket, code);
+      attributeFailure(bucket, code);
       this.settleTrialIfComplete(bucket, model, context);
       return;
     }
@@ -312,12 +358,10 @@ export class CircuitBreaker {
     if (bucket.state === 'half-open') return;
 
     bucket.consecutiveFailures += 1;
-    this.attributeFailure(bucket, code);
+    attributeFailure(bucket, code);
 
-    if (bucket.tripping.onFailure()) {
-      bucket.openedAt = Date.now();
-      bucket.cooldownMsForOpen = this.computeCooldown(bucket);
-      this.transition(bucket, 'open', model, context);
+    if (this.tripping.onFailure(this.trippingKeyFor(model))) {
+      this.openBucket(bucket, model, context);
     }
   }
 
@@ -335,11 +379,8 @@ export class CircuitBreaker {
   /** Manually opens the circuit, as if `threshold` consecutive failures had just happened. */
   open(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
-
-    bucket.openedAt = Date.now();
     bucket.trial = null;
-    bucket.cooldownMsForOpen = this.computeCooldown(bucket);
-    this.transition(bucket, 'open', model, context);
+    this.openBucket(bucket, model, context);
   }
 
   /** Manually closes the circuit and resets its failure count, without requiring a real success first. */
@@ -347,7 +388,7 @@ export class CircuitBreaker {
     const bucket = this.ensureBucketFor(model);
 
     bucket.consecutiveFailures = 0;
-    bucket.tripping.reset();
+    this.tripping.reset(this.trippingKeyFor(model));
     bucket.trial = null;
     bucket.reopenCount = 0;
     bucket.failuresByReason.clear();
@@ -355,8 +396,24 @@ export class CircuitBreaker {
 
     // transition() may have synchronously re-entered, so re-check state rather than assuming it still holds.
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
-      this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
+      this.forgetModel(model);
     }
+  }
+
+  /**
+   * Opens `bucket`: stamps `openedAt`/`cooldownMsForOpen` and transitions
+   * to `open`. Shared by `recordFailure`'s trip, `settleTrialIfComplete`'s
+   * reopen, and the manual `open()`, all of which reach this with
+   * `bucket.trial` already `null`.
+   */
+  private openBucket(
+    bucket: CircuitBucket,
+    model: string | undefined,
+    context: CircuitBreakerCallContext | undefined,
+  ): void {
+    bucket.openedAt = Date.now();
+    bucket.cooldownMsForOpen = this.computeCooldown(bucket);
+    this.transition(bucket, 'open', model, context);
   }
 
   /** Computes and clamps the cooldown for `bucket`'s current `reopenCount`. Called once, on open. */
@@ -371,33 +428,41 @@ export class CircuitBreaker {
   /** Returns the bucket for a model if one already exists, without allocating. */
   private lookupBucket(model: string | undefined): CircuitBucket | undefined {
     if (!this.isolateByModel) return this.sharedBucket;
+    return this.bucketsByModel.get(keyFor(model));
+  }
 
-    const key = model ?? UNLABELED_MODEL;
-    return this.bucketsByModel.get(key);
+  /**
+   * The key `tripping` is called with. Real per-model isolation under
+   * `isolateByModel`, matching `ensureBucketFor`/`lookupBucket`'s own
+   * per-model key. Otherwise one fixed shared key regardless of what
+   * `model` was passed, matching `sharedBucket` being the one and only
+   * bucket in that mode: `model` is never allowed to split tripping state
+   * when `isolateByModel` is off, the same way it never splits which
+   * bucket a call lands in.
+   */
+  private trippingKeyFor(model: string | undefined): string {
+    return this.isolateByModel ? keyFor(model) : UNLABELED_MODEL;
   }
 
   /** Creates and stores a bucket for a model when the first mutation needs one. */
   private ensureBucketFor(model: string | undefined): CircuitBucket {
     if (!this.isolateByModel) return this.sharedBucket;
 
-    const key = model ?? UNLABELED_MODEL;
+    const key = keyFor(model);
     let bucket = this.bucketsByModel.get(key);
 
     if (!bucket) {
-      bucket = newBucket(this.trippingFactory);
+      bucket = newBucket();
       this.bucketsByModel.set(key, bucket);
     }
 
     return bucket;
   }
 
-  /** True if this outcome's call claimed a permit for `bucket`'s current trial. */
-  private claimsCurrentTrial(
-    bucket: CircuitBucket,
-    context: CircuitBreakerCallContext | undefined,
-  ): boolean {
-    if (!context) return true;
-    return trialPermits.get(context.state) === bucket.trial;
+  /** Drops an idle model's bucket and lets `tripping` release that key's state too. */
+  private forgetModel(model: string | undefined): void {
+    this.bucketsByModel.delete(keyFor(model));
+    this.tripping.forget?.(this.trippingKeyFor(model));
   }
 
   /** Every state mutation routes through here, so `onStateChange` fires exactly once per real change. */
@@ -414,12 +479,6 @@ export class CircuitBreaker {
     this.onStateChange?.(from, to, bucket.consecutiveFailures, model, context);
   }
 
-  /** Records `code` (or `'unknown'` if omitted) against `bucket.failuresByReason`. */
-  private attributeFailure(bucket: CircuitBucket, code: LLMErrorCode | undefined): void {
-    const key = code ?? 'unknown';
-    bucket.failuresByReason.set(key, (bucket.failuresByReason.get(key) ?? 0) + 1);
-  }
-
   /** Once every admitted trial has reported in, closes or reopens based on `halfOpenSuccessRatio`. */
   private settleTrialIfComplete(
     bucket: CircuitBucket,
@@ -434,21 +493,19 @@ export class CircuitBreaker {
 
     if (ratio >= this.halfOpenSuccessRatio) {
       bucket.consecutiveFailures = 0;
-      bucket.tripping.onSuccess();
+      this.tripping.onSuccess(this.trippingKeyFor(model));
       bucket.reopenCount = 0;
       bucket.failuresByReason.clear();
       this.transition(bucket, 'closed', model, context);
 
       if (this.isolateByModel && bucket.state === 'closed') {
-        this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
+        this.forgetModel(model);
       }
       return;
     }
 
     // Trial failed: reopen, reset the cooldown window, count the repeat.
-    bucket.openedAt = Date.now();
     bucket.reopenCount += 1;
-    bucket.cooldownMsForOpen = this.computeCooldown(bucket);
-    this.transition(bucket, 'open', model, context);
+    this.openBucket(bucket, model, context);
   }
 }
