@@ -1,6 +1,13 @@
+import type { LLMErrorCode } from './errors.js';
 import type { CallMeta } from './fallback.js';
 import type { JsonSchemaSpec, SchemaLike } from './schema.js';
-import type { ToolCall, ToolChoice, ToolDefinition, ToolResult } from './tools.js';
+import type {
+  ToolCall,
+  ToolChoice,
+  ToolDefinition,
+  ToolResult,
+  CallWithToolsResult,
+} from './tools.js';
 import type { UsageHooks } from './usage.js';
 
 /**
@@ -392,3 +399,26 @@ export type CachedJsonModeEnabledCallParams = CachedCallInput & {
     schema?: never;
   };
 };
+
+/** Context handed to `DetectSoftFailure` alongside the response it's inspecting. */
+export interface SoftFailureMeta {
+  requestId: string;
+  model: string;
+  providerName: string;
+  isFallback: boolean;
+  /** 1-based, matching `CallMeta.attempts`. */
+  attempt: number;
+}
+
+/**
+ * Inspects an otherwise-successful result and optionally reclassifies it
+ * as a failure. Returning `undefined` leaves the result as a success;
+ * returning an `LLMErrorCode` fails the attempt with that code, feeding
+ * the same retry and circuit-breaker paths a thrown error would. A
+ * result that parses fine but is empty, truncated, or a low-confidence
+ * refusal is otherwise invisible to both.
+ */
+export type DetectSoftFailure<T = unknown> = (
+  result: T | CallWithToolsResult<T>,
+  meta: SoftFailureMeta,
+) => LLMErrorCode | undefined;

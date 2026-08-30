@@ -21,6 +21,21 @@ describe('CircuitBreaker (unit)', () => {
     expect(cb.getState()).toBe('open');
   });
 
+  it('behaves exactly as before when recordFailure is called with no third argument', () => {
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000 });
+    cb.recordFailure(undefined, undefined);
+    expect(cb.getState()).toBe('closed');
+    cb.recordFailure(undefined, undefined);
+    expect(cb.getState()).toBe('open');
+  });
+
+  it('accepts an optional code argument without throwing or changing trip behavior', () => {
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000 });
+    expect(() => cb.recordFailure(undefined, undefined, 'server_error')).not.toThrow();
+    cb.recordFailure(undefined, undefined, 'server_error');
+    expect(cb.getState()).toBe('open');
+  });
+
   it('throws LLMError(circuit_open) while open and within cooldown', () => {
     const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 10_000 });
     cb.recordFailure();

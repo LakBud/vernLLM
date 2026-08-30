@@ -1,5 +1,5 @@
 import type { CircuitBreaker, CircuitBreakerCallContext } from '../../circuitBreaker.js';
-import type { AttemptContext, MiddlewareStateBag } from '../../types/index.js';
+import type { AttemptContext, LLMErrorCode, MiddlewareStateBag } from '../../types/index.js';
 
 /** Everything one logical call needs to build attempt context and talk to its breaker. */
 export interface BreakerGatewayOptions {
@@ -30,8 +30,13 @@ export interface BreakerGateway {
   ): CircuitBreakerCallContext;
   /** No-op if no breaker was configured. */
   recordSuccess(attempt: number, signal: AbortSignal | undefined, state: MiddlewareStateBag): void;
-  /** No-op if no breaker was configured. */
-  recordFailure(attempt: number, signal: AbortSignal | undefined, state: MiddlewareStateBag): void;
+  /** No-op if no breaker was configured. `code`, when present, is forwarded to the breaker for future attribution use. */
+  recordFailure(
+    attempt: number,
+    signal: AbortSignal | undefined,
+    state: MiddlewareStateBag,
+    code?: LLMErrorCode,
+  ): void;
 }
 
 export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGateway {
@@ -70,8 +75,8 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
     recordSuccess(attempt, signal, state) {
       breaker?.recordSuccess(model, buildCallContext(attempt, signal, state));
     },
-    recordFailure(attempt, signal, state) {
-      breaker?.recordFailure(model, buildCallContext(attempt, signal, state));
+    recordFailure(attempt, signal, state, code) {
+      breaker?.recordFailure(model, buildCallContext(attempt, signal, state), code);
     },
   };
 }

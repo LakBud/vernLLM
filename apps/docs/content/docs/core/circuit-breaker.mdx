@@ -49,6 +49,9 @@ Does not count as a failure:
   `'rate_limit_capacity_exceeded'`, a local `rateLimit` rejection that never reached the provider,
   whether from a queue giving up or from a call rejected outright before it ever queued. See
   [Interaction with the circuit breaker](/docs/core/rate-limiting#interaction-with-the-circuit-breaker).
+- `LLMError('quota_exceeded')`. A usage reservation rejection is a caller or account level limit,
+  not a signal that the provider itself is unhealthy, so it's excluded even though it's still
+  retried.
 
 The tool contract errors are model response defects rather than provider health failures. An
 `unknown_tool` error means the model requested a tool that was not offered. A
@@ -57,6 +60,10 @@ the provider is unavailable, so neither contributes to the circuit failure count
 
 These tool contract errors are also not retried. Retrying the same request does not change the
 available tool contract or repair the duplicate ID.
+
+A response that arrives successfully can still be turned into a circuit breaker failure via
+`detectSoftFailure`, the same as a real transport or provider failure would be. See
+[Soft Failure Detection](/docs/core/error-handling#soft-failure-detection).
 
 ## Half open behavior
 

@@ -81,8 +81,10 @@ try {
   </Card>
   <Card title="quota_exceeded">
     The usage reservation failed before the request was sent. This happens when `reserveUsage`
-    rejects and the original error is preserved on `err.cause`. It is raised before retry handling
-    and is not retried.
+    rejects and the original error is preserved on `err.cause`. It's retried like most other types,
+    but excluded from circuit breaker accounting: a caller or account level limit says nothing about
+    whether the provider itself is healthy. See [Circuit
+    Breaker](/docs/core/circuit-breaker#what-counts-as-a-failure).
   </Card>
   <Card title="circuit_open">
     The circuit breaker is open because the provider has failed too many times in a row. Fails
@@ -172,6 +174,75 @@ The currently defined fallback code is:
 
 See [Provider Fallback](/docs/core/provider-fallback) for the full `fallback` option
 and what makes `fallbackOn` move to the next target versus stop.
+
+## Soft failure detection
+
+A response can parse cleanly and pass schema validation without actually being a good answer. A
+model that returns a placeholder, an empty-but-technically-present string, or a low-confidence
+refusal looks like a success to retries and the circuit breaker, since nothing threw. The
+`detectSoftFailure` option runs once per attempt, right after a response is shaped, and can turn
+that result into a real failure before it reaches the caller:
+
+```ts title="soft-failure-setup.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  detectSoftFailure: (result, meta) => {
+    // meta: { requestId, model, providerName, isFallback, attempt }
+    if (typeof result === 'string' && result.trim() === 'N/A') {
+      return 'soft_failure_detected';
+    }
+    return undefined;
+  },
+});
+```
+
+Returning `undefined` leaves the result as a success. Returning an `LLMErrorCode` throws
+`LLMError('api', code)`, using `soft_failure_detected` as a reasonable default when no more
+specific code applies.
+
+<Callout type="info">
+  The thrown type is `api`, not `validation`. `validation` errors are never retried and never count
+  toward the circuit breaker, which would make a soft failure invisible to both no matter what code
+  was returned. `api` lets the returned code's own retry and breaker behavior apply normally, the
+  same way the built-in empty-response check below already works.
+</Callout>
+
+A soft failure flows through the exact same retry and circuit breaker paths a real failure would:
+with `maxRetries` configured it can still succeed on a later attempt, and with `circuitBreaker`
+configured, repeated soft failures count toward the same threshold repeated real failures would.
+See [Retries](/docs/core/retries) and [Circuit Breaker](/docs/core/circuit-breaker).
+
+A throwing hook is caught, logged, and treated the same as returning `undefined`, so a broken hook
+doesn't fail every call it's attached to.
+
+For `stream: true` calls, `detectSoftFailure` runs at the same point, once the stream has fully
+accumulated, and a soft failure rejects `finalResult` the same as any other post-stream failure.
+
+<Callout type="info">
+  A streaming soft failure counts toward the circuit breaker too, the same as a non-streaming one,
+  gated by the same `countsTowardBreaker` policy the non-streaming path already applies (see
+  [`retryable`](#retryable) below). A code excluded from breaker accounting, such as
+  `quota_exceeded`, still won't count even when returned from `detectSoftFailure`. Even though the
+  streaming attempt has already returned successfully from VernLLM's own retry loop by the time the
+  final result is shaped, a finalize-time failure that does count is still recorded against the
+  breaker directly.
+</Callout>
+
+`fallback` targets each accept their own `detectSoftFailure`. A target that leaves it unset
+inherits the parent instance's hook, unlike `circuitBreaker` and `rateLimit`, which are always
+independent per target and never inherited.
+
+VernLLM already fails a call outright when a response arrives with no content and no tool calls at
+all, regardless of whether `detectSoftFailure` is configured. `detectSoftFailure` is for judgment
+calls beyond that baseline: a specific placeholder string, a truncated JSON shape, or anything else
+that's a failure for your application but not for VernLLM in general.
+
+The currently defined soft failure code is:
+
+| Code                    | Error type | Meaning                                                                                                                                                      |
+| ----------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `soft_failure_detected` | `api`      | The default code thrown when a `detectSoftFailure` hook flags an otherwise successful result as a failure without returning a more specific code of its own. |
 
 ```ts title="error-code.ts"
 try {
@@ -315,6 +386,14 @@ It is `false` when:
   `tool_choice_none_violated`, `unexpected_tool_calls`)
 - `code` is one of the local rate limit codes (`rate_limit_queue_full`,
   `rate_limit_queue_timeout`, `rate_limit_capacity_exceeded`)
+
+<Callout type="info">
+  `retryable` and `LLMError.countsTowardBreaker` answer different questions and can disagree.
+  `quota_exceeded` is retryable (`true`) but excluded from circuit breaker accounting, since a
+  caller or account level limit says nothing about whether the provider itself is healthy. See
+  [Circuit Breaker](/docs/core/circuit-breaker#what-counts-as-a-failure) for the full list of what's
+  excluded from breaker accounting specifically.
+</Callout>
 
 `FallbackExhaustedError` overrides this to defer to the last attempted target's own `retryable`,
 since `type: 'fallback_exhausted'` by itself says nothing about whether retrying could help.

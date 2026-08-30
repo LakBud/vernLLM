@@ -1,4 +1,4 @@
-import { LLMError } from './types/errors.js';
+import { LLMError, type LLMErrorCode } from './types/errors.js';
 
 import type { MiddlewareStateBag } from './types/middleware.js';
 
@@ -200,7 +200,12 @@ export class CircuitBreaker {
     }
   }
 
-  recordFailure(model?: string, context?: CircuitBreakerCallContext): void {
+  /**
+   * `code`, when present, is the failing `LLMError`'s `code`. Not read by
+   * `CircuitBreaker` itself yet, threaded through so later attribution
+   * work has it available without changing this signature again.
+   */
+  recordFailure(model?: string, context?: CircuitBreakerCallContext, _code?: LLMErrorCode): void {
     const bucket = this.ensureBucketFor(model);
 
     bucket.consecutiveFailures += 1;

@@ -61,7 +61,9 @@ export type LLMErrorCode =
   | 'fallback_exhausted'
   // Parsing (parse)
   | 'tool_arguments_parse_failed'
-  | 'stream_frame_invalid';
+  | 'stream_frame_invalid'
+  // Soft failure (api, default; a custom code can also override the type)
+  | 'soft_failure_detected';
 
 /**
  * Tool contract codes: a model or provider response defect, not a
@@ -126,6 +128,29 @@ function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): b
   if (code && NON_RETRYABLE_TOOL_CONTRACT_CODES.has(code)) return false;
   if (code && LOCAL_RATE_LIMIT_CODES.has(code)) return false;
   if (code && NON_RETRYABLE_MIDDLEWARE_TIMEOUT_CODES.has(code)) return false;
+  return true;
+}
+
+/**
+ * Types that are excluded from the circuit breaker even when retryable.
+ * `quota_exceeded` is a caller/account level limit, not a signal about
+ * whether the provider itself is healthy, so it should never push a
+ * healthy provider's circuit toward opening. Only ever removes from what
+ * `computeRetryable` already allows, never adds back something
+ * `computeRetryable` excluded.
+ */
+const NON_BREAKER_TYPES: ReadonlySet<LLMErrorType> = new Set(['quota_exceeded']);
+
+/**
+ * Shared "should this failure count toward the circuit breaker" rule
+ * behind `LLMError.countsTowardBreaker`. Always defers to
+ * `computeRetryable` first, so anything already excluded from retry is
+ * also excluded from the breaker; `NON_BREAKER_TYPES` only narrows
+ * further.
+ */
+function computeCountsTowardBreaker(type: LLMErrorType, code: LLMErrorCode | undefined): boolean {
+  if (!computeRetryable(type, code)) return false;
+  if (NON_BREAKER_TYPES.has(type)) return false;
   return true;
 }
 
@@ -447,6 +472,17 @@ export class LLMError extends Error {
    */
   get retryable(): boolean {
     return computeRetryable(this.type, this.code);
+  }
+
+  /**
+   * Whether this failure should count toward the circuit breaker's
+   * failure threshold. Not the same question as `retryable`:
+   * `quota_exceeded` is retryable but says nothing about provider
+   * health, so it's excluded here even though `retryable` is true for
+   * it. Always false whenever `retryable` is false.
+   */
+  get countsTowardBreaker(): boolean {
+    return computeCountsTowardBreaker(this.type, this.code);
   }
 
   /**
