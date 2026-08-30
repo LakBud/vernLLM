@@ -432,7 +432,7 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     vi.useRealTimers();
   });
 
-  it('the { multiplier, maxMs } shorthand grows the cooldown exactly across three reopen cycles', () => {
+  it('the shorthand always applies jitter: falls in [exp/2, exp], not the exact value', () => {
     vi.useFakeTimers();
     const cb = new CircuitBreaker({
       threshold: 1,
@@ -440,42 +440,84 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // First open: reopenCount 0, cooldown 1000 * 2^0 = 1000.
+    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, jittered to [500, 1000].
+    cb.recordFailure();
+    // Below the floor of the jittered range: never admitted.
+    vi.advanceTimersByTime(499);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    // Past the ceiling of the jittered range: always admitted, regardless of the actual roll.
+    vi.advanceTimersByTime(501);
+    expect(() => cb.assertClosed()).not.toThrow();
+    expect(cb.getState()).toBe('half-open');
+
+    vi.useRealTimers();
+  });
+
+  it('a custom function is never jittered automatically, jitter only applies to the shorthand', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: () => 1000, // fixed, no jitter applied by the library
+    });
+
     cb.recordFailure();
     vi.advanceTimersByTime(999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
     vi.advanceTimersByTime(2);
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    vi.useRealTimers();
+  });
+
+  it('the { multiplier, maxMs } shorthand grows the jittered range across three reopen cycles', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 2 },
+    });
+
+    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, jittered range [500, 1000].
+    cb.recordFailure();
+    vi.advanceTimersByTime(499);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(501); // total 1000, past the ceiling
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
-    // Trial fails: reopenCount becomes 1, cooldown 1000 * 2^1 = 2000.
+    // Trial fails: reopenCount 1, exp = 1000 * 2^1 = 2000, jittered range [1000, 2000].
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(1001); // total 2000, past the ceiling
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    // Trial fails again: reopenCount 2, exp = 1000 * 2^2 = 4000, jittered range [2000, 4000].
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
     vi.advanceTimersByTime(1999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2);
-    cb.assertClosed();
-    expect(cb.getState()).toBe('half-open');
-
-    // Trial fails again: reopenCount becomes 2, cooldown 1000 * 2^2 = 4000.
-    cb.recordFailure();
-    expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(3999);
-    expect(() => cb.assertClosed()).toThrow(
-      expect.objectContaining({ code: 'circuit_cooling_down' }),
-    );
-    vi.advanceTimersByTime(2);
+    vi.advanceTimersByTime(2001); // total 4000, past the ceiling
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
     vi.useRealTimers();
   });
 
-  it('maxMs caps the growth', () => {
+  it('maxMs caps the growth, including the jittered range', () => {
     vi.useFakeTimers();
     const cb = new CircuitBreaker({
       threshold: 1,
@@ -483,19 +525,20 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 10, maxMs: 5000 },
     });
 
-    // First open: 1000 * 10^0 = 1000.
+    // First open: reopenCount 0, exp = 1000 * 10^0 = 1000, admit by 1000ms.
     cb.recordFailure();
-    vi.advanceTimersByTime(1001);
+    vi.advanceTimersByTime(1000);
     cb.assertClosed();
 
-    // Trial fails: reopenCount 1, uncapped would be 10000, capped to 5000.
+    // Trial fails: reopenCount 1, uncapped exp would be 10000, capped to
+    // 5000, jittered range [2500, 5000].
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(4999);
+    vi.advanceTimersByTime(2499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2);
+    vi.advanceTimersByTime(2501); // total 5000, past the capped ceiling
     expect(() => cb.assertClosed()).not.toThrow();
 
     vi.useRealTimers();
@@ -550,27 +593,29 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // Open, reopen once via a failed trial (reopenCount -> 1), then
-    // recover with a successful trial, which should reset reopenCount.
+    // Open, reopen once via a failed trial (reopenCount -> 1, jittered
+    // range [1000, 2000]), then recover with a successful trial, which
+    // should reset reopenCount.
     cb.recordFailure();
-    vi.advanceTimersByTime(1001);
+    vi.advanceTimersByTime(1000); // reopenCount 0 ceiling
     cb.assertClosed();
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(2001);
+    vi.advanceTimersByTime(2000); // reopenCount 1 ceiling
     cb.assertClosed();
     cb.recordSuccess();
     expect(cb.getState()).toBe('closed');
 
-    // Trip again: reopenCount should be back to 0, so the cooldown is
-    // the base 1000ms again, not a continuation of the earlier growth.
+    // Trip again: reopenCount should be back to 0, so the jittered
+    // range is [500, 1000] again, not a continuation of the earlier
+    // growth ([1000, 2000] or beyond).
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2);
+    vi.advanceTimersByTime(501); // total 1000, past the reset ceiling
     expect(() => cb.assertClosed()).not.toThrow();
 
     vi.useRealTimers();

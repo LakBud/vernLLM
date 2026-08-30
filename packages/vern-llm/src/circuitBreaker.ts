@@ -87,7 +87,14 @@ export interface ExponentialBackoffOptions {
   maxMs?: number;
 }
 
-/** Not exported. Internal shorthand only. */
+/**
+ * Not exported. Internal shorthand only. Applies equal jitter
+ * unconditionally, same formula as retry backoff (`getBackoffDelay`),
+ * so several client instances don't reopen in lockstep. A caller wanting
+ * the exact deterministic value uses the `CooldownBackoff` function form
+ * instead, same escape hatch as any other shape beyond exponential
+ * growth.
+ */
 function buildCooldownBackoff(
   option: ExponentialBackoffOptions | CooldownBackoff | undefined,
 ): CooldownBackoff | undefined {
@@ -95,8 +102,10 @@ function buildCooldownBackoff(
   if (typeof option === 'function') return option;
 
   const { multiplier, maxMs = Infinity } = option;
-  return (reopenCount, baseCooldownMs) =>
-    Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
+  return (reopenCount, baseCooldownMs) => {
+    const exp = Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
+    return exp / 2 + Math.random() * (exp / 2);
+  };
 }
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
