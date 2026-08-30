@@ -1,5 +1,14 @@
 {
   "title": "Customization",
   "icon": "Puzzle",
-  "pages": ["index", "middleware", "caching", "tokenizer", "schema", "provider", "logging"]
+  "pages": [
+    "index",
+    "middleware",
+    "circuit-breaker",
+    "caching",
+    "tokenizer",
+    "schema",
+    "provider",
+    "logging"
+  ]
 }

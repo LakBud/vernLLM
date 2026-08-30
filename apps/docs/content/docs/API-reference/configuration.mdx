@@ -118,9 +118,9 @@ shapes.
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                                                                                     |
-| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `circuitBreaker` | disabled | Pass `true` for defaults (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, halfOpenProbes, halfOpenSuccessRatio, cooldownBackoff, onStateChange }`. See [Circuit Breaker](/docs/core/circuit-breaker). |
+| Option           | Default  | Notes                                                                                                                                                                                                                                               |
+| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for defaults (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, halfOpenProbes, halfOpenSuccessRatio, cooldownBackoff, tripping, onStateChange }`. See [Circuit Breaker](/docs/core/circuit-breaker). |
 
 The circuit breaker tracks provider and transport-level health. Response parsing and validation
 errors do not count as provider failures. `unknown_tool` and `duplicate_tool_call_id` tool-contract
@@ -144,8 +144,23 @@ run during the half-open window and what fraction must succeed to close the circ
 
 Omitted (the default), `cooldownMs` stays fixed.
 
+`tripping` accepts `{ kind: 'consecutive', threshold } | { kind: 'rolling', windowMs, minCalls, failureRatio } | TrippingPolicy`:
+
+- `{ kind: 'consecutive', threshold }`: the default, matching `threshold` on its own. Opens after
+  that many failures in a row.
+- `{ kind: 'rolling', windowMs, minCalls, failureRatio }`: opens once at least `minCalls` calls have
+  landed in the trailing `windowMs` and the failure ratio among them reaches `failureRatio`.
+- `TrippingPolicy`: `{ onSuccess(), onFailure(): boolean, reset() }`, an escape hatch for anything
+  else. No class required, a plain object satisfying the interface works.
+
+`onStateChange`, the `circuit_state` event, and the open-circuit error message always report a true
+consecutive-failure count, tracked independently of `tripping`.
+
+Omitted (the default), `tripping` is `{ kind: 'consecutive', threshold }`.
+
 See [Circuit Breaker](/docs/core/circuit-breaker) for failure conditions, half-open
-behavior, cooldown backoff, failure attribution, per-model isolation, and state inspection.
+behavior, cooldown backoff, tripping policy, failure attribution, per-model isolation, and state
+inspection.
 
 ## Rate limiting
 

@@ -12,6 +12,10 @@ estimated), there's a matching interface you can implement instead of accepting 
     Write your own transform/wrap middleware, share state with createStateKey, and use
     createMiddleware for the "I only care about failures" case.
   </Card>
+  <Card title="Circuit Breaker" href="/docs/customization/circuit-breaker">
+    Bring your own `TrippingPolicy` to decide when a circuit opens, or a `CooldownBackoff` function
+    for a custom reopen curve, on top of the built-in policies and exponential backoff.
+  </Card>
   <Card title="Caching" href="/docs/customization/caching">
     Bring your own `CacheAdapter` backed by Redis, Upstash, or anything else, on top of the built-in
     in-memory, normalized, and tiered adapters.

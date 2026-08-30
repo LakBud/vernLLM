@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { CircuitBreaker } from '../../src/circuitBreaker.js';
+import {
+  CircuitBreaker,
+  ConsecutiveTripping,
+  RollingTripping,
+  type TrippingPolicy,
+} from '../../src/circuitBreaker.js';
 import { FallbackExhaustedError } from '../../src/types/fallback.js';
 import { createMiddlewareStateBag, type VernLLMMiddleware } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
@@ -1758,5 +1763,142 @@ describe('VernLLM, circuit breaker integration', () => {
     const llm = new VernLLM({ client, model: 'm', circuitBreaker: { threshold: 5 } });
 
     expect(() => llm.getFailureBreakdown({ index: 9 })).toThrow(RangeError);
+  });
+});
+
+describe('CircuitBreaker, tripping policy (unit)', () => {
+  it('default tripping (no option) reproduces the current consecutive-failure suite unmodified', () => {
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000 });
+    cb.recordFailure();
+    expect(cb.getState()).toBe('closed');
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+  });
+
+  it("the `{ kind: 'consecutive' }` shorthand behaves identically to a hand built ConsecutiveTripping", () => {
+    const shorthand = new CircuitBreaker({
+      cooldownMs: 1000,
+      tripping: { kind: 'consecutive', threshold: 2 },
+    });
+    const handBuilt = new CircuitBreaker({
+      cooldownMs: 1000,
+      tripping: new ConsecutiveTripping(2),
+    });
+
+    shorthand.recordFailure();
+    handBuilt.recordFailure();
+    expect(shorthand.getState()).toBe('closed');
+    expect(handBuilt.getState()).toBe('closed');
+
+    shorthand.recordFailure();
+    handBuilt.recordFailure();
+    expect(shorthand.getState()).toBe('open');
+    expect(handBuilt.getState()).toBe('open');
+  });
+
+  it("`{ kind: 'rolling' }` trips exactly at the configured ratio and not before", () => {
+    const cb = new CircuitBreaker({
+      cooldownMs: 1000,
+      tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 4, failureRatio: 0.5 },
+    });
+
+    cb.recordFailure(); // 1/1, below minCalls
+    expect(cb.getState()).toBe('closed');
+    cb.recordSuccess(); // 1/2
+    expect(cb.getState()).toBe('closed');
+    cb.recordFailure(); // 2/3, still below minCalls
+    expect(cb.getState()).toBe('closed');
+    cb.recordFailure(); // 3/4, minCalls met, ratio 0.75 >= 0.5
+    expect(cb.getState()).toBe('open');
+  });
+
+  it('minCalls gates tripping even at 100% failure ratio within the window', () => {
+    const cb = new CircuitBreaker({
+      cooldownMs: 1000,
+      tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 10, failureRatio: 0.5 },
+    });
+
+    for (let i = 0; i < 9; i++) cb.recordFailure();
+    expect(cb.getState()).toBe('closed');
+
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+  });
+
+  it('a hand written plain object satisfying TrippingPolicy (not the shorthand, not a built in) is honored', () => {
+    let failures = 0;
+    let resetCalls = 0;
+    const custom: TrippingPolicy = {
+      onSuccess: () => {
+        failures = 0;
+      },
+      onFailure: () => ++failures >= 3,
+      reset: () => {
+        resetCalls += 1;
+        failures = 0;
+      },
+    };
+
+    const cb = new CircuitBreaker({ cooldownMs: 1000, tripping: custom });
+
+    cb.recordFailure();
+    cb.recordFailure();
+    expect(cb.getState()).toBe('closed');
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+
+    cb.close();
+    expect(resetCalls).toBe(1);
+  });
+
+  it('reports a true consecutive-failure count via onStateChange even under rolling tripping', () => {
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({
+      cooldownMs: 1000,
+      tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 2, failureRatio: 0.5 },
+      onStateChange,
+    });
+
+    cb.recordFailure();
+    cb.recordFailure();
+
+    expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 2, undefined, undefined);
+  });
+
+  it('isolateByModel gives each model its own independent RollingTripping instance', () => {
+    const cb = new CircuitBreaker({
+      cooldownMs: 1000,
+      isolateByModel: true,
+      tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 2, failureRatio: 0.5 },
+    });
+
+    cb.recordFailure('model-a');
+    cb.recordFailure('model-a');
+    expect(cb.getState('model-a')).toBe('open');
+    expect(cb.getState('model-b')).toBe('closed');
+  });
+});
+
+describe('RollingTripping (unit)', () => {
+  it('trips once minCalls and failureRatio are both satisfied within the window', () => {
+    const tripping = new RollingTripping(60_000, 4, 0.5);
+
+    expect(tripping.onFailure()).toBe(false); // 1/1
+    tripping.onSuccess(); // 1/2
+    expect(tripping.onFailure()).toBe(false); // 2/3, below minCalls
+    expect(tripping.onFailure()).toBe(true); // 3/4, minCalls met, ratio 0.75
+  });
+
+  it('reset clears accumulated state', () => {
+    const tripping = new RollingTripping(60_000, 3, 0.5);
+    tripping.onFailure(); // 1/1
+    tripping.onFailure(); // 2/2, one more would meet minCalls and trip
+
+    tripping.reset();
+
+    // Without the reset, this next failure would be the 3rd and would
+    // trip (count 3 >= minCalls, ratio 1 >= 0.5). After reset it's back
+    // to a fresh window, so it doesn't.
+    expect(tripping.onFailure()).toBe(false);
   });
 });
