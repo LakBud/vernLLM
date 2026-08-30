@@ -24,7 +24,7 @@ overrides:
   ip-address: ^10.3.1
   nanoid: ^3.3.18
   hono: ^4.12.34
-  '@hono/node-server': ^1.19.15
+  '@hono/node-server': ^1.19.17
   mermaid: ^11.16.1
   dompurify: ^3.4.13
   diff: ^8.0.3
