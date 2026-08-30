@@ -74,7 +74,7 @@
     "size-limit": "^13.0.3",
     "tsdown": "^0.22.14",
     "typescript": "^7.0.2",
-    "unplugin-unused": "^0.6.0",
+    "unplugin-unused": "^0.5.7",
     "vitest": "^4.1.11",
     "zod": "^4.5.4"
   },

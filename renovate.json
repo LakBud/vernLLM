@@ -18,6 +18,10 @@
 
   "prConcurrentLimit": 3,
 
+  "platformAutomerge": true,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+
   "packageRules": [
     {
       "description": "Group all docs app updates into one PR",

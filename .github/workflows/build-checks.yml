@@ -29,6 +29,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Check peer dependencies
+        run: pnpm peers check
+
       - run: pnpm --filter vern-llm run build
 
       - name: Bundle size
