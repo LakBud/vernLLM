@@ -19,7 +19,7 @@ overrides:
   '@hono/node-server': ^2.1.1
   mermaid: ^11.17.2
   dompurify: ^3.4.14
-  diff: ^8.0.4
+  diff: ^9.0.0
   js-yaml: ^4.3.2
   read-yaml-file>js-yaml: ^3.15.2
 
@@ -4698,8 +4698,8 @@ packages:
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
 
-  diff@8.0.4:
-    resolution: {integrity: sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==}
+  diff@9.0.0:
+    resolution: {integrity: sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==}
     engines: {node: '>=0.3.1'}
 
   dompurify@3.4.14:
@@ -9961,7 +9961,7 @@ snapshots:
       '@pierre/theme': 1.1.0
       '@pierre/theming': 0.0.2(@pierre/theme@1.1.0)(@shikijs/themes@4.4.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
       '@shikijs/transformers': 4.3.1
-      diff: 8.0.4
+      diff: 9.0.0
       hast-util-to-html: 9.0.5
       lru_map: 0.4.1
       react: 19.2.8
@@ -12340,7 +12340,7 @@ snapshots:
     dependencies:
       dequal: 2.0.3
 
-  diff@8.0.4: {}
+  diff@9.0.0: {}
 
   dompurify@3.4.14:
     optionalDependencies:
@@ -15196,7 +15196,7 @@ snapshots:
       cosmiconfig: 9.0.2(typescript@6.0.3)
       dedent: 1.7.2(babel-plugin-macros@3.1.0)
       deepmerge: 4.3.1
-      diff: 8.0.4
+      diff: 9.0.0
       execa: 9.6.1
       fast-glob: 3.3.3
       fs-extra: 11.3.6
@@ -15507,7 +15507,7 @@ snapshots:
       chokidar: 4.0.3
       consola: 3.4.2
       debug: 4.4.3(supports-color@10.2.2)
-      diff: 8.0.4
+      diff: 9.0.0
       empathic: 1.1.0
       hookable: 5.5.3
       lightningcss: 1.32.0
