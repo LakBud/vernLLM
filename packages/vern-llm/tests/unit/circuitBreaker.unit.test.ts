@@ -455,6 +455,37 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     vi.useRealTimers();
   });
 
+  it('the jittered cooldown is sampled once per open period, not resampled on every assertClosed check', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 10_000,
+      cooldownBackoff: { multiplier: 2 },
+    });
+
+    cb.recordFailure();
+
+    const messages: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      try {
+        cb.assertClosed();
+      } catch (error) {
+        messages.push((error as Error).message);
+      }
+    }
+
+    // Every check above happened at the same elapsed time (0ms since
+    // open, no time advanced between calls). The jittered range here
+    // spans several whole seconds ([5000, 10000]ms), so if the cooldown
+    // were resampled per check, the reported "Retry in Xs" would very
+    // likely differ across the 20 draws. Sampled once and cached, every
+    // check reports the identical wait.
+    expect(messages).toHaveLength(20);
+    expect(new Set(messages).size).toBe(1);
+
+    vi.useRealTimers();
+  });
+
   it('a custom function is never jittered automatically, jitter only applies to the shorthand', () => {
     vi.useFakeTimers();
     const cb = new CircuitBreaker({

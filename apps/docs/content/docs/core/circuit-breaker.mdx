@@ -123,9 +123,15 @@ growth, or an exact deterministic value, pass a function instead. A custom funct
 jittered automatically:
 
 ```ts title="circuit-breaker-cooldown-backoff-custom.ts"
-circuitBreaker: {
-  cooldownBackoff: (reopenCount, baseCooldownMs) => baseCooldownMs + reopenCount * 5_000,
-},
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+    cooldownBackoff: (reopenCount, baseCooldownMs) => baseCooldownMs + reopenCount * 5_000,
+  },
+});
 ```
 
 The growth resets once the circuit recovers. A successful trial or a manual `closeCircuit()` sets

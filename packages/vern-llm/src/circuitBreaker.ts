@@ -133,6 +133,15 @@ interface CircuitBucket {
   reopenCount: number;
   /** Failure counts by `LLMErrorCode`, `'unknown'` for a missing code. Attribution only, never read to decide anything. */
   failuresByReason: Map<LLMErrorCode | 'unknown', number>;
+  /**
+   * The cooldown to honor for this specific open period, computed once
+   * when `state` transitions into `open` and read on every subsequent
+   * `assertClosed` check until the bucket leaves `open`. Sampled once
+   * rather than on every check so a jittered `cooldownBackoff` value
+   * doesn't change between checks within the same open period. Unused
+   * while `state` isn't `open`.
+   */
+  cooldownMsForOpen: number;
 }
 
 function newBucket(): CircuitBucket {
@@ -143,6 +152,7 @@ function newBucket(): CircuitBucket {
     trial: null,
     reopenCount: 0,
     failuresByReason: new Map(),
+    cooldownMsForOpen: 0,
   };
 }
 
@@ -198,10 +208,12 @@ export class CircuitBreaker {
   }
 
   /**
-   * Cooldown for `bucket`'s current `reopenCount`. Clamps a caller
-   * supplied backoff to a minimum of 0, catching `NaN` and negatives.
+   * Computes and clamps the cooldown for `bucket`'s current `reopenCount`.
+   * Called exactly once, whenever `bucket` transitions into `open`, and
+   * cached on the bucket as `cooldownMsForOpen`. Clamps a caller supplied
+   * backoff to a minimum of 0, catching `NaN` and negatives.
    */
-  private effectiveCooldown(bucket: CircuitBucket): number {
+  private computeCooldown(bucket: CircuitBucket): number {
     if (!this.cooldownBackoff) return this.cooldownMs;
 
     const computed = this.cooldownBackoff(bucket.reopenCount, this.cooldownMs);
@@ -269,7 +281,7 @@ export class CircuitBreaker {
 
     if (bucket.state === 'open') {
       const elapsed = Date.now() - bucket.openedAt;
-      const cooldown = this.effectiveCooldown(bucket);
+      const cooldown = bucket.cooldownMsForOpen;
       if (elapsed < cooldown) {
         throw new LLMError(
           `Circuit open, provider has failed ${bucket.consecutiveFailures} times in a row. Retry in ${Math.ceil((cooldown - elapsed) / 1000)}s.`,
@@ -347,6 +359,7 @@ export class CircuitBreaker {
 
     if (bucket.consecutiveFailures >= this.threshold) {
       bucket.openedAt = Date.now();
+      bucket.cooldownMsForOpen = this.computeCooldown(bucket);
       this.transition(bucket, 'open', model, context);
     }
   }
@@ -390,6 +403,7 @@ export class CircuitBreaker {
     // Trial failed: reopen, reset the cooldown window, count the repeat.
     bucket.openedAt = Date.now();
     bucket.reopenCount += 1;
+    bucket.cooldownMsForOpen = this.computeCooldown(bucket);
     this.transition(bucket, 'open', model, context);
   }
 
@@ -426,6 +440,7 @@ export class CircuitBreaker {
 
     bucket.openedAt = Date.now();
     bucket.trial = null;
+    bucket.cooldownMsForOpen = this.computeCooldown(bucket);
     this.transition(bucket, 'open', model, context);
   }
 
