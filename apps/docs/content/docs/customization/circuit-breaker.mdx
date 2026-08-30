@@ -37,7 +37,7 @@ If you don't care about `isolateByModel`, ignore `key` entirely and track one fl
 simplest version:
 
 ```ts title="slow-call-tripping.ts"
-import { VernLLM, type TrippingPolicy } from 'vern-llm';
+import { VernLLM, type TrippingPolicy, fromOpenAI } from 'vern-llm';
 import { openai } from './openai-client'; // your configured OpenAI client
 
 const slowCallTripping: TrippingPolicy = (() => {
@@ -55,7 +55,7 @@ const slowCallTripping: TrippingPolicy = (() => {
 })();
 
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   circuitBreaker: { cooldownMs: 30_000, tripping: slowCallTripping },
 });
@@ -78,7 +78,7 @@ internally:
 
 ```ts title="per-model-custom-tripping.ts"
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-4o',
   circuitBreaker: {
     cooldownMs: 30_000,

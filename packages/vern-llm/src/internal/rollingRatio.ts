@@ -29,9 +29,10 @@ export class RollingRatio {
   /** Drops buckets that have aged out of the window, replacing them with fresh, empty ones. */
   private rotate(): void {
     const elapsed = Date.now() - this.bucketStartMs;
-    const drop = Math.min(BUCKET_COUNT, Math.floor(elapsed / this.bucketWidthMs));
+    const drop = Math.floor(elapsed / this.bucketWidthMs);
+    const shiftCount = Math.min(BUCKET_COUNT, drop);
 
-    for (let i = 0; i < drop; i++) {
+    for (let i = 0; i < shiftCount; i++) {
       this.buckets.shift();
       this.buckets.push({ total: 0, failures: 0 });
     }

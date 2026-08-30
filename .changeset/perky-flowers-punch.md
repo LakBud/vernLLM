@@ -6,7 +6,7 @@ Add `tripping` to `CircuitBreakerOptions`, so a circuit can open off a rolling f
 instead of only a fixed streak of consecutive failures.
 
 Today, `threshold` counts consecutive failures and opens the circuit once that streak is reached.
-That's a poor fit for a provider whose failures are frequent but not literally back to back:
+That's a poor fit for a provider whose failures are frequent but not literally back-to-back:
 `tripping` lets a caller open the circuit once a failure ratio is reached over a trailing window
 instead:
 
@@ -24,7 +24,7 @@ const llm = new VernLLM({
 `{ kind: 'consecutive', threshold }` (the default, matching `threshold` on its own) opens after
 that many failures in a row. `{ kind: 'rolling', windowMs, minCalls, failureRatio }` opens once at
 least `minCalls` calls have landed in the trailing `windowMs` and the failure ratio among them
-reaches `failureRatio`. A hand built `TrippingPolicy` is the escape hatch for anything else, no
+reaches `failureRatio`. A hand-built `TrippingPolicy` is the escape hatch for anything else, no
 class required, a plain object satisfying the interface works:
 
 ```ts

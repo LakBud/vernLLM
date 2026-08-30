@@ -65,6 +65,19 @@ describe('RollingRatio (unit)', () => {
     expect(ratio.getRatio()).toBe(0); // only the t=9000 success remains
   });
 
+  it('recovers correctly after an idle gap well beyond windowMs', () => {
+    const ratio = new RollingRatio(10_000);
+
+    ratio.record(true);
+    expect(ratio.getCount()).toBe(1);
+
+    // Idle for far longer than the window before the next outcome.
+    vi.advanceTimersByTime(100_000);
+    ratio.record(false);
+
+    expect(ratio.getCount()).toBe(1);
+  });
+
   it('getCount and getRatio agree after a reset', () => {
     const ratio = new RollingRatio(60_000);
     ratio.record(true);
