@@ -3,6 +3,7 @@ import { CallExecutor } from './execution/callExecutor.js';
 import { buildCircuitBreaker } from './utils/circuitBreaker.utils.js';
 
 import type { Logger } from '../logger.js';
+import type { DetectSoftFailure } from '../types/call.js';
 import type { LLMError } from '../types/errors.js';
 import type { FallbackTarget } from '../types/fallback.js';
 import type { TokenUsage, VernLLMEvent, VernLLMMiddleware } from '../types/index.js';
@@ -36,6 +37,7 @@ export interface ExecutorFactoryShared {
   logger: Logger;
   middleware: VernLLMMiddleware[];
   middlewareTimeoutMs: number;
+  detectSoftFailure?: DetectSoftFailure;
 }
 
 /**
@@ -103,6 +105,7 @@ export function buildExecutors(
       isFallback,
       middleware: shared.middleware,
       middlewareTimeoutMs: shared.middlewareTimeoutMs,
+      detectSoftFailure: target.detectSoftFailure ?? shared.detectSoftFailure,
     });
   });
 }

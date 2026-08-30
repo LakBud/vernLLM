@@ -143,7 +143,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
       // above), so the attempt that actually exhausted the retries/broke
       // the loop is one past that. `recordFailure` converts to 1-based
       // itself.
-      gateway.recordFailure(attempts.length, signal, resolvedState);
+      gateway.recordFailure(attempts.length, signal, resolvedState, normalized.code);
     }
 
     logger.debug(`[VernLLM:${requestId}] ${logLabel}:\n${redactText(describeError(error))}`);

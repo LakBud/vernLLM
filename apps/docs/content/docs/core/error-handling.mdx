@@ -173,6 +173,73 @@ The currently defined fallback code is:
 See [Provider Fallback](/docs/core/provider-fallback) for the full `fallback` option
 and what makes `fallbackOn` move to the next target versus stop.
 
+## Soft failure detection
+
+A response can parse cleanly and pass schema validation without actually being a good answer. A
+model that returns a placeholder, an empty-but-technically-present string, or a low-confidence
+refusal looks like a success to retries and the circuit breaker, since nothing threw. The
+`detectSoftFailure` option runs once per attempt, right after a response is shaped, and can turn
+that result into a real failure before it reaches the caller:
+
+```ts title="soft-failure-setup.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  detectSoftFailure: (result, meta) => {
+    // meta: { requestId, model, providerName, isFallback, attempt }
+    if (typeof result === 'string' && result.trim() === 'N/A') {
+      return 'empty_response';
+    }
+    return undefined;
+  },
+});
+```
+
+Returning `undefined` leaves the result as a success. Returning an `LLMErrorCode` throws
+`LLMError('api', code)`, using `soft_failure_detected` as a reasonable default when no more
+specific code applies.
+
+<Callout type="info">
+  The thrown type is `api`, not `validation`. `validation` errors are never retried and never count
+  toward the circuit breaker, which would make a soft failure invisible to both no matter what code
+  was returned. `api` lets the returned code's own retry and breaker behavior apply normally, the
+  same way the built-in empty-response check below already works.
+</Callout>
+
+A soft failure flows through the exact same retry and circuit breaker paths a real failure would:
+with `maxRetries` configured it can still succeed on a later attempt, and with `circuitBreaker`
+configured, repeated soft failures count toward the same threshold repeated real failures would.
+See [Retries](/docs/core/retries) and [Circuit Breaker](/docs/core/circuit-breaker).
+
+A throwing hook is caught, logged, and treated the same as returning `undefined`, so a broken hook
+doesn't fail every call it's attached to.
+
+For `stream: true` calls, `detectSoftFailure` runs at the same point, once the stream has fully
+accumulated, and a soft failure rejects `finalResult` the same as any other post-stream failure.
+
+<Callout type="warn">
+  Unlike the non-streaming path, a soft failure detected on a streaming call does not count toward
+  the circuit breaker. By the time the final result is shaped, the streaming attempt has already
+  returned successfully from VernLLM's own retry loop, so nothing is still listening for this
+  failure the way the non-streaming path is. Only a genuine mid-stream failure, such as the
+  connection going idle, is recorded against the breaker for a streaming call.
+</Callout>
+
+`fallback` targets each accept their own `detectSoftFailure`. A target that leaves it unset
+inherits the parent instance's hook, unlike `circuitBreaker` and `rateLimit`, which are always
+independent per target and never inherited.
+
+VernLLM already fails a call outright when a response arrives with no content and no tool calls at
+all, regardless of whether `detectSoftFailure` is configured. `detectSoftFailure` is for judgment
+calls beyond that baseline: a specific placeholder string, a truncated JSON shape, or anything else
+that's a failure for your application but not for VernLLM in general.
+
+The currently defined soft failure code is:
+
+| Code                    | Error type | Meaning                                                                                                                                                      |
+| ----------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `soft_failure_detected` | `api`      | The default code thrown when a `detectSoftFailure` hook flags an otherwise successful result as a failure without returning a more specific code of its own. |
+
 ```ts title="error-code.ts"
 try {
   await llm.call({

@@ -2,6 +2,7 @@ import type { CircuitBreakerOptions } from '../circuitBreaker.js';
 import type { Logger } from '../logger.js';
 import type { RateLimitOptions } from '../rateLimit.js';
 import type { CacheAdapter } from './cache.js';
+import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
 import type { OnEvent } from './events.js';
 import type { FallbackOn, FallbackTarget } from './fallback.js';
@@ -78,6 +79,17 @@ export interface VernLLMOptions {
   redact?: (text: string) => string;
   /** Cache adapter for cachedCall. Defaults to an in-memory adapter */
   cache?: CacheAdapter;
+  /**
+   * Reclassifies an otherwise-successful result as a failure, e.g. a
+   * response that parsed fine but came back empty or truncated. Runs
+   * once per attempt, right after a response is validated. Returning
+   * `undefined` leaves the result untouched; returning an
+   * `LLMErrorCode` fails that attempt with it, feeding the same retry
+   * and circuit-breaker paths a thrown error would. A throwing hook is
+   * caught, logged, and treated as no soft failure, so a broken hook
+   * degrades safely instead of failing every call.
+   */
+  detectSoftFailure?: DetectSoftFailure;
   /** HTTP status codes that should fail fast without retrying. Default [400, 401, 403, 404, 422] */
   nonRetryableStatus?: number[];
   /** Custom JSON parser. Must return undefined/null on failure. Default: JSON.parse wrapped in try/catch */

@@ -115,12 +115,32 @@ describe('createBreakerGateway, recordSuccess/recordFailure', () => {
 
     gateway.recordFailure(3, signal, state);
 
-    expect(recordFailure).toHaveBeenCalledWith('gpt-failure', {
-      requestId: 'req-1',
-      state,
-      signal,
-      attempt: 4,
-    });
+    expect(recordFailure).toHaveBeenCalledWith(
+      'gpt-failure',
+      {
+        requestId: 'req-1',
+        state,
+        signal,
+        attempt: 4,
+      },
+      undefined,
+    );
+  });
+
+  it('forwards an optional code through to the breaker, when provided', () => {
+    const breaker = new CircuitBreaker();
+    const recordFailure = vi.spyOn(breaker, 'recordFailure');
+    const gateway = createBreakerGateway(baseOptions({ breaker, model: 'gpt-failure' }));
+    const state = createMiddlewareStateBag();
+    const signal = new AbortController().signal;
+
+    gateway.recordFailure(3, signal, state, 'server_error');
+
+    expect(recordFailure).toHaveBeenCalledWith(
+      'gpt-failure',
+      { requestId: 'req-1', state, signal, attempt: 4 },
+      'server_error',
+    );
   });
 
   it('actually opens the circuit after threshold consecutive failures, same as calling the breaker directly', () => {

@@ -17,6 +17,7 @@ import type { RateLimiter } from '../../rateLimit.js';
 import type {
   CallParams,
   CallWithToolsResult,
+  DetectSoftFailure,
   LLMClient,
   MiddlewareStateBag,
   StreamChunk,
@@ -54,6 +55,8 @@ export interface CallExecutorOptions {
   middleware?: VernLLMMiddleware[];
   /** See `VernLLMOptions.middlewareTimeoutMs`. */
   middlewareTimeoutMs?: number;
+  /** See `VernLLMOptions.detectSoftFailure`. */
+  detectSoftFailure?: DetectSoftFailure;
 }
 
 /**
@@ -80,6 +83,7 @@ export class CallExecutor {
   private readonly middleware: VernLLMMiddleware[];
   private readonly middlewareTimeoutMs: number;
   private readonly supportsJsonObjectMode: boolean;
+  private readonly detectSoftFailure?: DetectSoftFailure;
 
   constructor(
     readonly providerName: string,
@@ -102,6 +106,7 @@ export class CallExecutor {
     this.middleware = options.middleware ?? [];
     this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
     this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
+    this.detectSoftFailure = options.detectSoftFailure;
     this.usageReporter = createUsageReporter({
       providerName: this.providerName,
       isFallback: this.isFallback,
@@ -320,6 +325,10 @@ export class CallExecutor {
           logger: this.logger,
           redactText: (text) => this.redactText(text),
           parseJson: this.parseJson,
+          detectSoftFailure: this.detectSoftFailure,
+          providerName: this.providerName,
+          isFallback: this.isFallback,
+          model,
         },
       );
     } finally {
@@ -462,7 +471,7 @@ export class CallExecutor {
           // breaker: otherwise a provider that hangs after one chunk
           // would always record a success and never open it.
           if (normalized.type === 'timeout') {
-            gateway.recordFailure(attempt, params.signal, state);
+            gateway.recordFailure(attempt, params.signal, state, normalized.code);
           }
 
           if (usage && normalized.type !== 'aborted') {
@@ -487,6 +496,10 @@ export class CallExecutor {
               logger: this.logger,
               redactText: (text) => this.redactText(text),
               parseJson: this.parseJson,
+              detectSoftFailure: this.detectSoftFailure,
+              providerName: this.providerName,
+              isFallback: this.isFallback,
+              model,
             },
           ),
       });
@@ -510,10 +523,11 @@ export class CallExecutor {
    * that will very likely recur regardless of provider health, so it
    * shouldn't push a healthy provider's circuit toward opening. Same for
    * a caller-input bug or a local rate-limit rejection: neither ever
-   * reached the provider at all. This is exactly what `LLMError.retryable`
-   * already excludes, so this defers to it directly.
+   * reached the provider at all. A `quota_exceeded` rejection is also
+   * excluded: it's a caller/account level limit, not a signal about
+   * provider health, even though it's still retryable.
    */
   private countsTowardBreaker(error: LLMError): boolean {
-    return error.retryable;
+    return error.countsTowardBreaker;
   }
 }

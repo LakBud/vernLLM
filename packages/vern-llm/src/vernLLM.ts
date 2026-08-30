@@ -176,6 +176,7 @@ export class VernLLM {
       nonRetryableStatus: options.nonRetryableStatus,
       circuitBreaker: options.circuitBreaker,
       rateLimit: options.rateLimit,
+      detectSoftFailure: options.detectSoftFailure,
     };
 
     const declaredFallbacks: FallbackTarget[] = Array.isArray(options.fallback)
@@ -203,6 +204,7 @@ export class VernLLM {
       logger: this.logger,
       middleware: this.middleware,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
+      detectSoftFailure: options.detectSoftFailure,
     });
   }
 

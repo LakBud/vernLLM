@@ -175,6 +175,7 @@ describe('runAttemptLoop, terminal failure', () => {
     expect(recordFailureSpy).toHaveBeenCalledExactlyOnceWith(
       'gpt-test',
       expect.objectContaining({ attempt: 3 }),
+      undefined,
     );
   });
 
