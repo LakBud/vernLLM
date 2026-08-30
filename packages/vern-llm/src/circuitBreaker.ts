@@ -245,7 +245,6 @@ function attributeFailure(bucket: CircuitBucket, code: LLMErrorCode | undefined)
  * LLMError('circuit_open') until the cooldown elapses and a trial succeeds.
  */
 export class CircuitBreaker {
-  private readonly threshold: number;
   private readonly cooldownMs: number;
   private readonly onStateChange?: CircuitBreakerOptions['onStateChange'];
   /** Whether this breaker tracks failures per model instead of one shared circuit. */
@@ -261,7 +260,7 @@ export class CircuitBreaker {
   private readonly bucketsByModel = new Map<string, CircuitBucket>();
 
   constructor(options: CircuitBreakerOptions = {}) {
-    this.threshold = options.threshold ?? 5;
+    const threshold = options.threshold ?? 5;
     this.cooldownMs = options.cooldownMs ?? 30_000;
     this.onStateChange = options.onStateChange;
     this.isolateByModel = options.isolateByModel ?? false;
@@ -273,9 +272,7 @@ export class CircuitBreaker {
     this.halfOpenSuccessRatio = Number.isFinite(rawRatio) ? Math.min(1, Math.max(0, rawRatio!)) : 1;
 
     this.cooldownBackoff = buildCooldownBackoff(options.cooldownBackoff);
-    this.tripping = buildTripping(
-      options.tripping ?? { kind: 'consecutive', threshold: this.threshold },
-    );
+    this.tripping = buildTripping(options.tripping ?? { kind: 'consecutive', threshold });
   }
 
   /**
