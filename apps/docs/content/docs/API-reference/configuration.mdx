@@ -137,7 +137,7 @@ run during the half-open window and what fraction must succeed to close the circ
 `cooldownBackoff` accepts `ExponentialBackoffOptions | CooldownBackoff`:
 
 - `ExponentialBackoffOptions`: `{ multiplier: number; maxMs?: number }`. Scales `cooldownMs` by
-  `multiplier` on each repeat open, capped at `maxMs` (default `Infinity`). Always applies equal
+  `multiplier` on each repeat open, capped at `maxMs` (default `Infinity`). Always applies full
   jitter.
 - `CooldownBackoff`: `(reopenCount: number, baseCooldownMs: number) => number`, an escape hatch for
   anything beyond exponential growth, or an exact deterministic value. Never jittered automatically.

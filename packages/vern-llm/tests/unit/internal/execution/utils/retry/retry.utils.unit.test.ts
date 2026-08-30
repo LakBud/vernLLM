@@ -185,14 +185,16 @@ describe('getBackoffDelay', () => {
     return { min, max };
   }
 
-  it('omitting rateLimited and serverError reproduces the pre-change range', () => {
+  it('omitting rateLimited and serverError produces a full-jitter range of [0, exp]', () => {
     const baseDelayMs = 100;
     const attempt = 2;
     const maxDelayMs = 10_000;
     const exp = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
     const { min, max } = sampleRange(() => getBackoffDelay(baseDelayMs, attempt, maxDelayMs));
-    expect(min).toBeGreaterThanOrEqual(exp / 2);
+    expect(min).toBeGreaterThanOrEqual(0);
     expect(max).toBeLessThanOrEqual(exp);
+    // full jitter should exercise well below the old half-jitter floor
+    expect(min).toBeLessThan(exp / 2);
   });
 
   it('rateLimited produces a value in the doubled range', () => {
@@ -203,7 +205,7 @@ describe('getBackoffDelay', () => {
     const { min, max } = sampleRange(() =>
       getBackoffDelay(baseDelayMs, attempt, maxDelayMs, true, false),
     );
-    expect(min).toBeGreaterThanOrEqual(exp / 2);
+    expect(min).toBeGreaterThanOrEqual(0);
     expect(max).toBeLessThanOrEqual(exp);
     // distinct from the default range
     expect(max).toBeGreaterThan(baseDelayMs * 2 ** attempt);
@@ -217,7 +219,7 @@ describe('getBackoffDelay', () => {
     const { min, max } = sampleRange(() =>
       getBackoffDelay(baseDelayMs, attempt, maxDelayMs, false, true),
     );
-    expect(min).toBeGreaterThanOrEqual(exp / 2);
+    expect(min).toBeGreaterThanOrEqual(0);
     expect(max).toBeLessThanOrEqual(exp);
     expect(max).toBeGreaterThan(baseDelayMs * 2 ** attempt);
     expect(max).toBeLessThan(baseDelayMs * 2 * 2 ** attempt);
@@ -231,7 +233,7 @@ describe('getBackoffDelay', () => {
     const { min, max } = sampleRange(() =>
       getBackoffDelay(baseDelayMs, attempt, maxDelayMs, true, true),
     );
-    expect(min).toBeGreaterThanOrEqual(expRateLimited / 2);
+    expect(min).toBeGreaterThanOrEqual(0);
     expect(max).toBeLessThanOrEqual(expRateLimited);
   });
 

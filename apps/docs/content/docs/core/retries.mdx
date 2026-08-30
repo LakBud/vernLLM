@@ -20,10 +20,10 @@ Each retry waits longer than the last, and the exact wait is randomized within a
 
 ```ts
 exp = min(baseDelayMs * 2 ** attempt, maxDelayMs);
-delay = exp / 2 + random() * (exp / 2);
+delay = random() * exp;
 ```
 
-This is full jitter: the delay lands somewhere between half and all of the computed exponential value, instead of every caller waiting the identical amount. When many callers hit a failure at the same time, full jitter spreads their retries out instead of having them all retry in lockstep and hit the provider again at the same instant.
+This is full jitter: the delay lands anywhere between zero and the computed exponential value, instead of every caller waiting the identical amount. When many callers hit a failure at the same time, full jitter spreads their retries out instead of having them all retry in lockstep and hit the provider again at the same instant. See AWS's [Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) for why full jitter is preferred over equal jitter.
 
 The delay is capped at `DEFAULT_MAX_DELAY_MS` (10 seconds) regardless of `attempt`, so a high `maxRetries` never produces an unbounded wait.
 
