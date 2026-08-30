@@ -339,3 +339,22 @@ for (const target of states) {
   }
 }
 ```
+
+## Failure attribution
+
+`getFailureBreakdown(target?)` returns the current bucket's failure counts by `LLMErrorCode`,
+`'unknown'` for a failure that carried no code:
+
+```ts title="circuit-breaker-failure-breakdown.ts"
+llm.getFailureBreakdown();
+// { server_error: 3, request_timeout: 1 }
+
+llm.getFailureBreakdown({ index: 1 }); // first fallback target
+llm.getFailureBreakdown({ model: 'gpt-4o' }); // for a target with isolateByModel
+```
+
+It takes the same `target: { index?, model? }` shape as `getCircuitState`, and returns `undefined`
+for a target with no breaker configured, or `{}` for a bucket that hasn't failed yet.
+
+The breakdown is attribution only. It never decides whether the circuit trips, and clears whenever
+the bucket does, on a successful call, a successful half-open trial, or a manual `closeCircuit()`.

@@ -122,10 +122,19 @@ interface CircuitBucket {
    * `cooldownBackoff`. Does not count the first open from closed.
    */
   reopenCount: number;
+  /** Failure counts by `LLMErrorCode`, `'unknown'` for a missing code. Attribution only, never read to decide anything. */
+  failuresByReason: Map<LLMErrorCode | 'unknown', number>;
 }
 
 function newBucket(): CircuitBucket {
-  return { state: 'closed', consecutiveFailures: 0, openedAt: 0, trial: null, reopenCount: 0 };
+  return {
+    state: 'closed',
+    consecutiveFailures: 0,
+    openedAt: 0,
+    trial: null,
+    reopenCount: 0,
+    failuresByReason: new Map(),
+  };
 }
 
 /** Key a bucket lookup falls into when the call omitted `model` under `isolateByModel`. */
@@ -302,6 +311,7 @@ export class CircuitBreaker {
     bucket.consecutiveFailures = 0;
     bucket.trial = null;
     bucket.reopenCount = 0;
+    bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
@@ -309,16 +319,13 @@ export class CircuitBreaker {
     }
   }
 
-  /**
-   * `code`, when present, is the failing `LLMError`'s `code`. Not read by
-   * `CircuitBreaker` itself yet, threaded through so later attribution
-   * work has it available without changing this signature again.
-   */
-  recordFailure(model?: string, context?: CircuitBreakerCallContext, _code?: LLMErrorCode): void {
+  /** `code`, when present, is the failing `LLMError`'s `code`. Missing attributes to `'unknown'`. */
+  recordFailure(model?: string, context?: CircuitBreakerCallContext, code?: LLMErrorCode): void {
     const bucket = this.ensureBucketFor(model);
 
     if (bucket.state === 'half-open' && bucket.trial && this.claimsCurrentTrial(bucket, context)) {
       bucket.trial.failures += 1;
+      this.attributeFailure(bucket, code);
       this.settleTrialIfComplete(bucket, model, context);
       return;
     }
@@ -327,11 +334,18 @@ export class CircuitBreaker {
     if (bucket.state === 'half-open') return;
 
     bucket.consecutiveFailures += 1;
+    this.attributeFailure(bucket, code);
 
     if (bucket.consecutiveFailures >= this.threshold) {
       bucket.openedAt = Date.now();
       this.transition(bucket, 'open', model, context);
     }
+  }
+
+  /** Records `code` (or `'unknown'` if omitted) against `bucket.failuresByReason`. */
+  private attributeFailure(bucket: CircuitBucket, code: LLMErrorCode | undefined): void {
+    const key = code ?? 'unknown';
+    bucket.failuresByReason.set(key, (bucket.failuresByReason.get(key) ?? 0) + 1);
   }
 
   /**
@@ -355,6 +369,7 @@ export class CircuitBreaker {
     if (ratio >= this.halfOpenSuccessRatio) {
       bucket.consecutiveFailures = 0;
       bucket.reopenCount = 0;
+      bucket.failuresByReason.clear();
       this.transition(bucket, 'closed', model, context);
 
       if (this.isolateByModel && bucket.state === 'closed') {
@@ -378,6 +393,16 @@ export class CircuitBreaker {
    */
   getState(model?: string): CircuitState {
     return this.lookupBucket(model)?.state ?? 'closed';
+  }
+
+  /**
+   * Failure counts by `LLMErrorCode` for `model`'s bucket, a real code
+   * where the failing `LLMError` carried one, `'unknown'` otherwise.
+   * Returned as a plain object copy, never the live map.
+   */
+  getFailureBreakdown(model?: string): Partial<Record<LLMErrorCode | 'unknown', number>> {
+    const bucket = this.lookupBucket(model);
+    return bucket ? Object.fromEntries(bucket.failuresByReason) : {};
   }
 
   /**
@@ -408,6 +433,7 @@ export class CircuitBreaker {
     bucket.consecutiveFailures = 0;
     bucket.trial = null;
     bucket.reopenCount = 0;
+    bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
     // transition() may have synchronously re-entered (e.g. an

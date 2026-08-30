@@ -145,6 +145,11 @@ export class CallExecutor {
     return this.breaker?.getState(model);
   }
 
+  /** Failure counts by `LLMErrorCode` for this target's breaker, if configured. Undefined otherwise. */
+  getFailureBreakdown(model?: string) {
+    return this.breaker?.getFailureBreakdown(model);
+  }
+
   /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured. */
   get isolateByModel(): boolean {
     return this.breaker?.isolateByModel ?? false;
