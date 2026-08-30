@@ -33,6 +33,31 @@ const result = await llm.cachedCall({
   worth double-checking if you're copying a value across.
 </Callout>
 
+## Eviction
+
+Once `maxSize` is exceeded, `InMemoryCacheAdapter` evicts an entry to make room. Two policies:
+
+- `'fifo'` (default): drops the oldest inserted entry, regardless of reads.
+- `'lru'`: drops the entry read or written longest ago.
+
+```ts
+const cache = new InMemoryCacheAdapter(1000, 'lru');
+```
+
+The shorthand form on `VernLLMOptions.cache` covers the same thing without importing anything:
+
+```ts
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  cache: { maxSize: 1000, eviction: 'lru' },
+});
+```
+
+There's no third in-process policy to opt into. Anything beyond fifo/lru is a different cache
+backend through `CacheAdapter` (Redis with an LRU `maxmemory-policy`, for example), not another
+built-in algorithm here.
+
 ## Concurrent misses are coalesced
 
 If several calls with the same `cacheKey` miss the cache at roughly the same time, only the first one

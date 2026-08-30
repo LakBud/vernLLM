@@ -98,9 +98,9 @@ Two additional built-in adapters compose on top of any `CacheAdapter`: `Normaliz
 (normalizes keys before matching, including case, whitespace, and punctuation) and
 `TieredCacheAdapter` (checks a fast local adapter first, falling back to a shared one). See [Caching](/docs/core/caching) for usage.
 
-| Option  | Default                      | Notes                                                                                                                                                          |
-| ------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall`, not plain `call()`. The default in-memory cache is not shared across processes. Use a shared adapter for multi-process deployments. |
+| Option  | Default                      | Notes                                                                                                                                                                                                                                                  |
+| ------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cache` | `new InMemoryCacheAdapter()` | Used only by `cachedCall`, not plain `call()`. `{ maxSize, eviction }` configures the built-in adapter (`eviction`: `'fifo'` default or `'lru'`), or pass a `CacheAdapter` directly for a shared backend. See [Eviction](/docs/core/caching#eviction). |
 
 ## Observability
 

@@ -1,7 +1,7 @@
 import type { CircuitBreakerOptions } from '../circuitBreaker.js';
+import type { CacheOption } from '../internal/utils/cacheAdapter.utils.js';
 import type { Logger } from '../logger.js';
 import type { RateLimitOptions } from '../rateLimit.js';
-import type { CacheAdapter } from './cache.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
 import type { OnEvent } from './events.js';
@@ -77,8 +77,13 @@ export interface VernLLMOptions {
    * (no redaction).
    */
   redact?: (text: string) => string;
-  /** Cache adapter for cachedCall. Defaults to an in-memory adapter */
-  cache?: CacheAdapter;
+  /**
+   * Cache for cachedCall. `{ maxSize, eviction }` configures the
+   * built-in in-memory adapter (`eviction` default `'fifo'`). Pass a
+   * `CacheAdapter` directly for a real backend. Default: in-memory,
+   * maxSize 1000, fifo.
+   */
+  cache?: CacheOption;
   /**
    * Reclassifies an otherwise-successful result as a failure, e.g. a
    * response that parsed fine but came back empty or truncated. Runs

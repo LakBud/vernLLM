@@ -96,6 +96,7 @@ export {
   type HistoryToolResultIssue,
   type UnsupportedCapabilityIssue,
   type CacheAdapter,
+  type EvictionOption,
   type LLMClient,
   type WireMessage,
   type WireToolCall,

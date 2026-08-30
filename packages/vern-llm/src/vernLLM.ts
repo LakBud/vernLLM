@@ -15,6 +15,7 @@ import {
   withReservedUsageForStream,
 } from './internal/execution/utils/response/usage.utils.js';
 import { buildExecutors } from './internal/executorFactory.js';
+import { buildCache } from './internal/utils/cacheAdapter.utils.js';
 import {
   makeEventReporter,
   resolveExecutor,
@@ -23,7 +24,6 @@ import {
 import { createSafeLogger } from './internal/utils/logger.utils.js';
 import { ConsoleLogger, type Logger } from './logger.js';
 import {
-  InMemoryCacheAdapter,
   LLMError,
   defaultFallbackOn,
   type CachedCallParams,
@@ -135,10 +135,7 @@ export class VernLLM {
 
     const providerName = options.name ?? 'primary';
 
-    this.cacheOrchestrator = new CacheOrchestrator(
-      options.cache ?? new InMemoryCacheAdapter(),
-      this.logger,
-    );
+    this.cacheOrchestrator = new CacheOrchestrator(buildCache(options.cache), this.logger);
 
     this.fallbackOn = options.fallbackOn ?? defaultFallbackOn;
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
