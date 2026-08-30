@@ -1,4 +1,8 @@
 import {
+  attachRateLimitHint,
+  parseAnthropicRateLimitHeaders,
+} from '../internal/utils/rateLimitHint.utils.js';
+import {
   LLMError,
   type ContentBlock,
   type LLMClient,
@@ -463,6 +467,13 @@ export interface AnthropicAdapterOptions {
    * predicate.
    */
   adaptiveOnlyModels?: ModelCapabilityOverride;
+  /**
+   * Whether the client's `messages.create` supports `.withResponse()`
+   * (needed for AIMD's proactive path). Default `false`, since
+   * `AnthropicClient` is structural and a test fake or thin wrapper
+   * won't implement it. See [AIMD](/docs/core/aimd).
+   */
+  supportsWithResponse?: boolean;
 }
 
 /**
@@ -503,6 +514,7 @@ export function fromAnthropic(
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
   const adaptiveOnlyModels = options?.adaptiveOnlyModels;
+  const supportsWithResponse = options?.supportsWithResponse ?? false;
   // The Anthropic SDK's `messages.create`, called with `stream: true`,
   // returns an AsyncIterable of `AnthropicStreamEvent` rather than
   // `AnthropicClient['messages']['create']`'s normal single-message return
@@ -533,7 +545,26 @@ export function fromAnthropic(
             adaptiveOnlyModels,
           );
 
-          const response = await anthropicClient.messages.create(body, options);
+          let responseHeaders: Response['headers'] | undefined;
+
+          // `.withResponse()` is specific to the real `@anthropic-ai/sdk`
+          // package's `APIPromise`, not `AnthropicClient`'s declared
+          // structural type, hence the cast, gated behind `supportsWithResponse`.
+          const response = supportsWithResponse
+            ? await (async () => {
+                const { data, response: raw } = await (
+                  anthropicClient.messages.create(body, options) as unknown as {
+                    withResponse(): Promise<{
+                      data: Awaited<ReturnType<AnthropicClient['messages']['create']>>;
+                      response: Response;
+                    }>;
+                  }
+                ).withResponse();
+
+                responseHeaders = raw.headers;
+                return data;
+              })()
+            : await anthropicClient.messages.create(body, options);
 
           let text: string;
           let wireToolCalls: WireToolCall[] | undefined;
@@ -578,7 +609,7 @@ export function fromAnthropic(
             }
           }
 
-          return {
+          const result = {
             choices: [
               {
                 message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
@@ -598,6 +629,12 @@ export function fromAnthropic(
                 : {}),
             },
           };
+
+          if (responseHeaders) {
+            attachRateLimitHint(result, parseAnthropicRateLimitHeaders(responseHeaders));
+          }
+
+          return result;
         },
 
         async *createStream(params, options) {

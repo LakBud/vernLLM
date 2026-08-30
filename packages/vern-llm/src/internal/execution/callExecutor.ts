@@ -1,6 +1,7 @@
 import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import { LLMError } from '../../types/errors.js';
 import { makeEventReporter } from '../utils/circuitBreaker.utils.js';
+import { readRateLimitHint } from '../utils/rateLimitHint.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { finalizeResponse } from './responseFinalizer.js';
@@ -8,6 +9,7 @@ import { buildStreamResult } from './streamAccumulator.js';
 import { createUsageReporter, type UsageReporter } from './usageReporter.js';
 import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
 import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
+import { extractStatus } from './utils/errors.utils.js';
 import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
 import { withTimeout } from './utils/retry/retry.utils.js';
@@ -293,11 +295,22 @@ export class CallExecutor {
     let release = acquiredRelease;
 
     try {
-      const response = await withTimeout(
-        (attemptSignal) => this.client.chat.completions.create(request, { signal: attemptSignal }),
-        this.timeoutMs,
-        params.signal,
-      );
+      let response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
+
+      try {
+        response = await withTimeout(
+          (attemptSignal) =>
+            this.client.chat.completions.create(request, { signal: attemptSignal }),
+          this.timeoutMs,
+          params.signal,
+        );
+      } catch (error) {
+        this.reactToRateLimitError(error);
+        throw error;
+      }
+
+      // AIMD's proactive path. See [AIMD](/docs/core/aimd).
+      this.limiter?.reactToRateLimitHint(readRateLimitHint(response));
 
       // Extracted right after the response arrives, before anything else
       // touches it, so a post-response failure still gets its usage reported.
@@ -344,6 +357,18 @@ export class CallExecutor {
   /** Applies `redact` (if configured); otherwise returns `text` unchanged. */
   private redactText(text: string): string {
     return this.redact ? this.redact(text) : text;
+  }
+
+  /**
+   * AIMD's reactive path: shrinks the ceiling on a real 429,
+   * adapter-agnostic, independent of `supportsWithResponse`. See
+   * [AIMD](/docs/core/aimd).
+   */
+  private reactToRateLimitError(error: unknown): void {
+    if (!this.limiter) return;
+    if (extractStatus(error) !== 429) return;
+
+    this.limiter.signalRateLimit();
   }
 
   /**

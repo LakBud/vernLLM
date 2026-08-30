@@ -13,6 +13,13 @@ Many hosted inference providers expose the same wire format as OpenAI's Chat Com
   `LLMClient` unwrapped. See [Migration Notes](/docs/migration-notes) for details.
 </Callout>
 
+<Callout title="The openai SDK retries on its own too">
+  `openai` (and every compatible client) retries transient failures, including 429s, internally by
+  default (`maxRetries: 2`), before VernLLM's own retry loop ever sees them. Pass `maxRetries: 0` to
+  the client constructor if you want VernLLM to be the sole retry authority. See [SDK-internal
+  retries](/docs/core/retries#sdk-internal-retries).
+</Callout>
+
 The adapter preserves the OpenAI-compatible request shape and only normalizes fields VernLLM adds on top of the standard Chat Completions format. In particular, multimodal `ContentBlock[]` input is translated into OpenAI's native content array format, while plain string messages pass through unchanged.
 
 The named adapters exist purely for readability and discoverability. They also leave room to introduce provider-specific behavior in the future without requiring a breaking API change.

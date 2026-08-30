@@ -3,14 +3,18 @@
  * tokens per minute, where `refillPerMs` is `capacity / 60000`, and for
  * concurrency, where `refillPerMs` is 0 and every release calls
  * `give(1)` instead of relying on the clock.
+ *
+ * `capacity`/`refillPerMs` are mutable so AIMD (`RateLimiter`'s `aimd`
+ * option) can `resize()` a bucket's ceiling after construction. See
+ * [AIMD](/docs/core/aimd).
  */
 export class TokenBucket {
   private available: number;
   private lastRefill = Date.now();
 
   constructor(
-    private readonly capacity: number,
-    private readonly refillPerMs: number,
+    private capacity: number,
+    private refillPerMs: number,
   ) {
     this.available = capacity;
   }
@@ -73,5 +77,23 @@ export class TokenBucket {
   /** The bucket's ceiling, e.g. so a request that could never fit can fail fast instead of queueing forever. */
   getCapacity(): number {
     return this.capacity;
+  }
+
+  /**
+   * Changes capacity in place. A shrink clamps `available` down but
+   * never raises it. `refillPerMs` rescales by the same ratio, so a
+   * shrink doesn't leave the bucket refilling at its old, relatively
+   * too-fast rate; a concurrency bucket (`refillPerMs === 0`) is
+   * unaffected.
+   */
+  resize(newCapacity: number): void {
+    this.refill();
+
+    if (this.refillPerMs > 0) {
+      this.refillPerMs = (this.refillPerMs / this.capacity) * newCapacity;
+    }
+
+    this.capacity = newCapacity;
+    this.available = Math.min(this.available, newCapacity);
   }
 }

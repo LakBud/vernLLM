@@ -7,6 +7,13 @@ description: fromGemini adapter
 
 `GeminiClient` is the public client type exported by `VernLLM` and accepted by `fromGemini`. It allows TypeScript users to type their Gemini client without depending on adapter internals. It covers both the callable model methods directly and the whole top-level SDK client (via an optional `models` field), so both of the forms below type-check with no cast.
 
+<Callout title="The Gemini SDK retries on its own too">
+  `@google/genai` retries transient failures, including 429s, internally by default, with its own
+  backoff, before VernLLM's own retry loop ever sees them. Check the installed SDK version's retry
+  options field to disable this if you want VernLLM to be the sole retry authority. See
+  [SDK-internal retries](/docs/core/retries#sdk-internal-retries).
+</Callout>
+
 ## New SDK (`@google/genai`)
 
 The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it. Pass the whole client straight through, `fromGemini` unwraps `.models` internally:

@@ -269,3 +269,24 @@ export async function drain(chunks: AsyncIterable<StreamChunk>): Promise<StreamC
   for await (const chunk of chunks) out.push(chunk);
   return out;
 }
+
+/**
+ * Whether `promise` is still pending after flushing several microtask
+ * ticks, without racing it against a timer (which would need fake
+ * timers, awkward alongside a real HTTP server/SDK in the same test).
+ * Used to prove a call actually queued for rate-limit capacity rather
+ * than going straight through, without waiting for it to resolve.
+ */
+export async function isPending(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  return !settled;
+}

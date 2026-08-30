@@ -1,4 +1,9 @@
 import {
+  attachRateLimitHint,
+  parseOpenAIRateLimitHeaders,
+  type ProviderRateLimitHint,
+} from '../internal/utils/rateLimitHint.utils.js';
+import {
   LLMError,
   type LLMClient,
   type WireStreamChunk,
@@ -128,6 +133,12 @@ export interface FetchAdapterConfig {
    * silently empty stream.
    */
   mapStreamEvent?: (event: unknown) => WireStreamChunk | WireStreamChunk[] | undefined;
+
+  /**
+   * Optional. How to read AIMD's proactive rate limit hint off a
+   * successful response. Defaults to OpenAI's header set.
+   */
+  parseRateLimitHint?: (headers: ResponseLike['headers']) => ProviderRateLimitHint;
 }
 
 /**
@@ -296,7 +307,7 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
               }))
             : undefined;
 
-          return {
+          const result = {
             choices: [
               {
                 message: {
@@ -313,6 +324,16 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
                 }
               : undefined,
           };
+
+          const parseHint = config.parseRateLimitHint ?? parseOpenAIRateLimitHeaders;
+
+          // Guarded: a test double may omit `.headers` despite it being
+          // part of `ResponseLike`'s declared shape.
+          if (res.headers && typeof res.headers.get === 'function') {
+            attachRateLimitHint(result, parseHint(res.headers));
+          }
+
+          return result;
         },
 
         async *createStream(params, options) {

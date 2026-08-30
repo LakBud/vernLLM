@@ -234,6 +234,72 @@ if (
 }
 ```
 
+## AIMD
+
+`requestsPerMinute` can be a fixed ceiling, or it can adjust itself: growing on success,
+shrinking on a real rate limit, via `aimd` (additive increase / multiplicative decrease):
+
+```ts title="aimd-setup.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  rateLimit: {
+    requestsPerMinute: 500,
+    aimd: { increaseBy: 10, decreaseFactor: 0.5, minCapacity: 50, maxCapacity: 1000 },
+  },
+});
+```
+
+`increaseBy` is added to the ceiling on every clean release. `decreaseFactor` is multiplied in on
+a rate-limit signal, bounded to `[minCapacity, maxCapacity]`. Requires `requestsPerMinute` to be
+set; ignored otherwise.
+
+**Reactive**, on a real 429, works for every adapter with no configuration beyond `aimd` itself:
+the ceiling shrinks by `decreaseFactor` unconditionally, before the retry/`Retry-After` handling
+above runs.
+
+**Proactive**, before a 429 happens, needs `proactiveFloor` plus, for two of the four built-in
+adapters, an explicit opt-in:
+
+```ts title="aimd-proactive.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai, { supportsWithResponse: true }),
+  model: 'gpt-4o',
+  rateLimit: {
+    requestsPerMinute: 500,
+    aimd: {
+      increaseBy: 10,
+      decreaseFactor: 0.5,
+      minCapacity: 50,
+      maxCapacity: 1000,
+      proactiveFloor: 20,
+    },
+  },
+});
+```
+
+Once a response reports `remainingRequests` at or below `proactiveFloor`, the ceiling shrinks
+right there, rather than waiting for an actual rejection. Default `0`, meaning off. Not every
+client can produce this hint:
+
+| Adapter                     | Proactive support                                                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fromFetch`                 | On by default, already has direct access to response headers. Override with `parseRateLimitHint` for a non-OpenAI-shaped provider.                             |
+| `fromOpenAI`                | Needs `supportsWithResponse: true`. Off by default: not every "OpenAI-compatible" client is confirmed to implement the SDK's `.withResponse()` this relies on. |
+| `fromAnthropic`             | Same opt-in, same reasoning: `AnthropicClient` is a structural type, and a test fake or thin wrapper won't have `.withResponse()` either.                      |
+| `fromGemini`, `fromBedrock` | Reactive only. Neither provider exposes a remaining-capacity header to read.                                                                                   |
+
+`supportsWithResponse` only ever affects the proactive path; every adapter above still reacts to a
+real 429 regardless, since that only needs the response status, not header access.
+
+| AIMD option      | Default   | Notes                                                                                    |
+| ---------------- | --------- | ---------------------------------------------------------------------------------------- |
+| `increaseBy`     | required  | Added to the ceiling on every clean release.                                             |
+| `decreaseFactor` | required  | Multiplied against the ceiling on a rate-limit signal. Must be `0-1`; clamped otherwise. |
+| `minCapacity`    | required  | Floor the ceiling never shrinks below.                                                   |
+| `maxCapacity`    | required  | Ceiling the bucket never grows above.                                                    |
+| `proactiveFloor` | `0` (off) | Shrink once a hint reports remaining capacity at or below this.                          |
+
 ## Observing waits
 
 `onEvent` reports a `rate_limited` event whenever an attempt actually had to wait for capacity:
@@ -278,6 +344,7 @@ union.
 | `maxQueueMs`        | `30000`                | Max time a call may sit queued. Pass `0` to wait indefinitely.                                      |
 | `maxQueueSize`      | `0`                    | Max queued calls before new ones fail immediately instead of queueing. Pass `0` for unbounded.      |
 | `estimateTokens`    | chars/4 + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes. |
+| `aimd`              | unset (fixed ceiling)  | Grows/shrinks `requestsPerMinute`'s ceiling instead of keeping it fixed. See [AIMD](#aimd).         |
 
 See [Configuration](/docs/API-reference/configuration#rate-limiting) for how `rateLimit`
 sits alongside every other constructor option.

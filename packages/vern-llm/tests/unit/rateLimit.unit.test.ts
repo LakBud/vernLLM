@@ -384,3 +384,271 @@ describe('RateLimiter', () => {
     held.release(60);
   });
 });
+
+describe('RateLimiter, AIMD', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Whether `promise` is still pending after flushing several microtask
+   * ticks, used to probe a limiter's exact current capacity without
+   * relying on `maxQueueSize` rejection (sequential, one-at-a-time
+   * `await acquire()` calls never actually pile up in the queue, since
+   * each resolves before the next is issued) or on real wall-clock
+   * waiting for refill. `promise` is deliberately never awaited when
+   * pending, only settled ones report `false`; an unresolved one is left
+   * dangling for the caller to resolve later (e.g. by releasing a held
+   * slot or advancing fake timers).
+   */
+  async function isPending(promise: Promise<unknown>): Promise<boolean> {
+    let settled = false;
+    promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    return !settled;
+  }
+
+  it('grows the requests bucket ceiling by increaseBy on every clean release, confirmed via a full-window refill', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 2,
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    // Drain the starting capacity of 2, then release both, each release
+    // growing the ceiling by 1: 2 -> 3 -> 4.
+    const first = await limiter.acquire(0);
+    const second = await limiter.acquire(0);
+    first.release();
+    second.release();
+
+    // Advance a full minute so the (now higher) ceiling is fully
+    // refilled, isolating "did the ceiling grow" from "has it refilled
+    // yet", which are two different questions.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 4; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    const fifth = limiter.acquire(0);
+    expect(await isPending(fifth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('growth is capped at maxCapacity, never exceeding it', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 2,
+      aimd: { increaseBy: 5, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 3 },
+    });
+
+    // Two releases would push the ceiling to 2 + 5 + 5 = 12 uncapped;
+    // maxCapacity clamps it to 3.
+    const first = await limiter.acquire(0);
+    const second = await limiter.acquire(0);
+    first.release();
+    second.release();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 3; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    const fourth = limiter.acquire(0);
+    expect(await isPending(fourth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('signalRateLimit shrinks the ceiling by decreaseFactor, confirmed via a full-window refill', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 0, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    limiter.signalRateLimit(); // ceiling: 10 -> 5
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 5; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    const sixth = limiter.acquire(0);
+    expect(await isPending(sixth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('signalRateLimit never shrinks below minCapacity, even called repeatedly', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 0, decreaseFactor: 0.5, minCapacity: 2, maxCapacity: 100 },
+    });
+
+    for (let i = 0; i < 10; i++) limiter.signalRateLimit(); // would go toward 0 uncapped
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 2; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    const third = limiter.acquire(0);
+    expect(await isPending(third)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('signalRateLimit and growOnSuccess are no-ops without aimd configured', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({ requestsPerMinute: 3 });
+
+    limiter.signalRateLimit(); // no aimd: must not throw or change anything
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 3; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    // Ceiling unchanged at 3: a 4th still blocks.
+    const fourth = limiter.acquire(0);
+    expect(await isPending(fourth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('reactToRateLimitHint shrinks the ceiling when remainingRequests is at or below proactiveFloor', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 10,
+      aimd: {
+        increaseBy: 0,
+        decreaseFactor: 0.5,
+        minCapacity: 1,
+        maxCapacity: 100,
+        proactiveFloor: 5,
+      },
+    });
+
+    limiter.reactToRateLimitHint({ remainingRequests: 5 }); // at the floor: shrinks 10 -> 5
+    limiter.reactToRateLimitHint({ remainingRequests: 50 }); // well above floor: no-op
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 5; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    const sixth = limiter.acquire(0);
+    expect(await isPending(sixth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('reactToRateLimitHint is a no-op when proactiveFloor is left at its default (0, meaning off)', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 3,
+      aimd: { increaseBy: 0, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    limiter.reactToRateLimitHint({ remainingRequests: 0 }); // would trip any nonzero floor
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 3; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    const fourth = limiter.acquire(0);
+    expect(await isPending(fourth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('reactToRateLimitHint is a no-op when the hint has no remainingRequests', () => {
+    const limiter = new RateLimiter({
+      requestsPerMinute: 100,
+      aimd: {
+        increaseBy: 0,
+        decreaseFactor: 0.5,
+        minCapacity: 10,
+        maxCapacity: 1000,
+        proactiveFloor: 100,
+      },
+    });
+
+    expect(() => limiter.reactToRateLimitHint({})).not.toThrow();
+    expect(() => limiter.reactToRateLimitHint(undefined)).not.toThrow();
+  });
+
+  it('throws at construction when aimd.minCapacity exceeds aimd.maxCapacity', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 200, maxCapacity: 100 },
+        }),
+    ).toThrow(/minCapacity/);
+  });
+
+  it('clamps a decreaseFactor outside (0, 1] instead of doubling capacity', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 3,
+      aimd: { increaseBy: 0, decreaseFactor: 2, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    limiter.signalRateLimit(); // decreaseFactor clamped to 1: ceiling unchanged at 3, not 6
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = [];
+    for (let i = 0; i < 3; i++) {
+      held.push(await limiter.acquire(0));
+    }
+
+    const fourth = limiter.acquire(0);
+    expect(await isPending(fourth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('aimd is ignored entirely when requestsPerMinute is not set', () => {
+    const limiter = new RateLimiter({
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 },
+    });
+
+    expect(() => limiter.signalRateLimit()).not.toThrow();
+    expect(() => limiter.reactToRateLimitHint({ remainingRequests: 0 })).not.toThrow();
+  });
+});
