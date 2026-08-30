@@ -7,6 +7,9 @@ export {
   type CircuitState,
   type CooldownBackoff,
   type ExponentialBackoffOptions,
+  type TrippingPolicy,
+  ConsecutiveTripping,
+  RollingTripping,
 } from './circuitBreaker.js';
 export {
   RateLimiter,

@@ -1,0 +1,141 @@
+---
+title: Circuit Breaker
+description: Plug in your own tripping policy or cooldown curve
+---
+
+<Callout type="info">
+  This page covers writing a custom `TrippingPolicy` or `CooldownBackoff`. See [Circuit
+  Breaker](/docs/core/circuit-breaker) in Core for the full behavior: failure conditions, half-open
+  behavior, scope, and state inspection.
+</Callout>
+
+`CircuitBreakerOptions` has two seams built the same way: a shorthand covering the common case, and
+a raw interface or function type a caller can hand in directly for anything else.
+
+## Tripping policy
+
+VernLLM ships `ConsecutiveTripping` and `RollingTripping` out of the box, selected through the
+`tripping` shorthand, plus a `TrippingPolicy` interface for bringing your own:
+
+```ts
+interface TrippingPolicy {
+  onSuccess(key: string): void;
+  /** Returns true if this failure should open the circuit for `key`. */
+  onFailure(key: string): boolean;
+  reset(key: string): void;
+  /** Called when `key`'s bucket is discarded (closed and idle, under isolateByModel). Optional. */
+  forget?(key: string): void;
+}
+```
+
+`key` is the resolved model under `isolateByModel`, or one fixed shared key otherwise. VernLLM
+always constructs exactly one instance of your policy and calls it with the right `key`, so whether
+your policy ends up isolated per model or shared across all of them depends entirely on what your
+own implementation does with `key`, not on anything you have to configure.
+
+If you don't care about `isolateByModel`, ignore `key` entirely and track one flat counter, the
+simplest version:
+
+```ts title="slow-call-tripping.ts"
+import { VernLLM, type TrippingPolicy, fromOpenAI } from 'vern-llm';
+import { openai } from './openai-client'; // your configured OpenAI client
+
+const slowCallTripping: TrippingPolicy = (() => {
+  let failures = 0;
+  const threshold = 5;
+  return {
+    onSuccess: () => {
+      failures = 0;
+    },
+    onFailure: () => ++failures >= threshold,
+    reset: () => {
+      failures = 0;
+    },
+  };
+})();
+
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: { cooldownMs: 30_000, tripping: slowCallTripping },
+});
+```
+
+No base class or builder required. TypeScript checks the shape structurally, so a plain object
+literal satisfying the interface works exactly as well as a class instance.
+
+<Callout>
+  `onFailure(key)`'s return value is the only thing that decides whether `key`'s circuit opens.
+  `reset(key)` is called on recovery: a successful trial, or a manual `closeCircuit()`. Neither
+  `onStateChange`, the `circuit_state` event, nor the open-circuit error message read anything from
+  your policy directly, they report a true consecutive-failure count that `CircuitBreaker` tracks on
+  its own, per bucket, independent of whatever your `onFailure()` bases its decision on.
+</Callout>
+
+If you do want `isolateByModel` to give your custom policy real per-model isolation, track state
+per `key` instead of flat, the same way the built in `ConsecutiveTripping`/`RollingTripping` do
+internally:
+
+```ts title="per-model-custom-tripping.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    cooldownMs: 30_000,
+    isolateByModel: true,
+    tripping: (() => {
+      const failuresByKey = new Map<string, number>();
+      const threshold = 5;
+      return {
+        onSuccess: (key) => failuresByKey.set(key, 0),
+        onFailure: (key) => {
+          const next = (failuresByKey.get(key) ?? 0) + 1;
+          failuresByKey.set(key, next);
+          return next >= threshold;
+        },
+        reset: (key) => failuresByKey.set(key, 0),
+        // Optional: drops that model's entry once its bucket goes idle,
+        // so the map doesn't grow forever across many distinct models.
+        forget: (key) => failuresByKey.delete(key),
+      };
+    })(),
+  },
+});
+```
+
+<Callout>
+  See [Tripping policy](/docs/core/circuit-breaker#tripping-policy) in Core for the built-in
+  `{ kind: 'consecutive', threshold }` and `{ kind: 'rolling', windowMs, minCalls, failureRatio }`
+  shorthands, which cover most callers without needing a custom `TrippingPolicy` at all.
+</Callout>
+
+## Cooldown backoff
+
+The built-in `{ multiplier, maxMs }` shorthand covers exponential growth, the shape most callers
+reach for. A `CooldownBackoff` function is the escape hatch for anything else, a linear ramp, a
+fixed step, or an exact deterministic value:
+
+```ts
+type CooldownBackoff = (reopenCount: number, baseCooldownMs: number) => number;
+```
+
+```ts title="linear-cooldown-backoff.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: {
+    cooldownMs: 30_000,
+    cooldownBackoff: (reopenCount, baseCooldownMs) => baseCooldownMs + reopenCount * 5_000,
+  },
+});
+```
+
+`reopenCount` counts a trial that failed back to open, not the first open from a closed circuit,
+and resets to 0 on recovery, the same moments `TrippingPolicy.reset()` fires.
+
+<Callout type="warn">
+  The `{ multiplier, maxMs }` shorthand always applies full jitter (the computed cooldown is
+  randomized anywhere between zero and its full value), so several client instances don't reopen in
+  lockstep. A custom `CooldownBackoff` function is never jittered automatically, apply your own if
+  you want it.
+</Callout>
