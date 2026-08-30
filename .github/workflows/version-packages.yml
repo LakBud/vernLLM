@@ -38,7 +38,7 @@ jobs:
       - if: steps.filter.outputs.code == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.20.0
           cache: pnpm
 
       - if: steps.filter.outputs.code == 'true'
