@@ -17,12 +17,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -33,10 +33,10 @@ jobs:
               - 'pnpm-lock.yaml'
 
       - if: steps.filter.outputs.code == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - if: steps.filter.outputs.code == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24.20.0
           cache: pnpm
@@ -46,7 +46,7 @@ jobs:
 
       - if: steps.filter.outputs.code == 'true'
         name: Open or update the Version Packages PR
-        uses: changesets/action@v1
+        uses: changesets/action@v2.1.1
         with:
           version: pnpm changeset version
           commit: 'chore: version packages'
