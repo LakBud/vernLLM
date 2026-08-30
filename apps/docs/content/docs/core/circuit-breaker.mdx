@@ -117,12 +117,21 @@ const llm = new VernLLM({
 (default `Infinity`). A repeat open counts a trial that failed back to open, not the first open from
 a closed circuit.
 
-For anything beyond exponential growth (jitter, a linear ramp), pass a function instead:
+The shorthand always applies equal jitter (half the computed cooldown is fixed, the other half
+randomized), so several client instances don't reopen in lockstep. For anything beyond exponential
+growth, or an exact deterministic value, pass a function instead. A custom function is never
+jittered automatically:
 
 ```ts title="circuit-breaker-cooldown-backoff-custom.ts"
-circuitBreaker: {
-  cooldownBackoff: (reopenCount, baseCooldownMs) => baseCooldownMs + reopenCount * 5_000,
-},
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+    cooldownBackoff: (reopenCount, baseCooldownMs) => baseCooldownMs + reopenCount * 5_000,
+  },
+});
 ```
 
 The growth resets once the circuit recovers. A successful trial or a manual `closeCircuit()` sets
@@ -339,3 +348,22 @@ for (const target of states) {
   }
 }
 ```
+
+## Failure attribution
+
+`getFailureBreakdown(target?)` returns the current bucket's failure counts by `LLMErrorCode`,
+`'unknown'` for a failure that carried no code:
+
+```ts title="circuit-breaker-failure-breakdown.ts"
+llm.getFailureBreakdown();
+// { server_error: 3, request_timeout: 1 }
+
+llm.getFailureBreakdown({ index: 1 }); // first fallback target
+llm.getFailureBreakdown({ model: 'gpt-4o' }); // for a target with isolateByModel
+```
+
+It takes the same `target: { index?, model? }` shape as `getCircuitState`, and returns `undefined`
+for a target with no breaker configured, or `{}` for a bucket that hasn't failed yet.
+
+The breakdown is attribution only. It never decides whether the circuit trips, and clears whenever
+the bucket does, on a successful call, a successful half-open trial, or a manual `closeCircuit()`.

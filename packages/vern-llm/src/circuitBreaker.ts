@@ -87,7 +87,14 @@ export interface ExponentialBackoffOptions {
   maxMs?: number;
 }
 
-/** Not exported. Internal shorthand only. */
+/**
+ * Not exported. Internal shorthand only. Applies equal jitter
+ * unconditionally, same formula as retry backoff (`getBackoffDelay`),
+ * so several client instances don't reopen in lockstep. A caller wanting
+ * the exact deterministic value uses the `CooldownBackoff` function form
+ * instead, same escape hatch as any other shape beyond exponential
+ * growth.
+ */
 function buildCooldownBackoff(
   option: ExponentialBackoffOptions | CooldownBackoff | undefined,
 ): CooldownBackoff | undefined {
@@ -95,8 +102,10 @@ function buildCooldownBackoff(
   if (typeof option === 'function') return option;
 
   const { multiplier, maxMs = Infinity } = option;
-  return (reopenCount, baseCooldownMs) =>
-    Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
+  return (reopenCount, baseCooldownMs) => {
+    const exp = Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
+    return exp / 2 + Math.random() * (exp / 2);
+  };
 }
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
@@ -122,10 +131,29 @@ interface CircuitBucket {
    * `cooldownBackoff`. Does not count the first open from closed.
    */
   reopenCount: number;
+  /** Failure counts by `LLMErrorCode`, `'unknown'` for a missing code. Attribution only, never read to decide anything. */
+  failuresByReason: Map<LLMErrorCode | 'unknown', number>;
+  /**
+   * The cooldown to honor for this specific open period, computed once
+   * when `state` transitions into `open` and read on every subsequent
+   * `assertClosed` check until the bucket leaves `open`. Sampled once
+   * rather than on every check so a jittered `cooldownBackoff` value
+   * doesn't change between checks within the same open period. Unused
+   * while `state` isn't `open`.
+   */
+  cooldownMsForOpen: number;
 }
 
 function newBucket(): CircuitBucket {
-  return { state: 'closed', consecutiveFailures: 0, openedAt: 0, trial: null, reopenCount: 0 };
+  return {
+    state: 'closed',
+    consecutiveFailures: 0,
+    openedAt: 0,
+    trial: null,
+    reopenCount: 0,
+    failuresByReason: new Map(),
+    cooldownMsForOpen: 0,
+  };
 }
 
 /** Key a bucket lookup falls into when the call omitted `model` under `isolateByModel`. */
@@ -180,10 +208,12 @@ export class CircuitBreaker {
   }
 
   /**
-   * Cooldown for `bucket`'s current `reopenCount`. Clamps a caller
-   * supplied backoff to a minimum of 0, catching `NaN` and negatives.
+   * Computes and clamps the cooldown for `bucket`'s current `reopenCount`.
+   * Called exactly once, whenever `bucket` transitions into `open`, and
+   * cached on the bucket as `cooldownMsForOpen`. Clamps a caller supplied
+   * backoff to a minimum of 0, catching `NaN` and negatives.
    */
-  private effectiveCooldown(bucket: CircuitBucket): number {
+  private computeCooldown(bucket: CircuitBucket): number {
     if (!this.cooldownBackoff) return this.cooldownMs;
 
     const computed = this.cooldownBackoff(bucket.reopenCount, this.cooldownMs);
@@ -251,7 +281,7 @@ export class CircuitBreaker {
 
     if (bucket.state === 'open') {
       const elapsed = Date.now() - bucket.openedAt;
-      const cooldown = this.effectiveCooldown(bucket);
+      const cooldown = bucket.cooldownMsForOpen;
       if (elapsed < cooldown) {
         throw new LLMError(
           `Circuit open, provider has failed ${bucket.consecutiveFailures} times in a row. Retry in ${Math.ceil((cooldown - elapsed) / 1000)}s.`,
@@ -302,6 +332,7 @@ export class CircuitBreaker {
     bucket.consecutiveFailures = 0;
     bucket.trial = null;
     bucket.reopenCount = 0;
+    bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
@@ -309,16 +340,13 @@ export class CircuitBreaker {
     }
   }
 
-  /**
-   * `code`, when present, is the failing `LLMError`'s `code`. Not read by
-   * `CircuitBreaker` itself yet, threaded through so later attribution
-   * work has it available without changing this signature again.
-   */
-  recordFailure(model?: string, context?: CircuitBreakerCallContext, _code?: LLMErrorCode): void {
+  /** `code`, when present, is the failing `LLMError`'s `code`. Missing attributes to `'unknown'`. */
+  recordFailure(model?: string, context?: CircuitBreakerCallContext, code?: LLMErrorCode): void {
     const bucket = this.ensureBucketFor(model);
 
     if (bucket.state === 'half-open' && bucket.trial && this.claimsCurrentTrial(bucket, context)) {
       bucket.trial.failures += 1;
+      this.attributeFailure(bucket, code);
       this.settleTrialIfComplete(bucket, model, context);
       return;
     }
@@ -327,11 +355,19 @@ export class CircuitBreaker {
     if (bucket.state === 'half-open') return;
 
     bucket.consecutiveFailures += 1;
+    this.attributeFailure(bucket, code);
 
     if (bucket.consecutiveFailures >= this.threshold) {
       bucket.openedAt = Date.now();
+      bucket.cooldownMsForOpen = this.computeCooldown(bucket);
       this.transition(bucket, 'open', model, context);
     }
+  }
+
+  /** Records `code` (or `'unknown'` if omitted) against `bucket.failuresByReason`. */
+  private attributeFailure(bucket: CircuitBucket, code: LLMErrorCode | undefined): void {
+    const key = code ?? 'unknown';
+    bucket.failuresByReason.set(key, (bucket.failuresByReason.get(key) ?? 0) + 1);
   }
 
   /**
@@ -355,6 +391,7 @@ export class CircuitBreaker {
     if (ratio >= this.halfOpenSuccessRatio) {
       bucket.consecutiveFailures = 0;
       bucket.reopenCount = 0;
+      bucket.failuresByReason.clear();
       this.transition(bucket, 'closed', model, context);
 
       if (this.isolateByModel && bucket.state === 'closed') {
@@ -366,6 +403,7 @@ export class CircuitBreaker {
     // Trial failed: reopen, reset the cooldown window, count the repeat.
     bucket.openedAt = Date.now();
     bucket.reopenCount += 1;
+    bucket.cooldownMsForOpen = this.computeCooldown(bucket);
     this.transition(bucket, 'open', model, context);
   }
 
@@ -381,6 +419,16 @@ export class CircuitBreaker {
   }
 
   /**
+   * Failure counts by `LLMErrorCode` for `model`'s bucket, a real code
+   * where the failing `LLMError` carried one, `'unknown'` otherwise.
+   * Returned as a plain object copy, never the live map.
+   */
+  getFailureBreakdown(model?: string): Partial<Record<LLMErrorCode | 'unknown', number>> {
+    const bucket = this.lookupBucket(model);
+    return bucket ? Object.fromEntries(bucket.failuresByReason) : {};
+  }
+
+  /**
    * Manually opens the circuit, as if `threshold` consecutive failures had
    * just happened, e.g. to pull a provider out of rotation ahead of known
    * maintenance. Resets the cooldown window from now, same as a real
@@ -392,6 +440,7 @@ export class CircuitBreaker {
 
     bucket.openedAt = Date.now();
     bucket.trial = null;
+    bucket.cooldownMsForOpen = this.computeCooldown(bucket);
     this.transition(bucket, 'open', model, context);
   }
 
@@ -408,6 +457,7 @@ export class CircuitBreaker {
     bucket.consecutiveFailures = 0;
     bucket.trial = null;
     bucket.reopenCount = 0;
+    bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
     // transition() may have synchronously re-entered (e.g. an

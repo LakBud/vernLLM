@@ -432,7 +432,7 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     vi.useRealTimers();
   });
 
-  it('the { multiplier, maxMs } shorthand grows the cooldown exactly across three reopen cycles', () => {
+  it('the shorthand always applies jitter: falls in [exp/2, exp], not the exact value', () => {
     vi.useFakeTimers();
     const cb = new CircuitBreaker({
       threshold: 1,
@@ -440,42 +440,115 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // First open: reopenCount 0, cooldown 1000 * 2^0 = 1000.
+    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, jittered to [500, 1000].
+    cb.recordFailure();
+    // Below the floor of the jittered range: never admitted.
+    vi.advanceTimersByTime(499);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    // Past the ceiling of the jittered range: always admitted, regardless of the actual roll.
+    vi.advanceTimersByTime(501);
+    expect(() => cb.assertClosed()).not.toThrow();
+    expect(cb.getState()).toBe('half-open');
+
+    vi.useRealTimers();
+  });
+
+  it('the jittered cooldown is sampled once per open period, not resampled on every assertClosed check', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 10_000,
+      cooldownBackoff: { multiplier: 2 },
+    });
+
+    cb.recordFailure();
+
+    const messages: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      try {
+        cb.assertClosed();
+      } catch (error) {
+        messages.push((error as Error).message);
+      }
+    }
+
+    // Every check above happened at the same elapsed time (0ms since
+    // open, no time advanced between calls). The jittered range here
+    // spans several whole seconds ([5000, 10000]ms), so if the cooldown
+    // were resampled per check, the reported "Retry in Xs" would very
+    // likely differ across the 20 draws. Sampled once and cached, every
+    // check reports the identical wait.
+    expect(messages).toHaveLength(20);
+    expect(new Set(messages).size).toBe(1);
+
+    vi.useRealTimers();
+  });
+
+  it('a custom function is never jittered automatically, jitter only applies to the shorthand', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: () => 1000, // fixed, no jitter applied by the library
+    });
+
     cb.recordFailure();
     vi.advanceTimersByTime(999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
     vi.advanceTimersByTime(2);
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    vi.useRealTimers();
+  });
+
+  it('the { multiplier, maxMs } shorthand grows the jittered range across three reopen cycles', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 2 },
+    });
+
+    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, jittered range [500, 1000].
+    cb.recordFailure();
+    vi.advanceTimersByTime(499);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(501); // total 1000, past the ceiling
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
-    // Trial fails: reopenCount becomes 1, cooldown 1000 * 2^1 = 2000.
+    // Trial fails: reopenCount 1, exp = 1000 * 2^1 = 2000, jittered range [1000, 2000].
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(1001); // total 2000, past the ceiling
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    // Trial fails again: reopenCount 2, exp = 1000 * 2^2 = 4000, jittered range [2000, 4000].
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
     vi.advanceTimersByTime(1999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2);
-    cb.assertClosed();
-    expect(cb.getState()).toBe('half-open');
-
-    // Trial fails again: reopenCount becomes 2, cooldown 1000 * 2^2 = 4000.
-    cb.recordFailure();
-    expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(3999);
-    expect(() => cb.assertClosed()).toThrow(
-      expect.objectContaining({ code: 'circuit_cooling_down' }),
-    );
-    vi.advanceTimersByTime(2);
+    vi.advanceTimersByTime(2001); // total 4000, past the ceiling
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
     vi.useRealTimers();
   });
 
-  it('maxMs caps the growth', () => {
+  it('maxMs caps the growth, including the jittered range', () => {
     vi.useFakeTimers();
     const cb = new CircuitBreaker({
       threshold: 1,
@@ -483,19 +556,20 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 10, maxMs: 5000 },
     });
 
-    // First open: 1000 * 10^0 = 1000.
+    // First open: reopenCount 0, exp = 1000 * 10^0 = 1000, admit by 1000ms.
     cb.recordFailure();
-    vi.advanceTimersByTime(1001);
+    vi.advanceTimersByTime(1000);
     cb.assertClosed();
 
-    // Trial fails: reopenCount 1, uncapped would be 10000, capped to 5000.
+    // Trial fails: reopenCount 1, uncapped exp would be 10000, capped to
+    // 5000, jittered range [2500, 5000].
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(4999);
+    vi.advanceTimersByTime(2499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2);
+    vi.advanceTimersByTime(2501); // total 5000, past the capped ceiling
     expect(() => cb.assertClosed()).not.toThrow();
 
     vi.useRealTimers();
@@ -550,30 +624,151 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // Open, reopen once via a failed trial (reopenCount -> 1), then
-    // recover with a successful trial, which should reset reopenCount.
+    // Open, reopen once via a failed trial (reopenCount -> 1, jittered
+    // range [1000, 2000]), then recover with a successful trial, which
+    // should reset reopenCount.
     cb.recordFailure();
-    vi.advanceTimersByTime(1001);
+    vi.advanceTimersByTime(1000); // reopenCount 0 ceiling
     cb.assertClosed();
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(2001);
+    vi.advanceTimersByTime(2000); // reopenCount 1 ceiling
     cb.assertClosed();
     cb.recordSuccess();
     expect(cb.getState()).toBe('closed');
 
-    // Trip again: reopenCount should be back to 0, so the cooldown is
-    // the base 1000ms again, not a continuation of the earlier growth.
+    // Trip again: reopenCount should be back to 0, so the jittered
+    // range is [500, 1000] again, not a continuation of the earlier
+    // growth ([1000, 2000] or beyond).
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(2);
+    vi.advanceTimersByTime(501); // total 1000, past the reset ceiling
     expect(() => cb.assertClosed()).not.toThrow();
 
     vi.useRealTimers();
+  });
+});
+
+describe('CircuitBreaker, failure attribution (unit)', () => {
+  it('repeated failures with different codes produce a correct breakdown', () => {
+    const cb = new CircuitBreaker({ threshold: 10 });
+
+    cb.recordFailure(undefined, undefined, 'server_error');
+    cb.recordFailure(undefined, undefined, 'server_error');
+    cb.recordFailure(undefined, undefined, 'request_timeout');
+
+    expect(cb.getFailureBreakdown()).toEqual({ server_error: 2, request_timeout: 1 });
+  });
+
+  it('an error with no code attributes to "unknown"', () => {
+    const cb = new CircuitBreaker({ threshold: 10 });
+
+    cb.recordFailure();
+    cb.recordFailure(undefined, undefined, 'server_error');
+
+    expect(cb.getFailureBreakdown()).toEqual({ unknown: 1, server_error: 1 });
+  });
+
+  it('breakdown clears on success', () => {
+    const cb = new CircuitBreaker({ threshold: 10 });
+
+    cb.recordFailure(undefined, undefined, 'server_error');
+    expect(cb.getFailureBreakdown()).toEqual({ server_error: 1 });
+
+    cb.recordSuccess();
+    expect(cb.getFailureBreakdown()).toEqual({});
+  });
+
+  it('breakdown clears on manual close()', () => {
+    const cb = new CircuitBreaker({ threshold: 10 });
+
+    cb.recordFailure(undefined, undefined, 'server_error');
+    cb.close();
+
+    expect(cb.getFailureBreakdown()).toEqual({});
+  });
+
+  it('breakdown clears when a half-open trial succeeds and closes the circuit', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+
+    cb.recordFailure(undefined, undefined, 'server_error');
+    vi.advanceTimersByTime(1001);
+    cb.assertClosed();
+    cb.recordSuccess();
+
+    expect(cb.getFailureBreakdown()).toEqual({});
+
+    vi.useRealTimers();
+  });
+
+  it('a trial failure that reopens the circuit still attributes, and prior failures survive since the bucket never closed', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+
+    cb.recordFailure(undefined, undefined, 'server_error');
+    vi.advanceTimersByTime(1001);
+    cb.assertClosed();
+    cb.recordFailure(undefined, undefined, 'request_timeout');
+
+    expect(cb.getState()).toBe('open');
+    expect(cb.getFailureBreakdown()).toEqual({ server_error: 1, request_timeout: 1 });
+
+    vi.useRealTimers();
+  });
+
+  it('isolateByModel keeps breakdowns per model', () => {
+    const cb = new CircuitBreaker({ threshold: 10, isolateByModel: true });
+
+    cb.recordFailure('gpt-4o', undefined, 'server_error');
+    cb.recordFailure('gpt-4o-mini', undefined, 'request_timeout');
+    cb.recordFailure('gpt-4o-mini', undefined, 'request_timeout');
+
+    expect(cb.getFailureBreakdown('gpt-4o')).toEqual({ server_error: 1 });
+    expect(cb.getFailureBreakdown('gpt-4o-mini')).toEqual({ request_timeout: 2 });
+  });
+
+  it('getFailureBreakdown returns an empty object for a model that never failed', () => {
+    const cb = new CircuitBreaker({ threshold: 10, isolateByModel: true });
+
+    expect(cb.getFailureBreakdown('never-called')).toEqual({});
+  });
+
+  it("a stale trial permit's failure is ignored entirely, including attribution", () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+    const staleContext = { requestId: 'stale', state: createMiddlewareStateBag() };
+
+    // Admitted while closed: no trial permit claimed for this call at all.
+    cb.assertClosed(undefined, staleContext);
+
+    cb.recordFailure(); // trips the circuit for real
+    vi.advanceTimersByTime(1001);
+
+    const trialContext = { requestId: 'trial', state: createMiddlewareStateBag() };
+    cb.assertClosed(undefined, trialContext);
+    expect(cb.getState()).toBe('half-open');
+
+    // The stale call's failure arrives late, after the real trial began.
+    // It must not be attributed, since it was never part of this trial.
+    cb.recordFailure(undefined, staleContext, 'server_error');
+    expect(cb.getFailureBreakdown()).toEqual({ unknown: 1 });
+
+    vi.useRealTimers();
+  });
+
+  it('getFailureBreakdown returns a plain object copy, not a live reference', () => {
+    const cb = new CircuitBreaker({ threshold: 10 });
+
+    cb.recordFailure(undefined, undefined, 'server_error');
+    const breakdown = cb.getFailureBreakdown();
+    breakdown.server_error = 999;
+
+    expect(cb.getFailureBreakdown()).toEqual({ server_error: 1 });
   });
 });
 
@@ -1476,5 +1671,61 @@ describe('VernLLM, circuit breaker integration', () => {
     expect(() => llm.openCircuit()).not.toThrow();
     expect(() => llm.closeCircuit()).not.toThrow();
     expect(llm.getCircuitState()).toBeUndefined();
+  });
+
+  it('getFailureBreakdown is undefined by default (opt-in), same as getCircuitState', () => {
+    const { client } = createMockClient([jsonResponse({ ok: true })]);
+    const llm = new VernLLM({ client, model: 'm' });
+    expect(llm.getFailureBreakdown()).toBeUndefined();
+  });
+
+  it('getFailureBreakdown reflects real call failures on the primary target', async () => {
+    const { client } = createMockClient([new Error('down'), new Error('down')]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 5, cooldownMs: 10_000 },
+    });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
+    await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
+
+    const breakdown = llm.getFailureBreakdown();
+    expect(breakdown).toBeDefined();
+    const total = Object.values(breakdown ?? {}).reduce((a, b) => a + (b ?? 0), 0);
+    expect(total).toBe(2);
+  });
+
+  it('getFailureBreakdown reads a fallback target by index, independent of the primary', async () => {
+    const { client: primaryClient } = createMockClient([new Error('down')]);
+    const { client: fallbackClient } = createMockClient([jsonResponse({ ok: true })]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      fallback: {
+        client: fallbackClient,
+        model: 'fallback-model',
+        name: 'fallback',
+        circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+      },
+    });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' }).catch(() => {});
+
+    const primaryBreakdown = llm.getFailureBreakdown({ index: 0 });
+    const fallbackBreakdown = llm.getFailureBreakdown({ index: 1 });
+    expect(Object.keys(primaryBreakdown ?? {}).length).toBeGreaterThan(0);
+    expect(fallbackBreakdown).toEqual({});
+  });
+
+  it('getFailureBreakdown throws RangeError for an out-of-range index', () => {
+    const { client } = createMockClient([]);
+    const llm = new VernLLM({ client, model: 'm', circuitBreaker: { threshold: 5 } });
+
+    expect(() => llm.getFailureBreakdown({ index: 9 })).toThrow(RangeError);
   });
 });

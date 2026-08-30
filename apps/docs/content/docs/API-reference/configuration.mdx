@@ -137,14 +137,15 @@ run during the half-open window and what fraction must succeed to close the circ
 `cooldownBackoff` accepts `ExponentialBackoffOptions | CooldownBackoff`:
 
 - `ExponentialBackoffOptions`: `{ multiplier: number; maxMs?: number }`. Scales `cooldownMs` by
-  `multiplier` on each repeat open, capped at `maxMs` (default `Infinity`).
+  `multiplier` on each repeat open, capped at `maxMs` (default `Infinity`). Always applies equal
+  jitter.
 - `CooldownBackoff`: `(reopenCount: number, baseCooldownMs: number) => number`, an escape hatch for
-  anything beyond exponential growth (jitter, a linear ramp).
+  anything beyond exponential growth, or an exact deterministic value. Never jittered automatically.
 
 Omitted (the default), `cooldownMs` stays fixed.
 
 See [Circuit Breaker](/docs/core/circuit-breaker) for failure conditions, half-open
-behavior, cooldown backoff, per-model isolation, and state inspection.
+behavior, cooldown backoff, failure attribution, per-model isolation, and state inspection.
 
 ## Rate limiting
 

@@ -46,6 +46,7 @@ import {
   type JsonModeDisabledCallParams,
   type JsonModeEnabledCallParams,
   type JsonValue,
+  type LLMErrorCode,
   type StreamCallResult,
   type StreamConditionalStringToolCallParams,
   type StreamJsonModeDisabledCallParams,
@@ -719,6 +720,27 @@ export class VernLLM {
     warnIfModelUnsupported(executor.isolateByModel, target?.model, 'getCircuitState', this.logger);
 
     return executor.getCircuitState(target?.model ?? executor.model);
+  }
+
+  /**
+   * @param target.index Which target to read. Defaults to the primary.
+   * @param target.model Which model bucket to read, if the target isolates by model.
+   * @returns Failure counts by `LLMErrorCode`, `'unknown'` for a missing
+   * code, or `undefined` if that target has no breaker.
+   * @throws {RangeError} If `target.index` names no target.
+   */
+  getFailureBreakdown(
+    target?: CircuitTarget,
+  ): Partial<Record<LLMErrorCode | 'unknown', number>> | undefined {
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'getFailureBreakdown');
+    warnIfModelUnsupported(
+      executor.isolateByModel,
+      target?.model,
+      'getFailureBreakdown',
+      this.logger,
+    );
+
+    return executor.getFailureBreakdown(target?.model ?? executor.model);
   }
 
   /**
