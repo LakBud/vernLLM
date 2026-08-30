@@ -52,9 +52,10 @@ const llm = new VernLLM({ client: openai, model: 'gpt-4o', cache: new UpstashCac
 
 <Callout>
   The built-in `InMemoryCacheAdapter` treats `ttl` as seconds, supports deletion, and accepts an
-  optional `maxSize` limit to prevent unbounded memory growth. When the limit is reached, the oldest
-  entries are removed first. Custom adapters should keep the same `ttl` convention (seconds, not
-  milliseconds) so behavior stays consistent across adapters.
+  optional `maxSize` limit to prevent unbounded memory growth. When the limit is reached it evicts
+  by `'fifo'` (default) or `'lru'`, see [Eviction](/docs/core/caching#eviction) in Core. Custom
+  adapters should keep the same `ttl` convention (seconds, not milliseconds) so behavior stays
+  consistent across adapters.
 </Callout>
 
 <Callout type="warn">
