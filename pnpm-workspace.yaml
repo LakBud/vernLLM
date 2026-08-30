@@ -15,21 +15,21 @@ minimumReleaseAge: 1440
 overrides:
   glob: ^13.0.6
   valibot: ^1.4.2
-  sharp: ^0.35.0
-  next: ^16.2.11
-  postcss: ^8.5.23
+  sharp: ^0.35.4
+  next: ^16.3.3
+  postcss: ^8.5.26
   brace-expansion: ^5.0.9
   undici: ^7.29.0
-  fast-uri: ^3.1.5
-  ip-address: ^10.3.1
+  fast-uri: ^3.1.6
+  ip-address: ^10.7.0
   nanoid: ^3.3.18
-  hono: ^4.12.34
+  hono: ^4.13.5
   '@hono/node-server': ^1.19.17
-  mermaid: ^11.16.1
-  dompurify: ^3.4.13
-  diff: ^8.0.3
-  js-yaml: ^4.3.1
-  read-yaml-file>js-yaml: ^3.15.1
+  mermaid: ^11.17.2
+  dompurify: ^3.4.14
+  diff: ^8.0.4
+  js-yaml: ^4.3.2
+  read-yaml-file>js-yaml: ^3.15.2
 
 peerDependencyRules:
   allowedVersions:
