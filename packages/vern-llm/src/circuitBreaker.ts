@@ -99,6 +99,15 @@ function newBucket(): CircuitBucket {
 const UNLABELED_MODEL = '';
 
 /**
+ * Maps each call's `CircuitBreakerCallContext.state` to the trial object
+ * it claimed a slot in. `bucket.trial` is a fresh object per half-open
+ * cycle, so identity alone tells a current permit from a stale one. No
+ * `context` (direct `CircuitBreaker` use) always counts, unchanged from
+ * before permit tracking existed.
+ */
+const trialPermits = new WeakMap<object, object>();
+
+/**
  * Per retry VernLLM-instance circuit breaker. Tracks consecutive failures across
  * calls. Once the threshold is hit, short-circuits new calls with an
  * LLMError('circuit_open') instead of hitting the provider, until the
@@ -125,11 +134,13 @@ export class CircuitBreaker {
     this.cooldownMs = options.cooldownMs ?? 30_000;
     this.onStateChange = options.onStateChange;
     this.isolateByModel = options.isolateByModel ?? false;
-    // Clamped rather than thrown: a config mistake here shouldn't take
-    // down the call path, same reasoning `TokenBucket.give` guards
-    // against a bad caller-supplied amount rather than throwing.
-    this.halfOpenProbes = Math.max(1, Math.floor(options.halfOpenProbes ?? 1));
-    this.halfOpenSuccessRatio = Math.min(1, Math.max(0, options.halfOpenSuccessRatio ?? 1));
+    // Clamped rather than thrown, same as `TokenBucket.give`. `Number.isFinite`
+    // catches NaN/Infinity, which would otherwise bypass or break the clamp.
+    const rawProbes = options.halfOpenProbes;
+    this.halfOpenProbes = Number.isFinite(rawProbes) ? Math.max(1, Math.floor(rawProbes!)) : 1;
+
+    const rawRatio = options.halfOpenSuccessRatio;
+    this.halfOpenSuccessRatio = Number.isFinite(rawRatio) ? Math.min(1, Math.max(0, rawRatio!)) : 1;
   }
 
   /** Returns the bucket for a model if one already exists, without allocating. */
@@ -153,6 +164,15 @@ export class CircuitBreaker {
     }
 
     return bucket;
+  }
+
+  /** True if this outcome's call claimed a permit for `bucket`'s current trial. Stale or unstamped calls don't. */
+  private claimsCurrentTrial(
+    bucket: CircuitBucket,
+    context: CircuitBreakerCallContext | undefined,
+  ): boolean {
+    if (!context) return true;
+    return trialPermits.get(context.state) === bucket.trial;
   }
 
   /** Every state mutation routes through here, so `onStateChange` fires exactly once per real change. */
@@ -196,6 +216,7 @@ export class CircuitBreaker {
       // call as already claiming a trial slot, not still eligible for
       // one. `slotsRemaining - 1` since this call itself consumes one.
       bucket.trial = { slotsRemaining: this.halfOpenProbes - 1, successes: 0, failures: 0 };
+      if (context) trialPermits.set(context.state, bucket.trial);
       this.transition(bucket, 'half-open', model, context);
       return;
     }
@@ -210,6 +231,7 @@ export class CircuitBreaker {
     }
 
     bucket.trial.slotsRemaining -= 1;
+    if (context) trialPermits.set(context.state, bucket.trial);
   }
 
   recordSuccess(model?: string, context?: CircuitBreakerCallContext): void {
@@ -219,11 +241,14 @@ export class CircuitBreaker {
       return;
     }
 
-    if (bucket.state === 'half-open' && bucket.trial) {
+    if (bucket.state === 'half-open' && bucket.trial && this.claimsCurrentTrial(bucket, context)) {
       bucket.trial.successes += 1;
       this.settleTrialIfComplete(bucket, model, context);
       return;
     }
+
+    // Stale trial permit: ignore, don't settle a trial it wasn't part of.
+    if (bucket.state === 'half-open') return;
 
     bucket.consecutiveFailures = 0;
     bucket.trial = null;
@@ -242,11 +267,14 @@ export class CircuitBreaker {
   recordFailure(model?: string, context?: CircuitBreakerCallContext, _code?: LLMErrorCode): void {
     const bucket = this.ensureBucketFor(model);
 
-    if (bucket.state === 'half-open' && bucket.trial) {
+    if (bucket.state === 'half-open' && bucket.trial && this.claimsCurrentTrial(bucket, context)) {
       bucket.trial.failures += 1;
       this.settleTrialIfComplete(bucket, model, context);
       return;
     }
+
+    // Stale trial permit: ignore, don't fall through to the closed-state counter below.
+    if (bucket.state === 'half-open') return;
 
     bucket.consecutiveFailures += 1;
 

@@ -18,7 +18,7 @@ const llm = new VernLLM({
     threshold: 5,
     cooldownMs: 30_000,
     halfOpenProbes: 3,
-    halfOpenSuccessRatio: 0.67, // 2 of 3 trials succeeding closes the circuit
+    halfOpenSuccessRatio: 2 / 3, // 2 of 3 trials succeeding closes the circuit
   },
 });
 ```
