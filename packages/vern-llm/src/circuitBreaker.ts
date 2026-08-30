@@ -69,6 +69,34 @@ export interface CircuitBreakerOptions {
    * construction.
    */
   halfOpenSuccessRatio?: number;
+  /**
+   * Grows `cooldownMs` on each repeat open instead of a fixed wait.
+   * `{ multiplier, maxMs }` covers exponential growth; a `CooldownBackoff`
+   * function covers anything else. Omitted means `cooldownMs` stays fixed.
+   */
+  cooldownBackoff?: ExponentialBackoffOptions | CooldownBackoff;
+}
+
+/** Computes the cooldown for a bucket's `reopenCount`-th repeat open. */
+export type CooldownBackoff = (reopenCount: number, baseCooldownMs: number) => number;
+
+export interface ExponentialBackoffOptions {
+  /** Growth factor applied per repeat open, e.g. 2 doubles each time. */
+  multiplier: number;
+  /** Upper bound on the computed cooldown, in ms. Default `Infinity`. */
+  maxMs?: number;
+}
+
+/** Not exported. Internal shorthand only. */
+function buildCooldownBackoff(
+  option: ExponentialBackoffOptions | CooldownBackoff | undefined,
+): CooldownBackoff | undefined {
+  if (option === undefined) return undefined;
+  if (typeof option === 'function') return option;
+
+  const { multiplier, maxMs = Infinity } = option;
+  return (reopenCount, baseCooldownMs) =>
+    Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
 }
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
@@ -89,10 +117,15 @@ interface CircuitBucket {
    * or reopens.
    */
   trial: { slotsRemaining: number; successes: number; failures: number } | null;
+  /**
+   * Times this bucket has reopened after a failed trial. Feeds
+   * `cooldownBackoff`. Does not count the first open from closed.
+   */
+  reopenCount: number;
 }
 
 function newBucket(): CircuitBucket {
-  return { state: 'closed', consecutiveFailures: 0, openedAt: 0, trial: null };
+  return { state: 'closed', consecutiveFailures: 0, openedAt: 0, trial: null, reopenCount: 0 };
 }
 
 /** Key a bucket lookup falls into when the call omitted `model` under `isolateByModel`. */
@@ -122,6 +155,7 @@ export class CircuitBreaker {
   readonly isolateByModel: boolean;
   private readonly halfOpenProbes: number;
   private readonly halfOpenSuccessRatio: number;
+  private readonly cooldownBackoff?: CooldownBackoff;
 
   // Exactly one of these is used, chosen once at construction by
   // `isolateByModel`, so every method has a single, unambiguous place to
@@ -141,6 +175,20 @@ export class CircuitBreaker {
 
     const rawRatio = options.halfOpenSuccessRatio;
     this.halfOpenSuccessRatio = Number.isFinite(rawRatio) ? Math.min(1, Math.max(0, rawRatio!)) : 1;
+
+    this.cooldownBackoff = buildCooldownBackoff(options.cooldownBackoff);
+  }
+
+  /**
+   * Cooldown for `bucket`'s current `reopenCount`. Clamps a caller
+   * supplied backoff to a minimum of 0, catching `NaN` and negatives.
+   */
+  private effectiveCooldown(bucket: CircuitBucket): number {
+    if (!this.cooldownBackoff) return this.cooldownMs;
+
+    const computed = this.cooldownBackoff(bucket.reopenCount, this.cooldownMs);
+    if (Number.isNaN(computed)) return 0;
+    return Math.max(0, computed);
   }
 
   /** Returns the bucket for a model if one already exists, without allocating. */
@@ -203,9 +251,10 @@ export class CircuitBreaker {
 
     if (bucket.state === 'open') {
       const elapsed = Date.now() - bucket.openedAt;
-      if (elapsed < this.cooldownMs) {
+      const cooldown = this.effectiveCooldown(bucket);
+      if (elapsed < cooldown) {
         throw new LLMError(
-          `Circuit open, provider has failed ${bucket.consecutiveFailures} times in a row. Retry in ${Math.ceil((this.cooldownMs - elapsed) / 1000)}s.`,
+          `Circuit open, provider has failed ${bucket.consecutiveFailures} times in a row. Retry in ${Math.ceil((cooldown - elapsed) / 1000)}s.`,
           'circuit_open',
           { code: 'circuit_cooling_down' },
         );
@@ -252,6 +301,7 @@ export class CircuitBreaker {
 
     bucket.consecutiveFailures = 0;
     bucket.trial = null;
+    bucket.reopenCount = 0;
     this.transition(bucket, 'closed', model, context);
 
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
@@ -304,6 +354,7 @@ export class CircuitBreaker {
 
     if (ratio >= this.halfOpenSuccessRatio) {
       bucket.consecutiveFailures = 0;
+      bucket.reopenCount = 0;
       this.transition(bucket, 'closed', model, context);
 
       if (this.isolateByModel && bucket.state === 'closed') {
@@ -312,11 +363,9 @@ export class CircuitBreaker {
       return;
     }
 
-    // Trial failed the ratio: reopen and reset the cooldown window. Set
-    // before transition() for the same reason as assertClosed above: a
-    // synchronous observer must see the fresh cooldown, not a stale or
-    // zeroed one.
+    // Trial failed: reopen, reset the cooldown window, count the repeat.
     bucket.openedAt = Date.now();
+    bucket.reopenCount += 1;
     this.transition(bucket, 'open', model, context);
   }
 
@@ -358,6 +407,7 @@ export class CircuitBreaker {
 
     bucket.consecutiveFailures = 0;
     bucket.trial = null;
+    bucket.reopenCount = 0;
     this.transition(bucket, 'closed', model, context);
 
     // transition() may have synchronously re-entered (e.g. an

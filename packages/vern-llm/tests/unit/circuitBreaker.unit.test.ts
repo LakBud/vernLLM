@@ -404,6 +404,179 @@ describe('CircuitBreaker, multi-probe half-open (unit)', () => {
   });
 });
 
+describe('CircuitBreaker, cooldown backoff (unit)', () => {
+  it('no cooldownBackoff reproduces the current fixed cooldown, unmodified', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+
+    cb.recordFailure();
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    expect(() => cb.assertClosed()).not.toThrow();
+    expect(cb.getState()).toBe('half-open');
+
+    // Reopen via a failed trial, cooldown should still be the same
+    // fixed 1000ms, not grown, since no cooldownBackoff is configured.
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    vi.useRealTimers();
+  });
+
+  it('the { multiplier, maxMs } shorthand grows the cooldown exactly across three reopen cycles', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 2 },
+    });
+
+    // First open: reopenCount 0, cooldown 1000 * 2^0 = 1000.
+    cb.recordFailure();
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    // Trial fails: reopenCount becomes 1, cooldown 1000 * 2^1 = 2000.
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(1999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    // Trial fails again: reopenCount becomes 2, cooldown 1000 * 2^2 = 4000.
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(3999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    vi.useRealTimers();
+  });
+
+  it('maxMs caps the growth', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 10, maxMs: 5000 },
+    });
+
+    // First open: 1000 * 10^0 = 1000.
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+    cb.assertClosed();
+
+    // Trial fails: reopenCount 1, uncapped would be 10000, capped to 5000.
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(4999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    vi.useRealTimers();
+  });
+
+  it('a custom linear backoff function, passed directly rather than the shorthand, is honored exactly', () => {
+    vi.useFakeTimers();
+    const linear = (reopenCount: number, baseCooldownMs: number): number =>
+      baseCooldownMs + reopenCount * 500;
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, cooldownBackoff: linear });
+
+    // First open: reopenCount 0, cooldown 1000 + 0 * 500 = 1000.
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+    cb.assertClosed();
+
+    // Trial fails: reopenCount 1, cooldown 1000 + 1 * 500 = 1500.
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(1499);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    vi.useRealTimers();
+  });
+
+  it('a backoff function returning a negative number is clamped to 0', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: () => -500,
+    });
+
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    // Clamped to 0: no wait at all, admits a trial immediately.
+    expect(() => cb.assertClosed()).not.toThrow();
+    expect(cb.getState()).toBe('half-open');
+
+    vi.useRealTimers();
+  });
+
+  it('recordSuccess resets reopenCount, so a later reopen starts the backoff over', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 2 },
+    });
+
+    // Open, reopen once via a failed trial (reopenCount -> 1), then
+    // recover with a successful trial, which should reset reopenCount.
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+    cb.assertClosed();
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(2001);
+    cb.assertClosed();
+    cb.recordSuccess();
+    expect(cb.getState()).toBe('closed');
+
+    // Trip again: reopenCount should be back to 0, so the cooldown is
+    // the base 1000ms again, not a continuation of the earlier growth.
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(2);
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    vi.useRealTimers();
+  });
+});
+
 describe('CircuitBreaker, isolateByModel (unit)', () => {
   it('defaults to off: a single shared circuit, unchanged from every prior version', () => {
     const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000 });

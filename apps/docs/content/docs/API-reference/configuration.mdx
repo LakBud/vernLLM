@@ -118,9 +118,9 @@ shapes.
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                                                                    |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `circuitBreaker` | disabled | Pass `true` for defaults (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, halfOpenProbes, halfOpenSuccessRatio, onStateChange }`. See [Circuit Breaker](/docs/core/circuit-breaker). |
+| Option           | Default  | Notes                                                                                                                                                                                                                                     |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `circuitBreaker` | disabled | Pass `true` for defaults (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, halfOpenProbes, halfOpenSuccessRatio, cooldownBackoff, onStateChange }`. See [Circuit Breaker](/docs/core/circuit-breaker). |
 
 The circuit breaker tracks provider and transport-level health. Response parsing and validation
 errors do not count as provider failures. `unknown_tool` and `duplicate_tool_call_id` tool-contract
@@ -134,8 +134,17 @@ acts on the target's own configured model rather than an unlabeled bucket.
 `halfOpenProbes` (default 1) and `halfOpenSuccessRatio` (default 1) control how many trial calls
 run during the half-open window and what fraction must succeed to close the circuit again.
 
+`cooldownBackoff` accepts `ExponentialBackoffOptions | CooldownBackoff`:
+
+- `ExponentialBackoffOptions`: `{ multiplier: number; maxMs?: number }`. Scales `cooldownMs` by
+  `multiplier` on each repeat open, capped at `maxMs` (default `Infinity`).
+- `CooldownBackoff`: `(reopenCount: number, baseCooldownMs: number) => number`, an escape hatch for
+  anything beyond exponential growth (jitter, a linear ramp).
+
+Omitted (the default), `cooldownMs` stays fixed.
+
 See [Circuit Breaker](/docs/core/circuit-breaker) for failure conditions, half-open
-behavior, per-model isolation, and state inspection.
+behavior, cooldown backoff, per-model isolation, and state inspection.
 
 ## Rate limiting
 
