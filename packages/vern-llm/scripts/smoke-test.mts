@@ -86,7 +86,7 @@ try {
   // module systems, confirming `files`/`exports.types` include them.
   const installedTypesDir = path.join(consumerDir, 'node_modules', 'vern-llm', 'dist');
   const shipped = readdirSync(installedTypesDir);
-  assert.ok(shipped.includes('index.d.ts'), 'index.d.ts missing from installed package');
+  assert.ok(shipped.includes('index.d.mts'), 'index.d.mts missing from installed package');
   assert.ok(shipped.includes('index.d.cts'), 'index.d.cts missing from installed package');
 
   console.log(
