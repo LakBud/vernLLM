@@ -169,6 +169,145 @@ describe('CircuitBreaker (unit)', () => {
   });
 });
 
+describe('CircuitBreaker, multi-probe half-open (unit)', () => {
+  function openAndCooldown(cb: CircuitBreaker): void {
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+  }
+
+  it('halfOpenProbes: 1 behaves byte for byte like the current suite (regression guard)', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, halfOpenProbes: 1 });
+
+    openAndCooldown(cb);
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_trial_in_flight' }),
+    );
+
+    cb.recordSuccess();
+    expect(cb.getState()).toBe('closed');
+
+    vi.useRealTimers();
+  });
+
+  it('all three of three probes succeeding closes the circuit', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, halfOpenProbes: 3 });
+
+    openAndCooldown(cb);
+    cb.assertClosed();
+    cb.assertClosed();
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    cb.recordSuccess();
+    cb.recordSuccess();
+    expect(cb.getState()).toBe('half-open'); // still waiting on the third
+    cb.recordSuccess();
+    expect(cb.getState()).toBe('closed');
+
+    vi.useRealTimers();
+  });
+
+  it('two of three succeeding at a 0.5 ratio closes the circuit', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      halfOpenProbes: 3,
+      halfOpenSuccessRatio: 0.5,
+    });
+
+    openAndCooldown(cb);
+    cb.assertClosed();
+    cb.assertClosed();
+    cb.assertClosed();
+
+    cb.recordSuccess();
+    cb.recordFailure();
+    cb.recordSuccess();
+    expect(cb.getState()).toBe('closed');
+
+    vi.useRealTimers();
+  });
+
+  it('two of three succeeding at a 1.0 ratio reopens the circuit', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      halfOpenProbes: 3,
+      halfOpenSuccessRatio: 1,
+    });
+
+    openAndCooldown(cb);
+    cb.assertClosed();
+    cb.assertClosed();
+    cb.assertClosed();
+
+    cb.recordSuccess();
+    cb.recordFailure();
+    cb.recordSuccess();
+    expect(cb.getState()).toBe('open');
+
+    vi.useRealTimers();
+  });
+
+  it('a fourth concurrent call while three trials are in flight is rejected with circuit_trial_in_flight', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, halfOpenProbes: 3 });
+
+    openAndCooldown(cb);
+    cb.assertClosed();
+    cb.assertClosed();
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_trial_in_flight' }),
+    );
+
+    vi.useRealTimers();
+  });
+
+  it('halfOpenProbes clamps to at least 1 when given 0 or a negative number', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, halfOpenProbes: 0 });
+
+    openAndCooldown(cb);
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+    // Only one slot, since 0 clamped to 1: a second concurrent call is rejected.
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_trial_in_flight' }),
+    );
+
+    vi.useRealTimers();
+  });
+
+  it('halfOpenSuccessRatio clamps to [0, 1]', () => {
+    vi.useFakeTimers();
+    // A ratio above 1 clamps to 1: every probe must succeed.
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      halfOpenProbes: 2,
+      halfOpenSuccessRatio: 5,
+    });
+
+    openAndCooldown(cb);
+    cb.assertClosed();
+    cb.assertClosed();
+    cb.recordSuccess();
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open'); // one failure is enough to fail a ratio of 1
+
+    vi.useRealTimers();
+  });
+});
+
 describe('CircuitBreaker, isolateByModel (unit)', () => {
   it('defaults to off: a single shared circuit, unchanged from every prior version', () => {
     const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000 });

@@ -61,13 +61,14 @@ pipelines.
 
 ## Retry & timeout
 
-| Option               | Default                     | Notes                                                                                                                                                                                                          |
-| -------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                       |
-| `timeoutMs`          | `25000`                     | Per-attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, this bounds opening the stream and its first chunk; see `chunkIdleTimeoutMs`.             |
-| `chunkIdleTimeoutMs` | `30000`                     | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout). |
-| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. A `Retry-After` header overrides the computed delay when present.                                                    |
-| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying.                                                                                                                                                   |
+| Option               | Default                     | Notes                                                                                                                                                                                                                                |
+| -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                             |
+| `timeoutMs`          | `25000`                     | Per-attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, this bounds opening the stream and its first chunk; see `chunkIdleTimeoutMs`.                                   |
+| `chunkIdleTimeoutMs` | `30000`                     | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).                       |
+| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. A `Retry-After` header overrides the computed delay when present.                                                                          |
+| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying.                                                                                                                                                                         |
+| `detectSoftFailure`  | none                        | `(result, meta) => LLMErrorCode \| undefined`. Reclassifies a response that parsed and validated fine as a failure. `undefined` leaves it a success. See [Soft Failure Detection](/docs/core/error-handling#soft-failure-detection). |
 
 ## Request defaults
 
@@ -117,9 +118,9 @@ shapes.
 
 ## Circuit breaker
 
-| Option           | Default  | Notes                                                                                                                                                                              |
-| ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `circuitBreaker` | disabled | Pass `true` for defaults (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, onStateChange }`. See [Circuit Breaker](/docs/core/circuit-breaker). |
+| Option           | Default  | Notes                                                                                                                                                                                                                    |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `circuitBreaker` | disabled | Pass `true` for defaults (`threshold: 5`, `cooldownMs: 30_000`), or `{ threshold, cooldownMs, isolateByModel, halfOpenProbes, halfOpenSuccessRatio, onStateChange }`. See [Circuit Breaker](/docs/core/circuit-breaker). |
 
 The circuit breaker tracks provider and transport-level health. Response parsing and validation
 errors do not count as provider failures. `unknown_tool` and `duplicate_tool_call_id` tool-contract
@@ -129,6 +130,9 @@ With `isolateByModel: false` (the default), one circuit is shared across models 
 target. With `isolateByModel: true`, each resolved model gets its own circuit and
 `getCircuitState({ model })` can be used to inspect that model's state. Omitting `model` reads or
 acts on the target's own configured model rather than an unlabeled bucket.
+
+`halfOpenProbes` (default 1) and `halfOpenSuccessRatio` (default 1) control how many trial calls
+run during the half-open window and what fraction must succeed to close the circuit again.
 
 See [Circuit Breaker](/docs/core/circuit-breaker) for failure conditions, half-open
 behavior, per-model isolation, and state inspection.
@@ -154,8 +158,9 @@ rate-limit rejections. See [Error codes](/docs/core/error-handling#error-codes).
 | `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget }) => 'next' \| 'stop'`. Decides whether a failed target is followed by the next one.                                                                                                     |
 
 Each `FallbackTarget` needs its own `client` and `model`. `name`, `maxRetries`, `timeoutMs`,
-`chunkIdleTimeoutMs`, `baseDelayMs`, `defaultMaxTokens`, `defaultTemperature`, and
-`nonRetryableStatus` inherit the parent instance's resolved value when omitted.
+`chunkIdleTimeoutMs`, `baseDelayMs`, `defaultMaxTokens`, `defaultTemperature`,
+`nonRetryableStatus`, and `detectSoftFailure` inherit the parent instance's resolved value when
+omitted.
 
 `circuitBreaker` and `rateLimit` are never inherited. Each target has its own independent breaker
 and rate limiter when configured.

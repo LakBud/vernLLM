@@ -55,6 +55,20 @@ export interface CircuitBreakerOptions {
    * alongside every other call that also omits it.
    */
   isolateByModel?: boolean;
+  /**
+   * Trial calls allowed through per half-open cycle, instead of exactly
+   * one. Default 1, matching every version before this option existed.
+   * Clamped to at least 1 at construction, a half-open circuit that
+   * admits zero trials could never recover.
+   */
+  halfOpenProbes?: number;
+  /**
+   * Fraction of `halfOpenProbes` that must succeed to close the circuit
+   * again. Default 1, meaning every trial must succeed, matching every
+   * version before this option existed. Clamped to `[0, 1]` at
+   * construction.
+   */
+  halfOpenSuccessRatio?: number;
 }
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
@@ -65,15 +79,20 @@ interface CircuitBucket {
   consecutiveFailures: number;
   openedAt: number;
   /**
-   * True while a single half-open trial call is in flight. Guards against
-   * multiple concurrent callers all treating themselves as "the" trial once
-   * the cooldown elapses
+   * Non null only while `state` is half-open. Set in `transition()` the
+   * moment a bucket enters half-open, cleared back to null the moment it
+   * leaves, so a caller never has to reconcile several flat fields that
+   * could in principle desync. `slotsRemaining` guards against more than
+   * `halfOpenProbes` concurrent callers all treating themselves as a
+   * trial once the cooldown elapses; `successes`/`failures` decide,
+   * once every admitted trial has resolved, whether the circuit closes
+   * or reopens.
    */
-  trialInFlight: boolean;
+  trial: { slotsRemaining: number; successes: number; failures: number } | null;
 }
 
 function newBucket(): CircuitBucket {
-  return { state: 'closed', consecutiveFailures: 0, openedAt: 0, trialInFlight: false };
+  return { state: 'closed', consecutiveFailures: 0, openedAt: 0, trial: null };
 }
 
 /** Key a bucket lookup falls into when the call omitted `model` under `isolateByModel`. */
@@ -83,7 +102,8 @@ const UNLABELED_MODEL = '';
  * Per retry VernLLM-instance circuit breaker. Tracks consecutive failures across
  * calls. Once the threshold is hit, short-circuits new calls with an
  * LLMError('circuit_open') instead of hitting the provider, until the
- * cooldown elapses and a single trial call is allowed through
+ * cooldown elapses and up to `halfOpenProbes` trial calls (default 1)
+ * are allowed through
  */
 export class CircuitBreaker {
   private readonly threshold: number;
@@ -91,6 +111,8 @@ export class CircuitBreaker {
   private readonly onStateChange?: CircuitBreakerOptions['onStateChange'];
   /** Whether this breaker tracks failures per model instead of one shared circuit. Read by `CallExecutor`/`VernLLM` to report per-target in `getCircuitStates`. */
   readonly isolateByModel: boolean;
+  private readonly halfOpenProbes: number;
+  private readonly halfOpenSuccessRatio: number;
 
   // Exactly one of these is used, chosen once at construction by
   // `isolateByModel`, so every method has a single, unambiguous place to
@@ -103,6 +125,11 @@ export class CircuitBreaker {
     this.cooldownMs = options.cooldownMs ?? 30_000;
     this.onStateChange = options.onStateChange;
     this.isolateByModel = options.isolateByModel ?? false;
+    // Clamped rather than thrown: a config mistake here shouldn't take
+    // down the call path, same reasoning `TokenBucket.give` guards
+    // against a bad caller-supplied amount rather than throwing.
+    this.halfOpenProbes = Math.max(1, Math.floor(options.halfOpenProbes ?? 1));
+    this.halfOpenSuccessRatio = Math.min(1, Math.max(0, options.halfOpenSuccessRatio ?? 1));
   }
 
   /** Returns the bucket for a model if one already exists, without allocating. */
@@ -144,10 +171,10 @@ export class CircuitBreaker {
 
   /**
    * Throws if the circuit is open and the cooldown hasn't elapsed, or if
-   * the circuit is half-open and a trial call is already in flight.
-   * Otherwise, if the circuit just became eligible for a trial (cooldown
-   * elapsed, or half-open with no trial currently running), this call
-   * becomes that trial
+   * the circuit is half-open and every trial slot (`halfOpenProbes`,
+   * default 1) is already claimed. Otherwise, if the circuit just became
+   * eligible for a trial (cooldown elapsed) or still has a free slot
+   * (already half-open), this call claims one.
    */
   assertClosed(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
@@ -166,22 +193,23 @@ export class CircuitBreaker {
 
       // Set before transition(): a synchronous onStateChange observer
       // that re-enters (e.g. calls assertClosed again) must see this
-      // call as already claiming the trial, not still eligible for one.
-      bucket.trialInFlight = true;
+      // call as already claiming a trial slot, not still eligible for
+      // one. `slotsRemaining - 1` since this call itself consumes one.
+      bucket.trial = { slotsRemaining: this.halfOpenProbes - 1, successes: 0, failures: 0 };
       this.transition(bucket, 'half-open', model, context);
       return;
     }
 
     // state === 'half-open'
-    if (bucket.trialInFlight) {
+    if (!bucket.trial || bucket.trial.slotsRemaining <= 0) {
       throw new LLMError(
-        'Circuit half-open. A trial request is already in flight. Try again shortly.',
+        'Circuit half-open. Every trial slot is already in flight. Try again shortly.',
         'circuit_open',
         { code: 'circuit_trial_in_flight' },
       );
     }
 
-    bucket.trialInFlight = true;
+    bucket.trial.slotsRemaining -= 1;
   }
 
   recordSuccess(model?: string, context?: CircuitBreakerCallContext): void {
@@ -191,8 +219,14 @@ export class CircuitBreaker {
       return;
     }
 
+    if (bucket.state === 'half-open' && bucket.trial) {
+      bucket.trial.successes += 1;
+      this.settleTrialIfComplete(bucket, model, context);
+      return;
+    }
+
     bucket.consecutiveFailures = 0;
-    bucket.trialInFlight = false;
+    bucket.trial = null;
     this.transition(bucket, 'closed', model, context);
 
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
@@ -208,23 +242,54 @@ export class CircuitBreaker {
   recordFailure(model?: string, context?: CircuitBreakerCallContext, _code?: LLMErrorCode): void {
     const bucket = this.ensureBucketFor(model);
 
-    bucket.consecutiveFailures += 1;
-    bucket.trialInFlight = false;
-
-    if (bucket.state === 'half-open') {
-      // Trial call failed: reopen and reset the cooldown window. Set
-      // before transition() for the same reason as assertClosed above:
-      // a synchronous observer must see the fresh cooldown, not a stale
-      // or zeroed one.
-      bucket.openedAt = Date.now();
-      this.transition(bucket, 'open', model, context);
+    if (bucket.state === 'half-open' && bucket.trial) {
+      bucket.trial.failures += 1;
+      this.settleTrialIfComplete(bucket, model, context);
       return;
     }
+
+    bucket.consecutiveFailures += 1;
 
     if (bucket.consecutiveFailures >= this.threshold) {
       bucket.openedAt = Date.now();
       this.transition(bucket, 'open', model, context);
     }
+  }
+
+  /**
+   * Once every admitted trial in a half-open bucket has reported in
+   * (`successes + failures` reaches `halfOpenProbes`), decides whether
+   * to close or reopen based on `halfOpenSuccessRatio`, and clears
+   * `trial` either way, since it's only ever non null while half-open.
+   * A no-op while trials are still outstanding.
+   */
+  private settleTrialIfComplete(
+    bucket: CircuitBucket,
+    model: string | undefined,
+    context: CircuitBreakerCallContext | undefined,
+  ): void {
+    const trial = bucket.trial;
+    if (!trial || trial.successes + trial.failures < this.halfOpenProbes) return;
+
+    const ratio = trial.successes / this.halfOpenProbes;
+    bucket.trial = null;
+
+    if (ratio >= this.halfOpenSuccessRatio) {
+      bucket.consecutiveFailures = 0;
+      this.transition(bucket, 'closed', model, context);
+
+      if (this.isolateByModel && bucket.state === 'closed') {
+        this.bucketsByModel.delete(model ?? UNLABELED_MODEL);
+      }
+      return;
+    }
+
+    // Trial failed the ratio: reopen and reset the cooldown window. Set
+    // before transition() for the same reason as assertClosed above: a
+    // synchronous observer must see the fresh cooldown, not a stale or
+    // zeroed one.
+    bucket.openedAt = Date.now();
+    this.transition(bucket, 'open', model, context);
   }
 
   /**
@@ -249,7 +314,7 @@ export class CircuitBreaker {
     const bucket = this.ensureBucketFor(model);
 
     bucket.openedAt = Date.now();
-    bucket.trialInFlight = false;
+    bucket.trial = null;
     this.transition(bucket, 'open', model, context);
   }
 
@@ -264,7 +329,7 @@ export class CircuitBreaker {
     const bucket = this.ensureBucketFor(model);
 
     bucket.consecutiveFailures = 0;
-    bucket.trialInFlight = false;
+    bucket.trial = null;
     this.transition(bucket, 'closed', model, context);
 
     // transition() may have synchronously re-entered (e.g. an
