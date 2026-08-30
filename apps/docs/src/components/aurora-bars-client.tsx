@@ -1,19 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import type { ComponentProps } from 'react';
+
+import dynamic from 'next/dynamic';
 
 import { AuroraBars } from '@/components/unlumen-ui/aurora-bars';
 
-export function AuroraBarsClient(props: React.ComponentProps<typeof AuroraBars>) {
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  if (!mounted) {
-    return <div className={props.className} />;
-  }
-
-  return <AuroraBars {...props} />;
-}
+export const AuroraBarsClient = dynamic(() => Promise.resolve(AuroraBars), {
+  ssr: false,
+}) as React.ComponentType<ComponentProps<typeof AuroraBars>>;
