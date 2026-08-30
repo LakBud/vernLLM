@@ -463,7 +463,14 @@ export class CallExecutor {
         logger: this.logger,
         signal: params.signal,
         onStreamSuccess: (usage) => {
-          gateway.recordSuccess(attempt, params.signal, state);
+          // No breaker success recorded here. finalizeResponse (called
+          // from finalize, below) is the single source of truth for a
+          // streaming success, exactly like the non-streaming path:
+          // recording it here, before finalize runs, would mark the
+          // attempt a success even when finalize's own shaping or
+          // detectSoftFailure check is about to fail it, and would
+          // reset consecutiveFailures right before the failure path
+          // below tries to increment it.
           releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         onStreamFailure: (normalized, usage) => {
@@ -480,28 +487,45 @@ export class CallExecutor {
 
           releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
-        finalize: (textAcc, wireToolCalls, usage) =>
-          finalizeResponse(
-            textAcc,
-            wireToolCalls,
-            params,
-            useJson,
-            usage,
-            requestId,
-            attempt,
-            state,
-            {
-              gateway,
-              usageReporter: this.usageReporter,
-              logger: this.logger,
-              redactText: (text) => this.redactText(text),
-              parseJson: this.parseJson,
-              detectSoftFailure: this.detectSoftFailure,
-              providerName: this.providerName,
-              isFallback: this.isFallback,
-              model,
-            },
-          ),
+        finalize: (textAcc, wireToolCalls, usage) => {
+          try {
+            return finalizeResponse(
+              textAcc,
+              wireToolCalls,
+              params,
+              useJson,
+              usage,
+              requestId,
+              attempt,
+              state,
+              {
+                gateway,
+                usageReporter: this.usageReporter,
+                logger: this.logger,
+                redactText: (text) => this.redactText(text),
+                parseJson: this.parseJson,
+                detectSoftFailure: this.detectSoftFailure,
+                providerName: this.providerName,
+                isFallback: this.isFallback,
+                model,
+              },
+            );
+          } catch (error) {
+            // This attempt already returned successfully to the retry
+            // loop once the stream opened, so unlike the non-streaming
+            // path, nothing else will ever record a finalize-time
+            // failure (including a soft failure) against the breaker.
+            // Recorded here directly, gated by the same
+            // countsTowardBreaker policy the non-streaming path already
+            // applies, so this doesn't count anything that policy would
+            // otherwise exclude.
+            if (error instanceof LLMError && this.countsTowardBreaker(error)) {
+              gateway.recordFailure(attempt, params.signal, state, error.code);
+            }
+
+            throw error;
+          }
+        },
       });
 
       // Ownership of `release` passes to `buildStreamResult` from here.
@@ -525,7 +549,9 @@ export class CallExecutor {
    * a caller-input bug or a local rate-limit rejection: neither ever
    * reached the provider at all. A `quota_exceeded` rejection is also
    * excluded: it's a caller/account level limit, not a signal about
-   * provider health, even though it's still retryable.
+   * provider health, even though it's still retryable. This defers
+   * directly to `LLMError.countsTowardBreaker`, which captures both
+   * exclusions.
    */
   private countsTowardBreaker(error: LLMError): boolean {
     return error.countsTowardBreaker;

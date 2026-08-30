@@ -17,7 +17,7 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   detectSoftFailure: (result, meta) => {
     if (typeof result === 'string' && result.trim() === 'N/A') {
-      return 'empty_response';
+      return 'soft_failure_detected';
     }
     return undefined;
   },
@@ -29,9 +29,9 @@ attempt with that code, feeding the same retry and circuit breaker paths a throw
 throwing hook is caught, logged, and treated as no soft failure. `fallback` targets accept their
 own `detectSoftFailure`, inheriting the parent instance's hook when left unset.
 
-For streaming calls, a soft failure rejects `finalResult` the same as any other post-stream
-failure, but does not count toward the circuit breaker: by the time the final result is shaped,
-the streaming attempt has already returned successfully from the retry loop.
+A soft failure on a streaming call rejects `finalResult` and counts toward the circuit breaker,
+same as a non-streaming failure would, even though the streaming attempt has already returned
+successfully from VernLLM's own retry loop by that point.
 
 Adds `soft_failure_detected` as a new `LLMErrorCode`. See the
 [Error Handling](/docs/core/error-handling#soft-failure-detection) docs for details.

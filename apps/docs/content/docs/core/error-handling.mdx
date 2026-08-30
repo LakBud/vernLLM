@@ -81,8 +81,10 @@ try {
   </Card>
   <Card title="quota_exceeded">
     The usage reservation failed before the request was sent. This happens when `reserveUsage`
-    rejects and the original error is preserved on `err.cause`. It is raised before retry handling
-    and is not retried.
+    rejects and the original error is preserved on `err.cause`. It's retried like most other types,
+    but excluded from circuit breaker accounting: a caller or account level limit says nothing about
+    whether the provider itself is healthy. See [Circuit
+    Breaker](/docs/core/circuit-breaker#what-counts-as-a-failure).
   </Card>
   <Card title="circuit_open">
     The circuit breaker is open because the provider has failed too many times in a row. Fails
@@ -188,7 +190,7 @@ const llm = new VernLLM({
   detectSoftFailure: (result, meta) => {
     // meta: { requestId, model, providerName, isFallback, attempt }
     if (typeof result === 'string' && result.trim() === 'N/A') {
-      return 'empty_response';
+      return 'soft_failure_detected';
     }
     return undefined;
   },
@@ -217,12 +219,11 @@ doesn't fail every call it's attached to.
 For `stream: true` calls, `detectSoftFailure` runs at the same point, once the stream has fully
 accumulated, and a soft failure rejects `finalResult` the same as any other post-stream failure.
 
-<Callout type="warn">
-  Unlike the non-streaming path, a soft failure detected on a streaming call does not count toward
-  the circuit breaker. By the time the final result is shaped, the streaming attempt has already
-  returned successfully from VernLLM's own retry loop, so nothing is still listening for this
-  failure the way the non-streaming path is. Only a genuine mid-stream failure, such as the
-  connection going idle, is recorded against the breaker for a streaming call.
+<Callout type="info">
+  A streaming soft failure counts toward the circuit breaker too, the same as a non-streaming one.
+  Even though the streaming attempt has already returned successfully from VernLLM's own retry loop
+  by the time the final result is shaped, a finalize-time failure (including one from
+  `detectSoftFailure`) is still recorded against the breaker directly.
 </Callout>
 
 `fallback` targets each accept their own `detectSoftFailure`. A target that leaves it unset

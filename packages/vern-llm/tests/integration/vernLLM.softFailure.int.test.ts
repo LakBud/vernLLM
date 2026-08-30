@@ -123,4 +123,29 @@ describe('detectSoftFailure end to end', () => {
 
     await expect(finalResult).rejects.toMatchObject({ type: 'api', code: 'empty_response' });
   });
+
+  it('opens the circuit on repeated streaming soft failures, same as a non-streaming call would', async () => {
+    const { client } = createMockStreamingClient([
+      [{ type: 'text-delta', delta: PLACEHOLDER }],
+      [{ type: 'text-delta', delta: PLACEHOLDER }],
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      circuitBreaker: { threshold: 2, cooldownMs: 10_000 },
+      detectSoftFailure: flagPlaceholder,
+    });
+
+    const first = await llm.call({ userContent: 'hello', jsonMode: false, stream: true });
+    await drain(first.chunks);
+    await expect(first.finalResult).rejects.toMatchObject({ code: 'empty_response' });
+    expect(llm.getCircuitStates()[0]?.state).toBe('closed');
+
+    const second = await llm.call({ userContent: 'hello', jsonMode: false, stream: true });
+    await drain(second.chunks);
+    await expect(second.finalResult).rejects.toMatchObject({ code: 'empty_response' });
+    expect(llm.getCircuitStates()[0]?.state).toBe('open');
+  });
 });

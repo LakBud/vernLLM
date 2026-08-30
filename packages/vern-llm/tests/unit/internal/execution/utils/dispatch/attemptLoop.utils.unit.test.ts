@@ -158,6 +158,34 @@ describe('runAttemptLoop, terminal failure', () => {
     expect(recordFailureSpy).not.toHaveBeenCalled();
   });
 
+  it('does not record a breaker failure for a quota_exceeded error that fails mid-attempt, using the real countsTowardBreaker check', async () => {
+    const breaker = new CircuitBreaker({ threshold: 2, cooldownMs: 10_000 });
+    const recordFailureSpy = vi.spyOn(breaker, 'recordFailure');
+    const fn = vi.fn(async () => {
+      throw new LLMError('quota gone', 'quota_exceeded');
+    });
+    // The real getter, not a stub: `quota_exceeded` is retryable but
+    // still excluded from breaker accounting, and that distinction is
+    // exactly what this test needs to exercise.
+    const params = baseParams({
+      fn,
+      maxRetries: 0,
+      breaker,
+      countsTowardBreaker: (error) => error.countsTowardBreaker,
+    });
+
+    await expect(runAttemptLoop(params)).rejects.toThrow();
+    expect(recordFailureSpy).not.toHaveBeenCalled();
+    expect(breaker.getState()).toBe('closed');
+
+    // A second attempt-level quota_exceeded failure still doesn't move
+    // the breaker, confirming this isn't just "one failure under
+    // threshold" but a genuine, repeatable exclusion.
+    await expect(runAttemptLoop(params)).rejects.toThrow();
+    expect(recordFailureSpy).not.toHaveBeenCalled();
+    expect(breaker.getState()).toBe('closed');
+  });
+
   it('records the failure against the breaker with the 1-based attempt count that exhausted the loop', async () => {
     const breaker = new CircuitBreaker({ threshold: 5, cooldownMs: 1000 });
     const recordFailureSpy = vi.spyOn(breaker, 'recordFailure');
@@ -176,6 +204,22 @@ describe('runAttemptLoop, terminal failure', () => {
       'gpt-test',
       expect.objectContaining({ attempt: 3 }),
       undefined,
+    );
+  });
+
+  it("forwards the exhausting error's own code to the breaker, not just undefined", async () => {
+    const breaker = new CircuitBreaker({ threshold: 5, cooldownMs: 1000 });
+    const recordFailureSpy = vi.spyOn(breaker, 'recordFailure');
+    const fn = vi.fn(async () => {
+      throw new LLMError('provider down', 'api', { code: 'server_error' });
+    });
+
+    await expect(runAttemptLoop(baseParams({ fn, maxRetries: 0, breaker }))).rejects.toThrow();
+
+    expect(recordFailureSpy).toHaveBeenCalledExactlyOnceWith(
+      'gpt-test',
+      expect.objectContaining({ attempt: 1 }),
+      'server_error',
     );
   });
 
