@@ -12,15 +12,17 @@ describe('buildCache', () => {
     expect((await cache.get('k')).value).toBe('v');
   });
 
-  it('builds a configured InMemoryCacheAdapter from a plain config object', async () => {
-    const cache = buildCache({ maxSize: 1, eviction: 'lru' });
+  it('builds a configured InMemoryCacheAdapter with lru eviction, distinguishing it from fifo', async () => {
+    const cache = buildCache({ maxSize: 2, eviction: 'lru' });
 
     await cache.set('a', 'A', 60);
     await cache.set('b', 'B', 60);
+    // Reading 'a' marks it as recently used, so 'b' becomes the eviction victim instead.
+    await cache.get('a');
+    await cache.set('c', 'C', 60);
 
-    // maxSize 1 means 'a' was evicted when 'b' was inserted.
-    expect((await cache.get('a')).hit).toBe(false);
-    expect((await cache.get('b')).hit).toBe(true);
+    expect((await cache.get('a')).hit).toBe(true);
+    expect((await cache.get('b')).hit).toBe(false);
   });
 
   it('passes a hand built CacheAdapter through untouched, never re-wrapping it', () => {
@@ -33,5 +35,20 @@ describe('buildCache', () => {
     const custom = new InMemoryCacheAdapter(5, 'lru');
 
     expect(buildCache(custom)).toBe(custom);
+  });
+
+  it('rejects an invalid maxSize before constructing the adapter', () => {
+    expect(() => buildCache({ maxSize: Number.NaN })).toThrow(RangeError);
+    expect(() => buildCache({ maxSize: Infinity })).toThrow(RangeError);
+    expect(() => buildCache({ maxSize: -1 })).toThrow(RangeError);
+    expect(() => buildCache({ maxSize: 1.5 })).toThrow(RangeError);
+  });
+
+  it('accepts a valid maxSize, including the boundary case of 0', async () => {
+    expect(() => buildCache({ maxSize: 0 })).not.toThrow();
+
+    const cache = buildCache({ maxSize: 10 });
+    await cache.set('k', 'v', 60);
+    expect((await cache.get('k')).value).toBe('v');
   });
 });

@@ -92,7 +92,9 @@ For distributed deployments, provide your own adapter backed by shared storage s
 Upstash.
 
 `InMemoryCacheAdapter` accepts an optional `maxSize` argument to limit the number of entries kept in
-memory. When the limit is reached, the oldest entries are removed first.
+memory. When the limit is reached, it evicts by `'fifo'` (default), removing the oldest inserted
+entry, or `'lru'`, removing the least recently used entry. See
+[Eviction](/docs/core/caching#eviction).
 
 Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
 (normalizes keys before matching, including case, whitespace, and punctuation) and
