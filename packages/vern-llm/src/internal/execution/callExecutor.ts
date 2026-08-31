@@ -315,14 +315,7 @@ export class CallExecutor {
       // Extracted right after the response arrives, before anything else
       // touches it, so a post-response failure still gets its usage reported.
       const usage = this.usageReporter.extract(response, requestId, model);
-
-      // Reconcile against real usage, then hand off so `finally` below
-      // can't release a second time. `success: true` is what lets AIMD
-      // grow the ceiling here; the `finally` block's own `release?.()`
-      // below never passes it, so a failed attempt only ever shrinks
-      // via `reactToRateLimitError`, never grows right back.
-      release?.(this.usageReporter.actualTokensFor(usage), true);
-      release = undefined;
+      const actualTokens = this.usageReporter.actualTokensFor(usage);
 
       // Raw and unvalidated on purpose. Extraction (including `.trim()`,
       // which throws on a non-string `content`) happens inside
@@ -331,27 +324,50 @@ export class CallExecutor {
       const rawContent = response.choices?.[0]?.message?.content;
       const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
 
-      return finalizeResponse(
-        rawContent,
-        wireToolCalls,
-        params,
-        useJson,
-        usage,
-        requestId,
-        attempt,
-        state,
-        {
-          gateway,
-          usageReporter: this.usageReporter,
-          logger: this.logger,
-          redactText: (text) => this.redactText(text),
-          parseJson: this.parseJson,
-          detectSoftFailure: this.detectSoftFailure,
-          providerName: this.providerName,
-          isFallback: this.isFallback,
-          model,
-        },
-      );
+      let finalized: T | CallWithToolsResult<T>;
+
+      try {
+        finalized = finalizeResponse(
+          rawContent,
+          wireToolCalls,
+          params,
+          useJson,
+          usage,
+          requestId,
+          attempt,
+          state,
+          {
+            gateway,
+            usageReporter: this.usageReporter,
+            logger: this.logger,
+            redactText: (text) => this.redactText(text),
+            parseJson: this.parseJson,
+            detectSoftFailure: this.detectSoftFailure,
+            providerName: this.providerName,
+            isFallback: this.isFallback,
+            model,
+          },
+        );
+      } catch (error) {
+        // Still reconcile real token usage and give the concurrency slot
+        // back, but never grow the AIMD ceiling for a response VernLLM
+        // itself rejected (invalid JSON, schema/tool-contract validation,
+        // empty content, a soft failure): only a response that actually
+        // made it back to the caller counts as a success.
+        release?.(actualTokens);
+        release = undefined;
+        throw error;
+      }
+
+      // `success: true` is what lets AIMD grow the ceiling here, only
+      // once finalization has actually succeeded. The `finally` block's
+      // own `release?.()` below never passes it, so a failed attempt
+      // only ever shrinks via `reactToRateLimitError`, never grows right
+      // back.
+      release?.(actualTokens, true);
+      release = undefined;
+
+      return finalized;
     } finally {
       release?.();
     }
@@ -502,16 +518,16 @@ export class CallExecutor {
         streamController,
         logger: this.logger,
         signal: params.signal,
-        onStreamSuccess: (usage) => {
-          // No breaker success recorded here. finalizeResponse (called
-          // from finalize, below) is the single source of truth for a
-          // streaming success, exactly like the non-streaming path:
-          // recording it here, before finalize runs, would mark the
-          // attempt a success even when finalize's own shaping or
-          // detectSoftFailure check is about to fail it, and would
+        onStreamSuccess: (_usage) => {
+          // No breaker success recorded here, and no release here
+          // either. `finalize`, below, is the single source of truth
+          // for a streaming success, exactly like the non-streaming
+          // path: releasing (and possibly growing the AIMD ceiling)
+          // here, before finalize runs, would treat the attempt as
+          // successful even when finalize's own shaping or
+          // detectSoftFailure check is about to reject it, and would
           // reset consecutiveFailures right before the failure path
           // below tries to increment it.
-          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage), true);
         },
         onStreamFailure: (normalized, usage) => {
           // Idle timeout is the one mid-stream failure that trips the
@@ -528,8 +544,10 @@ export class CallExecutor {
           releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         finalize: (textAcc, wireToolCalls, usage) => {
+          const actualTokens = this.usageReporter.actualTokensFor(usage);
+
           try {
-            return finalizeResponse(
+            const finalized = finalizeResponse(
               textAcc,
               wireToolCalls,
               params,
@@ -550,7 +568,22 @@ export class CallExecutor {
                 model,
               },
             );
+
+            // Only now, once finalization has actually succeeded, is
+            // this attempt a real success: release and let AIMD grow
+            // the ceiling. See `onStreamSuccess`'s own comment for why
+            // this can't happen any earlier.
+            releaseAtOpen?.(actualTokens, true);
+
+            return finalized;
           } catch (error) {
+            // Still reconcile real token usage and give the
+            // concurrency slot back, but never grow the AIMD ceiling
+            // for a response VernLLM itself rejected (invalid JSON,
+            // schema/tool-contract validation, empty content, a soft
+            // failure).
+            releaseAtOpen?.(actualTokens);
+
             // This attempt already returned successfully to the retry
             // loop once the stream opened, so unlike the non-streaming
             // path, nothing else will ever record a finalize-time
