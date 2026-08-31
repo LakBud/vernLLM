@@ -14,9 +14,12 @@ Many hosted inference providers expose the same wire format as OpenAI's Chat Com
 </Callout>
 
 <Callout title="The openai SDK retries on its own too">
-  `openai` (and every compatible client) retries transient failures, including 429s, internally by
-  default (`maxRetries: 2`), before VernLLM's own retry loop ever sees them. Pass `maxRetries: 0` to
-  the client constructor if you want VernLLM to be the sole retry authority. See [SDK-internal
+  The official `openai` client retries transient failures, including 429s, internally by default
+  (`maxRetries: 2`), before VernLLM's own retry loop ever sees them. Pass `maxRetries: 0` to the
+  client constructor if you want VernLLM to be the sole retry authority. Other OpenAI-compatible
+  clients may have different retry defaults (or none) since `fromOpenAICompatible` forwards to
+  whatever `chat.completions.create` implementation you supply, without guaranteeing this behavior.
+  To be sure check your client's own docs. See [SDK-internal
   retries](/docs/core/retries#sdk-internal-retries).
 </Callout>
 

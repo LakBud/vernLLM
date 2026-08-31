@@ -724,6 +724,26 @@ describe('RateLimiter, AIMD', () => {
     ).toThrow(/finite/);
   });
 
+  it('throws at construction when aimd.increaseBy is NaN', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: NaN, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+        }),
+    ).toThrow(/finite/);
+  });
+
+  it('throws at construction when aimd.decreaseFactor is NaN', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: NaN, minCapacity: 1, maxCapacity: 100 },
+        }),
+    ).toThrow(/finite/);
+  });
+
   it('clamps a decreaseFactor outside (0, 1] instead of doubling capacity', async () => {
     vi.useFakeTimers();
 

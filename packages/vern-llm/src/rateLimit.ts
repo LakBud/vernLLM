@@ -107,14 +107,23 @@ export function defaultEstimateTokens(request: WireRequest): number {
 function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefined {
   if (!option) return undefined;
 
-  if (
-    !Number.isFinite(option.minCapacity) ||
-    !Number.isFinite(option.maxCapacity) ||
-    option.minCapacity < 1 ||
-    option.maxCapacity < 1
-  ) {
+  const assertFinite = (name: 'minCapacity' | 'maxCapacity' | 'increaseBy' | 'decreaseFactor') => {
+    if (!Number.isFinite(option[name])) {
+      throw new LLMError(
+        `aimd.${name} (${option[name]}) must be a finite number.`,
+        'invalid_params',
+      );
+    }
+  };
+
+  assertFinite('minCapacity');
+  assertFinite('maxCapacity');
+  assertFinite('increaseBy');
+  assertFinite('decreaseFactor');
+
+  if (option.minCapacity < 1 || option.maxCapacity < 1) {
     throw new LLMError(
-      `aimd.minCapacity (${option.minCapacity}) and aimd.maxCapacity (${option.maxCapacity}) must both be finite and at least 1, since the requests bucket always takes 1 per acquire; a capacity below 1 could never be satisfied.`,
+      `aimd.minCapacity (${option.minCapacity}) and aimd.maxCapacity (${option.maxCapacity}) must both be at least 1, since the requests bucket always takes 1 per acquire; a capacity below 1 could never be satisfied.`,
       'invalid_params',
     );
   }

@@ -93,7 +93,7 @@ Every option on this page governs VernLLM's own retry loop, the one wrapping `cl
 | `fromGemini`    | `@google/genai`     | Off by default, opt in via `httpOptions.retryOptions` |
 | `fromBedrock`   | AWS SDK v3          | Standard retry mode, `maxAttempts: 3` by default      |
 
-`fromFetch` is the one exception: it calls `fetch` directly, so VernLLM's own retry loop is the only one in play there.
+`fromFetch` is the one exception when left at its default: it calls native `fetch` directly, so VernLLM's own retry loop is the only one in play there. If you swap in a custom `request` or `requestStream` transport via `FetchAdapterConfig`, that transport (e.g. `axios`) may add its own retry layer, the same as the official SDK adapters above.
 
 This is invisible, not incorrect, but it has real consequences worth knowing about:
 

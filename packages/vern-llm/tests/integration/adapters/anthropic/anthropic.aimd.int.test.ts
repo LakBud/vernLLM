@@ -128,6 +128,7 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
         headers: { 'anthropic-ratelimit-requests-remaining': '1' },
       },
       { body: messageBody('2') },
+      { body: messageBody('3') },
     ]);
 
     const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url });
@@ -153,6 +154,13 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
     const second = await llm.call({ userContent: 'two', jsonMode: false });
     expect(second).toBe('ok:2');
     expect(server.requests).toHaveLength(2);
+
+    // A third call also succeeds without ever being blocked in the
+    // queue, confirming the ceiling genuinely never shrank rather than
+    // just not yet being exercised.
+    const third = await llm.call({ userContent: 'three', jsonMode: false });
+    expect(third).toBe('ok:3');
+    expect(server.requests).toHaveLength(3);
   });
 
   it('a real 429 shrinks the ceiling reactively, independent of supportsWithResponse', async () => {
@@ -267,6 +275,7 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
     server = await startRealSdkServer([
       { raw: streamedMessage('1', { 'anthropic-ratelimit-requests-remaining': '1' }) },
       { body: messageBody('2') },
+      { body: messageBody('3') },
     ]);
 
     const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url });
@@ -297,5 +306,13 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
     const second = await llm.call({ userContent: 'two', jsonMode: false });
     expect(second).toBe('ok:2');
     expect(server.requests).toHaveLength(2);
+
+    // A third, non-streaming call also succeeds without ever being
+    // blocked in the queue, confirming the ceiling genuinely never
+    // shrank off the streaming header rather than just not yet being
+    // exercised.
+    const third = await llm.call({ userContent: 'three', jsonMode: false });
+    expect(third).toBe('ok:3');
+    expect(server.requests).toHaveLength(3);
   });
 });

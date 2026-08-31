@@ -148,6 +148,7 @@ describe('AIMD integration (real openai SDK client)', () => {
     server = await startRealSdkServer([
       { body: completionBody('1'), headers: { 'x-ratelimit-remaining-requests': '1' } },
       { body: completionBody('2') },
+      { body: completionBody('3') },
     ]);
 
     const openai = new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` });
@@ -175,6 +176,13 @@ describe('AIMD integration (real openai SDK client)', () => {
     const second = await llm.call({ userContent: 'two', jsonMode: false });
     expect(second).toBe('ok:2');
     expect(server.requests).toHaveLength(2);
+
+    // A third call also succeeds without ever being blocked in the
+    // queue, confirming the ceiling genuinely never shrank rather than
+    // just not yet being exercised.
+    const third = await llm.call({ userContent: 'three', jsonMode: false });
+    expect(third).toBe('ok:3');
+    expect(server.requests).toHaveLength(3);
   });
 
   it('a real 429 shrinks the ceiling reactively, independent of supportsWithResponse', async () => {
@@ -287,6 +295,7 @@ describe('AIMD integration (real openai SDK client)', () => {
     server = await startRealSdkServer([
       { raw: streamedCompletion('1', { 'x-ratelimit-remaining-requests': '1' }) },
       { body: completionBody('2') },
+      { body: completionBody('3') },
     ]);
 
     const openai = new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` });
@@ -317,5 +326,13 @@ describe('AIMD integration (real openai SDK client)', () => {
     const second = await llm.call({ userContent: 'two', jsonMode: false });
     expect(second).toBe('ok:2');
     expect(server.requests).toHaveLength(2);
+
+    // A third, non-streaming call also succeeds without ever being
+    // blocked in the queue, confirming the ceiling genuinely never
+    // shrank off the streaming header rather than just not yet being
+    // exercised.
+    const third = await llm.call({ userContent: 'three', jsonMode: false });
+    expect(third).toBe('ok:3');
+    expect(server.requests).toHaveLength(3);
   });
 });
