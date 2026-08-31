@@ -23,6 +23,7 @@ build/
 
 # test & build
 /coverage
+coverage
 /.next/
 /out/
 /build

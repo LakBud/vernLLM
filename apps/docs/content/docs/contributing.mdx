@@ -38,18 +38,41 @@ Add or update tests alongside any change to `packages/vern-llm`:
 
 No real API calls are made anywhere in the suite; everything runs against fakes and mocks. See [Development](/docs/development) for the full test layout.
 
+New or changed lines in `packages/vern-llm` need at least 80% test coverage; CI enforces this through Codecov's patch check. Overall project coverage is also tracked and shouldn't regress by more than a small margin. Run `pnpm run test:coverage` locally to see where you stand before opening a PR.
+
 Before a change is merged, expect a personal canary test on a simple real app, like a small chat CLI, to confirm the change behaves as intended outside the test suite.
 
 ## Before opening a PR
 
-Run these locally, they match CI exactly (`.github/workflows/lint.yml`, `typecheck.yml`, `test.yml`):
+Every PR runs the following checks in CI. Run the equivalent commands locally first so nothing surprises you:
+
+| Check                                       | Workflow               | Local command                                                                                                                  |
+| ------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Lint                                        | `lint.yml`             | `pnpm run lint`                                                                                                                |
+| Typecheck source                            | `typecheck.yml`        | `pnpm run typecheck:package`                                                                                                   |
+| Typecheck tests                             | `typecheck.yml`        | `pnpm run typecheck:test`                                                                                                      |
+| Unit tests + coverage                       | `test-unit.yml`        | `pnpm run test:unit:coverage`                                                                                                  |
+| Integration tests + coverage                | `test-integration.yml` | `pnpm run test:int:coverage`                                                                                                   |
+| Build, bundle size, smoke test              | `build-checks.yml`     | `pnpm run build:package && pnpm --filter vern-llm run size && pnpm --filter vern-llm run smoke-test`                           |
+| Changeset present                           | `changeset.yml`        | `pnpm changeset status --since=origin/main`                                                                                    |
+| Docs build (only if `apps/docs/**` changed) | `docs-build.yml`       | `pnpm --filter vern-llm-docs run lint && pnpm --filter vern-llm-docs run types:check && pnpm --filter vern-llm-docs run build` |
+| Coverage thresholds                         | Codecov                | `pnpm run test:coverage`                                                                                                       |
+| Static analysis                             | `codeql.yml`           | runs on GitHub only                                                                                                            |
+
+The quickest local pass before pushing:
 
 ```bash
 pnpm run lint
 pnpm run typecheck
 pnpm run typecheck:test
-pnpm run test
+pnpm run test:unit:coverage
+pnpm run test:int:coverage
+pnpm run build:package
 ```
+
+`build-checks.yml` also verifies peer dependencies (`pnpm peers check`), checks the published bundle stays under the configured `size-limit`, and runs a smoke test against the built output, so if you're touching `packages/vern-llm`'s public surface or its dependencies, run `pnpm run build:package` and `pnpm --filter vern-llm run size` before pushing.
+
+`changeset.yml` blocks any PR touching `packages/vern-llm` that doesn't include a changeset (see below). `docs-build.yml` only runs when `apps/docs/**` or the lockfile changes, so it won't fire on pure library changes.
 
 ## Changesets
 

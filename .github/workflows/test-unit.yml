@@ -25,9 +25,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Test unit
-        run: pnpm run test:unit
+        run: pnpm --filter vern-llm run test:unit:coverage
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm/coverage/lcov.info
+          flags: unit
+          fail_ci_if_error: true

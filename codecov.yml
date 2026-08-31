@@ -1,0 +1,25 @@
+flags:
+  unit:
+    paths:
+      - 'packages/vern-llm/**'
+  integration:
+    paths:
+      - 'packages/vern-llm/**'
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/vern-llm/**'
+    patch:
+      default:
+        target: 80%
+        paths:
+          - 'packages/vern-llm/**'
+
+ignore:
+  - '**/index.ts'
+  - 'apps/**'
