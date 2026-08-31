@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   changeset:
-    if: github.head_ref != 'changeset-release/main' && !startsWith(github.head_ref, 'renovate/')
+    if: github.head_ref != 'changeset-release/main' && !startsWith(github.head_ref, 'renovate/') && github.actor != 'renovate[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
