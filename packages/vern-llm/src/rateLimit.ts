@@ -95,6 +95,15 @@ export function defaultEstimateTokens(request: WireRequest): number {
  * Clamps `AimdOptions` at construction: an out-of-range `decreaseFactor`
  * or negative `increaseBy` is a config mistake, clamped rather than
  * thrown. `minCapacity` above `maxCapacity` is unsatisfiable and throws.
+ * `minCapacity`/`maxCapacity` below 1 also throw: the requests bucket
+ * always takes exactly 1 per acquire, so a ceiling under 1 can never be
+ * satisfied no matter how long a caller waits (`available` never
+ * exceeds `capacity`, see `TokenBucket.tryTake`). Worse, since AIMD only
+ * ever resizes the requests bucket, letting capacity reach exactly 0
+ * would also permanently zero `TokenBucket`'s internal refill rate (see
+ * `resize`'s own comment), with no way back: nothing could ever succeed
+ * again to trigger `growOnSuccess()`. A fractional value at or above 1
+ * is fine, since the bucket still refills past 1 over time.
  */
 function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefined {
   if (!option) return undefined;
@@ -102,11 +111,11 @@ function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefi
   if (
     !Number.isFinite(option.minCapacity) ||
     !Number.isFinite(option.maxCapacity) ||
-    option.minCapacity < 0 ||
-    option.maxCapacity <= 0
+    option.minCapacity < 1 ||
+    option.maxCapacity < 1
   ) {
     throw new LLMError(
-      `aimd.minCapacity (${option.minCapacity}) and aimd.maxCapacity (${option.maxCapacity}) must both be finite, aimd.minCapacity must not be negative, and aimd.maxCapacity must be greater than 0.`,
+      `aimd.minCapacity (${option.minCapacity}) and aimd.maxCapacity (${option.maxCapacity}) must both be finite and at least 1, since the requests bucket always takes 1 per acquire; a capacity below 1 could never be satisfied.`,
       'invalid_params',
     );
   }

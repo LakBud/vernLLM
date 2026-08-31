@@ -16,13 +16,26 @@ import { startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.j
  *
  * A call blocked by the rate limiter never even reaches `client.chat
  * .completions.create()` (`RateLimiter.acquire()` awaits capacity
- * first), so whether the *second* call actually landed on the mock
+ * first), so whether the *next* call actually landed on the mock
  * server after a short real wait is a reliable, adapter-agnostic signal
  * of "did AIMD's shrink actually take effect". A plain pending-promise
  * check (flushing microtasks with nothing awaited) does not work here:
  * a real loopback HTTP round trip does not settle within pure
  * microtasks either way, rate-limited or not, so it reads as "pending"
  * regardless and can't tell the two apart.
+ *
+ * `aimd.minCapacity` must be `>= 1` (the requests bucket always takes
+ * exactly 1 per acquire, so a lower ceiling could never be satisfied,
+ * and letting it reach exactly 0 would permanently break the bucket's
+ * refill rate too, see `rateLimit.ts`'s own `buildAimdOptions` comment).
+ * A shrink to that floor therefore never destroys capacity already
+ * banked below it, only clamps it down: proving a shrink actually took
+ * effect takes two calls after it, not one. The first spends whatever
+ * single unit of capacity is still banked under the new, lower ceiling
+ * (succeeding either way, shrunk or not); only the second call is the
+ * real discriminator, since it only blocks if the ceiling is genuinely
+ * capped at 1 now, not whatever headroom `requestsPerMinute` originally
+ * left.
  */
 function completionBody(tag: string) {
   return {
@@ -64,32 +77,44 @@ describe('AIMD integration (real openai SDK client)', () => {
       model: 'gpt-test',
       rateLimit: {
         requestsPerMinute: 5,
-        // decreaseFactor deliberately tiny: clamps available well under
-        // 1 after the shrink, guaranteeing the very next call blocks
-        // rather than one more full unit slipping through first.
+        // decreaseFactor deliberately tiny: drives the shrink straight
+        // down to minCapacity (1), the floor a caller could ever
+        // configure, rather than some intermediate value.
         aimd: {
           increaseBy: 0,
           decreaseFactor: 0.0001,
-          minCapacity: 0,
+          minCapacity: 1,
           maxCapacity: 100,
           proactiveFloor: 5,
         },
       },
     });
 
+    // Triggers the proactive shrink: capacity 5 -> floor 1, clamping
+    // the 4 units already banked down to 1, not below.
     const first = await llm.call({ userContent: 'one', jsonMode: false });
     expect(first).toBe('ok:1');
     expect(server.requests).toHaveLength(1);
 
+    // Spends the one remaining banked unit. Succeeds either way, shrunk
+    // or not, so this alone doesn't prove anything; it's the setup for
+    // the real assertion below.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
+
+    // The real discriminator: blocked only if the ceiling is genuinely
+    // capped at 1 now. Without the shrink, 2 more units of the original
+    // 5 would still be free, and this would succeed instead.
     const controller = new AbortController();
     void llm
-      .call({ userContent: 'two', jsonMode: false, signal: controller.signal })
+      .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
       .catch(() => {}); // aborted below; the rejection itself isn't the assertion
 
     await sleep(SETTLE_WINDOW_MS);
 
     // Blocked in the limiter's queue: never reached the mock server.
-    expect(server.requests).toHaveLength(1);
+    expect(server.requests).toHaveLength(2);
 
     controller.abort();
   });
@@ -110,7 +135,7 @@ describe('AIMD integration (real openai SDK client)', () => {
         aimd: {
           increaseBy: 0,
           decreaseFactor: 0.0001,
-          minCapacity: 0,
+          minCapacity: 1,
           maxCapacity: 100,
           proactiveFloor: 5,
         },
@@ -144,27 +169,35 @@ describe('AIMD integration (real openai SDK client)', () => {
       model: 'gpt-test',
       maxRetries: 0,
       rateLimit: {
-        requestsPerMinute: 2,
-        aimd: { increaseBy: 0, decreaseFactor: 0.0001, minCapacity: 0, maxCapacity: 100 },
+        requestsPerMinute: 5,
+        aimd: { increaseBy: 0, decreaseFactor: 0.0001, minCapacity: 1, maxCapacity: 100 },
       },
     });
 
+    // The failed attempt still spends 1 (acquire spends unconditionally,
+    // before dispatch), leaving 4 of the original 5 banked, then the
+    // reactive shrink caps the ceiling at 1, clamping that 4 down to 1.
     await expect(llm.call({ userContent: 'one', jsonMode: false })).rejects.toMatchObject({
       code: 'provider_rate_limited',
     });
     expect(server.requests).toHaveLength(1);
 
+    // Spends the one remaining banked unit.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
+
     const controller = new AbortController();
     void llm
-      .call({ userContent: 'two', jsonMode: false, signal: controller.signal })
+      .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
       .catch(() => {});
 
     await sleep(SETTLE_WINDOW_MS);
 
     // Ceiling shrank off the 429 alone (no header parsing needed for
-    // this): the second call is blocked in the queue, never reaching
+    // this): the third call is blocked in the queue, never reaching
     // the server.
-    expect(server.requests).toHaveLength(1);
+    expect(server.requests).toHaveLength(2);
 
     controller.abort();
   });

@@ -9,7 +9,9 @@ import { startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.j
  * Anthropic counterpart to `openaiCompatible.aimd.real.int.test.ts`. See
  * that file's own header comment for why a request-reached-the-server
  * check, not a pending-promise check, is what actually distinguishes
- * "blocked by AIMD" from "still in flight over a real socket" here.
+ * "blocked by AIMD" from "still in flight over a real socket" here, and
+ * for why proving a shrink happened takes two calls after it (spend the
+ * banked slack, then check the next one is genuinely capped), not one.
  */
 function messageBody(tag: string) {
   return {
@@ -56,25 +58,33 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
         aimd: {
           increaseBy: 0,
           decreaseFactor: 0.0001,
-          minCapacity: 0,
+          minCapacity: 1,
           maxCapacity: 100,
           proactiveFloor: 5,
         },
       },
     });
 
+    // Triggers the proactive shrink: capacity 5 -> floor 1, clamping
+    // the 4 units already banked down to 1, not below.
     const first = await llm.call({ userContent: 'one', jsonMode: false });
     expect(first).toBe('ok:1');
     expect(server.requests).toHaveLength(1);
 
+    // Spends that one remaining banked unit. Succeeds either way,
+    // shrunk or not; the real assertion is the third call below.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
+
     const controller = new AbortController();
     void llm
-      .call({ userContent: 'two', jsonMode: false, signal: controller.signal })
+      .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
       .catch(() => {});
 
     await sleep(SETTLE_WINDOW_MS);
 
-    expect(server.requests).toHaveLength(1); // blocked: never reached the mock server
+    expect(server.requests).toHaveLength(2); // blocked: never reached the mock server
 
     controller.abort();
   });
@@ -98,7 +108,7 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
         aimd: {
           increaseBy: 0,
           decreaseFactor: 0.0001,
-          minCapacity: 0,
+          minCapacity: 1,
           maxCapacity: 100,
           proactiveFloor: 5,
         },
@@ -135,24 +145,32 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
       model: 'claude-test',
       maxRetries: 0,
       rateLimit: {
-        requestsPerMinute: 2,
-        aimd: { increaseBy: 0, decreaseFactor: 0.0001, minCapacity: 0, maxCapacity: 100 },
+        requestsPerMinute: 5,
+        aimd: { increaseBy: 0, decreaseFactor: 0.0001, minCapacity: 1, maxCapacity: 100 },
       },
     });
 
+    // The failed attempt still spends 1 (acquire spends unconditionally,
+    // before dispatch), leaving 4 of the original 5 banked, then the
+    // reactive shrink caps the ceiling at 1, clamping that 4 down to 1.
     await expect(llm.call({ userContent: 'one', jsonMode: false })).rejects.toMatchObject({
       code: 'provider_rate_limited',
     });
     expect(server.requests).toHaveLength(1);
 
+    // Spends the one remaining banked unit.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
+
     const controller = new AbortController();
     void llm
-      .call({ userContent: 'two', jsonMode: false, signal: controller.signal })
+      .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
       .catch(() => {});
 
     await sleep(SETTLE_WINDOW_MS);
 
-    expect(server.requests).toHaveLength(1); // blocked: never reached the mock server
+    expect(server.requests).toHaveLength(2); // blocked: never reached the mock server
 
     controller.abort();
   });

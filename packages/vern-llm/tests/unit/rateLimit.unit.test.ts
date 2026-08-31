@@ -640,6 +640,54 @@ describe('RateLimiter, AIMD', () => {
     ).toThrow(/minCapacity/);
   });
 
+  it('throws at construction when aimd.minCapacity or aimd.maxCapacity is a fraction below 1, since the requests bucket always takes 1 and could never be satisfied', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 0.5, maxCapacity: 100 },
+        }),
+    ).toThrow(/minCapacity/);
+
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 0.5, maxCapacity: 0.9 },
+        }),
+    ).toThrow(/maxCapacity/);
+  });
+
+  it('accepts a fractional aimd.maxCapacity/minCapacity at or above 1', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 2.5 },
+        }),
+    ).not.toThrow();
+  });
+
+  it('signalRateLimit shrinking toward a fractional-but->=1 minCapacity still leaves acquisition possible', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 0, decreaseFactor: 0.1, minCapacity: 1.5, maxCapacity: 100 },
+    });
+
+    // Repeated shrinks would drive capacity toward 0 uncapped;
+    // minCapacity floors it at 1.5, still >= 1, so a request can still
+    // eventually be satisfied once refilled.
+    for (let i = 0; i < 20; i++) limiter.signalRateLimit();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const held = await limiter.acquire(0);
+    expect(held).toBeDefined();
+    held.release();
+  });
+
   it('throws at construction when aimd.minCapacity or aimd.maxCapacity is NaN', () => {
     expect(
       () =>
