@@ -116,10 +116,9 @@ function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefi
     }
   };
 
-  assertFinite('minCapacity');
-  assertFinite('maxCapacity');
-  assertFinite('increaseBy');
-  assertFinite('decreaseFactor');
+  for (const name of ['minCapacity', 'maxCapacity', 'increaseBy', 'decreaseFactor'] as const) {
+    assertFinite(name);
+  }
 
   if (option.minCapacity < 1 || option.maxCapacity < 1) {
     throw new LLMError(
@@ -144,6 +143,17 @@ function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefi
   };
 }
 
+/** Same amount used by `tryAcquireBuckets` and `scheduleWake`, stated once so the two can't drift apart. tpm spends `estimatedTokens`, everything else spends 1. */
+function amountFor(reason: RateLimitReason, estimatedTokens: number): number {
+  return reason === 'tpm' ? estimatedTokens : 1;
+}
+
+/** `requests`/`tokens` share this "per minute" refill formula. `concurrency` doesn't, it only refills via `release`. */
+function buildPerMinuteBucket(capacityPerMinute: number | undefined): TokenBucket | undefined {
+  if (!capacityPerMinute) return undefined;
+  return new TokenBucket(capacityPerMinute, capacityPerMinute / 60_000);
+}
+
 /**
  * `setTimeout` silently clamps any delay above this (~24.8 days) instead
  * of erroring, so an uncapped delay derived from a very small
@@ -164,15 +174,32 @@ interface Waiter {
 }
 
 /**
+ * What VernLLM's dispatch layer needs from a limiter. `RateLimiter`
+ * implements this; a caller wanting cross-process coordination can hand
+ * over their own instance instead, see `buildRateLimit`. Every method is
+ * required, `RateLimiter` itself already no-ops the AIMD methods when
+ * `aimd` isn't configured, so a custom limiter follows the same pattern.
+ */
+export interface RateLimiterLike {
+  estimate(request: WireRequest): number;
+  acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
+  signalRateLimit(): void;
+  reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
+}
+
+/**
  * Per-target rate limiter. Up to three buckets (requests/min, tokens/min,
  * concurrency) behind one FIFO queue, so a large call isn't starved by a
  * stream of small ones. Any bucket omitted from `options` has infinite
  * capacity and never blocks.
  */
-export class RateLimiter {
+export class RateLimiter implements RateLimiterLike {
   private readonly requests?: TokenBucket;
   private readonly tokens?: TokenBucket;
   private readonly concurrency?: TokenBucket;
+
+  /** Buckets in acquire precedence order (concurrency, rpm, tpm), omitted ones filtered out. Built once so order can't drift between `tryAcquireBuckets` and `scheduleWake`. */
+  private readonly buckets: ReadonlyArray<{ reason: RateLimitReason; bucket: TokenBucket }>;
 
   private readonly maxQueueMs: number;
   private readonly maxQueueSize: number;
@@ -191,20 +218,20 @@ export class RateLimiter {
   private wakeTimer?: ReturnType<typeof setTimeout>;
 
   constructor(options: RateLimitOptions) {
-    if (options.requestsPerMinute) {
-      this.requests = new TokenBucket(
-        options.requestsPerMinute,
-        options.requestsPerMinute / 60_000,
-      );
-    }
-
-    if (options.tokensPerMinute) {
-      this.tokens = new TokenBucket(options.tokensPerMinute, options.tokensPerMinute / 60_000);
-    }
+    this.requests = buildPerMinuteBucket(options.requestsPerMinute);
+    this.tokens = buildPerMinuteBucket(options.tokensPerMinute);
 
     if (options.maxConcurrent) {
       this.concurrency = new TokenBucket(options.maxConcurrent, 0);
     }
+
+    this.buckets = (
+      [
+        { reason: 'concurrency', bucket: this.concurrency },
+        { reason: 'rpm', bucket: this.requests },
+        { reason: 'tpm', bucket: this.tokens },
+      ] as const
+    ).flatMap(({ reason, bucket }) => (bucket ? [{ reason, bucket }] : []));
 
     this.maxQueueMs = options.maxQueueMs ?? 30_000;
     this.maxQueueSize = options.maxQueueSize ?? 0;
@@ -347,37 +374,21 @@ export class RateLimiter {
     });
   }
 
-  /**
-   * Checks and takes from every configured bucket as one atomic unit: if
-   * any bucket lacks capacity, whatever was already taken from the
-   * earlier ones in this attempt is rolled back before reporting which
-   * bucket blocked.
-   */
+  /** Takes from every configured bucket as one atomic unit, in `this.buckets`' order. Rolls back whatever was already taken if any bucket lacks capacity. */
   private tryAcquireBuckets(
     estimatedTokens: number,
   ): { ok: true } | { ok: false; reason: RateLimitReason } {
     const taken: Array<{ bucket: TokenBucket; amount: number }> = [];
 
-    const take = (bucket: TokenBucket | undefined, amount: number) => {
-      if (!bucket) return true;
-      if (!bucket.tryTake(amount)) return false;
+    for (const { reason, bucket } of this.buckets) {
+      const amount = amountFor(reason, estimatedTokens);
+
+      if (!bucket.tryTake(amount)) {
+        for (const entry of taken) entry.bucket.give(entry.amount);
+        return { ok: false, reason };
+      }
 
       taken.push({ bucket, amount });
-      return true;
-    };
-
-    if (!take(this.concurrency, 1)) {
-      return { ok: false, reason: 'concurrency' };
-    }
-
-    if (!take(this.requests, 1)) {
-      for (const entry of taken) entry.bucket.give(entry.amount);
-      return { ok: false, reason: 'rpm' };
-    }
-
-    if (!take(this.tokens, estimatedTokens)) {
-      for (const entry of taken) entry.bucket.give(entry.amount);
-      return { ok: false, reason: 'tpm' };
     }
 
     return { ok: true };
@@ -413,13 +424,10 @@ export class RateLimiter {
    */
   private scheduleWake(reason: RateLimitReason, estimatedTokens: number): void {
     if (this.wakeTimer) return;
+    if (reason === 'concurrency') return;
 
-    const ms =
-      reason === 'rpm'
-        ? this.requests?.msUntilAvailable(1)
-        : reason === 'tpm'
-          ? this.tokens?.msUntilAvailable(estimatedTokens)
-          : undefined;
+    const bucket = this.buckets.find((entry) => entry.reason === reason)?.bucket;
+    const ms = bucket?.msUntilAvailable(amountFor(reason, estimatedTokens));
 
     if (ms === undefined || !Number.isFinite(ms)) return;
 
@@ -475,15 +483,18 @@ export class RateLimiter {
     };
   }
 
-  /** AIMD's additive-increase half: grows the ceiling by `aimd.increaseBy` on a clean release. No-op without `aimd`/`requestsPerMinute`. */
-  private growOnSuccess(): void {
+  /** Shared guard and resize call behind both AIMD halves below; only the arithmetic differs. */
+  private resizeRequestsCeiling(next: (aimd: AimdOptions, current: number) => number): void {
     if (!this.aimd || !this.requests) return;
 
-    const next = Math.min(
-      this.requests.getCapacity() + this.aimd.increaseBy,
-      this.aimd.maxCapacity,
+    this.requests.resize(next(this.aimd, this.requests.getCapacity()));
+  }
+
+  /** AIMD's additive-increase half: grows the ceiling by `aimd.increaseBy` on a clean release. No-op without `aimd`/`requestsPerMinute`. */
+  private growOnSuccess(): void {
+    this.resizeRequestsCeiling((aimd, current) =>
+      Math.min(current + aimd.increaseBy, aimd.maxCapacity),
     );
-    this.requests.resize(next);
   }
 
   /**
@@ -493,13 +504,9 @@ export class RateLimiter {
    * adjusts the ceiling as a side effect.
    */
   signalRateLimit(): void {
-    if (!this.aimd || !this.requests) return;
-
-    const next = Math.max(
-      this.requests.getCapacity() * this.aimd.decreaseFactor,
-      this.aimd.minCapacity,
+    this.resizeRequestsCeiling((aimd, current) =>
+      Math.max(current * aimd.decreaseFactor, aimd.minCapacity),
     );
-    this.requests.resize(next);
   }
 
   /**

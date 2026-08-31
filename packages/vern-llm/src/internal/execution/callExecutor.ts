@@ -15,7 +15,7 @@ import { defaultParseJson } from './utils/parse.utils.js';
 import { withTimeout } from './utils/retry/retry.utils.js';
 
 import type { Logger } from '../../logger.js';
-import type { RateLimiter } from '../../rateLimit.js';
+import type { RateLimiterLike } from '../../rateLimit.js';
 import type {
   CallParams,
   CallWithToolsResult,
@@ -50,7 +50,7 @@ export interface CallExecutorOptions {
   onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
   onEvent?: (event: VernLLMEvent) => void;
   breaker?: CircuitBreaker;
-  limiter?: RateLimiter;
+  limiter?: RateLimiterLike;
   /** True for every target after the primary. Stamped onto reported `TokenUsage`. */
   isFallback?: boolean;
   /** See `VernLLMOptions.middleware`. */
@@ -79,7 +79,7 @@ export class CallExecutor {
   private readonly usageReporter: UsageReporter;
   private readonly reportEvent: (event: VernLLMEvent) => void;
   private readonly breaker?: CircuitBreaker;
-  private readonly limiter?: RateLimiter;
+  private readonly limiter?: RateLimiterLike;
   private readonly isFallback: boolean;
   private readonly requestBuilder: RequestBuilder;
   private readonly middleware: VernLLMMiddleware[];

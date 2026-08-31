@@ -207,6 +207,68 @@ describe('buildStreamResult, chunk translation', () => {
     });
     expect(finalizeUsage).toEqual(secondChunk?.type === 'usage' ? secondChunk.usage : undefined);
   });
+
+  it('fires onRateLimitHint with the hint payload and pushes no StreamChunk for it', async () => {
+    const hint = { remainingRequests: 3 };
+    const iterator = scriptedIterator([
+      { type: 'rate_limit_hint', hint },
+      { type: 'text-delta', delta: 'ok' },
+    ]);
+    const first: IteratorResult<WireStreamChunk> = {
+      done: false,
+      value: { type: 'text-delta', delta: 'hi ' },
+    };
+
+    const onRateLimitHint = vi.fn();
+    const { chunks, finalResult } = buildStreamResult(iterator, first, {
+      ...baseOptions(),
+      onRateLimitHint,
+    });
+
+    expect(await drain(chunks)).toEqual([
+      { type: 'text-delta', delta: 'hi ' },
+      { type: 'text-delta', delta: 'ok' },
+    ]);
+    await expect(finalResult).resolves.toBe('hi ok');
+    expect(onRateLimitHint).toHaveBeenCalledTimes(1);
+    expect(onRateLimitHint).toHaveBeenCalledWith(hint);
+  });
+
+  it('tolerates a stream with no onRateLimitHint configured, no crash on a rate_limit_hint chunk', async () => {
+    const iterator = scriptedIterator([
+      { type: 'rate_limit_hint', hint: { remainingRequests: 1 } },
+    ]);
+    const first: IteratorResult<WireStreamChunk> = {
+      done: false,
+      value: { type: 'text-delta', delta: 'x' },
+    };
+
+    const { chunks, finalResult } = buildStreamResult(iterator, first, baseOptions());
+
+    expect(await drain(chunks)).toEqual([{ type: 'text-delta', delta: 'x' }]);
+    await expect(finalResult).resolves.toBe('x');
+  });
+
+  it('ignores a wire chunk of an unrecognized type, no crash, no accumulation, no push', async () => {
+    // Cast past the type system: this exercises the runtime fallthrough
+    // for a wire value that doesn't match any known WireStreamChunk
+    // variant, e.g. a malformed or future adapter payload, not something
+    // reachable through the type-checked union alone.
+    const unrecognized = { type: 'not-a-real-chunk-type' } as unknown as WireStreamChunk;
+    const iterator = scriptedIterator([unrecognized, { type: 'text-delta', delta: 'ok' }]);
+    const first: IteratorResult<WireStreamChunk> = {
+      done: false,
+      value: { type: 'text-delta', delta: 'hi ' },
+    };
+
+    const { chunks, finalResult } = buildStreamResult(iterator, first, baseOptions());
+
+    expect(await drain(chunks)).toEqual([
+      { type: 'text-delta', delta: 'hi ' },
+      { type: 'text-delta', delta: 'ok' },
+    ]);
+    await expect(finalResult).resolves.toBe('hi ok');
+  });
 });
 
 describe('buildStreamResult, success path', () => {

@@ -6,6 +6,7 @@
     "middleware",
     "circuit-breaker",
     "caching",
+    "rate-limiting",
     "tokenizer",
     "schema",
     "provider",

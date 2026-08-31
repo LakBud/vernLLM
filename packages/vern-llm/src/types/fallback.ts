@@ -1,7 +1,7 @@
 import { LLMError, type RetryAttempt } from './errors.js';
 
 import type { CircuitBreakerOptions, CircuitState } from '../circuitBreaker.js';
-import type { RateLimitOptions } from '../rateLimit.js';
+import type { RateLimitOption } from '../internal/utils/rateLimitAdapter.utils.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
 
@@ -37,7 +37,7 @@ export interface FallbackTarget {
   /** This target's own circuit breaker, independent of every other target's. Not inherited from the parent's `circuitBreaker`. */
   circuitBreaker?: boolean | CircuitBreakerOptions;
   /** This target's own rate limiter, independent of every other target's. Not inherited from the parent's `rateLimit`. */
-  rateLimit?: RateLimitOptions;
+  rateLimit?: RateLimitOption;
   /**
    * Reclassifies an otherwise-successful result from this target as a
    * failure. Falls back to the parent `VernLLM` instance's own

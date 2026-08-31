@@ -413,4 +413,57 @@ describe('VernLLM, rateLimit option', () => {
       controller.abort();
     });
   });
+
+  describe('custom RateLimiterLike', () => {
+    it('uses a hand built RateLimiterLike instance directly, not a package-constructed RateLimiter', async () => {
+      const { client } = createMockClient([jsonResponse({ ok: true })]);
+
+      const acquire = vi.fn().mockResolvedValue({ release: () => {}, waitedMs: 0 });
+      const custom = {
+        estimate: () => 0,
+        acquire,
+        signalRateLimit: vi.fn(),
+        reactToRateLimitHint: vi.fn(),
+      };
+
+      const llm = new VernLLM({ client, model: 'gpt-4o', rateLimit: custom });
+
+      const result = await llm.call<{ ok: boolean }>({ userContent: 'hi' });
+
+      expect(result).toEqual({ ok: true });
+      expect(acquire).toHaveBeenCalledTimes(1);
+    });
+
+    it('shares one custom RateLimiterLike instance across the primary and a fallback target', async () => {
+      const { client: primaryClient } = createMockClient([
+        async () => {
+          throw new LLMError('down', 'api', { status: 500 });
+        },
+      ]);
+      const { client: fallbackClient } = createMockClient([jsonResponse({ ok: true })]);
+
+      const acquire = vi.fn().mockResolvedValue({ release: () => {}, waitedMs: 0 });
+      const shared = {
+        estimate: () => 0,
+        acquire,
+        signalRateLimit: vi.fn(),
+        reactToRateLimitHint: vi.fn(),
+      };
+
+      const llm = new VernLLM({
+        client: primaryClient,
+        model: 'gpt-4o',
+        maxRetries: 0,
+        rateLimit: shared,
+        fallback: { client: fallbackClient, model: 'gpt-4o-mini', rateLimit: shared },
+      });
+
+      const result = await llm.call<{ ok: boolean }>({ userContent: 'hi' });
+
+      expect(result).toEqual({ ok: true });
+      // One acquire for the failed primary attempt, one for the
+      // fallback attempt, both drawing on the same shared instance.
+      expect(acquire).toHaveBeenCalledTimes(2);
+    });
+  });
 });

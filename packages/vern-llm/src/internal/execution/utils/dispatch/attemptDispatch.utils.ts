@@ -4,7 +4,7 @@ import { applyMiddlewareTransforms, emitEvent } from '../middleware.utils.js';
 import { acquireRateLimit } from './rateLimitDispatch.utils.js';
 
 import type { Logger } from '../../../../logger.js';
-import type { RateLimiter } from '../../../../rateLimit.js';
+import type { RateLimiterLike } from '../../../../rateLimit.js';
 import type {
   CallParams,
   MiddlewareStateBag,
@@ -33,7 +33,7 @@ export interface PrepareAttemptParams<T> {
   gateway: BreakerGateway;
   requestBuilder: RequestBuilder;
   providerName: string;
-  limiter: RateLimiter | undefined;
+  limiter: RateLimiterLike | undefined;
   middleware: VernLLMMiddleware[];
   middlewareTimeoutMs: number;
   logger: Logger;
