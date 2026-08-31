@@ -66,7 +66,7 @@ export interface RateLimitAcquireResult {
    * Idempotent: only the first call does anything. Must run in a
    * `finally` block so a slot is never leaked on a failed attempt.
    */
-  release: (actualTokens?: number) => void;
+  release: (actualTokens?: number, success?: boolean) => void;
   /** How long this attempt waited in queue before capacity was available. */
   waitedMs: number;
   /** Which bucket was blocking this attempt just before it cleared, if any wait happened. */
@@ -98,6 +98,18 @@ export function defaultEstimateTokens(request: WireRequest): number {
  */
 function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefined {
   if (!option) return undefined;
+
+  if (
+    !Number.isFinite(option.minCapacity) ||
+    !Number.isFinite(option.maxCapacity) ||
+    option.minCapacity < 0 ||
+    option.maxCapacity <= 0
+  ) {
+    throw new LLMError(
+      `aimd.minCapacity (${option.minCapacity}) and aimd.maxCapacity (${option.maxCapacity}) must both be finite, aimd.minCapacity must not be negative, and aimd.maxCapacity must be greater than 0.`,
+      'invalid_params',
+    );
+  }
 
   if (option.minCapacity > option.maxCapacity) {
     throw new LLMError(
@@ -414,11 +426,17 @@ export class RateLimiter {
    * bucket is a real spend that only recovers via its own refill, and the
    * tokens bucket is reconciled against `actualTokens` rather than fully
    * refunded, since real tokens really were spent.
+   *
+   * `success` defaults to `false`: the AIMD ceiling only grows when the
+   * caller explicitly confirms a successful attempt. A failed or
+   * rate-limited attempt still releases its slot (so nothing leaks), but
+   * must not also grow the ceiling right back up after
+   * `signalRateLimit()` just shrank it.
    */
-  private makeRelease(estimatedTokens: number): (actualTokens?: number) => void {
+  private makeRelease(estimatedTokens: number): (actualTokens?: number, success?: boolean) => void {
     let released = false;
 
-    return (actualTokens?: number) => {
+    return (actualTokens?: number, success = false) => {
       if (released) return;
       released = true;
 
@@ -435,7 +453,7 @@ export class RateLimiter {
         this.tokens.give(estimatedTokens - actualTokens);
       }
 
-      this.growOnSuccess();
+      if (success) this.growOnSuccess();
       this.drain();
     };
   }

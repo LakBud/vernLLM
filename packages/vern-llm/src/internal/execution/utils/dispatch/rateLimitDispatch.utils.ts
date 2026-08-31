@@ -17,7 +17,7 @@ export async function acquireRateLimit(
   request: WireRequest,
   signal: AbortSignal | undefined,
   onRateLimited: RateLimitedEventReporter,
-): Promise<{ release?: (actualTokens?: number) => void }> {
+): Promise<{ release?: (actualTokens?: number, success?: boolean) => void }> {
   if (!limiter) return {};
 
   const acquired = await limiter.acquire(limiter.estimate(request), signal);

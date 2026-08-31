@@ -317,8 +317,11 @@ export class CallExecutor {
       const usage = this.usageReporter.extract(response, requestId, model);
 
       // Reconcile against real usage, then hand off so `finally` below
-      // can't release a second time.
-      release?.(this.usageReporter.actualTokensFor(usage));
+      // can't release a second time. `success: true` is what lets AIMD
+      // grow the ceiling here; the `finally` block's own `release?.()`
+      // below never passes it, so a failed attempt only ever shrinks
+      // via `reactToRateLimitError`, never grows right back.
+      release?.(this.usageReporter.actualTokensFor(usage), true);
       release = undefined;
 
       // Raw and unvalidated on purpose. Extraction (including `.trim()`,
@@ -453,18 +456,25 @@ export class CallExecutor {
       : streamController.signal;
 
     try {
-      const { iterator, first } = await withTimeout(
-        async (attemptSignal) => {
-          const streamIterator = createStream(request, { signal: attemptSignal })[
-            Symbol.asyncIterator
-          ]();
-          const firstResult = await streamIterator.next();
+      const { iterator, first } = await (async () => {
+        try {
+          return await withTimeout(
+            async (attemptSignal) => {
+              const streamIterator = createStream(request, { signal: attemptSignal })[
+                Symbol.asyncIterator
+              ]();
+              const firstResult = await streamIterator.next();
 
-          return { iterator: streamIterator, first: firstResult };
-        },
-        this.timeoutMs,
-        combinedExternal,
-      );
+              return { iterator: streamIterator, first: firstResult };
+            },
+            this.timeoutMs,
+            combinedExternal,
+          );
+        } catch (error) {
+          this.reactToRateLimitError(error);
+          throw error;
+        }
+      })();
 
       // An immediately-exhausted stream (no chunks at all) is the streaming
       // equivalent of `executeCall`'s empty-response check: surface the same
@@ -501,7 +511,7 @@ export class CallExecutor {
           // detectSoftFailure check is about to fail it, and would
           // reset consecutiveFailures right before the failure path
           // below tries to increment it.
-          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
+          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage), true);
         },
         onStreamFailure: (normalized, usage) => {
           // Idle timeout is the one mid-stream failure that trips the

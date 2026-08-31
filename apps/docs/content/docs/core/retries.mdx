@@ -84,14 +84,14 @@ Everything else, including timeouts, 5xx errors, network failures, and unknown e
 
 ## SDK-internal retries
 
-Every option on this page governs VernLLM's own retry loop, the one wrapping `client.chat.completions.create()` (or the equivalent per adapter). It has no visibility into what happens _inside_ that call. `fromOpenAI`, `fromAnthropic`, `fromGemini`, and `fromBedrock` each wrap an official provider SDK, and every one of those SDKs retries transient failures, including 429s, on its own, by default, before VernLLM's `create()` call ever returns:
+Every option on this page governs VernLLM's own retry loop, the one wrapping `client.chat.completions.create()` (or the equivalent per adapter). It has no visibility into what happens inside that call. `fromOpenAI`, `fromAnthropic`, `fromGemini`, and `fromBedrock` each wrap an official provider SDK, and most of those SDKs retry transient failures, including 429s, on their own, by default, before VernLLM's `create()` call ever returns. `@google/genai` is the exception: it only retries when the client is explicitly configured to.
 
-| Adapter         | SDK                 | Default internal retry                           |
-| --------------- | ------------------- | ------------------------------------------------ |
-| `fromOpenAI`    | `openai`            | `maxRetries: 2`                                  |
-| `fromAnthropic` | `@anthropic-ai/sdk` | `maxRetries: 2`                                  |
-| `fromGemini`    | `@google/genai`     | Automatic backoff on 429/5xx, on by default      |
-| `fromBedrock`   | AWS SDK v3          | Standard retry mode, `maxAttempts: 3` by default |
+| Adapter         | SDK                 | Default internal retry                                |
+| --------------- | ------------------- | ----------------------------------------------------- |
+| `fromOpenAI`    | `openai`            | `maxRetries: 2`                                       |
+| `fromAnthropic` | `@anthropic-ai/sdk` | `maxRetries: 2`                                       |
+| `fromGemini`    | `@google/genai`     | Off by default, opt in via `httpOptions.retryOptions` |
+| `fromBedrock`   | AWS SDK v3          | Standard retry mode, `maxAttempts: 3` by default      |
 
 `fromFetch` is the one exception: it calls `fetch` directly, so VernLLM's own retry loop is the only one in play there.
 

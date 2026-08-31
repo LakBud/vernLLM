@@ -423,12 +423,12 @@ describe('RateLimiter, AIMD', () => {
       aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
     });
 
-    // Drain the starting capacity of 2, then release both, each release
-    // growing the ceiling by 1: 2 -> 3 -> 4.
+    // Drain the starting capacity of 2, then release both as confirmed
+    // successes, each release growing the ceiling by 1: 2 -> 3 -> 4.
     const first = await limiter.acquire(0);
     const second = await limiter.acquire(0);
-    first.release();
-    second.release();
+    first.release(undefined, true);
+    second.release(undefined, true);
 
     // Advance a full minute so the (now higher) ceiling is fully
     // refilled, isolating "did the ceiling grow" from "has it refilled
@@ -454,12 +454,12 @@ describe('RateLimiter, AIMD', () => {
       aimd: { increaseBy: 5, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 3 },
     });
 
-    // Two releases would push the ceiling to 2 + 5 + 5 = 12 uncapped;
-    // maxCapacity clamps it to 3.
+    // Two confirmed-success releases would push the ceiling to
+    // 2 + 5 + 5 = 12 uncapped; maxCapacity clamps it to 3.
     const first = await limiter.acquire(0);
     const second = await limiter.acquire(0);
-    first.release();
-    second.release();
+    first.release(undefined, true);
+    second.release(undefined, true);
 
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -620,6 +620,62 @@ describe('RateLimiter, AIMD', () => {
     ).toThrow(/minCapacity/);
   });
 
+  it('throws at construction when aimd.maxCapacity is 0', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 0, maxCapacity: 0 },
+        }),
+    ).toThrow(/maxCapacity/);
+  });
+
+  it('throws at construction when aimd.minCapacity is negative', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: -1, maxCapacity: 100 },
+        }),
+    ).toThrow(/minCapacity/);
+  });
+
+  it('throws at construction when aimd.minCapacity or aimd.maxCapacity is NaN', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: NaN, maxCapacity: 100 },
+        }),
+    ).toThrow(/finite/);
+
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: NaN },
+        }),
+    ).toThrow(/finite/);
+  });
+
+  it('throws at construction when aimd.minCapacity or aimd.maxCapacity is infinite', () => {
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: Infinity },
+        }),
+    ).toThrow(/finite/);
+
+    expect(
+      () =>
+        new RateLimiter({
+          requestsPerMinute: 100,
+          aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: -Infinity, maxCapacity: 100 },
+        }),
+    ).toThrow(/finite/);
+  });
+
   it('clamps a decreaseFactor outside (0, 1] instead of doubling capacity', async () => {
     vi.useFakeTimers();
 
@@ -639,6 +695,35 @@ describe('RateLimiter, AIMD', () => {
 
     const fourth = limiter.acquire(0);
     expect(await isPending(fourth)).toBe(true);
+
+    for (const h of held) h.release();
+  });
+
+  it('a failed or rate-limited release (no success flag) does not grow the AIMD ceiling', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 2,
+      aimd: { increaseBy: 5, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    // A real 429 shrinks the ceiling 2 -> 1.
+    limiter.signalRateLimit();
+
+    // The failed attempt still releases its slot, exactly like a
+    // successful one must, but without confirming success. If this call
+    // grows the ceiling back up, it would partially cancel the shrink
+    // above.
+    const first = await limiter.acquire(0);
+    first.release();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Ceiling should still be exactly 1: only a second, real success
+    // could grow it.
+    const held = [await limiter.acquire(0)];
+    const second = limiter.acquire(0);
+    expect(await isPending(second)).toBe(true);
 
     for (const h of held) h.release();
   });
