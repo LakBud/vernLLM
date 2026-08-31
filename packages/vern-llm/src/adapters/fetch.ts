@@ -1,4 +1,9 @@
 import {
+  attachRateLimitHint,
+  parseOpenAIRateLimitHeaders,
+  type ProviderRateLimitHint,
+} from '../internal/utils/rateLimitHint.utils.js';
+import {
   LLMError,
   type LLMClient,
   type WireStreamChunk,
@@ -128,6 +133,12 @@ export interface FetchAdapterConfig {
    * silently empty stream.
    */
   mapStreamEvent?: (event: unknown) => WireStreamChunk | WireStreamChunk[] | undefined;
+
+  /**
+   * Optional. How to read AIMD's proactive rate limit hint off a
+   * successful response. Defaults to OpenAI's header set.
+   */
+  parseRateLimitHint?: (headers: ResponseLike['headers']) => ProviderRateLimitHint;
 }
 
 /**
@@ -165,11 +176,22 @@ async function* webStreamToAsyncIterable(
   }
 }
 
-/** Default `requestStream`: native `fetch`, with the same error/`.status` contract non-streaming errors get. */
-async function defaultRequestStream(
+/**
+ * Default `requestStream`: native `fetch`, with the same error/`.status`
+ * contract non-streaming errors get. Also returns the response headers,
+ * for AIMD's proactive path. Only ever called for the default native
+ * `fetch` transport (see `createStream`'s call site), never through
+ * `config.requestStream`: that's a public, swappable extension point
+ * (axios, undici, etc.) whose contract (`StreamRequestLike`) returns just
+ * the byte stream, no headers, since not every transport exposes them the
+ * same way. A custom `requestStream` simply doesn't get a proactive
+ * hint, same as today; only the reactive 429 path (via `err.headers`,
+ * already attached below) still applies to it.
+ */
+async function defaultRequestStreamWithHeaders(
   url: string,
   init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal },
-): Promise<AsyncIterable<Uint8Array | string>> {
+): Promise<{ headers: ResponseLike['headers']; body: AsyncIterable<Uint8Array | string> }> {
   const res = await fetch(url, init);
 
   if (!res.ok) {
@@ -188,7 +210,7 @@ async function defaultRequestStream(
     throw new Error('Fetch adapter stream request received a response with no body.');
   }
 
-  return webStreamToAsyncIterable(res.body);
+  return { headers: res.headers, body: webStreamToAsyncIterable(res.body) };
 }
 
 /** Builds the shared `{ method, headers, body? }` request-init for both `create` and `createStream`. */
@@ -296,7 +318,7 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
               }))
             : undefined;
 
-          return {
+          const result = {
             choices: [
               {
                 message: {
@@ -313,6 +335,16 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
                 }
               : undefined,
           };
+
+          const parseHint = config.parseRateLimitHint ?? parseOpenAIRateLimitHeaders;
+
+          // Guarded: a test double may omit `.headers` despite it being
+          // part of `ResponseLike`'s declared shape.
+          if (res.headers && typeof res.headers.get === 'function') {
+            attachRateLimitHint(result, parseHint(res.headers));
+          }
+
+          return result;
         },
 
         async *createStream(params, options) {
@@ -353,15 +385,36 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
             params,
             config.mapRequest(params),
           );
-          const requestStream = config.requestStream ?? defaultRequestStream;
           const parseFrames = config.parseStreamFrames ?? parseSseStream;
 
-          const byteStream = await requestStream(url, {
-            method,
-            headers,
-            body,
-            signal: options.signal,
-          });
+          let byteStream: AsyncIterable<Uint8Array | string>;
+
+          if (config.requestStream) {
+            byteStream = await config.requestStream(url, {
+              method,
+              headers,
+              body,
+              signal: options.signal,
+            });
+          } else {
+            const opened = await defaultRequestStreamWithHeaders(url, {
+              method,
+              headers,
+              body,
+              signal: options.signal,
+            });
+
+            byteStream = opened.body;
+
+            if (opened.headers && typeof opened.headers.get === 'function') {
+              const parseHint = config.parseRateLimitHint ?? parseOpenAIRateLimitHeaders;
+              const hint = parseHint(opened.headers);
+
+              if (hint.remainingRequests !== undefined || hint.limitRequests !== undefined) {
+                yield { type: 'rate_limit_hint', hint };
+              }
+            }
+          }
 
           for await (const event of parseFrames(byteStream)) {
             // Only the default parseSseStream produces this sentinel (an

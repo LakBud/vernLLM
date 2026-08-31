@@ -1,7 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 
+import { LLMError } from '../../src/types/errors.js';
 import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, createMockStreamingClient, jsonResponse } from './../helpers.js';
+import {
+  createMockClient,
+  createMockStreamingClient,
+  drain,
+  jsonResponse,
+  textResponse,
+} from './../helpers.js';
 
 import type { VernLLMEvent, WireStreamChunk } from '../../src/types/index.js';
 
@@ -202,5 +209,208 @@ describe('VernLLM, rateLimit option', () => {
     const secondResult = await second;
     expect(secondSettled).toBe(true);
     await expect(secondResult.finalResult).resolves.toBe('two');
+  });
+
+  describe('AIMD ceiling only grows on a response VernLLM actually accepts', () => {
+    /**
+     * Regression coverage: `growOnSuccess()` used to fire as soon as a
+     * response arrived, before `finalizeResponse`/`detectSoftFailure`
+     * had a chance to reject it (invalid JSON, schema/tool-contract
+     * validation, empty content, a soft failure). A response VernLLM
+     * itself rejects must never grow the ceiling.
+     *
+     * `requestsPerMinute: 1` deliberately drains `available` to exactly
+     * 0 on the rejected call, so growth is the only thing that could
+     * let a second call through sooner than a full refill would allow.
+     * `increaseBy: 10` makes a wrongful grow impossible to miss: if it
+     * fired, capacity would jump from 1 to 11, and a full-window
+     * refill would leave 10 spare requests free instead of the single
+     * one a correctly-ungrown ceiling allows.
+     */
+    const PLACEHOLDER = 'N/A';
+
+    function flagPlaceholder(result: unknown) {
+      return typeof result === 'string' && result.trim() === PLACEHOLDER
+        ? 'empty_response'
+        : undefined;
+    }
+
+    it('a non-streaming response rejected by detectSoftFailure does not grow the ceiling', async () => {
+      vi.useFakeTimers();
+
+      const { client, calls } = createMockClient([
+        textResponse(PLACEHOLDER),
+        jsonResponse({ n: 2 }),
+        jsonResponse({ n: 3 }),
+      ]);
+
+      const llm = new VernLLM({
+        client,
+        model: 'gpt-4o',
+        maxRetries: 0,
+        detectSoftFailure: flagPlaceholder,
+        rateLimit: {
+          requestsPerMinute: 1,
+          aimd: { increaseBy: 10, decreaseFactor: 1, minCapacity: 1, maxCapacity: 100 },
+        },
+      });
+
+      // Rejected by the soft-failure hook. Drains `available` to 0
+      // either way; a wrongful grow would additionally push capacity
+      // from 1 to 11.
+      await expect(llm.call({ userContent: 'one', jsonMode: false })).rejects.toMatchObject({
+        code: 'empty_response',
+      });
+
+      // A full window's worth of refill: enough to fully restore
+      // capacity 1 back to `available: 1` either way, but only enough
+      // to restore capacity 11 back to `available: 11` in the buggy
+      // case.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Succeeds either way: even a correctly-ungrown ceiling of 1 has
+      // refilled to `available: 1` by now. This call alone doesn't
+      // prove anything; it's the setup for the real assertion below.
+      const second = await llm.call<{ n: number }>({ userContent: 'two' });
+      expect(second).toEqual({ n: 2 });
+      expect(calls).toHaveLength(2);
+
+      // The real discriminator: with the ceiling correctly still at 1,
+      // this stays queued, so the mock client is never actually
+      // invoked a third time. If the ceiling had wrongly grown to 11,
+      // there would still be 9 spare requests free and `create` would
+      // be called immediately instead. A plain pending-promise check
+      // isn't reliable here (the mock client resolves synchronously
+      // with no real I/O, so the outer call promise can still be
+      // mid-flight through unrelated internal `await`s several
+      // microtask ticks later regardless of whether the limiter let it
+      // through), so the call count is the actual signal, matching how
+      // the real-SDK AIMD integration tests check `server.requests`.
+      const controller = new AbortController();
+      void llm
+        .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
+        .catch(() => {});
+
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+
+      expect(calls).toHaveLength(2);
+
+      controller.abort();
+    });
+
+    it('a streaming response rejected by detectSoftFailure does not grow the ceiling', async () => {
+      vi.useFakeTimers();
+
+      const { client, calls } = createMockStreamingClient([
+        [{ type: 'text-delta', delta: PLACEHOLDER }],
+        [{ type: 'text-delta', delta: 'ok:2' }],
+        [{ type: 'text-delta', delta: 'ok:3' }],
+      ]);
+
+      const llm = new VernLLM({
+        client,
+        model: 'gpt-4o',
+        maxRetries: 0,
+        detectSoftFailure: flagPlaceholder,
+        rateLimit: {
+          requestsPerMinute: 1,
+          aimd: { increaseBy: 10, decreaseFactor: 1, minCapacity: 1, maxCapacity: 100 },
+        },
+      });
+
+      const first = await llm.call({ userContent: 'one', jsonMode: false, stream: true });
+      await drain(first.chunks);
+      await expect(first.finalResult).rejects.toMatchObject({ code: 'empty_response' });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const second = await llm.call({ userContent: 'two', jsonMode: false, stream: true });
+      await drain(second.chunks);
+      await expect(second.finalResult).resolves.toBe('ok:2');
+      expect(calls).toHaveLength(2);
+
+      const controller = new AbortController();
+      void llm
+        .call({ userContent: 'three', jsonMode: false, stream: true, signal: controller.signal })
+        .catch(() => {});
+
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+
+      expect(calls).toHaveLength(2);
+
+      controller.abort();
+    });
+  });
+
+  describe('AIMD shrinks on a 429 that arrives after the stream already opened', () => {
+    /**
+     * Regression coverage: `reactToRateLimitError` ran on a stream-open
+     * failure (the initial `withTimeout`/`streamIterator.next()` call),
+     * but not inside `onStreamFailure`, which is what actually fires
+     * for a 429 a provider raises mid-stream, after the connection
+     * already opened and at least one chunk arrived (e.g. Bedrock's
+     * `throttlingException` event, translated to an `LLMError` with
+     * `status: 429`). The ceiling must shrink there too, not just on
+     * an opening failure.
+     */
+    it('a mid-stream 429 (after at least one chunk) shrinks the ceiling reactively', async () => {
+      vi.useFakeTimers();
+
+      const throttledAfterOneChunk = async function* (): AsyncGenerator<WireStreamChunk> {
+        yield { type: 'text-delta', delta: 'partial' };
+        throw new LLMError('Bedrock throttled the request mid-stream', 'api', {
+          status: 429,
+          code: 'provider_rate_limited',
+        });
+      };
+
+      const { client, calls } = createMockStreamingClient([
+        () => throttledAfterOneChunk(),
+        [{ type: 'text-delta', delta: 'ok:2' }],
+        [{ type: 'text-delta', delta: 'ok:3' }],
+      ]);
+
+      const llm = new VernLLM({
+        client,
+        model: 'gpt-4o',
+        maxRetries: 0,
+        rateLimit: {
+          requestsPerMinute: 5,
+          aimd: { increaseBy: 0, decreaseFactor: 0.0001, minCapacity: 1, maxCapacity: 100 },
+        },
+      });
+
+      // Opens, streams one real chunk, then fails with a 429. The
+      // failed attempt still spends 1 from the requests bucket (spent
+      // unconditionally on acquire, before dispatch), leaving 4 of the
+      // original 5 banked; the reactive shrink then caps the ceiling
+      // at 1, clamping that 4 down to 1, not below.
+      const first = await llm.call({ userContent: 'one', jsonMode: false, stream: true });
+      await drain(first.chunks).catch(() => {});
+      await expect(first.finalResult).rejects.toMatchObject({ code: 'provider_rate_limited' });
+      expect(calls).toHaveLength(1);
+
+      // Spends the one remaining banked unit. Succeeds either way,
+      // shrunk or not, so this alone doesn't prove the shrink happened.
+      const second = await llm.call({ userContent: 'two', jsonMode: false, stream: true });
+      await drain(second.chunks);
+      await expect(second.finalResult).resolves.toBe('ok:2');
+      expect(calls).toHaveLength(2);
+
+      // The real discriminator: blocked only if the ceiling is
+      // genuinely capped at 1 now. Without `reactToRateLimitError`
+      // firing on this mid-stream 429, 2 more units of the original 5
+      // would still be free, and this would succeed instead.
+      const controller = new AbortController();
+      void llm
+        .call({ userContent: 'three', jsonMode: false, stream: true, signal: controller.signal })
+        .catch(() => {});
+
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+
+      expect(calls).toHaveLength(2); // blocked: never reached the mock client
+
+      controller.abort();
+    });
   });
 });

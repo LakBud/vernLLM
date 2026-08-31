@@ -50,7 +50,7 @@ export interface PreparedAttempt {
    * Present unless no `limiter` was configured. Must run in a `finally`
    * block so a slot is never leaked on a failed attempt (see `acquireRateLimit`).
    */
-  release?: (actualTokens?: number) => void;
+  release?: (actualTokens?: number, success?: boolean) => void;
 }
 
 /**

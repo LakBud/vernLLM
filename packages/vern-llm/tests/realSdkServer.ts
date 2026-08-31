@@ -50,12 +50,15 @@ export type ScriptedResponse =
  * Builds a `raw` response function that writes a Server-Sent-Events stream:
  * Anthropic, OpenAI, and Gemini's real streaming wire format (each just
  * differs in the JSON payload shape per event, not the SSE framing itself).
+ * `headers` merges in on top of the required `content-type`, e.g. for a
+ * provider's rate-limit headers on a streaming response.
  */
 export function sseRaw(
   events: Array<{ event?: string; data: unknown }>,
+  headers?: http.OutgoingHttpHeaders,
 ): (res: http.ServerResponse) => void {
   return (res) => {
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.writeHead(200, { 'content-type': 'text/event-stream', ...headers });
     for (const e of events) {
       if (e.event) res.write(`event: ${e.event}\n`);
       // String data (e.g. OpenAI's `[DONE]` sentinel) is written raw and

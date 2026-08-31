@@ -1,6 +1,7 @@
 import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import { LLMError } from '../../types/errors.js';
 import { makeEventReporter } from '../utils/circuitBreaker.utils.js';
+import { readRateLimitHint } from '../utils/rateLimitHint.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { finalizeResponse } from './responseFinalizer.js';
@@ -8,6 +9,7 @@ import { buildStreamResult } from './streamAccumulator.js';
 import { createUsageReporter, type UsageReporter } from './usageReporter.js';
 import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
 import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
+import { extractStatus } from './utils/errors.utils.js';
 import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
 import { withTimeout } from './utils/retry/retry.utils.js';
@@ -293,20 +295,27 @@ export class CallExecutor {
     let release = acquiredRelease;
 
     try {
-      const response = await withTimeout(
-        (attemptSignal) => this.client.chat.completions.create(request, { signal: attemptSignal }),
-        this.timeoutMs,
-        params.signal,
-      );
+      let response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
+
+      try {
+        response = await withTimeout(
+          (attemptSignal) =>
+            this.client.chat.completions.create(request, { signal: attemptSignal }),
+          this.timeoutMs,
+          params.signal,
+        );
+      } catch (error) {
+        this.reactToRateLimitError(error);
+        throw error;
+      }
+
+      // AIMD's proactive path.
+      this.limiter?.reactToRateLimitHint(readRateLimitHint(response));
 
       // Extracted right after the response arrives, before anything else
       // touches it, so a post-response failure still gets its usage reported.
       const usage = this.usageReporter.extract(response, requestId, model);
-
-      // Reconcile against real usage, then hand off so `finally` below
-      // can't release a second time.
-      release?.(this.usageReporter.actualTokensFor(usage));
-      release = undefined;
+      const actualTokens = this.usageReporter.actualTokensFor(usage);
 
       // Raw and unvalidated on purpose. Extraction (including `.trim()`,
       // which throws on a non-string `content`) happens inside
@@ -315,27 +324,50 @@ export class CallExecutor {
       const rawContent = response.choices?.[0]?.message?.content;
       const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
 
-      return finalizeResponse(
-        rawContent,
-        wireToolCalls,
-        params,
-        useJson,
-        usage,
-        requestId,
-        attempt,
-        state,
-        {
-          gateway,
-          usageReporter: this.usageReporter,
-          logger: this.logger,
-          redactText: (text) => this.redactText(text),
-          parseJson: this.parseJson,
-          detectSoftFailure: this.detectSoftFailure,
-          providerName: this.providerName,
-          isFallback: this.isFallback,
-          model,
-        },
-      );
+      let finalized: T | CallWithToolsResult<T>;
+
+      try {
+        finalized = finalizeResponse(
+          rawContent,
+          wireToolCalls,
+          params,
+          useJson,
+          usage,
+          requestId,
+          attempt,
+          state,
+          {
+            gateway,
+            usageReporter: this.usageReporter,
+            logger: this.logger,
+            redactText: (text) => this.redactText(text),
+            parseJson: this.parseJson,
+            detectSoftFailure: this.detectSoftFailure,
+            providerName: this.providerName,
+            isFallback: this.isFallback,
+            model,
+          },
+        );
+      } catch (error) {
+        // Still reconcile real token usage and give the concurrency slot
+        // back, but never grow the AIMD ceiling for a response VernLLM
+        // itself rejected (invalid JSON, schema/tool-contract validation,
+        // empty content, a soft failure): only a response that actually
+        // made it back to the caller counts as a success.
+        release?.(actualTokens);
+        release = undefined;
+        throw error;
+      }
+
+      // `success: true` is what lets AIMD grow the ceiling here, only
+      // once finalization has actually succeeded. The `finally` block's
+      // own `release?.()` below never passes it, so a failed attempt
+      // only ever shrinks via `reactToRateLimitError`, never grows right
+      // back.
+      release?.(actualTokens, true);
+      release = undefined;
+
+      return finalized;
     } finally {
       release?.();
     }
@@ -344,6 +376,17 @@ export class CallExecutor {
   /** Applies `redact` (if configured); otherwise returns `text` unchanged. */
   private redactText(text: string): string {
     return this.redact ? this.redact(text) : text;
+  }
+
+  /**
+   * AIMD's reactive path: shrinks the ceiling on a real 429,
+   * adapter-agnostic, independent of `supportsWithResponse`.
+   */
+  private reactToRateLimitError(error: unknown): void {
+    if (!this.limiter) return;
+    if (extractStatus(error) !== 429) return;
+
+    this.limiter.signalRateLimit();
   }
 
   /**
@@ -428,18 +471,25 @@ export class CallExecutor {
       : streamController.signal;
 
     try {
-      const { iterator, first } = await withTimeout(
-        async (attemptSignal) => {
-          const streamIterator = createStream(request, { signal: attemptSignal })[
-            Symbol.asyncIterator
-          ]();
-          const firstResult = await streamIterator.next();
+      const { iterator, first } = await (async () => {
+        try {
+          return await withTimeout(
+            async (attemptSignal) => {
+              const streamIterator = createStream(request, { signal: attemptSignal })[
+                Symbol.asyncIterator
+              ]();
+              const firstResult = await streamIterator.next();
 
-          return { iterator: streamIterator, first: firstResult };
-        },
-        this.timeoutMs,
-        combinedExternal,
-      );
+              return { iterator: streamIterator, first: firstResult };
+            },
+            this.timeoutMs,
+            combinedExternal,
+          );
+        } catch (error) {
+          this.reactToRateLimitError(error);
+          throw error;
+        }
+      })();
 
       // An immediately-exhausted stream (no chunks at all) is the streaming
       // equivalent of `executeCall`'s empty-response check: surface the same
@@ -467,18 +517,29 @@ export class CallExecutor {
         streamController,
         logger: this.logger,
         signal: params.signal,
-        onStreamSuccess: (usage) => {
-          // No breaker success recorded here. finalizeResponse (called
-          // from finalize, below) is the single source of truth for a
-          // streaming success, exactly like the non-streaming path:
-          // recording it here, before finalize runs, would mark the
-          // attempt a success even when finalize's own shaping or
-          // detectSoftFailure check is about to fail it, and would
+        onRateLimitHint: (hint) => {
+          this.limiter?.reactToRateLimitHint(hint);
+        },
+        onStreamSuccess: (_usage) => {
+          // No breaker success recorded here, and no release here
+          // either. `finalize`, below, is the single source of truth
+          // for a streaming success, exactly like the non-streaming
+          // path: releasing (and possibly growing the AIMD ceiling)
+          // here, before finalize runs, would treat the attempt as
+          // successful even when finalize's own shaping or
+          // detectSoftFailure check is about to reject it, and would
           // reset consecutiveFailures right before the failure path
           // below tries to increment it.
-          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         onStreamFailure: (normalized, usage) => {
+          // AIMD's reactive path. A provider can emit a 429 after the
+          // stream has already opened (e.g. Bedrock's mid-stream
+          // `throttlingException`), not just on the opening attempt
+          // (already handled above, around the initial `withTimeout`
+          // call): both are real rate-limit signals and must shrink
+          // the ceiling the same way.
+          this.reactToRateLimitError(normalized);
+
           // Idle timeout is the one mid-stream failure that trips the
           // breaker: otherwise a provider that hangs after one chunk
           // would always record a success and never open it.
@@ -493,8 +554,10 @@ export class CallExecutor {
           releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
         finalize: (textAcc, wireToolCalls, usage) => {
+          const actualTokens = this.usageReporter.actualTokensFor(usage);
+
           try {
-            return finalizeResponse(
+            const finalized = finalizeResponse(
               textAcc,
               wireToolCalls,
               params,
@@ -515,7 +578,22 @@ export class CallExecutor {
                 model,
               },
             );
+
+            // Only now, once finalization has actually succeeded, is
+            // this attempt a real success: release and let AIMD grow
+            // the ceiling. See `onStreamSuccess`'s own comment for why
+            // this can't happen any earlier.
+            releaseAtOpen?.(actualTokens, true);
+
+            return finalized;
           } catch (error) {
+            // Still reconcile real token usage and give the
+            // concurrency slot back, but never grow the AIMD ceiling
+            // for a response VernLLM itself rejected (invalid JSON,
+            // schema/tool-contract validation, empty content, a soft
+            // failure).
+            releaseAtOpen?.(actualTokens);
+
             // This attempt already returned successfully to the retry
             // loop once the stream opened, so unlike the non-streaming
             // path, nothing else will ever record a finalize-time

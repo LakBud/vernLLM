@@ -82,6 +82,36 @@ Everything else, including timeouts, 5xx errors, network failures, and unknown e
   Fallback](/docs/core/provider-fallback).
 </Callout>
 
+## SDK-internal retries
+
+Every option on this page governs VernLLM's own retry loop, the one wrapping `client.chat.completions.create()` (or the equivalent per adapter). It has no visibility into what happens inside that call. `fromOpenAI`, `fromAnthropic`, `fromGemini`, and `fromBedrock` each wrap an official provider SDK, and most of those SDKs retry transient failures, including 429s, on their own, by default, before VernLLM's `create()` call ever returns. `@google/genai` is the exception: it only retries when the client is explicitly configured to.
+
+| Adapter         | SDK                 | Default internal retry                                |
+| --------------- | ------------------- | ----------------------------------------------------- |
+| `fromOpenAI`    | `openai`            | `maxRetries: 2`                                       |
+| `fromAnthropic` | `@anthropic-ai/sdk` | `maxRetries: 2`                                       |
+| `fromGemini`    | `@google/genai`     | Off by default, opt in via `httpOptions.retryOptions` |
+| `fromBedrock`   | AWS SDK v3          | Standard retry mode, `maxAttempts: 3` by default      |
+
+`fromFetch` is the one exception when left at its default: it calls native `fetch` directly, so VernLLM's own retry loop is the only one in play there. If you swap in a custom `request` or `requestStream` transport via `FetchAdapterConfig`, that transport (e.g. `axios`) may add its own retry layer, the same as the official SDK adapters above.
+
+This is invisible, not incorrect, but it has real consequences worth knowing about:
+
+- **Amplified retries.** A failure can be retried by the SDK, then, if it still fails, retried again by VernLLM, each with its own separate backoff policy, uncoordinated with the other.
+- **A blind circuit breaker.** A burst of 429s the SDK quietly retries through to eventual success never reaches VernLLM as a failure, so the breaker never sees it, even though the provider was genuinely under strain.
+- **A blind rate limiter.** [AIMD](/docs/core/rate-limiting#aimd)'s reactive shrink only fires once a 429 actually reaches VernLLM; an SDK that retries the 429 away internally gives AIMD nothing to react to until the SDK's own retries are exhausted too.
+- **Blind telemetry.** `onEvent`'s `retry` events, the logger, and usage metering all see nothing while a retry happens at the SDK layer.
+- **A shared timeout budget.** `timeoutMs` wraps the whole `create()` call, SDK-internal retries included, so they can eat into the budget before VernLLM's own retry loop gets a turn.
+
+If you want VernLLM to be the sole retry authority, disable the SDK's own retries when constructing the client:
+
+```ts title="disable-sdk-retries.ts"
+const openai = new OpenAI({ apiKey, maxRetries: 0 });
+const anthropic = new Anthropic({ apiKey, maxRetries: 0 });
+// AWS SDK v3: new BedrockRuntimeClient({ maxAttempts: 1, ... })
+// @google/genai: check the SDK's own retry-options field for the installed version
+```
+
 ## Cancelling mid retry
 
 If a `signal` fires while a retry is waiting out its backoff delay, the pending wait is cancelled immediately rather than sitting idle until the delay finishes. An abort during backoff is never retried, it is treated as a deliberate cancellation. See [Cancellation & Timeouts](/docs/core/cancellation) for the full abort lifecycle.

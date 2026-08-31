@@ -1,3 +1,7 @@
+import {
+  attachRateLimitHint,
+  parseOpenAIRateLimitHeaders,
+} from '../internal/utils/rateLimitHint.utils.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 import {
   budgetTokensToEffort,
@@ -181,6 +185,12 @@ export interface OpenAICompatibleAdapterOptions {
    * effect when `reasoningEffort` is set directly.
    */
   reasoningEffortTokens?: Partial<EffortTokenTable>;
+  /**
+   * Whether the client's request builder supports `.withResponse()`
+   * (needed for AIMD's proactive path). Default `false`, since not
+   * every "OpenAI-compatible" client is confirmed to support it.
+   */
+  supportsWithResponse?: boolean;
 }
 
 export function fromOpenAICompatible(
@@ -188,7 +198,7 @@ export function fromOpenAICompatible(
   options: OpenAICompatibleAdapterOptions = {},
 ): LLMClient {
   const raw = client as LLMClient;
-  const { supportsStreamUsage = true } = options;
+  const { supportsStreamUsage = true, supportsWithResponse = false } = options;
   const effortTokenTable = resolveEffortTokenTable(options.reasoningEffortTokens);
 
   // The underlying client's `create`, called with `stream: true`, returns
@@ -207,30 +217,72 @@ export function fromOpenAICompatible(
       completions: {
         async create(params, options) {
           const messages = toOpenAIMessages(params);
+          const built = applyReasoningBudget(
+            { ...params, messages },
+            effortTokenTable,
+          ) as Parameters<LLMClient['chat']['completions']['create']>[0];
 
-          return raw.chat.completions.create(
-            applyReasoningBudget({ ...params, messages }, effortTokenTable) as Parameters<
-              LLMClient['chat']['completions']['create']
-            >[0],
-            options,
-          );
+          if (!supportsWithResponse) {
+            return raw.chat.completions.create(built, options);
+          }
+
+          // `.withResponse()` is specific to the `openai` package's own
+          // `APIPromise`, not `LLMClient['create']`'s declared return
+          // type, hence the cast, gated behind `supportsWithResponse`.
+          const { data, response } = await (
+            raw.chat.completions.create(built, options) as unknown as {
+              withResponse(): Promise<{ data: unknown; response: Response }>;
+            }
+          ).withResponse();
+
+          if (data && typeof data === 'object') {
+            attachRateLimitHint(data, parseOpenAIRateLimitHeaders(response.headers));
+          }
+
+          return data as Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
         },
 
         async *createStream(params, options) {
           const messages = toOpenAIMessages(params);
+          const built = applyReasoningBudget(
+            {
+              ...params,
+              messages,
+              stream: true,
+              ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+            },
+            effortTokenTable,
+          );
 
-          const stream = (await rawCreate(
-            applyReasoningBudget(
-              {
-                ...params,
-                messages,
-                stream: true,
-                ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
-              },
-              effortTokenTable,
-            ),
-            options,
-          )) as AsyncIterable<OpenAIStreamChunk>;
+          let stream: AsyncIterable<OpenAIStreamChunk>;
+
+          if (!supportsWithResponse) {
+            stream = (await rawCreate(built, options)) as AsyncIterable<OpenAIStreamChunk>;
+          } else {
+            // Same `.withResponse()` used by `create`, above, and its own
+            // doc comment: gated behind `supportsWithResponse` since it's
+            // specific to the real `openai` package's `APIPromise`, not
+            // `LLMClient['create']`'s declared return type. Works
+            // identically for a streaming call: `data` is the `Stream`
+            // itself instead of a parsed completion, and `response` is
+            // available immediately, before the stream body is consumed.
+            const { data, response } = await (
+              raw.chat.completions.create(
+                built as Parameters<LLMClient['chat']['completions']['create']>[0],
+                options,
+              ) as unknown as {
+                withResponse(): Promise<{ data: unknown; response: Response }>;
+              }
+            ).withResponse();
+
+            stream = data as AsyncIterable<OpenAIStreamChunk>;
+
+            const hint = parseOpenAIRateLimitHeaders(response.headers);
+
+            if (hint.remainingRequests !== undefined || hint.limitRequests !== undefined) {
+              yield { type: 'rate_limit_hint', hint };
+            }
+          }
 
           for await (const chunk of stream) {
             yield* toWireStreamChunks(chunk);
@@ -250,11 +302,15 @@ export function fromOpenAICompatible(
  * variant) in ways that no longer structurally satisfy VernLLM's
  * provider-agnostic `ContentBlock[]` on `userContent`, so passing the SDK
  * instance directly can fail to typecheck depending on the installed
- * `openai` version. Wrapping with `fromOpenAI()` (a plain alias of
- * `fromOpenAICompatible()`) sidesteps that by translating through
- * `unknown` at the boundary, and also picks up multimodal image
- * translation and `createStream` wiring that a raw client doesn't have.
- * See Migration Notes for details.
+ * `openai` version. Wrapping with `fromOpenAI()` sidesteps that by
+ * translating through `unknown` at the boundary, and also picks up
+ * multimodal image translation and `createStream` wiring that a raw
+ * client doesn't have. See Migration Notes for details.
+ *
+ * `supportsWithResponse` defaults to `false` here too:
+ * `client` is `unknown`, so there's no way to verify it's really the
+ * official `openai` package's client versus a fake or a test double.
+ * Pass `supportsWithResponse: true` once you've confirmed it.
  */
 export const fromOpenAI = fromOpenAICompatible;
 

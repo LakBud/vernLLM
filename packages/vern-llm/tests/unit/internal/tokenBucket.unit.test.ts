@@ -205,3 +205,75 @@ describe('TokenBucket, concurrency mode (refillPerMs: 0)', () => {
     expect(bucket.msUntilAvailable(1)).toBe(0);
   });
 });
+
+describe('TokenBucket, resize', () => {
+  it('grows capacity and getCapacity() reflects the new ceiling', () => {
+    const bucket = new TokenBucket(100, 100 / 60_000);
+
+    bucket.resize(150);
+
+    expect(bucket.getCapacity()).toBe(150);
+  });
+
+  it('shrinking clamps available down to the new capacity', () => {
+    const bucket = new TokenBucket(100, 0);
+
+    // Full at 100, shrink to 40: available must clamp down, not stay at 100.
+    bucket.resize(40);
+
+    expect(bucket.tryTake(40)).toBe(true);
+    expect(bucket.tryTake(1)).toBe(false);
+  });
+
+  it('growing never raises available beyond what was actually there', () => {
+    const bucket = new TokenBucket(100, 0);
+
+    bucket.tryTake(90); // available: 10
+    bucket.resize(200); // capacity grows, available should still be 10, not 200
+
+    expect(bucket.tryTake(10)).toBe(true);
+    expect(bucket.tryTake(1)).toBe(false);
+  });
+
+  it('rescales refillPerMs proportionally to the capacity change, not left at the old rate', () => {
+    // capacity 600, refillPerMs = 600/60_000 = 0.01/ms -> full refill in 60s
+    const bucket = new TokenBucket(600, 600 / 60_000);
+
+    bucket.tryTake(600); // available: 0
+    bucket.resize(60); // shrink to 1/10th; refillPerMs should also shrink 1/10th
+
+    // At the old (unscaled) refillPerMs, 60 units would refill in 6s.
+    // At the correctly rescaled refillPerMs (60/60_000 = 0.001/ms), a
+    // full refill of the new, smaller capacity still takes 60s.
+    expect(bucket.msUntilAvailable(60)).toBeCloseTo(60_000, -2);
+  });
+
+  it('is idempotent under repeated shrink/grow, each resize building on the last, not the original construction values', () => {
+    const bucket = new TokenBucket(1000, 1000 / 60_000);
+
+    bucket.resize(500); // refillPerMs: 500/60_000; available clamps 1000 -> 500
+    bucket.resize(250); // refillPerMs: 250/60_000, derived from 500's rate, not 1000's; available clamps 500 -> 250
+    bucket.resize(1000); // refillPerMs: 1000/60_000 again; available is NOT raised back to 1000 (a grow never manufactures capacity that wasn't there), it stays at 250
+
+    // refillPerMs ended up back at the original 1000/60_000 rate, the
+    // three resizes composed correctly rather than drifting. Confirmed
+    // by the time to go from the known available (250, per the clamp
+    // history above) up to the full 1000 capacity: at 1000/60_000 per
+    // ms, refilling the missing 750 takes exactly 45s, not some drifted
+    // rate.
+    expect(bucket.msUntilAvailable(1000)).toBeCloseTo(45_000, -2);
+  });
+
+  it('a concurrency bucket (refillPerMs === 0) is unaffected by rescaling, stays 0 after resize', () => {
+    const bucket = new TokenBucket(10, 0);
+
+    bucket.resize(5);
+
+    // If refillPerMs were left at some nonzero derived value, this
+    // bucket would start refilling on a clock, which a concurrency
+    // bucket must never do; msUntilAvailable staying Infinity once
+    // depleted proves refillPerMs is still exactly 0.
+    bucket.tryTake(5);
+    expect(bucket.msUntilAvailable(1)).toBe(Infinity);
+  });
+});

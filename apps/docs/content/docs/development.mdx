@@ -49,16 +49,16 @@ Tests live under `tests/unit/` and `tests/integration/`. No real API calls are m
 
 Every PR runs through several workflows in `.github/workflows/`:
 
-| Workflow               | Checks                                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------------------ |
-| `lint.yml`             | oxlint across the workspace                                                                      |
-| `typecheck.yml`        | `tsc --noEmit` on `src` and on tests separately                                                  |
-| `test-unit.yml`        | `tests/unit/*`, uploads coverage to Codecov under the `unit` flag                                |
-| `test-integration.yml` | `tests/integration/*`, uploads coverage to Codecov under the `integration` flag                  |
-| `build-checks.yml`     | peer dependency check, `tsdown` build, bundle size limit, smoke test on the built output         |
-| `changeset.yml`        | fails if a PR touching `packages/vern-llm` has no changeset                                      |
-| `docs-build.yml`       | lint, typecheck, and build the docs site — only runs when `apps/docs/**` or the lockfile changes |
-| `codeql.yml`           | static analysis, runs on PRs, pushes to `main`, and a weekly schedule                            |
+| Workflow               | Checks                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `lint.yml`             | oxlint across the workspace                                                                        |
+| `typecheck.yml`        | `tsc --noEmit` on `src` and on tests separately                                                    |
+| `test-unit.yml`        | `tests/unit/*`, uploads coverage to Codecov under the `unit` flag                                  |
+| `test-integration.yml` | `tests/integration/*`, uploads coverage to Codecov under the `integration` flag                    |
+| `build-checks.yml`     | peer dependency check, `tsdown` build, bundle size limit, smoke test on the built output           |
+| `changeset.yml`        | fails if a PR touching `packages/vern-llm` has no changeset                                        |
+| `docs-build.yml`       | lint, typecheck, and build the docs site. It only runs when `apps/docs/**` or the lockfile changes |
+| `codeql.yml`           | static analysis, runs on PRs, pushes to `main`, and a weekly schedule                              |
 
 Codecov merges the `unit` and `integration` coverage flags into one view, scoped to `packages/vern-llm/**` via `codecov.yml` at the repo root. It enforces two checks: `codecov/patch` requires at least 80% coverage on changed lines, and `codecov/project` fails if overall coverage regresses by more than 0.5%.
 

@@ -1,6 +1,7 @@
 import { TokenBucket } from './internal/tokenBucket.js';
 import { LLMError } from './types/errors.js';
 
+import type { ProviderRateLimitHint } from './internal/utils/rateLimitHint.utils.js';
 import type { LLMClient } from './types/client.js';
 
 /** The request shape sent to `LLMClient['chat']['completions']['create']`, used for token estimation. */
@@ -33,6 +34,28 @@ export interface RateLimitOptions {
    * chars/4 heuristic over message content plus `max_tokens`.
    */
   estimateTokens?: (request: WireRequest) => number;
+  /**
+   * AIMD against the `requestsPerMinute` bucket. Omit for a fixed
+   * ceiling, today's behavior. Requires `requestsPerMinute`.
+   */
+  aimd?: AimdOptions;
+}
+
+export interface AimdOptions {
+  /** Added to the requests-per-minute ceiling on every clean release. */
+  increaseBy: number;
+  /** Multiplied against the ceiling on a rate-limit signal. Must be in `(0, 1]`; clamped otherwise. */
+  decreaseFactor: number;
+  /** Floor the ceiling never shrinks below. */
+  minCapacity: number;
+  /** Ceiling the bucket never grows above. */
+  maxCapacity: number;
+  /**
+   * Shrink proactively once a provider hint reports `remainingRequests`
+   * at or below this, before a real 429 happens. Default 0, meaning
+   * off.
+   */
+  proactiveFloor?: number;
 }
 
 export interface RateLimitAcquireResult {
@@ -42,7 +65,7 @@ export interface RateLimitAcquireResult {
    * Idempotent: only the first call does anything. Must run in a
    * `finally` block so a slot is never leaked on a failed attempt.
    */
-  release: (actualTokens?: number) => void;
+  release: (actualTokens?: number, success?: boolean) => void;
   /** How long this attempt waited in queue before capacity was available. */
   waitedMs: number;
   /** Which bucket was blocking this attempt just before it cleared, if any wait happened. */
@@ -65,6 +88,60 @@ export function defaultEstimateTokens(request: WireRequest): number {
   }, 0);
 
   return Math.ceil(messagesChars / 4) + (request.max_tokens ?? 0);
+}
+
+/**
+ * Clamps `AimdOptions` at construction: an out-of-range `decreaseFactor`
+ * or negative `increaseBy` is a config mistake, clamped rather than
+ * thrown. `minCapacity` above `maxCapacity` is unsatisfiable and throws.
+ * `minCapacity`/`maxCapacity` below 1 also throw: the requests bucket
+ * always takes exactly 1 per acquire, so a ceiling under 1 can never be
+ * satisfied no matter how long a caller waits (`available` never
+ * exceeds `capacity`, see `TokenBucket.tryTake`). Worse, since AIMD only
+ * ever resizes the requests bucket, letting capacity reach exactly 0
+ * would also permanently zero `TokenBucket`'s internal refill rate (see
+ * `resize`'s own comment), with no way back: nothing could ever succeed
+ * again to trigger `growOnSuccess()`. A fractional value at or above 1
+ * is fine, since the bucket still refills past 1 over time.
+ */
+function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefined {
+  if (!option) return undefined;
+
+  const assertFinite = (name: 'minCapacity' | 'maxCapacity' | 'increaseBy' | 'decreaseFactor') => {
+    if (!Number.isFinite(option[name])) {
+      throw new LLMError(
+        `aimd.${name} (${option[name]}) must be a finite number.`,
+        'invalid_params',
+      );
+    }
+  };
+
+  assertFinite('minCapacity');
+  assertFinite('maxCapacity');
+  assertFinite('increaseBy');
+  assertFinite('decreaseFactor');
+
+  if (option.minCapacity < 1 || option.maxCapacity < 1) {
+    throw new LLMError(
+      `aimd.minCapacity (${option.minCapacity}) and aimd.maxCapacity (${option.maxCapacity}) must both be at least 1, since the requests bucket always takes 1 per acquire; a capacity below 1 could never be satisfied.`,
+      'invalid_params',
+    );
+  }
+
+  if (option.minCapacity > option.maxCapacity) {
+    throw new LLMError(
+      `aimd.minCapacity (${option.minCapacity}) must not exceed aimd.maxCapacity (${option.maxCapacity}).`,
+      'invalid_params',
+    );
+  }
+
+  return {
+    increaseBy: Math.max(0, option.increaseBy),
+    decreaseFactor: Math.min(1, Math.max(Number.MIN_VALUE, option.decreaseFactor)),
+    minCapacity: option.minCapacity,
+    maxCapacity: option.maxCapacity,
+    proactiveFloor: option.proactiveFloor ?? 0,
+  };
 }
 
 /**
@@ -100,6 +177,7 @@ export class RateLimiter {
   private readonly maxQueueMs: number;
   private readonly maxQueueSize: number;
   private readonly estimateTokensFn: (request: WireRequest) => number;
+  private readonly aimd?: AimdOptions;
 
   private readonly queue: Waiter[] = [];
 
@@ -131,6 +209,7 @@ export class RateLimiter {
     this.maxQueueMs = options.maxQueueMs ?? 30_000;
     this.maxQueueSize = options.maxQueueSize ?? 0;
     this.estimateTokensFn = options.estimateTokens ?? defaultEstimateTokens;
+    this.aimd = this.requests ? buildAimdOptions(options.aimd) : undefined;
   }
 
   /** Pre-flight token estimate for a request, per the configured (or default) heuristic. */
@@ -364,11 +443,17 @@ export class RateLimiter {
    * bucket is a real spend that only recovers via its own refill, and the
    * tokens bucket is reconciled against `actualTokens` rather than fully
    * refunded, since real tokens really were spent.
+   *
+   * `success` defaults to `false`: the AIMD ceiling only grows when the
+   * caller explicitly confirms a successful attempt. A failed or
+   * rate-limited attempt still releases its slot (so nothing leaks), but
+   * must not also grow the ceiling right back up after
+   * `signalRateLimit()` just shrank it.
    */
-  private makeRelease(estimatedTokens: number): (actualTokens?: number) => void {
+  private makeRelease(estimatedTokens: number): (actualTokens?: number, success?: boolean) => void {
     let released = false;
 
-    return (actualTokens?: number) => {
+    return (actualTokens?: number, success = false) => {
       if (released) return;
       released = true;
 
@@ -385,7 +470,48 @@ export class RateLimiter {
         this.tokens.give(estimatedTokens - actualTokens);
       }
 
+      if (success) this.growOnSuccess();
       this.drain();
     };
+  }
+
+  /** AIMD's additive-increase half: grows the ceiling by `aimd.increaseBy` on a clean release. No-op without `aimd`/`requestsPerMinute`. */
+  private growOnSuccess(): void {
+    if (!this.aimd || !this.requests) return;
+
+    const next = Math.min(
+      this.requests.getCapacity() + this.aimd.increaseBy,
+      this.aimd.maxCapacity,
+    );
+    this.requests.resize(next);
+  }
+
+  /**
+   * AIMD's multiplicative-decrease half. Called on a real 429, and,
+   * where an adapter can produce a hint, proactively via
+   * `reactToRateLimitHint`. Never throws or blocks a call itself, only
+   * adjusts the ceiling as a side effect.
+   */
+  signalRateLimit(): void {
+    if (!this.aimd || !this.requests) return;
+
+    const next = Math.max(
+      this.requests.getCapacity() * this.aimd.decreaseFactor,
+      this.aimd.minCapacity,
+    );
+    this.requests.resize(next);
+  }
+
+  /**
+   * AIMD's proactive entry point: shrinks via `signalRateLimit()` if
+   * `hint.remainingRequests` is at or below `aimd.proactiveFloor`.
+   */
+  reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void {
+    if (!this.aimd || !hint || hint.remainingRequests === undefined) return;
+
+    const floor = this.aimd.proactiveFloor ?? 0;
+    if (floor > 0 && hint.remainingRequests <= floor) {
+      this.signalRateLimit();
+    }
   }
 }
