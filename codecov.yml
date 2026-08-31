@@ -1,3 +1,11 @@
+flags:
+  unit:
+    paths:
+      - 'packages/vern-llm/**'
+  integration:
+    paths:
+      - 'packages/vern-llm/**'
+
 coverage:
   status:
     project:

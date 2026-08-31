@@ -6,17 +6,19 @@ icon: Hammer
 
 ```bash title="dev-scripts.sh"
 pnpm install
-pnpm run build            # tsdown → dist (ESM + CJS + types)
-pnpm run typecheck        # tsc --noEmit on src, since tsdown doesn't fully type-check
-pnpm run typecheck:test   # tsc --noEmit on src + test (separate tsconfig, no rootDir conflict)
-pnpm run test             # vitest run (unit + integration)
-pnpm run test:unit        # vitest run --project unit
-pnpm run test:int         # vitest run --project integration
-pnpm run test:watch       # vitest, watch mode
-pnpm run test:coverage    # vitest run --coverage (v8 provider)
-pnpm run lint             # oxlint
-pnpm run format           # oxfmt
-pnpm run changeset        # record a change for the next release
+pnpm run build              # tsdown → dist (ESM + CJS + types)
+pnpm run typecheck          # tsc --noEmit on src, since tsdown doesn't fully type-check
+pnpm run typecheck:test     # tsc --noEmit on src + test (separate tsconfig, no rootDir conflict)
+pnpm run test               # vitest run (unit + integration)
+pnpm run test:unit          # vitest run --project unit
+pnpm run test:unit:coverage # vitest run --project unit --coverage
+pnpm run test:int           # vitest run --project integration
+pnpm run test:int:coverage  # vitest run --project integration --coverage
+pnpm run test:watch         # vitest, watch mode
+pnpm run test:coverage      # vitest run --coverage (v8 provider, unit + integration combined)
+pnpm run lint                # oxlint
+pnpm run format              # oxfmt
+pnpm run changeset           # record a change for the next release
 ```
 
 ## Test layout
@@ -42,6 +44,30 @@ Tests live under `tests/unit/` and `tests/integration/`. No real API calls are m
 | ------------------------------------------ | ------------------------------------ |
 | `vernLLM`, `vernLLM.history`, `cachedCall` | Workflow-level behavior              |
 | `adapters/*`                               | Workflow-level behavior per provider |
+
+## CI
+
+Every PR runs through several workflows in `.github/workflows/`:
+
+| Workflow               | Checks                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `lint.yml`             | oxlint across the workspace                                                                      |
+| `typecheck.yml`        | `tsc --noEmit` on `src` and on tests separately                                                  |
+| `test-unit.yml`        | `tests/unit/*`, uploads coverage to Codecov under the `unit` flag                                |
+| `test-integration.yml` | `tests/integration/*`, uploads coverage to Codecov under the `integration` flag                  |
+| `build-checks.yml`     | peer dependency check, `tsdown` build, bundle size limit, smoke test on the built output         |
+| `changeset.yml`        | fails if a PR touching `packages/vern-llm` has no changeset                                      |
+| `docs-build.yml`       | lint, typecheck, and build the docs site — only runs when `apps/docs/**` or the lockfile changes |
+| `codeql.yml`           | static analysis, runs on PRs, pushes to `main`, and a weekly schedule                            |
+
+Codecov merges the `unit` and `integration` coverage flags into one view, scoped to `packages/vern-llm/**` via `codecov.yml` at the repo root. It enforces two checks: `codecov/patch` requires at least 80% coverage on changed lines, and `codecov/project` fails if overall coverage regresses by more than 0.5%.
+
+Two more workflows run outside the PR flow:
+
+- `version-packages.yml` opens or updates a "Version Packages" PR on every push to `main` that touches release-relevant files, using `changesets/action`.
+- `version.yml` runs when that PR is merged: it cuts a GitHub Release and triggers `publish.yml` to publish to npm and deploy the docs site.
+
+See [Contributing](/docs/contributing) for the pre-PR checklist with local-equivalent commands for each of these.
 
 ## Contributing
 
