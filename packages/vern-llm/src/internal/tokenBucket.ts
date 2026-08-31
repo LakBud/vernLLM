@@ -5,8 +5,7 @@
  * `give(1)` instead of relying on the clock.
  *
  * `capacity`/`refillPerMs` are mutable so AIMD (`RateLimiter`'s `aimd`
- * option) can `resize()` a bucket's ceiling after construction. See
- * [AIMD](/docs/core/aimd).
+ * option) can `resize()` a bucket's ceiling after construction.
  */
 export class TokenBucket {
   private available: number;

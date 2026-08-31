@@ -13,6 +13,7 @@ import type {
   WireStreamChunk,
   WireToolCall,
 } from '../../types/index.js';
+import type { ProviderRateLimitHint } from '../utils/rateLimitHint.utils.js';
 
 /** Everything `buildStreamResult` needs beyond the raw iterator and first chunk. */
 export interface StreamAccumulatorOptions<T> {
@@ -42,6 +43,15 @@ export interface StreamAccumulatorOptions<T> {
    * chunk would always record a success and never open it.
    */
   onStreamFailure: (normalized: LLMError, usage: TokenUsage | undefined) => void;
+  /**
+   * Fires as soon as a `rate_limit_hint` chunk arrives, as early as
+   * possible in the stream rather than deferred to `onStreamSuccess`/
+   * `finalize`: unlike growing the ceiling (which must wait for a
+   * confirmed success), reacting to a proactive hint is safe and
+   * useful the moment it's known, independent of how this attempt
+   * ultimately finishes.
+   */
+  onRateLimitHint?: (hint: ProviderRateLimitHint) => void;
   /**
    * Produces the final `T | CallWithToolsResult<T>` from the accumulated
    * text and tool-call deltas once the stream completes. Errors thrown
@@ -107,6 +117,7 @@ export function buildStreamResult<T>(
     streamController,
     logger,
     signal,
+    onRateLimitHint,
   } = options;
 
   let resolveFinal!: (value: T | CallWithToolsResult<T>) => void;
@@ -150,6 +161,10 @@ export function buildStreamResult<T>(
         if (wireChunk.type === 'ping') {
           // No content to accumulate or push. Just resolving here
           // resets the idle-timeout clock on the next .next() call.
+        } else if (wireChunk.type === 'rate_limit_hint') {
+          // No content to accumulate or push. Fired immediately, not
+          // deferred; see this option's own doc comment for why.
+          onRateLimitHint?.(wireChunk.hint);
         } else if (wireChunk.type === 'text-delta') {
           textAcc += wireChunk.delta;
           push({ type: 'text-delta', delta: wireChunk.delta });

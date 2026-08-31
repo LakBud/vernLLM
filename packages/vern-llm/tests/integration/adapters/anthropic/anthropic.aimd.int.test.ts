@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { fromAnthropic } from '../../../../src/adapters/anthropic.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-import { startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
+import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
 /**
  * Anthropic counterpart to `openaiCompatible.aimd.real.int.test.ts`. See
@@ -23,6 +23,38 @@ function messageBody(tag: string) {
     stop_reason: 'end_turn',
     usage: { input_tokens: 10, output_tokens: 4 },
   };
+}
+
+/** A minimal, single-chunk real Anthropic SSE stream. */
+function streamedMessage(tag: string, headers?: Record<string, string>) {
+  return sseRaw(
+    [
+      {
+        event: 'message_start',
+        data: { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+      },
+      {
+        event: 'content_block_start',
+        data: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' },
+        },
+      },
+      {
+        event: 'content_block_delta',
+        data: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: `ok:${tag}` },
+        },
+      },
+      { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+      { event: 'message_delta', data: { type: 'message_delta', usage: { output_tokens: 4 } } },
+      { event: 'message_stop', data: { type: 'message_stop' } },
+    ],
+    headers,
+  );
 }
 
 const SETTLE_WINDOW_MS = 150;
@@ -173,5 +205,97 @@ describe('AIMD integration (real @anthropic-ai/sdk client)', () => {
     expect(server.requests).toHaveLength(2); // blocked: never reached the mock server
 
     controller.abort();
+  });
+
+  it('supportsWithResponse: true shrinks the ceiling proactively for a streaming call too', async () => {
+    server = await startRealSdkServer([
+      { raw: streamedMessage('1', { 'anthropic-ratelimit-requests-remaining': '1' }) },
+      { body: messageBody('2') },
+    ]);
+
+    const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url });
+
+    const llm = new VernLLM({
+      client: fromAnthropic(anthropic, { supportsWithResponse: true }),
+      model: 'claude-test',
+      rateLimit: {
+        requestsPerMinute: 5,
+        aimd: {
+          increaseBy: 0,
+          decreaseFactor: 0.0001,
+          minCapacity: 1,
+          maxCapacity: 100,
+          proactiveFloor: 5,
+        },
+      },
+    });
+
+    // Streams a real response; the low-remaining-requests header on it
+    // triggers the proactive shrink: capacity 5 -> floor 1, clamping the
+    // 4 units already banked down to 1, not below.
+    const first = await llm.call({ userContent: 'one', jsonMode: false, stream: true });
+    for await (const _chunk of first.chunks) {
+      // drain
+    }
+    await expect(first.finalResult).resolves.toBe('ok:1');
+    expect(server.requests).toHaveLength(1);
+
+    // Spends the one remaining banked unit (non-streaming this time;
+    // AIMD's ceiling is adapter/mode-agnostic). Succeeds either way,
+    // shrunk or not, so this alone doesn't prove anything.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
+
+    // The real discriminator: blocked only if the ceiling is genuinely
+    // capped at 1 now. If the streaming response's header were never
+    // parsed at all, 2 more units of the original 5 would still be
+    // free, and this would succeed instead.
+    const controller = new AbortController();
+    void llm
+      .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
+      .catch(() => {});
+
+    await sleep(SETTLE_WINDOW_MS);
+
+    expect(server.requests).toHaveLength(2); // blocked: never reached the mock server
+
+    controller.abort();
+  });
+
+  it('supportsWithResponse left at default (false) never parses streaming headers, even with a low-remaining header present', async () => {
+    server = await startRealSdkServer([
+      { raw: streamedMessage('1', { 'anthropic-ratelimit-requests-remaining': '1' }) },
+      { body: messageBody('2') },
+    ]);
+
+    const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url });
+
+    const llm = new VernLLM({
+      client: fromAnthropic(anthropic), // supportsWithResponse defaults false
+      model: 'claude-test',
+      rateLimit: {
+        requestsPerMinute: 5,
+        aimd: {
+          increaseBy: 0,
+          decreaseFactor: 0.0001,
+          minCapacity: 1,
+          maxCapacity: 100,
+          proactiveFloor: 5,
+        },
+      },
+    });
+
+    const first = await llm.call({ userContent: 'one', jsonMode: false, stream: true });
+    for await (const _chunk of first.chunks) {
+      // drain
+    }
+    await expect(first.finalResult).resolves.toBe('ok:1');
+
+    // Ceiling never shrank (the header was never read): the second call
+    // reaches the server and succeeds normally.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
   });
 });

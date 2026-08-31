@@ -188,8 +188,7 @@ export interface OpenAICompatibleAdapterOptions {
   /**
    * Whether the client's request builder supports `.withResponse()`
    * (needed for AIMD's proactive path). Default `false`, since not
-   * every "OpenAI-compatible" client is confirmed to support it. See
-   * [AIMD](/docs/core/aimd).
+   * every "OpenAI-compatible" client is confirmed to support it.
    */
   supportsWithResponse?: boolean;
 }
@@ -245,19 +244,45 @@ export function fromOpenAICompatible(
 
         async *createStream(params, options) {
           const messages = toOpenAIMessages(params);
+          const built = applyReasoningBudget(
+            {
+              ...params,
+              messages,
+              stream: true,
+              ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+            },
+            effortTokenTable,
+          );
 
-          const stream = (await rawCreate(
-            applyReasoningBudget(
-              {
-                ...params,
-                messages,
-                stream: true,
-                ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
-              },
-              effortTokenTable,
-            ),
-            options,
-          )) as AsyncIterable<OpenAIStreamChunk>;
+          let stream: AsyncIterable<OpenAIStreamChunk>;
+
+          if (!supportsWithResponse) {
+            stream = (await rawCreate(built, options)) as AsyncIterable<OpenAIStreamChunk>;
+          } else {
+            // Same `.withResponse()` used by `create`, above, and its own
+            // doc comment: gated behind `supportsWithResponse` since it's
+            // specific to the real `openai` package's `APIPromise`, not
+            // `LLMClient['create']`'s declared return type. Works
+            // identically for a streaming call: `data` is the `Stream`
+            // itself instead of a parsed completion, and `response` is
+            // available immediately, before the stream body is consumed.
+            const { data, response } = await (
+              raw.chat.completions.create(
+                built as Parameters<LLMClient['chat']['completions']['create']>[0],
+                options,
+              ) as unknown as {
+                withResponse(): Promise<{ data: unknown; response: Response }>;
+              }
+            ).withResponse();
+
+            stream = data as AsyncIterable<OpenAIStreamChunk>;
+
+            const hint = parseOpenAIRateLimitHeaders(response.headers);
+
+            if (hint.remainingRequests !== undefined || hint.limitRequests !== undefined) {
+              yield { type: 'rate_limit_hint', hint };
+            }
+          }
 
           for await (const chunk of stream) {
             yield* toWireStreamChunks(chunk);
@@ -282,7 +307,7 @@ export function fromOpenAICompatible(
  * multimodal image translation and `createStream` wiring that a raw
  * client doesn't have. See Migration Notes for details.
  *
- * `supportsWithResponse` defaults to `false` here too (see [AIMD](/docs/core/aimd)):
+ * `supportsWithResponse` defaults to `false` here too:
  * `client` is `unknown`, so there's no way to verify it's really the
  * official `openai` package's client versus a fake or a test double.
  * Pass `supportsWithResponse: true` once you've confirmed it.

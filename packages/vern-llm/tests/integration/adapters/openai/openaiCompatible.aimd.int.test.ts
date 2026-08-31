@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { fromOpenAI } from '../../../../src/adapters/openaiCompatible.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-import { startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
+import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
 /**
  * Exercises AIMD's proactive and reactive paths against a real `openai`
@@ -47,6 +47,31 @@ function completionBody(tag: string) {
     ],
     usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
   };
+}
+
+/** A minimal, single-chunk real OpenAI SSE stream (one delta, then `finish_reason`, then `[DONE]`). */
+function streamedCompletion(tag: string, headers?: Record<string, string>) {
+  return sseRaw(
+    [
+      {
+        data: {
+          id: 'chatcmpl-1',
+          object: 'chat.completion.chunk',
+          choices: [{ index: 0, delta: { role: 'assistant', content: `ok:${tag}` } }],
+        },
+      },
+      {
+        data: {
+          id: 'chatcmpl-1',
+          object: 'chat.completion.chunk',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        },
+      },
+      { data: '[DONE]' },
+    ],
+    headers,
+  );
 }
 
 /** Comfortably longer than a loopback round trip, comfortably shorter than any queue/backoff wait in these tests. */
@@ -200,5 +225,97 @@ describe('AIMD integration (real openai SDK client)', () => {
     expect(server.requests).toHaveLength(2);
 
     controller.abort();
+  });
+
+  it('supportsWithResponse: true shrinks the ceiling proactively for a streaming call too', async () => {
+    server = await startRealSdkServer([
+      { raw: streamedCompletion('1', { 'x-ratelimit-remaining-requests': '1' }) },
+      { body: completionBody('2') },
+    ]);
+
+    const openai = new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` });
+
+    const llm = new VernLLM({
+      client: fromOpenAI(openai, { supportsWithResponse: true }),
+      model: 'gpt-test',
+      rateLimit: {
+        requestsPerMinute: 5,
+        aimd: {
+          increaseBy: 0,
+          decreaseFactor: 0.0001,
+          minCapacity: 1,
+          maxCapacity: 100,
+          proactiveFloor: 5,
+        },
+      },
+    });
+
+    // Streams a real response; the low-remaining-requests header on it
+    // triggers the proactive shrink: capacity 5 -> floor 1, clamping the
+    // 4 units already banked down to 1, not below.
+    const first = await llm.call({ userContent: 'one', jsonMode: false, stream: true });
+    for await (const _chunk of first.chunks) {
+      // drain
+    }
+    await expect(first.finalResult).resolves.toBe('ok:1');
+    expect(server.requests).toHaveLength(1);
+
+    // Spends the one remaining banked unit (non-streaming this time;
+    // AIMD's ceiling is adapter/mode-agnostic). Succeeds either way,
+    // shrunk or not, so this alone doesn't prove anything.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
+
+    // The real discriminator: blocked only if the ceiling is genuinely
+    // capped at 1 now. If the streaming response's header were never
+    // parsed at all, 2 more units of the original 5 would still be
+    // free, and this would succeed instead.
+    const controller = new AbortController();
+    void llm
+      .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
+      .catch(() => {});
+
+    await sleep(SETTLE_WINDOW_MS);
+
+    expect(server.requests).toHaveLength(2); // blocked: never reached the mock server
+
+    controller.abort();
+  });
+
+  it('supportsWithResponse left at default (false) never parses streaming headers, even with a low-remaining header present', async () => {
+    server = await startRealSdkServer([
+      { raw: streamedCompletion('1', { 'x-ratelimit-remaining-requests': '1' }) },
+      { body: completionBody('2') },
+    ]);
+
+    const openai = new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` });
+
+    const llm = new VernLLM({
+      client: fromOpenAI(openai), // supportsWithResponse defaults false
+      model: 'gpt-test',
+      rateLimit: {
+        requestsPerMinute: 5,
+        aimd: {
+          increaseBy: 0,
+          decreaseFactor: 0.0001,
+          minCapacity: 1,
+          maxCapacity: 100,
+          proactiveFloor: 5,
+        },
+      },
+    });
+
+    const first = await llm.call({ userContent: 'one', jsonMode: false, stream: true });
+    for await (const _chunk of first.chunks) {
+      // drain
+    }
+    await expect(first.finalResult).resolves.toBe('ok:1');
+
+    // Ceiling never shrank (the header was never read): the second call
+    // reaches the server and succeeds normally.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
   });
 });

@@ -36,8 +36,7 @@ export interface RateLimitOptions {
   estimateTokens?: (request: WireRequest) => number;
   /**
    * AIMD against the `requestsPerMinute` bucket. Omit for a fixed
-   * ceiling, today's behavior. Requires `requestsPerMinute`. See
-   * [AIMD](/docs/core/aimd).
+   * ceiling, today's behavior. Requires `requestsPerMinute`.
    */
   aimd?: AimdOptions;
 }
@@ -54,7 +53,7 @@ export interface AimdOptions {
   /**
    * Shrink proactively once a provider hint reports `remainingRequests`
    * at or below this, before a real 429 happens. Default 0, meaning
-   * off. See [AIMD](/docs/core/aimd) for which adapters can produce a hint.
+   * off.
    */
   proactiveFloor?: number;
 }
@@ -496,8 +495,7 @@ export class RateLimiter {
 
   /**
    * AIMD's proactive entry point: shrinks via `signalRateLimit()` if
-   * `hint.remainingRequests` is at or below `aimd.proactiveFloor`. See
-   * [AIMD](/docs/core/aimd).
+   * `hint.remainingRequests` is at or below `aimd.proactiveFloor`.
    */
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void {
     if (!this.aimd || !hint || hint.remainingRequests === undefined) return;

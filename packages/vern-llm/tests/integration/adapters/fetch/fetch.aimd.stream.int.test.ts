@@ -3,16 +3,26 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { fromFetch } from '../../../../src/adapters/fetch.js';
 import { type WireStreamChunk } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-import { startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
+import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
 /**
- * Regression coverage for `executeStreamCall`'s stream-opening path:
- * before this fix, a 429 on the very first `streamIterator.next()` (the
- * stream never even opens) never reached `reactToRateLimitError`, so
- * AIMD's ceiling stayed unchanged for streaming calls even though the
- * exact same failure on a non-streaming call already shrank it (see
- * `fetch.aimd.int.test.ts`'s "a real 429 shrinks the ceiling reactively"
- * case). This mirrors that test, but with `stream: true`.
+ * Regression coverage for AIMD on `fromFetch`'s streaming path,
+ * covering both directions:
+ *
+ * 1. Reactive: before this fix, a 429 on the very first
+ *    `streamIterator.next()` (the stream never even opens) never
+ *    reached `reactToRateLimitError`, so AIMD's ceiling stayed
+ *    unchanged for streaming calls even though the exact same failure
+ *    on a non-streaming call already shrank it (see
+ *    `fetch.aimd.int.test.ts`'s "a real 429 shrinks the ceiling
+ *    reactively" case). This mirrors that test, but with `stream: true`.
+ *
+ * 2. Proactive: before this fix, `createStream` never read the response
+ *    headers at all (only `create`, the non-streaming path, did), so a
+ *    streaming response's rate-limit headers were silently ignored, no
+ *    `supportsWithResponse`-style opt-in needed here since `fromFetch`
+ *    already has the headers in hand either way (native `fetch`'s
+ *    `Response`), unlike the SDK-wrapping adapters.
  *
  * `aimd.minCapacity` must be `>= 1` (see `rateLimit.ts`'s own
  * `buildAimdOptions` comment), so a shrink to that floor never destroys
@@ -48,7 +58,7 @@ function buildClient(server: RealSdkServer) {
   });
 }
 
-describe('AIMD integration (real fromFetch, streaming), stream-open 429', () => {
+describe('AIMD integration (real fromFetch, streaming)', () => {
   let server: RealSdkServer | undefined;
 
   afterEach(async () => {
@@ -96,6 +106,65 @@ describe('AIMD integration (real fromFetch, streaming), stream-open 429', () => 
     // capped at 1 now. Without the stream-open 429 reaching
     // `reactToRateLimitError`, 2 more units of the original 5 would
     // still be free, and this would succeed instead.
+    const controller = new AbortController();
+    void llm
+      .call({ userContent: 'three', jsonMode: false, signal: controller.signal })
+      .catch(() => {});
+
+    await sleep(SETTLE_WINDOW_MS);
+
+    expect(server.requests).toHaveLength(2); // blocked: never reached the mock server
+
+    controller.abort();
+  });
+
+  it('a low remaining-requests header on a streaming response shrinks the ceiling proactively', async () => {
+    server = await startRealSdkServer([
+      {
+        raw: sseRaw([{ data: { delta: 'ok:1' } }], {
+          'x-ratelimit-remaining-requests': '1',
+        }),
+      },
+      { body: completionBody('2') },
+    ]);
+
+    const llm = new VernLLM({
+      client: buildClient(server),
+      model: 'custom',
+      rateLimit: {
+        requestsPerMinute: 5,
+        aimd: {
+          increaseBy: 0,
+          decreaseFactor: 0.0001,
+          minCapacity: 1,
+          maxCapacity: 100,
+          proactiveFloor: 5,
+        },
+      },
+    });
+
+    // `fromFetch`'s default `requestStream` (native `fetch`) parses the
+    // response header directly, no `stream: true`-only opt-in needed;
+    // triggers the proactive shrink: capacity 5 -> floor 1, clamping the
+    // 4 units already banked down to 1, not below.
+    const first = await llm.call({ userContent: 'one', jsonMode: false, stream: true });
+    for await (const _chunk of first.chunks) {
+      // drain
+    }
+    await expect(first.finalResult).resolves.toBe('ok:1');
+    expect(server.requests).toHaveLength(1);
+
+    // Spends the one remaining banked unit (non-streaming this time;
+    // AIMD's ceiling is adapter/mode-agnostic). Succeeds either way,
+    // shrunk or not, so this alone doesn't prove anything.
+    const second = await llm.call({ userContent: 'two', jsonMode: false });
+    expect(second).toBe('ok:2');
+    expect(server.requests).toHaveLength(2);
+
+    // The real discriminator: blocked only if the ceiling is genuinely
+    // capped at 1 now. If the streaming response's header were never
+    // parsed at all, 2 more units of the original 5 would still be
+    // free, and this would succeed instead.
     const controller = new AbortController();
     void llm
       .call({ userContent: 'three', jsonMode: false, signal: controller.signal })

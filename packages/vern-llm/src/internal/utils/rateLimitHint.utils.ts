@@ -1,4 +1,4 @@
-/** A normalized read of a provider's rate limit headers. See [AIMD](/docs/core/aimd). */
+/** A normalized read of a provider's rate limit headers. */
 export interface ProviderRateLimitHint {
   remainingRequests?: number;
   limitRequests?: number;

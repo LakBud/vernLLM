@@ -1,3 +1,4 @@
+import type { ProviderRateLimitHint } from '../internal/utils/rateLimitHint.utils.js';
 import type {
   CachedCallInput,
   CallParams,
@@ -120,6 +121,19 @@ export type WireStreamChunk =
        * Never surfaced to callers as a `StreamChunk`.
        */
       type: 'ping';
+    }
+  | {
+      /**
+       * AIMD's proactive rate-limit hint, read off the stream's
+       * response headers (where the adapter/SDK can get at them) and
+       * yielded once, as early as possible. Mirrors `attachRateLimitHint`
+       * for the non-streaming path, just carried as a chunk instead of a
+       * hidden property on a response object, since a stream has no
+       * single response value to attach one to. Never surfaced to
+       * callers as a `StreamChunk`.
+       */
+      type: 'rate_limit_hint';
+      hint: ProviderRateLimitHint;
     };
 
 /**

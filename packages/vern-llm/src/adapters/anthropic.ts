@@ -471,7 +471,7 @@ export interface AnthropicAdapterOptions {
    * Whether the client's `messages.create` supports `.withResponse()`
    * (needed for AIMD's proactive path). Default `false`, since
    * `AnthropicClient` is structural and a test fake or thin wrapper
-   * won't implement it. See [AIMD](/docs/core/aimd).
+   * won't implement it.
    */
   supportsWithResponse?: boolean;
 }
@@ -645,10 +645,39 @@ export function fromAnthropic(
             adaptiveOnlyModels,
           );
 
-          const stream = (await rawMessagesCreate(
-            { ...body, stream: true },
-            options,
-          )) as AsyncIterable<AnthropicStreamEvent>;
+          let stream: AsyncIterable<AnthropicStreamEvent>;
+
+          if (!supportsWithResponse) {
+            stream = (await rawMessagesCreate(
+              { ...body, stream: true },
+              options,
+            )) as AsyncIterable<AnthropicStreamEvent>;
+          } else {
+            // Same `.withResponse()` used by `create`, above, and its own
+            // doc comment: specific to the real `@anthropic-ai/sdk`
+            // package's `APIPromise`, not `AnthropicClient`'s declared
+            // structural type, hence the cast, gated behind
+            // `supportsWithResponse`. Works identically for a streaming
+            // call: `data` is the async-iterable stream itself instead of
+            // a parsed message, and `response` is available immediately,
+            // before the stream body is consumed.
+            const { data, response: raw } = await (
+              anthropicClient.messages.create(
+                { ...body, stream: true } as Parameters<AnthropicClient['messages']['create']>[0],
+                options,
+              ) as unknown as {
+                withResponse(): Promise<{ data: unknown; response: Response }>;
+              }
+            ).withResponse();
+
+            stream = data as AsyncIterable<AnthropicStreamEvent>;
+
+            const hint = parseAnthropicRateLimitHeaders(raw.headers);
+
+            if (hint.remainingRequests !== undefined || hint.limitRequests !== undefined) {
+              yield { type: 'rate_limit_hint', hint };
+            }
+          }
 
           // Tracks which content-block index is which kind, since Anthropic
           // interleaves text and tool_use blocks under a shared `index`

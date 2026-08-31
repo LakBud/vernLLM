@@ -309,7 +309,7 @@ export class CallExecutor {
         throw error;
       }
 
-      // AIMD's proactive path. See [AIMD](/docs/core/aimd).
+      // AIMD's proactive path.
       this.limiter?.reactToRateLimitHint(readRateLimitHint(response));
 
       // Extracted right after the response arrives, before anything else
@@ -380,8 +380,7 @@ export class CallExecutor {
 
   /**
    * AIMD's reactive path: shrinks the ceiling on a real 429,
-   * adapter-agnostic, independent of `supportsWithResponse`. See
-   * [AIMD](/docs/core/aimd).
+   * adapter-agnostic, independent of `supportsWithResponse`.
    */
   private reactToRateLimitError(error: unknown): void {
     if (!this.limiter) return;
@@ -518,6 +517,9 @@ export class CallExecutor {
         streamController,
         logger: this.logger,
         signal: params.signal,
+        onRateLimitHint: (hint) => {
+          this.limiter?.reactToRateLimitHint(hint);
+        },
         onStreamSuccess: (_usage) => {
           // No breaker success recorded here, and no release here
           // either. `finalize`, below, is the single source of truth
@@ -530,6 +532,14 @@ export class CallExecutor {
           // below tries to increment it.
         },
         onStreamFailure: (normalized, usage) => {
+          // AIMD's reactive path. A provider can emit a 429 after the
+          // stream has already opened (e.g. Bedrock's mid-stream
+          // `throttlingException`), not just on the opening attempt
+          // (already handled above, around the initial `withTimeout`
+          // call): both are real rate-limit signals and must shrink
+          // the ceiling the same way.
+          this.reactToRateLimitError(normalized);
+
           // Idle timeout is the one mid-stream failure that trips the
           // breaker: otherwise a provider that hangs after one chunk
           // would always record a success and never open it.
