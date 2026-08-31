@@ -3,6 +3,8 @@ name: Changeset
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'packages/vern-llm/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
