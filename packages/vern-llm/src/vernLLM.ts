@@ -174,6 +174,7 @@ export class VernLLM {
       nonRetryableStatus: options.nonRetryableStatus,
       circuitBreaker: options.circuitBreaker,
       rateLimit: options.rateLimit,
+      retryBudget: options.retryBudget,
       detectSoftFailure: options.detectSoftFailure,
     };
 
@@ -738,6 +739,21 @@ export class VernLLM {
     );
 
     return executor.getFailureBreakdown(target?.model ?? executor.model);
+  }
+
+  /**
+   * @param target.index Which target to read. Defaults to the primary.
+   * @returns This target's current retry traffic/ratio in the trailing
+   * window, or `undefined` if that target has no retry budget
+   * configured. A budget is target-scoped, not model-scoped, so unlike
+   * `getFailureBreakdown` there's no `target.model` to pass.
+   * @throws {RangeError} If `target.index` names no target.
+   */
+  getRetryBudgetState(
+    target?: Pick<CircuitTarget, 'index'>,
+  ): { attempts: number; retryRatio: number } | undefined {
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'getRetryBudgetState');
+    return executor.getRetryBudgetState();
   }
 
   /**

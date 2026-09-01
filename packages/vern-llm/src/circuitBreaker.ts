@@ -1,5 +1,6 @@
 import { fullJitter } from './internal/execution/utils/retry/retry.utils.js';
 import { RollingRatio } from './internal/rollingRatio.js';
+import { validateMinCalls, validateRatio } from './internal/utils/validate.utils.js';
 import { LLMError, type LLMErrorCode } from './types/errors.js';
 
 import type { MiddlewareStateBag } from './types/middleware.js';
@@ -52,9 +53,12 @@ export interface CircuitBreakerOptions {
    * many failures in a row. `{ kind: 'rolling', windowMs, minCalls,
    * failureRatio }` opens once at least `minCalls` calls have landed in
    * the trailing `windowMs` and the failure ratio reaches `failureRatio`.
-   * A `TrippingPolicy` covers anything else, one instance shared across
-   * every model automatically under `isolateByModel`, since it tracks its
-   * own state per key rather than owning one flat counter.
+   * `minCalls` must be a non-negative integer; `failureRatio` must be
+   * finite and within `[0, 1]`. Both are validated at construction,
+   * thrown as `RangeError`. A `TrippingPolicy` covers anything else, one
+   * instance shared across every model automatically under
+   * `isolateByModel`, since it tracks its own state per key rather than
+   * owning one flat counter.
    */
   tripping?: TrippingOption;
 }
@@ -138,6 +142,8 @@ export class RollingTripping implements TrippingPolicy {
   ) {
     // Fail at construction rather than on the first recorded outcome.
     new RollingRatio(windowMs);
+    validateMinCalls(minCalls);
+    validateRatio(failureRatio, 'failureRatio');
   }
 
   private ratioFor(key: string): RollingRatio {

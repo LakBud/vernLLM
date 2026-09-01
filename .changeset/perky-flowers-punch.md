@@ -49,6 +49,12 @@ independently of whatever a policy uses to decide when to trip.
 
 Omitted (the default), behavior is unchanged: consecutive-failure tripping against `threshold`.
 
+`{ kind: 'rolling', ... }`'s `minCalls` and `failureRatio` are now validated at construction:
+`minCalls` must be a non-negative integer, `failureRatio` a finite number in `[0, 1]`, both thrown
+as `RangeError` otherwise, the same way `windowMs` already is. Previously an out-of-range value
+silently produced a degenerate policy (always tripping or never tripping) instead of surfacing the
+mistake. Every value already in a valid range keeps working exactly as before.
+
 Also reorganizes `circuitBreaker.ts` into clearly labeled sections (options, cooldown backoff,
 tripping policy, bucket state, the `CircuitBreaker` class), with the class's public API methods
 grouped separately from its private helpers. Pure code motion alongside the feature above: no

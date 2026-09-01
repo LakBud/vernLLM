@@ -1956,6 +1956,22 @@ describe('CircuitBreaker, tripping policy (unit)', () => {
 });
 
 describe('RollingTripping (unit)', () => {
+  it('throws for an invalid minCalls', () => {
+    expect(() => new RollingTripping(60_000, -1, 0.5)).toThrow(RangeError);
+    expect(() => new RollingTripping(60_000, 1.5, 0.5)).toThrow(RangeError);
+  });
+
+  it('throws for an invalid failureRatio', () => {
+    expect(() => new RollingTripping(60_000, 4, -0.1)).toThrow(RangeError);
+    expect(() => new RollingTripping(60_000, 4, 1.1)).toThrow(RangeError);
+    expect(() => new RollingTripping(60_000, 4, NaN)).toThrow(RangeError);
+  });
+
+  it('accepts the boundary values 0 and 1 for failureRatio, and 0 for minCalls', () => {
+    expect(() => new RollingTripping(60_000, 0, 0)).not.toThrow();
+    expect(() => new RollingTripping(60_000, 0, 1)).not.toThrow();
+  });
+
   it('trips once minCalls and failureRatio are both satisfied within the window', () => {
     const tripping = new RollingTripping(60_000, 4, 0.5);
 

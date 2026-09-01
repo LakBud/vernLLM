@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { CircuitBreaker } from '../../../../../../src/circuitBreaker.js';
 import { runAttemptLoop } from '../../../../../../src/internal/execution/utils/dispatch/attemptLoop.utils.js';
+import { RetryBudget } from '../../../../../../src/internal/retryBudget.js';
 import { LLMError } from '../../../../../../src/types/errors.js';
 
 /** Matches the local `noopLogger` helper other execution tests use (see `retry.utils.unit.test.ts`). */
@@ -232,5 +233,81 @@ describe('runAttemptLoop, terminal failure', () => {
       runAttemptLoop(baseParams({ fn, maxRetries: 0, breaker: undefined })),
     ).rejects.toThrow();
     // No assertion needed beyond not throwing from a missing breaker.
+  });
+});
+
+describe('runAttemptLoop, retry budget', () => {
+  it('throws the budget-exhausted error, not the failure that happened to be current, once the budget trips', async () => {
+    // minCalls 1, retryRatio 0: trips on the very first retry check.
+    const budget = new RetryBudget({ windowMs: 60_000, minCalls: 1, retryRatio: 0 });
+    const fn = vi.fn(async () => {
+      throw new LLMError('provider down', 'api', { code: 'server_error' });
+    });
+
+    await expect(runAttemptLoop(baseParams({ fn, maxRetries: 3, budget }))).rejects.toMatchObject({
+      code: 'retry_budget_exhausted',
+      type: 'rate_limited',
+    });
+  });
+
+  it('still carries the prior attempts made before the budget tripped, same as any other terminal error', async () => {
+    // minCalls 2: the first attempt is genuinely retried past (recorded
+    // into `attempts`) before the budget cuts the loop off on the
+    // second, leaving something in `attempts` to potentially lose.
+    const budget = new RetryBudget({ windowMs: 60_000, minCalls: 2, retryRatio: 0 });
+    const fn = vi.fn(async () => {
+      throw new LLMError('provider down', 'api', { code: 'server_error' });
+    });
+
+    await expect(runAttemptLoop(baseParams({ fn, maxRetries: 5, budget }))).rejects.toMatchObject({
+      code: 'retry_budget_exhausted',
+      attempts: [
+        expect.objectContaining({
+          index: 0,
+          error: expect.objectContaining({ code: 'server_error' }),
+        }),
+      ],
+    });
+  });
+
+  it('records recordAttempt(false) on the first attempt and recordAttempt(true) on every retry', async () => {
+    const budget = new RetryBudget({ windowMs: 60_000, minCalls: 100, retryRatio: 1 });
+    const recordAttemptSpy = vi.spyOn(budget, 'recordAttempt');
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls++;
+      if (calls < 3) throw new LLMError('transient', 'api');
+      return 'ok';
+    });
+
+    await runAttemptLoop(baseParams({ fn, maxRetries: 2, budget }));
+
+    expect(recordAttemptSpy).toHaveBeenCalledTimes(3);
+    expect(recordAttemptSpy).toHaveBeenNthCalledWith(1, false);
+    expect(recordAttemptSpy).toHaveBeenNthCalledWith(2, true);
+    expect(recordAttemptSpy).toHaveBeenNthCalledWith(3, true);
+  });
+
+  it('does not count a budget-exhausted terminal error toward the breaker, since it is not retryable', async () => {
+    const breaker = new CircuitBreaker({ threshold: 5, cooldownMs: 1000 });
+    const recordFailureSpy = vi.spyOn(breaker, 'recordFailure');
+    const budget = new RetryBudget({ windowMs: 60_000, minCalls: 1, retryRatio: 0 });
+    const fn = vi.fn(async () => {
+      throw new LLMError('provider down', 'api', { code: 'server_error' });
+    });
+
+    await expect(
+      runAttemptLoop(
+        baseParams({
+          fn,
+          maxRetries: 3,
+          breaker,
+          budget,
+          countsTowardBreaker: (error) => error.countsTowardBreaker,
+        }),
+      ),
+    ).rejects.toThrow();
+
+    expect(recordFailureSpy).not.toHaveBeenCalled();
   });
 });

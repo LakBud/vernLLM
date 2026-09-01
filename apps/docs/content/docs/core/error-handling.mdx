@@ -141,10 +141,12 @@ The currently defined rate-limiting codes are:
 | `rate_limit_queue_full`        | `rate_limited` | A `rateLimit` call was rejected locally because the queue was already at `maxQueueSize`.                                                      |
 | `rate_limit_queue_timeout`     | `rate_limited` | A `rateLimit` call's queue wait exceeded `maxQueueMs`.                                                                                        |
 | `rate_limit_capacity_exceeded` | `rate_limited` | The call's estimated tokens exceed the configured `tokensPerMinute` capacity outright; can never succeed no matter how long the caller waits. |
+| `retry_budget_exhausted`       | `rate_limited` | A `retryBudget` was configured and the target's recent retry ratio reached it; further retries against that target are refused.               |
 | `provider_rate_limited`        | `api`          | The provider itself returned an HTTP 429.                                                                                                     |
 
 See [Rate Limiting](/docs/core/rate-limiting) for the full `rateLimit` option and what
-triggers each of these.
+triggers each of these. See [Retry Budget](/docs/core/retry-budget) for `retry_budget_exhausted`
+specifically.
 
 The currently defined HTTP status codes are:
 
@@ -385,7 +387,7 @@ It is `false` when:
 - `code` is one of the tool contract codes (`unknown_tool`, `duplicate_tool_call_id`,
   `tool_choice_none_violated`, `unexpected_tool_calls`)
 - `code` is one of the local rate limit codes (`rate_limit_queue_full`,
-  `rate_limit_queue_timeout`, `rate_limit_capacity_exceeded`)
+  `rate_limit_queue_timeout`, `rate_limit_capacity_exceeded`, `retry_budget_exhausted`)
 
 <Callout type="info">
   `retryable` and `LLMError.countsTowardBreaker` answer different questions and can disagree.
@@ -412,6 +414,9 @@ since `type: 'fallback_exhausted'` by itself says nothing about whether retrying
   `'rate_limit_capacity_exceeded'` because the call could never fit the configured
   `tokensPerMinute` capacity in the first place, so no amount of retrying changes that. See
   [Interaction with retries](/docs/core/rate-limiting#interaction-with-retries).
+- `error.code` is `'retry_budget_exhausted'` because a configured `retryBudget` decided this
+  target has already had too many retries recently; further retrying against it is refused until
+  the trailing window's ratio drops. See [Retry Budget](/docs/core/retry-budget).
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to

@@ -1,6 +1,7 @@
 import { LLMError, type RetryAttempt } from './errors.js';
 
 import type { CircuitBreakerOptions, CircuitState } from '../circuitBreaker.js';
+import type { RetryBudgetOptions } from '../internal/retryBudget.js';
 import type { RateLimitOption } from '../internal/utils/rateLimitAdapter.utils.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
@@ -13,11 +14,11 @@ import type { LLMClient } from './client.js';
  * Most per-target overrides fall back to the parent `VernLLM` instance's
  * own option when omitted, so a target only needs to specify what's
  * actually different about it (a different client/model is the common
- * case). `circuitBreaker` and `rateLimit` are the exception: they are
- * never inherited from the parent, since a breaker or limiter tuned for
- * the primary provider's limits is rarely right for a fallback's. Leave
- * them unset on a target to run it without one, even if the parent has
- * one configured.
+ * case). `circuitBreaker`, `rateLimit`, and `retryBudget` are the
+ * exception: they are never inherited from the parent, since a breaker,
+ * limiter, or budget tuned for the primary provider's limits is rarely
+ * right for a fallback's. Leave them unset on a target to run it without
+ * one, even if the parent has one configured.
  */
 export interface FallbackTarget {
   client: LLMClient;
@@ -38,6 +39,8 @@ export interface FallbackTarget {
   circuitBreaker?: boolean | CircuitBreakerOptions;
   /** This target's own rate limiter, independent of every other target's. Not inherited from the parent's `rateLimit`. */
   rateLimit?: RateLimitOption;
+  /** This target's own retry budget, independent of every other target's. Not inherited from the parent's `retryBudget`. */
+  retryBudget?: RetryBudgetOptions;
   /**
    * Reclassifies an otherwise-successful result from this target as a
    * failure. Falls back to the parent `VernLLM` instance's own

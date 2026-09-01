@@ -1,0 +1,99 @@
+---
+title: Retry Budget
+description: Cap how much of a target's traffic is allowed to be retries
+---
+
+```ts title="retry-budget-setup.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  retryBudget: { windowMs: 60_000, minCalls: 10, retryRatio: 0.1 },
+});
+
+llm.getRetryBudgetState(); // { attempts: number, retryRatio: number } | undefined
+```
+
+`maxRetries` (see [Retries](/docs/core/retries)) caps how many times one call retries. `retryBudget`
+is a different question: how much of this target's traffic, across every call, is allowed to be a
+retry at all. A single call can be entirely within its own `maxRetries` and still get cut off, if
+other calls against the same target have already used up its tolerance in the trailing window.
+
+Once at least `minCalls` calls have landed in the trailing `windowMs` and the fraction of them that
+were retries reaches `retryRatio`, further retries against that target throw
+`new LLMError('Retry budget exhausted', 'rate_limited', { code: 'retry_budget_exhausted' })`
+instead of retrying. `minCalls`
+gates the check the same way it does for [rolling tripping](/docs/core/circuit-breaker#tripping-policy),
+so a cold start with too little traffic to judge doesn't trip.
+
+## Independent of the circuit breaker
+
+A retry budget and a circuit breaker ask different questions. The breaker asks whether the provider
+is healthy. The budget asks whether retrying is still worth the capacity it costs, regardless of
+provider health. A target can be perfectly healthy (never opening its breaker) while every call still
+needs a retry, and that alone is enough to trip the budget:
+
+```ts
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000 },
+  retryBudget: { windowMs: 60_000, minCalls: 10, retryRatio: 0.1 },
+});
+```
+
+The two gates sit at different points in a call's lifecycle, so they never fire for the same reason
+at the same moment:
+
+- The breaker's gate runs once, up front, before a logical call even starts.
+- The budget's gate runs fresh at each retry, inside the call's own retry loop.
+
+A call can clear the breaker and still get cut off by the budget partway through its own retries.
+The two failures are also distinguishable by `code`: `circuit_cooling_down`/`circuit_trial_in_flight`
+for the breaker, `retry_budget_exhausted` for the budget.
+
+```ts
+try {
+  await llm.call({ userContent: 'hello' });
+} catch (err) {
+  if (isLLMError(err) && err.code === 'retry_budget_exhausted') {
+    console.warn('retries against this target are being throttled');
+  }
+}
+```
+
+## Per target, not per model
+
+A retry budget is built once per target, the same as `circuitBreaker` and `rateLimit`, and it isn't
+inherited by `fallback` targets: leave it unset on a target to run it without one, even if the parent
+has one configured.
+
+Unlike `circuitBreaker`'s `isolateByModel`, a retry budget has no per model option. Every model routed
+through one target shares one budget, on purpose: a budget exists to protect that target's real
+capacity, and every model routed through it still draws on the same underlying rate limits and
+connection pool, regardless of which model each call asked for. `getRetryBudgetState()` reflects that
+combined traffic, not a single model's own.
+
+## Reading budget state
+
+```ts
+llm.getRetryBudgetState();
+// { attempts: 42, retryRatio: 0.07 }
+
+llm.getRetryBudgetState({ index: 1 }); // first fallback target
+```
+
+`undefined` means that target has no retry budget configured. `attempts` and `retryRatio` are always
+scoped to that target's own trailing window, independent of `getCircuitState()`/`getFailureBreakdown`.
+
+## Options reference
+
+| Option       | Notes                                                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `windowMs`   | Trailing window, in ms, the ratio is computed over. Must be a finite number > 0.                                                                                          |
+| `minCalls`   | Minimum calls in the window before the budget can trip. Prevents a cold start with too little traffic to judge from tripping immediately. Must be a non-negative integer. |
+| `retryRatio` | Fraction of calls in the window allowed to be retries before further retries are refused. Must be a finite number in `[0, 1]`.                                            |
+
+All three are validated at construction; an invalid value throws `RangeError` immediately rather
+than producing a silently degenerate budget.
+
+Omitting `retryBudget` entirely disables it, the default.

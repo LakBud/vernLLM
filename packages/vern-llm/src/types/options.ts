@@ -1,4 +1,5 @@
 import type { CircuitBreakerOptions } from '../circuitBreaker.js';
+import type { RetryBudgetOptions } from '../internal/retryBudget.js';
 import type { CacheOption } from '../internal/utils/cacheAdapter.utils.js';
 import type { RateLimitOption } from '../internal/utils/rateLimitAdapter.utils.js';
 import type { Logger } from '../logger.js';
@@ -138,6 +139,17 @@ export interface VernLLMOptions {
    * `RateLimiterAdapter` instead for cross-process coordination.
    */
   rateLimit?: RateLimitOption;
+  /**
+   * Caps how much of this target's recent traffic is allowed to be
+   * retries, independent of `circuitBreaker`. Once at least `minCalls`
+   * calls have landed in the trailing `windowMs` and the retry ratio
+   * among them reaches `retryRatio`, further retries against this target
+   * throw `LLMError('retry_budget_exhausted')` instead of retrying,
+   * protecting the target's real capacity even while its breaker is
+   * still closed. Omit for no budget (the default). Never inherited by
+   * `fallback` targets, same as `circuitBreaker`/`rateLimit`.
+   */
+  retryBudget?: RetryBudgetOptions;
   /**
    * Ordered targets tried after the primary, in order, once it (and its
    * own retries) is exhausted or abandoned. Order is the policy: VernLLM

@@ -143,3 +143,9 @@ try {
 | `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | Status codes that fail immediately instead of retrying.                                                                  |
 
 See [Configuration](/docs/API-reference/configuration) for every option alongside timeout and circuit breaker settings.
+
+<Callout type="info">
+  `maxRetries` caps how many times *one call* retries. A `retryBudget` can also stop retries early,
+  target-wide, once too much of a target's recent traffic has consisted of retries. See [Retry
+  Budget](/docs/core/retry-budget).
+</Callout>
