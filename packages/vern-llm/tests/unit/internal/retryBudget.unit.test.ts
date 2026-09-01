@@ -13,6 +13,41 @@ describe('RetryBudget (unit)', () => {
     );
   });
 
+  it('throws for an invalid minCalls', () => {
+    expect(() => new RetryBudget({ windowMs: 60_000, minCalls: -1, retryRatio: 0.5 })).toThrow(
+      RangeError,
+    );
+    expect(() => new RetryBudget({ windowMs: 60_000, minCalls: 1.5, retryRatio: 0.5 })).toThrow(
+      RangeError,
+    );
+  });
+
+  it('throws for an invalid retryRatio', () => {
+    expect(() => new RetryBudget({ windowMs: 60_000, minCalls: 1, retryRatio: -0.1 })).toThrow(
+      RangeError,
+    );
+    expect(() => new RetryBudget({ windowMs: 60_000, minCalls: 1, retryRatio: 1.1 })).toThrow(
+      RangeError,
+    );
+    expect(() => new RetryBudget({ windowMs: 60_000, minCalls: 1, retryRatio: NaN })).toThrow(
+      RangeError,
+    );
+  });
+
+  it('accepts the boundary values 0 and 1 for retryRatio, and 0 for minCalls', () => {
+    expect(() => new RetryBudget({ windowMs: 60_000, minCalls: 0, retryRatio: 0 })).not.toThrow();
+    expect(() => new RetryBudget({ windowMs: 60_000, minCalls: 0, retryRatio: 1 })).not.toThrow();
+  });
+
+  it('throws for a non positive windowMs, same as RollingRatio', () => {
+    expect(() => new RetryBudget({ windowMs: 0, minCalls: 1, retryRatio: 0.5 })).toThrow(
+      RangeError,
+    );
+    expect(() => new RetryBudget({ windowMs: -1, minCalls: 1, retryRatio: 0.5 })).toThrow(
+      RangeError,
+    );
+  });
+
   it('reports an empty snapshot before anything is recorded', () => {
     const budget = new RetryBudget({ windowMs: 60_000, minCalls: 5, retryRatio: 0.5 });
     expect(budget.getSnapshot()).toEqual({ attempts: 0, retryRatio: 0 });

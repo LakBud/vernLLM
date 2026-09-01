@@ -18,9 +18,11 @@ const llm = new VernLLM({
 
 Once at least `minCalls` calls have landed in the trailing `windowMs` and the fraction of them that
 were retries reaches `retryRatio`, further retries against that target throw
-`LLMError('retry_budget_exhausted')` instead of retrying. `minCalls` gates the check the same way it
-already does for `tripping: { kind: 'rolling', ... }`, so a cold start with too little traffic to
-judge doesn't trip. Reuses the same `RollingRatio` primitive `RollingTripping` is built on.
+`LLMError('rate_limited')` with `code: 'retry_budget_exhausted'` instead of retrying. `minCalls`
+gates the check the same way it already does for `tripping: { kind: 'rolling', ... }`, so a cold
+start with too little traffic to judge doesn't trip. Reuses the same `RollingRatio` primitive
+`RollingTripping` is built on. `minCalls` and `retryRatio` are validated at construction (a
+non-negative integer, and a finite number in `[0, 1]`, respectively), thrown as `RangeError`.
 
 The breaker and the budget are independent gates asking different questions, breaker health vs
 retry cost, and never fire for the same reason: the breaker's gate runs once per logical call,

@@ -1,12 +1,15 @@
 import { LLMError } from '../types/errors.js';
 import { RollingRatio } from './rollingRatio.js';
+import { validateMinCalls, validateRatio } from './utils/validate.utils.js';
 
 /**
  * Tunables for a `RetryBudget`. `windowMs`/`minCalls` behave the same as
  * `RollingTripping`'s (see `circuitBreaker.ts`): `minCalls` gates the
  * check so a cold start with too little traffic to judge doesn't trip.
  * `retryRatio` is the max fraction of calls in the window allowed to be
- * retries before the budget stops allowing more.
+ * retries before the budget stops allowing more. `minCalls` must be a
+ * non-negative integer; `retryRatio` must be finite and within `[0, 1]`.
+ * Both are validated at construction, thrown as `RangeError`.
  */
 export interface RetryBudgetOptions {
   windowMs: number;
@@ -27,6 +30,8 @@ export class RetryBudget {
 
   constructor(private readonly options: RetryBudgetOptions) {
     this.ratio = new RollingRatio(options.windowMs);
+    validateMinCalls(options.minCalls);
+    validateRatio(options.retryRatio, 'retryRatio');
   }
 
   /**

@@ -20,9 +20,9 @@ other calls against the same target have already used up its tolerance in the tr
 
 Once at least `minCalls` calls have landed in the trailing `windowMs` and the fraction of them that
 were retries reaches `retryRatio`, further retries against that target throw
-`LLMError('retry_budget_exhausted')` instead of retrying. `minCalls` gates the check the same way it
-does for [rolling tripping](/docs/core/circuit-breaker#tripping-policy), so a cold start with too
-little traffic to judge doesn't trip.
+`LLMError('rate_limited')` with `code: 'retry_budget_exhausted'` instead of retrying. `minCalls`
+gates the check the same way it does for [rolling tripping](/docs/core/circuit-breaker#tripping-policy),
+so a cold start with too little traffic to judge doesn't trip.
 
 ## Independent of the circuit breaker
 
@@ -82,14 +82,17 @@ llm.getRetryBudgetState({ index: 1 }); // first fallback target
 ```
 
 `undefined` means that target has no retry budget configured. `attempts` and `retryRatio` are always
-scoped to that target's own trailing window, independent of `getCircuitStates()`/`getFailureBreakdown`.
+scoped to that target's own trailing window, independent of `getCircuitState()`/`getFailureBreakdown`.
 
 ## Options reference
 
-| Option       | Notes                                                                                                                                     |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `windowMs`   | Trailing window, in ms, the ratio is computed over.                                                                                       |
-| `minCalls`   | Minimum calls in the window before the budget can trip. Prevents a cold start with too little traffic to judge from tripping immediately. |
-| `retryRatio` | Fraction of calls in the window allowed to be retries before further retries are refused.                                                 |
+| Option       | Notes                                                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `windowMs`   | Trailing window, in ms, the ratio is computed over. Must be a finite number > 0.                                                                                          |
+| `minCalls`   | Minimum calls in the window before the budget can trip. Prevents a cold start with too little traffic to judge from tripping immediately. Must be a non-negative integer. |
+| `retryRatio` | Fraction of calls in the window allowed to be retries before further retries are refused. Must be a finite number in `[0, 1]`.                                            |
+
+All three are validated at construction; an invalid value throws `RangeError` immediately rather
+than producing a silently degenerate budget.
 
 Omitting `retryBudget` entirely disables it, the default.

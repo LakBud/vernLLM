@@ -6,11 +6,10 @@ import { createMockClient, FakeApiError, jsonResponse } from '../helpers.js';
 /**
  * A retry budget caps how much of a target's recent traffic is allowed
  * to be retries, independent of the circuit breaker. These tests exercise
- * it end to end through `VernLLM.call`, per the design doc's ordering
- * claim (section 10.2): the breaker's gate runs once, up front, per
- * logical call; the budget's gate runs fresh at each retry, so a call can
- * clear the breaker and still get cut off by the budget partway through
- * its own retries.
+ * it end to end through `VernLLM.call`. The breaker's own gate runs once,
+ * up front, per logical call, while the budget's gate runs fresh at each
+ * retry, so a call can clear the breaker and still get cut off by the
+ * budget partway through its own retries.
  */
 describe('retry budget end to end', () => {
   it('cuts a call off with retry_budget_exhausted once retries exceed the configured ratio, breaker never trips', async () => {
@@ -21,9 +20,12 @@ describe('retry budget end to end', () => {
       model: 'test-model',
       maxRetries: 5,
       baseDelayMs: 1,
-      // High enough threshold that the breaker itself never trips here,
-      // isolating the budget as the thing that actually stops the call.
-      circuitBreaker: { threshold: 100, cooldownMs: 10_000 },
+      // threshold 1, not just "high enough": any single counted failure
+      // would trip this breaker, so a closed breaker below actually
+      // proves retry_budget_exhausted is excluded from breaker
+      // accounting, rather than merely being too rare to reach a large
+      // threshold.
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
       retryBudget: { windowMs: 60_000, minCalls: 4, retryRatio: 0.5 },
     });
 
@@ -32,9 +34,11 @@ describe('retry budget end to end', () => {
       type: 'rate_limited',
     });
 
-    // The breaker's own gate never fired: it stayed closed the whole
-    // time, proving the budget is a distinct, independent gate rather
-    // than a relabeling of the breaker's own trip.
+    // The breaker's own gate never fired: at threshold 1, any counted
+    // failure would have opened it, so staying closed here proves
+    // retry_budget_exhausted is genuinely excluded from breaker
+    // accounting, not just that the underlying real failures never
+    // individually reached the breaker.
     expect(llm.getCircuitStates()[0]?.state).toBe('closed');
   });
 

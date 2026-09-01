@@ -161,10 +161,16 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
   } catch (error) {
     // `attempts` only holds prior attempts that were actually retried
     // past. It's `[]` when nothing was retried, so normalize that to
-    // `undefined` per `LLMError.attempts`'s contract.
-    const normalized = budgetExhaustedError
-      ? budgetExhaustedError
-      : normalizeError(error, signal, attempts.length > 0 ? attempts : undefined);
+    // `undefined` per `LLMError.attempts`'s contract. `budgetExhaustedError`
+    // still goes through `normalizeError` so it inherits that same
+    // history: `normalizeError` fills in `attempts` on an already-built
+    // `LLMError` without overwriting anything it already carries, so
+    // this doesn't touch the error's own `type`/`code`.
+    const normalized = normalizeError(
+      budgetExhaustedError ?? error,
+      signal,
+      attempts.length > 0 ? attempts : undefined,
+    );
 
     if (countsTowardBreaker(normalized)) {
       // `attempts` only holds prior attempts that were retried past (see
