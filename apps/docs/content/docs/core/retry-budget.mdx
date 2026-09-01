@@ -20,7 +20,8 @@ other calls against the same target have already used up its tolerance in the tr
 
 Once at least `minCalls` calls have landed in the trailing `windowMs` and the fraction of them that
 were retries reaches `retryRatio`, further retries against that target throw
-`LLMError('rate_limited')` with `code: 'retry_budget_exhausted'` instead of retrying. `minCalls`
+`new LLMError('Retry budget exhausted', 'rate_limited', { code: 'retry_budget_exhausted' })`
+instead of retrying. `minCalls`
 gates the check the same way it does for [rolling tripping](/docs/core/circuit-breaker#tripping-policy),
 so a cold start with too little traffic to judge doesn't trip.
 

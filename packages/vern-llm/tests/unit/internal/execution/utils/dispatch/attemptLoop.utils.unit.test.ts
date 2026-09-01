@@ -282,6 +282,7 @@ describe('runAttemptLoop, retry budget', () => {
 
     await runAttemptLoop(baseParams({ fn, maxRetries: 2, budget }));
 
+    expect(recordAttemptSpy).toHaveBeenCalledTimes(3);
     expect(recordAttemptSpy).toHaveBeenNthCalledWith(1, false);
     expect(recordAttemptSpy).toHaveBeenNthCalledWith(2, true);
     expect(recordAttemptSpy).toHaveBeenNthCalledWith(3, true);

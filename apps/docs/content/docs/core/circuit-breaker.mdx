@@ -137,9 +137,9 @@ after that many failures in a row.
 
 `{ kind: 'rolling', windowMs, minCalls, failureRatio }` opens once at least `minCalls` calls have
 landed in the trailing `windowMs` and the failure ratio among them reaches `failureRatio`. This
-suits a provider whose failures are frequent but not literally back to back. `minCalls` must be a
-non-negative integer and `failureRatio` a finite number in `[0, 1]`; both are validated at
-construction, thrown as `RangeError`.
+suits a provider whose failures are frequent but not literally back-to-back. `minCalls` must be a
+non-negative integer and `failureRatio` a finite number in `[0, 1]`; invalid values throw a
+`RangeError` during construction.
 
 ```ts title="circuit-breaker-rolling-tripping.ts"
 const llm = new VernLLM({
