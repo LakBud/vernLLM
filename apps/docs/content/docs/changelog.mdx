@@ -360,7 +360,7 @@ vern-llm uses Changesets for versioning. The release history below is generated 
   Neither field is required. Existing calls and instances that set nothing here are unaffected.
 
   See the `budgetTokens` row in the
-  [Call Params reference](https://vernllm.vercel.app/docs/API-reference/call-params) for full per
+  [Call Params reference](https://vernllm.dev/docs/API-reference/call-params) for full per
   provider behavior.
 
 - d420f6f: `fromGemini` now accepts the whole `@google/genai` client, not just `ai.models`, and unwraps
@@ -633,7 +633,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   `fromOpenAI(client)` is a plain alias for `fromOpenAICompatible(client)`, no behavior change beyond
   the name. Existing code passing a raw client is unaffected; `fromOpenAI` is the recommended path
-  going forward. See [Migration Notes](https://vernllm.vercel.app/docs/migration-notes) for details.
+  going forward. See [Migration Notes](https://vernllm.dev/docs/migration-notes) for details.
 
 ## 2.1.0
 
@@ -819,7 +819,7 @@ undefined`'s type is already the union the ternary computes, not a literal that 
 
   This is purely additive. `onUsage`'s existing contract is unchanged, and no action is needed for existing integrations.
 
-  See the [Usage Tracking](https://vernllm.vercel.app/docs/core/usage-tracking) docs for the full shape and firing semantics.
+  See the [Usage Tracking](https://vernllm.dev/docs/core/usage-tracking) docs for the full shape and firing semantics.
 
 - 56aeab6: Added streaming support to the generic `fromFetch` adapter.
 

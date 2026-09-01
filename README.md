@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://vernllm.vercel.app">Documentation</a> ·
+  <a href="https://vernllm.dev">Documentation</a> ·
   <a href="./packages/vern-llm">Package</a>
 </p>
 
@@ -15,6 +15,7 @@
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/typecheck.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/typecheck.yml/badge.svg" alt="typecheck status" /></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/test-unit.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/test-unit.yml/badge.svg" alt="unit test status" /></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/test-integration.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/test-integration.yml/badge.svg" alt="integration test status" /></a>
+  <a href="https://codecov.io/gh/LakBud/vernLLM" ><img src="https://codecov.io/gh/LakBud/vernLLM/graph/badge.svg?token=NKKW54MODY"/></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/codeql.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/codeql.yml/badge.svg" alt="codeql status" /></a>
   <a href="https://www.bestpractices.dev/projects/14212"><img src="https://www.bestpractices.dev/projects/14212/badge"></a>
   <a href="./LICENSE.md"><img src="https://img.shields.io/npm/l/vern-llm.svg" alt="license" /></a>

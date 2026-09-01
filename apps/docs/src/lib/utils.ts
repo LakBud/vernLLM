@@ -5,4 +5,4 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export const baseUrl = 'https://vernllm.vercel.app';
+export const baseUrl = 'https://vernllm.dev';

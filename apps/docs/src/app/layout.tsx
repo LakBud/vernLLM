@@ -21,7 +21,10 @@ export const metadata: Metadata = {
     icon: '/favicon.ico',
   },
   verification: {
-    google: 'MlFiVXCMn-Rv2x1fE_x5q8TMWZu49CS6VWySgauTUfU',
+    google: [
+      'MlFiVXCMn-Rv2x1fE_x5q8TMWZu49CS6VWySgauTUfU',
+      'ouYzK7cF29I3UDhTZ9OeKs3df5i-jzpJg-N20c9fbfQ',
+    ],
   },
   openGraph: {
     title: 'VernLLM',

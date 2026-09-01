@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/LakBud/vernLLM">GitHub</a> ·
-  <a href="https://vernllm.vercel.app">Documentation</a> ·
+  <a href="https://vernllm.dev">Documentation</a> ·
   <a href="https://www.npmjs.com/package/vern-llm">npm</a>
 </p>
 
@@ -17,6 +17,7 @@
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/typecheck.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/typecheck.yml/badge.svg" alt="typecheck status" /></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/test-unit.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/test-unit.yml/badge.svg" alt="unit test status" /></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/test-integration.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/test-integration.yml/badge.svg" alt="integration test status" /></a>
+  <a href="https://codecov.io/gh/LakBud/vernLLM" ><img src="https://codecov.io/gh/LakBud/vernLLM/graph/badge.svg?token=NKKW54MODY"/></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/lint.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/lint.yml/badge.svg" alt="lint status" /></a>
   <a href="https://github.com/LakBud/vernLLM/blob/main/LICENSE.md"><img src="https://img.shields.io/npm/l/vern-llm.svg" alt="license" /></a>
   <img src="https://img.shields.io/node/v/vern-llm.svg" alt="node version" />
@@ -27,7 +28,7 @@
 
 <p align="center">Retries, timeouts, circuit breaking, provider fallback, rate limiting, caching, middleware plug-ins, structured output, usage metering, usage tracking, observability events and even more, with one interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock providers.</p>
 
-**Full documentation: [vernllm.vercel.app](https://vernllm.vercel.app)** -> installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
+**Full documentation: [vernllm.dev](https://vernllm.dev)** -> installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference all live there and are kept up to date. This README is a quick pitch, not the manual.
 
 ## Install
 
@@ -99,7 +100,7 @@ const result = await finalResult; // cached, retried, and streamed, tool calls i
 - **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
 - **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; vern-llm relies on compatible interfaces rather than specific implementations.
 
-See the [docs](https://vernllm.vercel.app) for adapter setup, caching, the circuit breaker, provider fallback, rate limiting, and structured output in depth.
+See the [docs](https://vernllm.dev) for adapter setup, caching, the circuit breaker, provider fallback, rate limiting, and structured output in depth.
 
 ## License
 

@@ -26,7 +26,7 @@ export default function HomePage() {
           name: 'VernLLM',
           description:
             'The LLM call framework. Resilience, observability, and control for every call.',
-          url: 'https://vernllm.vercel.app',
+          url: 'https://vernllm.dev',
         })}
       />
 

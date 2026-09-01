@@ -1,6 +1,6 @@
 # Contributing to vernLLM
 
-The full guide lives in the docs: [Contributing](https://vernllm.vercel.app/docs/contributing) (or [apps/docs/content/docs/contributing.mdx](https://github.com/LakBud/vernLLM/blob/main/apps/docs/content/docs/contributing.mdx) if browsing the repo).
+The full guide lives in the docs: [Contributing](https://vernllm.dev/docs/contributing) (or [apps/docs/content/docs/contributing.mdx](https://github.com/LakBud/vernLLM/blob/main/apps/docs/content/docs/contributing.mdx) if browsing the repo).
 
 Quick start:
 
