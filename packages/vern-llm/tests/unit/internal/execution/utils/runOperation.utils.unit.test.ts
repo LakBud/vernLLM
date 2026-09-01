@@ -502,4 +502,30 @@ describe('runOperation', () => {
     expect(seenContext).not.toHaveProperty('requestedProvider');
     expect(seenContext).not.toHaveProperty('requestedModel');
   });
+
+  it('Rule 3: keeps the resolved result and logs "unknown" when wrap throws a non-Error after next() already resolved', async () => {
+    const logger = fakeLogger();
+    const middleware: VernLLMMiddleware = {
+      name: 'mw',
+      wrap: async (_request, next) => {
+        await next();
+        throw 'not an Error instance';
+      },
+    };
+    const coreOperation = vi.fn(async () => ({ value: 'resolved' }) satisfies CallResult);
+
+    const outcome = await runOperation(
+      dependencies({ middleware: [middleware], logger }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      coreOperation,
+    );
+
+    expect(outcome).toEqual({ value: 'resolved' });
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VernLLM] middleware "mw".wrap threw after next() resolved; keeping the original result',
+      { message: 'unknown' },
+    );
+  });
 });

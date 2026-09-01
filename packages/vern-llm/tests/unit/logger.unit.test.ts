@@ -28,6 +28,14 @@ describe('ConsoleLogger', () => {
     expect(warnSpy).toHaveBeenCalledWith('a warning');
     expect(errorSpy).toHaveBeenCalledWith('an error', { detail: 1 });
   });
+
+  it('falls back to an empty string when error() is called without meta', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    new ConsoleLogger(false).error('no meta here');
+
+    expect(errorSpy).toHaveBeenCalledWith('no meta here', '');
+  });
 });
 
 describe('VernLLM: injectable logger', () => {

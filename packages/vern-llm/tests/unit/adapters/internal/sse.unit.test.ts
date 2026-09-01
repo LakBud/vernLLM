@@ -190,4 +190,14 @@ describe('parseSseStream', () => {
 
     expect(await collect(parseSseStream(source))).toEqual([{ a: 1 }, { a: 2 }]);
   });
+
+  it('does not yield anything for a trailing [DONE] frame with no closing blank line', async () => {
+    const events = await collect(parseSseStream(chunksOf('data: {"a":1}\n\ndata: [DONE]')));
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
+  it('yields SSE_PING for a trailing comment-only frame with no closing blank line', async () => {
+    const events = await collect(parseSseStream(chunksOf('data: {"a":1}\n\n: keep-alive')));
+    expect(events).toEqual([{ a: 1 }, SSE_PING]);
+  });
 });

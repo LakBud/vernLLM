@@ -120,6 +120,139 @@ describe('CacheOrchestrator.runCached, joinInFlight/registerTrigger', () => {
     expect(result).toBe('cached-value');
     expect(fn).not.toHaveBeenCalled();
   });
+
+  it('treats a failed cache read as a miss, logging a warning instead of throwing', async () => {
+    const logger = silentLogger();
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => {
+        throw new Error('read boom');
+      }),
+      set: vi.fn(),
+    };
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const fn = vi.fn(async () => 'fresh');
+
+    const result = await orchestrator.runCached({ cacheKey: 'k', ttl: 60, fn });
+
+    expect(result).toBe('fresh');
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[VernLLM] cache read failed: read boom'),
+    );
+  });
+
+  it('joinInFlight logs a refund error, instead of throwing, when the trigger rejects and refundUsage itself throws', async () => {
+    const logger = silentLogger();
+    const cache = new InMemoryCacheAdapter();
+    const orchestrator = new CacheOrchestrator(cache, logger);
+
+    let rejectFn!: (error: Error) => void;
+    const gate = new Promise<string>((_resolve, reject) => {
+      rejectFn = reject;
+    });
+    const fn = vi.fn(() => gate);
+    const reserveUsage = vi.fn(async () => {});
+    const refundUsage = vi.fn(async () => {
+      throw new Error('refund boom');
+    });
+
+    const trigger = orchestrator.runCached({ cacheKey: 'k', ttl: 60, fn, reserveUsage });
+    await Promise.resolve();
+    const joiner = orchestrator.runCached({
+      cacheKey: 'k',
+      ttl: 60,
+      fn,
+      reserveUsage,
+      refundUsage,
+    });
+
+    rejectFn(new Error('trigger failed'));
+
+    await expect(trigger).rejects.toThrow('trigger failed');
+    await expect(joiner).rejects.toThrow('trigger failed');
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed', {
+      message: 'refund boom',
+    });
+  });
+
+  it('logs a warning instead of throwing when caching a fresh non-streaming result fails', async () => {
+    const logger = silentLogger();
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => ({ hit: false, value: null })),
+      set: vi.fn(async () => {
+        throw new Error('write boom');
+      }),
+    };
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const fn = vi.fn(async () => 'fresh');
+
+    const result = await orchestrator.runCached({ cacheKey: 'k', ttl: 60, fn });
+
+    expect(result).toBe('fresh');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[VernLLM] cache write failed: write boom'),
+    );
+  });
+
+  it('logs "unknown" when caching a fresh non-streaming result fails with a non-Error value', async () => {
+    const logger = silentLogger();
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => ({ hit: false, value: null })),
+      set: vi.fn(async () => {
+        throw 'not an Error instance';
+      }),
+    };
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const fn = vi.fn(async () => 'fresh');
+
+    await orchestrator.runCached({ cacheKey: 'k', ttl: 60, fn });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[VernLLM] cache write failed: unknown'),
+    );
+  });
+
+  it('registerTrigger logs a refund error, instead of throwing, when fn() itself rejects and refundUsage throws', async () => {
+    const logger = silentLogger();
+    const cache = new InMemoryCacheAdapter();
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const reserveUsage = vi.fn(async () => {});
+    const refundUsage = vi.fn(async () => {
+      throw new Error('refund boom');
+    });
+    const fn = vi.fn(async () => {
+      throw new Error('fn failed');
+    });
+
+    await expect(
+      orchestrator.runCached({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }),
+    ).rejects.toThrow('fn failed');
+
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed', {
+      message: 'refund boom',
+    });
+  });
+
+  it('logRefundError logs "unknown" when refundUsage itself throws a non-Error value', async () => {
+    const logger = silentLogger();
+    const cache = new InMemoryCacheAdapter();
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const reserveUsage = vi.fn(async () => {});
+    const refundUsage = vi.fn(async () => {
+      throw 'not an Error instance';
+    });
+    const fn = vi.fn(async () => {
+      throw new Error('fn failed');
+    });
+
+    await expect(
+      orchestrator.runCached({ cacheKey: 'k', ttl: 60, fn, reserveUsage, refundUsage }),
+    ).rejects.toThrow('fn failed');
+
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed', {
+      message: 'unknown',
+    });
+  });
 });
 
 describe('CacheOrchestrator.runCachedStream, registerStreamTrigger', () => {
@@ -282,6 +415,80 @@ describe('CacheOrchestrator.runCachedStream, registerStreamTrigger', () => {
     await expect(finalResult).resolves.toBe('cached');
     expect(openStream).not.toHaveBeenCalled();
   });
+
+  it('logs a warning instead of throwing when caching a successfully-streamed result fails', async () => {
+    const logger = silentLogger();
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => ({ hit: false, value: null })),
+      set: vi.fn(async () => {
+        throw new Error('write boom');
+      }),
+    };
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const openStream = vi.fn(async () => ({
+      chunks: chunksOf([{ type: 'text-delta', delta: 'hi' }]),
+      finalResult: Promise.resolve('hi'),
+    }));
+
+    const { finalResult } = await orchestrator.runCachedStream(
+      { cacheKey: 'k', ttl: 60, openStream },
+      false,
+    );
+
+    await expect(finalResult).resolves.toBe('hi');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[VernLLM] cache write failed: write boom'),
+    );
+  });
+
+  it('logs "unknown" when caching a successfully-streamed result fails with a non-Error value', async () => {
+    const logger = silentLogger();
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => ({ hit: false, value: null })),
+      set: vi.fn(async () => {
+        throw 'not an Error instance';
+      }),
+    };
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const openStream = vi.fn(async () => ({
+      chunks: chunksOf([{ type: 'text-delta', delta: 'hi' }]),
+      finalResult: Promise.resolve('hi'),
+    }));
+
+    const { finalResult } = await orchestrator.runCachedStream(
+      { cacheKey: 'k', ttl: 60, openStream },
+      false,
+    );
+
+    await expect(finalResult).resolves.toBe('hi');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[VernLLM] cache write failed: unknown'),
+    );
+  });
+
+  it('logs a refund error, instead of throwing, when the stream fails mid-flight and refundUsage itself throws', async () => {
+    const logger = silentLogger();
+    const cache = new InMemoryCacheAdapter();
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const reserveUsage = vi.fn(async () => {});
+    const refundUsage = vi.fn(async () => {
+      throw new Error('refund boom');
+    });
+    const openStream = vi.fn(async () => ({
+      chunks: chunksOf([]),
+      finalResult: Promise.reject(new Error('mid-stream failure')),
+    }));
+
+    const { finalResult } = await orchestrator.runCachedStream(
+      { cacheKey: 'k', ttl: 60, openStream, reserveUsage, refundUsage },
+      false,
+    );
+
+    await expect(finalResult).rejects.toThrow('mid-stream failure');
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed after stream error', {
+      message: 'refund boom',
+    });
+  });
 });
 
 describe('CacheOrchestrator.resolveCacheKey / deleteCache', () => {
@@ -326,5 +533,41 @@ describe('CacheOrchestrator.resolveCacheKey / deleteCache', () => {
 
     await expect(orchestrator.deleteCache('k')).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs "unknown" when the adapter delete fails with a non-Error value', async () => {
+    const logger = silentLogger();
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => ({ hit: false, value: null })),
+      set: vi.fn(),
+      delete: vi.fn(async () => {
+        throw 'not an Error instance';
+      }),
+    };
+    const orchestrator = new CacheOrchestrator(cache, logger);
+
+    await orchestrator.deleteCache('k');
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[VernLLM] cache delete failed: unknown'),
+    );
+  });
+
+  it('logs "unknown" when a cache read fails with a non-Error value', async () => {
+    const logger = silentLogger();
+    const cache: CacheAdapter = {
+      get: vi.fn(async () => {
+        throw 'not an Error instance';
+      }),
+      set: vi.fn(),
+    };
+    const orchestrator = new CacheOrchestrator(cache, logger);
+    const fn = vi.fn(async () => 'fresh');
+
+    await orchestrator.runCached({ cacheKey: 'k', ttl: 60, fn });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[VernLLM] cache read failed: unknown'),
+    );
   });
 });

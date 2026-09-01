@@ -790,6 +790,27 @@ describe('fromGemini reasoning budget (Gemini 3 and later, thinkingLevel)', () =
     });
   });
 
+  it('accepts thinkingLevelModels as a predicate function, not just an array', async () => {
+    const { client, generateContent } = makeFakeGeminiClient('hi');
+    const adapted = fromGemini(client, {
+      thinkingLevelModels: (model) => model === 'gemini-nova-1',
+    });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'gemini-nova-1',
+        max_tokens: 200,
+        reasoning_effort: 'high',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(generateContent.mock.calls[0]![0].config?.thinkingConfig).toEqual({
+      thinkingLevel: 'HIGH',
+    });
+  });
+
   it('thinkingLevelModels cannot un-mark a model the built-in threshold already caught', async () => {
     const { client, generateContent } = makeFakeGeminiClient('hi');
     const adapted = fromGemini(client, { thinkingLevelModels: ['gemini-nova-1'] });

@@ -36,6 +36,19 @@ describe('defaultEstimateTokens', () => {
     expect(() => defaultEstimateTokens(req)).not.toThrow();
     expect(defaultEstimateTokens(req)).toBe(100);
   });
+
+  it('treats null content the same as undefined content (0 chars)', () => {
+    const req = request({ messages: [{ role: 'user', content: null as never }] });
+
+    expect(defaultEstimateTokens(req)).toBe(100);
+  });
+
+  it('defaults max_tokens to 0 when the request omits it', () => {
+    const req = request({ max_tokens: undefined });
+
+    // 'hello' is 5 chars -> ceil(5/4) = 2, plus max_tokens 0
+    expect(defaultEstimateTokens(req)).toBe(2);
+  });
 });
 
 describe('RateLimiter', () => {

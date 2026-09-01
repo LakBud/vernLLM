@@ -41,6 +41,12 @@ describe('toRequestSnapshot', () => {
     expect(snapshot.headers).toBeUndefined();
   });
 
+  it('leaves body undefined when no body was given', () => {
+    const snapshot = toRequestSnapshot('openai', 'gpt-4o', undefined);
+
+    expect(snapshot.body).toBeUndefined();
+  });
+
   it('replaces a circular body with a marker string instead of throwing', () => {
     const circular: Record<string, unknown> = { messages: [] };
     circular.self = circular;
@@ -138,6 +144,37 @@ describe('LLMError request snapshots on attempts', () => {
     expect(
       (err.toJSON().attempts as Array<{ request?: { provider?: string } }>)[0]?.request?.provider,
     ).toBe('anthropic');
+  });
+
+  it('safeAttempts caps recursion depth on a pathologically deep nested attempts chain', () => {
+    // Build a snapshot nested 25 levels deep via error.attempts, exceeding
+    // MAX_ATTEMPTS_DEPTH (20), to exercise the depth-cap guard rather than
+    // recursing without bound.
+    let innermost = new LLMError('down', 'network').toSnapshot();
+    for (let i = 0; i < 25; i++) {
+      innermost = { ...innermost, attempts: [{ index: 0, error: innermost }] };
+    }
+
+    const err = new LLMError('boom', 'api', {
+      attempts: [{ index: 0, error: innermost }],
+    });
+
+    expect(() => err.toSnapshot()).not.toThrow();
+
+    // Walk down through the snapshot's nested attempts until we hit the
+    // point where the depth cap truncated the chain to an empty array.
+    let cursor: unknown = err.toSnapshot();
+    let truncated = false;
+    for (let i = 0; i < 30; i++) {
+      const attempts = (cursor as { attempts?: unknown[] }).attempts;
+      if (!attempts || attempts.length === 0) {
+        truncated = attempts !== undefined;
+        break;
+      }
+      cursor = (attempts[0] as { error: unknown }).error;
+    }
+
+    expect(truncated).toBe(true);
   });
 
   it('request is absent on attempts predating this field', () => {

@@ -545,6 +545,13 @@ describe('middleware smoke test', () => {
     expect(metas[0]).toMatchObject({ provider: 'primary' });
   });
 
+  it('createMiddleware: without onError, returns a plain pass-through entry with no wrap function', async () => {
+    const middleware = createMiddleware({ name: 'passthrough', priority: 5 });
+
+    expect(middleware).toEqual({ name: 'passthrough', priority: 5 });
+    expect(middleware.wrap).toBeUndefined();
+  });
+
   it('createMiddleware: onError observes a failure without changing it, and never fires on success', async () => {
     const { client } = createMockClient([new Error('boom'), textResponse('recovered')]);
 

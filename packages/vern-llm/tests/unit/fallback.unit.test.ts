@@ -375,6 +375,15 @@ describe('VernLLM, fallback', () => {
     }
   });
 
+  it('retryable defers to LLMError.retryable (super) when attempts is empty', () => {
+    const error = new FallbackExhaustedError([]);
+
+    // With no attempts, `last` is undefined, so the getter falls back to
+    // `super.retryable`, derived from this error's own `type`/`status`
+    // ('fallback_exhausted' with no status set).
+    expect(error.retryable).toBe(new LLMError(error.message, error.type).retryable);
+  });
+
   it('isFallbackExhaustedError narrows a caught error and rejects a plain LLMError', () => {
     const attempts = [
       { index: -1, provider: 'primary', model: 'm', error: new LLMError('down', 'api') },

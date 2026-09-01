@@ -77,4 +77,18 @@ describe('InMemoryCacheAdapter, ttl expiry', () => {
       expect((await cache.get('a')).hit).toBe(false);
     }
   });
+
+  it('sweeps already-expired entries out of the store on the next set(), not just on get()', async () => {
+    const cache = new InMemoryCacheAdapter<string>(10);
+
+    // Expired immediately, but never read via get(), so it's still sitting
+    // in the backing store until the next set() call sweeps it.
+    await cache.set('stale', 'A', -1);
+    await cache.set('fresh', 'B', 60);
+
+    // Cleanup runs at the top of set(), before the new entry is inserted,
+    // so the store should now hold only the fresh entry.
+    expect((await cache.get('stale')).hit).toBe(false);
+    expect((await cache.get('fresh')).hit).toBe(true);
+  });
 });

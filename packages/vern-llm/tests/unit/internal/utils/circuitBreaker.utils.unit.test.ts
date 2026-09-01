@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildCircuitBreaker,
   resolveExecutor,
   warnIfModelUnsupported,
 } from '../../../../src/internal/utils/circuitBreaker.utils.js';
@@ -73,5 +74,205 @@ describe('warnIfModelUnsupported', () => {
     expect(message).toContain('openCircuit');
     expect(message).toContain('gpt-4o');
     expect(message).toContain('isolateByModel');
+  });
+});
+
+describe('buildCircuitBreaker', () => {
+  it('returns undefined when circuitBreakerOption is falsy', () => {
+    const logger = fakeLogger();
+
+    expect(
+      buildCircuitBreaker(undefined, 'openai', 'gpt-4o', undefined, logger, [], 5000, false, true),
+    ).toBeUndefined();
+    expect(
+      buildCircuitBreaker(false, 'openai', 'gpt-4o', undefined, logger, [], 5000, false, true),
+    ).toBeUndefined();
+  });
+
+  it('reports the state-change event directly (no middleware context) when the breaker is driven without a call context, e.g. manual open()', () => {
+    const logger = fakeLogger();
+    const onEvent = vi.fn();
+
+    const breaker = buildCircuitBreaker(
+      true,
+      'openai',
+      'gpt-4o',
+      onEvent,
+      logger,
+      [],
+      5000,
+      false,
+      true,
+    )!;
+
+    // No context passed: exercises the `else reportEvent(event)` branch,
+    // not the `emitEvent` middleware-context path.
+    breaker.open();
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'circuit_state', provider: 'openai', to: 'open' }),
+    );
+  });
+
+  it('builds an AttemptContext and routes through emitEvent when the breaker is driven with a call context, e.g. assertClosed()', () => {
+    const logger = fakeLogger();
+    const onEvent = vi.fn();
+
+    const breaker = buildCircuitBreaker(
+      true,
+      'openai',
+      'gpt-4o',
+      onEvent,
+      logger,
+      [],
+      5000,
+      false,
+      true,
+    )!;
+
+    breaker.open(); // circuit is now open
+
+    // Elapsed cooldown lets assertClosed transition open -> half-open,
+    // this time WITH a context, exercising the AttemptContext-building
+    // branch instead of the plain reportEvent() one.
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(31_000);
+
+    breaker.assertClosed('gpt-4o', { requestId: 'req-1', state: new Map(), attempt: 2 });
+
+    vi.useRealTimers();
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'circuit_state', provider: 'openai', to: 'half-open' }),
+    );
+  });
+
+  it('falls back to defaultModel in requestedModel when the call context omits a model', () => {
+    const logger = fakeLogger();
+    const onEvent = vi.fn();
+
+    const breaker = buildCircuitBreaker(
+      true,
+      'openai',
+      'gpt-4o-default',
+      onEvent,
+      logger,
+      [],
+      5000,
+      false,
+      true,
+    )!;
+
+    breaker.open();
+
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(31_000);
+
+    // No model passed here, so `model ?? defaultModel` should resolve to
+    // the constructor's defaultModel.
+    breaker.assertClosed(undefined, { requestId: 'req-1', state: new Map(), attempt: 1 });
+
+    vi.useRealTimers();
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-4o-default', to: 'half-open' }),
+    );
+  });
+
+  it('swallows and logs an error thrown by onEvent, instead of propagating it', () => {
+    const logger = fakeLogger();
+    const onEvent = vi.fn(() => {
+      throw new Error('onEvent boom');
+    });
+
+    const breaker = buildCircuitBreaker(
+      true,
+      'openai',
+      'gpt-4o',
+      onEvent,
+      logger,
+      [],
+      5000,
+      false,
+      true,
+    )!;
+
+    expect(() => breaker.open()).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onEvent failed', {
+      message: 'onEvent boom',
+    });
+  });
+
+  it('logs "unknown" when onEvent throws a non-Error value', () => {
+    const logger = fakeLogger();
+    const onEvent = vi.fn(() => {
+      throw 'not an Error instance';
+    });
+
+    const breaker = buildCircuitBreaker(
+      true,
+      'openai',
+      'gpt-4o',
+      onEvent,
+      logger,
+      [],
+      5000,
+      false,
+      true,
+    )!;
+
+    expect(() => breaker.open()).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onEvent failed', {
+      message: 'unknown',
+    });
+  });
+
+  it('swallows and logs an error thrown by a caller-supplied onStateChange, instead of propagating it', () => {
+    const logger = fakeLogger();
+    const userOnStateChange = vi.fn(() => {
+      throw new Error('onStateChange boom');
+    });
+
+    const breaker = buildCircuitBreaker(
+      { onStateChange: userOnStateChange },
+      'openai',
+      'gpt-4o',
+      undefined,
+      logger,
+      [],
+      5000,
+      false,
+      true,
+    )!;
+
+    expect(() => breaker.open()).not.toThrow();
+    expect(userOnStateChange).toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] circuitBreaker.onStateChange failed', {
+      message: 'onStateChange boom',
+    });
+  });
+
+  it('logs "unknown" when the caller-supplied onStateChange throws a non-Error value', () => {
+    const logger = fakeLogger();
+    const userOnStateChange = vi.fn(() => {
+      throw 'not an Error instance';
+    });
+
+    const breaker = buildCircuitBreaker(
+      { onStateChange: userOnStateChange },
+      'openai',
+      'gpt-4o',
+      undefined,
+      logger,
+      [],
+      5000,
+      false,
+      true,
+    )!;
+
+    expect(() => breaker.open()).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] circuitBreaker.onStateChange failed', {
+      message: 'unknown',
+    });
   });
 });

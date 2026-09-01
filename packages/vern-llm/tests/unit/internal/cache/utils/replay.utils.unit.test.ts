@@ -27,6 +27,12 @@ describe('buildReplayChunks, hasTools: false', () => {
     expect(chunks).toEqual([{ type: 'text-delta', delta: JSON.stringify({ a: 1 }) }]);
   });
 
+  it('falls back to an empty string when JSON.stringify itself returns undefined (e.g. an undefined value)', async () => {
+    const chunks = await collect(buildReplayChunks(undefined, false));
+
+    expect(chunks).toEqual([{ type: 'text-delta', delta: '' }]);
+  });
+
   it('never emits a usage chunk, since a cache hit spent no real tokens', async () => {
     const chunks = await collect(buildReplayChunks('hi', false));
 

@@ -249,6 +249,110 @@ describe('fromFetch().chat.completions.createStream', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('throws when the default requestStream gets an ok response with no body', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      status: 200,
+      body: null,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: (json: unknown) => ({ content: String(json) }),
+      mapStreamEvent: () => undefined,
+    });
+
+    await expect(
+      collect(
+        client.chat.completions.createStream!(
+          { model: 'm', max_tokens: 10, messages: [] },
+          { signal: new AbortController().signal },
+        ),
+      ),
+    ).rejects.toThrow('Fetch adapter stream request received a response with no body.');
+  });
+
+  it('does not yield a rate_limit_hint chunk when the response headers carry no rate-limit info at all', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(), // no x-ratelimit-* headers at all
+      body: fakeReadableStream(['data: {"delta":"hi"}\n\n']),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: (json: unknown) => ({ content: String(json) }),
+      mapStreamEvent: (event) => {
+        if (!isDeltaEvent(event) || !event.delta) return undefined;
+        return { type: 'text-delta', delta: event.delta };
+      },
+    });
+
+    const chunks = await collect(
+      client.chat.completions.createStream!(
+        { model: 'm', max_tokens: 10, messages: [] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([{ type: 'text-delta', delta: 'hi' }]);
+    expect(chunks.some((c) => c.type === 'rate_limit_hint')).toBe(false);
+  });
+
+  it('skips a falsy chunk value from the reader without yielding it, still finishing on done', async () => {
+    // A minimal fake stream whose reader briefly reports done: false with
+    // no value (a spec-legal but unusual reader state) before finishing,
+    // exercising the `if (value) yield value` guard's false branch.
+    let step = 0;
+    const fakeStream = {
+      getReader() {
+        return {
+          async read() {
+            step += 1;
+            if (step === 1) {
+              return { done: false, value: new TextEncoder().encode('data: {"delta":"hi"}\n\n') };
+            }
+            if (step === 2) return { done: false, value: undefined };
+            return { done: true, value: undefined };
+          },
+          releaseLock() {},
+          cancel: async () => {},
+        };
+      },
+    } as unknown as ReadableStream<Uint8Array>;
+
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      status: 200,
+      body: fakeStream,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: (json: unknown) => ({ content: String(json) }),
+      mapStreamEvent: (event) => {
+        if (!isDeltaEvent(event) || !event.delta) return undefined;
+        return { type: 'text-delta', delta: event.delta };
+      },
+    });
+
+    const chunks = await collect(
+      client.chat.completions.createStream!(
+        { model: 'm', max_tokens: 10, messages: [] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([{ type: 'text-delta', delta: 'hi' }]);
+  });
+
   it('throws an error with .status and .headers set when the default requestStream gets a non-2xx response', async () => {
     const responseHeaders = new Headers({ 'Retry-After': '30' });
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
@@ -276,6 +380,36 @@ describe('fromFetch().chat.completions.createStream', () => {
     expect(err.status).toBe(429);
     expect(err.message).toContain('rate limited');
     expect(err.headers.get('Retry-After')).toBe('30');
+  });
+
+  it('falls back to an empty body string when reading the error response text itself fails', async () => {
+    const responseHeaders = new Headers({ 'Retry-After': '30' });
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: false,
+      status: 500,
+      headers: responseHeaders,
+      text: async () => {
+        throw new Error('body read failed');
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: (json: unknown) => ({ content: String(json) }),
+      mapStreamEvent: () => undefined,
+    });
+
+    const err = await collect(
+      client.chat.completions.createStream!(
+        { model: 'm', max_tokens: 10, messages: [] },
+        { signal: new AbortController().signal },
+      ),
+    ).catch((e) => e);
+
+    expect(err.status).toBe(500);
+    expect(err.message).toContain('Fetch adapter stream request failed (500):');
   });
 
   it('omits body and Content-Type for GET requests, matching create()', async () => {

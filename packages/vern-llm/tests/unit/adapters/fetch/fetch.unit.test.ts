@@ -294,6 +294,41 @@ describe('fromFetch', () => {
     expect(err.headers.get('Retry-After')).toBe('30');
   });
 
+  it('falls back to an empty body string when reading the error response text itself fails', async () => {
+    const headers = { get: vi.fn(() => null) };
+    const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
+      ok: false,
+      status: 500,
+      headers,
+      text: async () => {
+        throw new Error('body read failed');
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: (json: unknown) => {
+        if (!isFetchResponse(json)) {
+          throw new Error('Invalid response shape');
+        }
+
+        return { content: json.text };
+      },
+    });
+
+    const err = await client.chat.completions
+      .create(
+        { model: 'm', temperature: 0.2, max_tokens: 10, messages: [] },
+        { signal: new AbortController().signal },
+      )
+      .catch((e) => e);
+
+    expect(err.status).toBe(500);
+    expect(err.message).toContain('Fetch adapter request failed (500):');
+  });
+
   it('passes the abort signal through to fetch', async () => {
     const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
       ok: true,

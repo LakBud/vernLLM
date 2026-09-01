@@ -176,6 +176,19 @@ describe('createUsageReporter, reportSuccess', () => {
       message: 'onUsage boom',
     });
   });
+
+  it('logs "unknown" when onUsage throws a non-Error value', () => {
+    const logger = fakeLogger();
+    const onUsage = vi.fn(() => {
+      throw 'not an Error instance';
+    });
+    const reporter = createUsageReporter(baseOptions({ onUsage, logger }));
+
+    expect(() => reporter.reportSuccess(baseUsage())).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsage failed', {
+      message: 'unknown',
+    });
+  });
 });
 
 describe('createUsageReporter, reportFailure', () => {
@@ -252,6 +265,19 @@ describe('createUsageReporter, reportFailure', () => {
     expect(() => reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 0)).not.toThrow();
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsageFailure failed', {
       message: 'onUsageFailure boom',
+    });
+  });
+
+  it('logs "unknown" when onUsageFailure throws a non-Error value', () => {
+    const logger = fakeLogger();
+    const onUsageFailure = vi.fn(() => {
+      throw 'not an Error instance';
+    });
+    const reporter = createUsageReporter(baseOptions({ onUsageFailure, logger }));
+
+    expect(() => reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 0)).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsageFailure failed', {
+      message: 'unknown',
     });
   });
 });
