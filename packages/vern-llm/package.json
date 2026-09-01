@@ -1,6 +1,6 @@
 {
   "name": "vern-llm",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "The LLM call framework. Resilience, observability, and control for every call. Retries, timeouts, provider fallback, rate limiting, circuit breaking and more, dependency-light and typed from the start.",
   "keywords": [
     "llm",

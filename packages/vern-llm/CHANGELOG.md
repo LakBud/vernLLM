@@ -1,5 +1,366 @@
 # vern-llm
 
+## 2.6.0
+
+### Minor Changes
+
+- b0b2249: Add `detectSoftFailure`, a hook that can reclassify a technically successful response as a
+  failure.
+
+  A response can parse cleanly and pass schema validation without actually being a good answer: a
+  placeholder string, an empty-but-present response, or a low-confidence refusal all look like
+  successes to retries and the circuit breaker today. `detectSoftFailure` runs once per attempt,
+  right after a response is shaped, and lets you turn that result into a real failure before it
+  reaches the caller:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    detectSoftFailure: (result, meta) => {
+      if (typeof result === 'string' && result.trim() === 'N/A') {
+        return 'soft_failure_detected';
+      }
+      return undefined;
+    },
+  });
+  ```
+
+  Returning `undefined` leaves the result as a success. Returning an `LLMErrorCode` fails the
+  attempt with that code, feeding the same retry and circuit breaker paths a thrown error would. A
+  throwing hook is caught, logged, and treated as no soft failure. `fallback` targets accept their
+  own `detectSoftFailure`, inheriting the parent instance's hook when left unset.
+
+  A soft failure on a streaming call rejects `finalResult` and counts toward the circuit breaker,
+  same as a non-streaming failure would, even though the streaming attempt has already returned
+  successfully from VernLLM's own retry loop by that point.
+
+  Adds `soft_failure_detected` as a new `LLMErrorCode`. See the
+  [Error Handling](/docs/core/error-handling#soft-failure-detection) docs for details.
+
+- 492d34e: Add `RateLimiterAdapter`, a pluggable extension point so `rateLimit` can be backed by a limiter
+  that coordinates across processes, not just the built in in-process `RateLimiter`.
+
+  Today, `rateLimit` on `VernLLMOptions` and `FallbackTarget` always builds a fresh in-process
+  `RateLimiter`. A second VernLLM instance, a second server process, or a horizontally scaled
+  deployment each get their own independent bucket, so the real ceiling a provider enforces is
+  never actually shared across any of them, and there was no way to plug in a limiter that is.
+
+  ```ts
+  import { VernLLM, type RateLimiterAdapter } from 'vern-llm';
+
+  const sharedLimiter: RateLimiterAdapter = new MyRedisBackedRateLimiter(/* ... */);
+
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    rateLimit: sharedLimiter,
+  });
+  ```
+
+  `RateLimiterAdapter` is the same surface `RateLimiter` already exposes: `estimate`, `acquire`,
+  `signalRateLimit`, `reactToRateLimitHint`. Handing over an object satisfying it, instead of a
+  plain `RateLimitOptions` config, is used as is, no wrapping. The same instance can be shared
+  across the primary and any fallback target on purpose, e.g. two targets that really do draw on
+  one provider account's real ceiling.
+
+  Passing a plain `RateLimitOptions` object (today's only option) keeps building an in-process
+  `RateLimiter` exactly as before, zero behavioral change.
+
+- e2aa869: Add `retryBudget`, capping how much of a target's recent traffic is allowed to be retries,
+  independent of the circuit breaker.
+
+  `maxRetries` only bounds one call's own retries. A target can be perfectly healthy, never opening
+  its breaker, while every single call still needs a retry, and today nothing catches that:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    retryBudget: { windowMs: 60_000, minCalls: 10, retryRatio: 0.1 },
+  });
+  ```
+
+  Once at least `minCalls` calls have landed in the trailing `windowMs` and the fraction of them that
+  were retries reaches `retryRatio`, further retries against that target throw
+  `LLMError('rate_limited')` with `code: 'retry_budget_exhausted'` instead of retrying. `minCalls`
+  gates the check the same way it already does for `tripping: { kind: 'rolling', ... }`, so a cold
+  start with too little traffic to judge doesn't trip. Reuses the same `RollingRatio` primitive
+  `RollingTripping` is built on. `minCalls` and `retryRatio` are validated at construction (a
+  non-negative integer, and a finite number in `[0, 1]`, respectively), thrown as `RangeError`.
+
+  The breaker and the budget are independent gates asking different questions, breaker health vs
+  retry cost, and never fire for the same reason: the breaker's gate runs once per logical call,
+  before it starts; the budget's gate runs fresh at each retry, inside the call's own loop. A call
+  can clear the breaker and still get cut off by the budget mid retry, distinguishable by `code`
+  (`circuit_cooling_down`/`circuit_trial_in_flight` vs `retry_budget_exhausted`).
+
+  `retryBudget` is built once per target, same as `circuitBreaker`/`rateLimit`, and `fallback`
+  targets get their own, never inherited from the parent. Every model routed through one target
+  shares one budget, since a budget protects that target's real capacity regardless of which model
+  a call asked for.
+
+  ```ts
+  llm.getRetryBudgetState();
+  // { attempts: 42, retryRatio: 0.07 }
+
+  llm.getRetryBudgetState({ index: 1 }); // first fallback target
+  ```
+
+  `undefined` for a target with no budget configured. Omitting `retryBudget` entirely keeps today's
+  exact behavior. Adds `retry_budget_exhausted` as a new `LLMErrorCode`. See [Retry
+  Budget](/docs/core/retry-budget) for details.
+
+- 2af8dda: Add `cooldownBackoff` to `CircuitBreakerOptions`, growing the cooldown on each repeat open instead
+  of using the same fixed wait every time.
+
+  Today, `cooldownMs` is a fixed value applied identically every time the circuit opens. A provider
+  that keeps failing every cooldown period cycles through the same fixed wait forever. `cooldownBackoff`
+  lets that wait grow the more times the circuit reopens:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    circuitBreaker: {
+      threshold: 5,
+      cooldownMs: 30_000,
+      cooldownBackoff: { multiplier: 2, maxMs: 5 * 60_000 },
+    },
+  });
+  ```
+
+  `{ multiplier, maxMs }` is shorthand for exponential growth, the shape most callers reach for, and
+  always applies full jitter (randomized anywhere between zero and the full computed cooldown), so
+  several client instances don't reopen in lockstep. A `CooldownBackoff` function, `(reopenCount,
+baseCooldownMs) => number`, is the escape hatch for anything else, a linear ramp or an exact
+  deterministic value, and is never jittered automatically. `reopenCount` only increments on a trial
+  that failed back to open, not on the first open from closed.
+
+  Omitted (the default), `cooldownMs` stays fixed, exactly reproducing today's behavior.
+
+- 282f147: Add `halfOpenProbes` and `halfOpenSuccessRatio` to `CircuitBreakerOptions`, letting a half-open
+  circuit admit more than one trial call before deciding to close or reopen.
+
+  Today, exactly one trial call is let through once cooldown elapses: a single success closes the
+  circuit, a single failure reopens it. That is a noisy signal for a provider whose failures are
+  intermittent rather than total, one lucky or unlucky call decides the outcome. `halfOpenProbes`
+  lets several trials run, and `halfOpenSuccessRatio` decides how many of them need to succeed:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    circuitBreaker: {
+      threshold: 5,
+      cooldownMs: 30_000,
+      halfOpenProbes: 3,
+      halfOpenSuccessRatio: 2 / 3, // 2 of 3 trials succeeding closes the circuit
+    },
+  });
+  ```
+
+  `halfOpenProbes` defaults to 1 and `halfOpenSuccessRatio` defaults to 1, exactly reproducing
+  today's single trial, must succeed behavior when both are left unset. Both are clamped at
+  construction (`halfOpenProbes` to at least 1, `halfOpenSuccessRatio` to `[0, 1]`) rather than
+  thrown, since a bad value here shouldn't take down the call path.
+
+  A concurrent caller beyond the configured number of probes is still rejected with
+  `circuit_trial_in_flight`, same as today.
+
+- deb48ee: Add AIMD (additive increase / multiplicative decrease) to `RateLimiter`, letting a target's
+  requests-per-minute ceiling grow gradually on success and shrink on a real rate limit rather than
+  staying fixed:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    rateLimit: {
+      requestsPerMinute: 500,
+      aimd: { increaseBy: 10, decreaseFactor: 0.5, minCapacity: 50, maxCapacity: 1000 },
+    },
+  });
+  ```
+
+  `increaseBy` is added to the ceiling on every clean release; `decreaseFactor` multiplies it down
+  whenever the limiter reacts to a rate limit, bounded to `[minCapacity, maxCapacity]`. Reacting to
+  a real 429 works for every provider unconditionally, no adapter changes required.
+
+  `fromOpenAI` and `fromAnthropic` can additionally react proactively, before a real 429 happens, by
+  reading a provider's own rate limit headers off a successful response. This needs an explicit
+  opt-in, since it depends on the underlying client supporting `.withResponse()`:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai, { supportsWithResponse: true }),
+    model: 'gpt-4o',
+    rateLimit: {
+      requestsPerMinute: 500,
+      aimd: {
+        increaseBy: 10,
+        decreaseFactor: 0.5,
+        minCapacity: 50,
+        maxCapacity: 1000,
+        proactiveFloor: 20,
+      },
+    },
+  });
+  ```
+
+  With `proactiveFloor` set, the limiter shrinks as soon as a response reports remaining capacity at
+  or below that number, rather than waiting for an actual rejection. `fromFetch` gets the same
+  proactive path with no opt-in needed (a new `parseRateLimitHint` config option, defaulting to
+  OpenAI's header shape), since it already has direct access to the response headers. `fromGemini`
+  and `fromBedrock` get reactive-only AIMD: neither provider exposes a remaining-capacity header to
+  react to proactively, confirmed against their own current documentation and SDK source, so only
+  the real-429 path applies there.
+
+  `TokenBucket.resize()` is new internal plumbing this relies on: a bucket's capacity can now change
+  after construction, with its refill rate rescaled proportionally so a shrink doesn't leave the
+  bucket refilling at its old, relatively-too-fast rate.
+
+- 4a54b37: Add `tripping` to `CircuitBreakerOptions`, so a circuit can open off a rolling failure ratio
+  instead of only a fixed streak of consecutive failures.
+
+  Today, `threshold` counts consecutive failures and opens the circuit once that streak is reached.
+  That's a poor fit for a provider whose failures are frequent but not literally back-to-back:
+  `tripping` lets a caller open the circuit once a failure ratio is reached over a trailing window
+  instead:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    circuitBreaker: {
+      cooldownMs: 30_000,
+      tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 20, failureRatio: 0.5 },
+    },
+  });
+  ```
+
+  `{ kind: 'consecutive', threshold }` (the default, matching `threshold` on its own) opens after
+  that many failures in a row. `{ kind: 'rolling', windowMs, minCalls, failureRatio }` opens once at
+  least `minCalls` calls have landed in the trailing `windowMs` and the failure ratio among them
+  reaches `failureRatio`. A hand-built `TrippingPolicy` is the escape hatch for anything else, no
+  class required, a plain object satisfying the interface works:
+
+  ```ts
+  interface TrippingPolicy {
+    onSuccess(key: string): void;
+    onFailure(key: string): boolean; // true opens the circuit for key
+    reset(key: string): void;
+    forget?(key: string): void; // optional: called when key's bucket is discarded
+  }
+  ```
+
+  `key` is the resolved model under `isolateByModel`, or one fixed shared key otherwise. Exactly one
+  instance of a policy is ever constructed, so `isolateByModel` isolation comes entirely from `key`:
+  a policy that tracks its own state per key gets real per-model isolation automatically, no special
+  handling needed, the same way the two built-in policies already do internally. A policy that
+  ignores `key` and tracks one flat counter stays intentionally shared across every model, a choice
+  the policy makes rather than a limitation of `isolateByModel` itself.
+
+  `onStateChange`, the `circuit_state` event, and the open-circuit error message still report a true
+  consecutive-failure count regardless of which policy is configured, since that count is tracked
+  independently of whatever a policy uses to decide when to trip.
+
+  Omitted (the default), behavior is unchanged: consecutive-failure tripping against `threshold`.
+
+  `{ kind: 'rolling', ... }`'s `minCalls` and `failureRatio` are now validated at construction:
+  `minCalls` must be a non-negative integer, `failureRatio` a finite number in `[0, 1]`, both thrown
+  as `RangeError` otherwise, the same way `windowMs` already is. Previously an out-of-range value
+  silently produced a degenerate policy (always tripping or never tripping) instead of surfacing the
+  mistake. Every value already in a valid range keeps working exactly as before.
+
+  Also reorganizes `circuitBreaker.ts` into clearly labeled sections (options, cooldown backoff,
+  tripping policy, bucket state, the `CircuitBreaker` class), with the class's public API methods
+  grouped separately from its private helpers. Pure code motion alongside the feature above: no
+  additional behavior, type, or export changes.
+
+- 14c4797: Add `eviction` to `InMemoryCacheAdapter`, choosing between `'fifo'` (default) and `'lru'` once
+  `maxSize` is exceeded.
+
+  Previously, `InMemoryCacheAdapter` always evicted the oldest inserted entry, regardless of how
+  recently it was read. A key that's read constantly but written once still aged out on schedule
+  alongside keys nobody had touched since.
+
+  ```ts
+  const cache = new InMemoryCacheAdapter(1000, 'lru');
+  ```
+
+  `VernLLMOptions.cache` also gains a plain config shorthand, so the built-in adapter no longer
+  needs an import or a `new`:
+
+  ```ts
+  const llm = new VernLLM({
+    client: fromOpenAI(openai),
+    model: 'gpt-4o',
+    cache: { maxSize: 1000, eviction: 'lru' },
+  });
+  ```
+
+  Passing a `CacheAdapter` directly still works exactly as before, `cache` accepts either shape and
+  resolves structurally. Omitting `cache` entirely, or passing `new InMemoryCacheAdapter()` (no
+  second argument), keeps today's exact default: fifo eviction, `maxSize` 1000.
+
+  There's no custom eviction extension point beyond `'fifo'`/`'lru'`. Anything past those two is a
+  different cache backend through `CacheAdapter` (a real Redis or Upstash instance, for example),
+  not a third in-process algorithm.
+
+  See [Eviction](/docs/core/caching#eviction) for details.
+
+- d11ab7c: Add `getFailureBreakdown` to `VernLLM`, `CircuitBreaker`, and the internal call executor, exposing
+  why a circuit's failures are happening rather than just how many.
+
+  Today, a circuit's failure count is a single number: consecutive failures crossing `threshold`.
+  That number does not distinguish a run of timeouts from a run of 500s from a run of empty
+  responses, all of which count the same way toward opening the circuit. `getFailureBreakdown` reports
+  those reasons separately:
+
+  ```ts
+  llm.getFailureBreakdown();
+  // { server_error: 3, request_timeout: 1 }
+
+  llm.getFailureBreakdown({ index: 1 }); // first fallback target
+  llm.getFailureBreakdown({ model: 'gpt-4o' }); // for a target with isolateByModel
+  ```
+
+  It takes the same `target: { index?, model? }` shape as `getCircuitState`, returns `undefined` for
+  a target with no breaker configured, and `{}` for a bucket that hasn't failed yet. A failure that
+  carried no `LLMErrorCode` attributes to `'unknown'`.
+
+  The breakdown is attribution only, it never decides whether the circuit trips, and clears whenever
+  the bucket does: on a successful call, a successful half-open trial, or a manual `closeCircuit()`.
+
+  No breaking changes. `CircuitBreaker.recordFailure`'s existing `code` parameter, added in an earlier
+  release to carry this data without a signature change, is now actually read.
+
+### Patch Changes
+
+- b0b2249: Fix: a `quota_exceeded` failure no longer counts toward the circuit breaker.
+
+  `LLMError.countsTowardBreaker` is now distinct from `LLMError.retryable`. A usage reservation
+  rejection is a caller or account level limit, not a signal that the provider itself is unhealthy,
+  so repeated `quota_exceeded` failures no longer push a healthy provider's circuit toward opening,
+  even though they're still retried. Every other error type is unaffected.
+
+  `CircuitBreaker.recordFailure` also accepts a new optional fourth argument, the failing error's
+  `LLMErrorCode`. It isn't read yet, existing calls are unaffected, and this lands ahead of upcoming
+  circuit breaker attribution work.
+
+- 96a1aea: `getBackoffDelay` now uses full jitter instead of equal jitter for retry backoff delays.
+
+  The computed delay is now randomized anywhere between zero and the full exponential value,
+  `random() * exp`, instead of `exp / 2 + random() * (exp / 2)`. AWS's own analysis found full
+  jitter does less client work and completes retries faster than equal jitter under contention,
+  since it spreads retries over a wider window instead of clustering them in the top half of the
+  range. See [Exponential Backoff and
+  Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/).
+
+  This changes the actual delay values retries wait for, but not the retry logic itself, no
+  options or public API changed.
+
 ## 2.5.0
 
 ### Minor Changes
