@@ -177,6 +177,18 @@ It is never retried and does not count as a circuit-breaker failure.
 A provider 429 carries `code: 'provider_rate_limited'` and is handled separately from local
 rate-limit rejections. See [Error codes](/docs/core/error-handling#error-codes).
 
+## Retry budget
+
+| Option        | Default  | Notes                                                                                                                                                                                    |
+| ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retryBudget` | disabled | `{ windowMs, minCalls, retryRatio }`. Caps how much of a target's recent traffic is allowed to be retries, independent of `circuitBreaker`. See [Retry Budget](/docs/core/retry-budget). |
+
+Once at least `minCalls` calls have landed in the trailing `windowMs` and the retry ratio among
+them reaches `retryRatio`, further retries against that target fail immediately with
+`LLMError('rate_limited')` and `code: 'retry_budget_exhausted'`. It is never retried and does not
+count as a circuit-breaker failure. Like `circuitBreaker` and `rateLimit`, a target's own
+`retryBudget` is never inherited: each target needs its own if it wants one.
+
 ## Fallback
 
 | Option       | Default             | Notes                                                                                                                                                                                                             |
@@ -189,8 +201,8 @@ Each `FallbackTarget` needs its own `client` and `model`. `name`, `maxRetries`, 
 `nonRetryableStatus`, and `detectSoftFailure` inherit the parent instance's resolved value when
 omitted.
 
-`circuitBreaker` and `rateLimit` are never inherited. Each target has its own independent breaker
-and rate limiter when configured.
+`circuitBreaker`, `rateLimit`, and `retryBudget` are never inherited. Each target has its own
+independent breaker, rate limiter, and retry budget when configured.
 
 An open target breaker is treated as a target failure and can cause the chain to move to the next
 target according to `fallbackOn`.

@@ -20,6 +20,7 @@ export {
   type RateLimitAcquireResult,
   type WireRequest,
 } from './rateLimit.js';
+export { RetryBudget, type RetryBudgetOptions } from './internal/retryBudget.js';
 export { ConsoleLogger, type Logger } from './logger.js';
 export { parseSseStream, SSE_PING } from './adapters/internal/sse.js';
 

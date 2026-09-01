@@ -39,6 +39,8 @@ export type LLMErrorCode =
   | 'rate_limit_queue_timeout'
   | 'rate_limit_capacity_exceeded'
   | 'provider_rate_limited'
+  // Retry budget (rate_limited)
+  | 'retry_budget_exhausted'
   // Timeouts (timeout)
   | 'request_timeout'
   | 'idle_timeout'
@@ -84,13 +86,14 @@ export const NON_RETRYABLE_TOOL_CONTRACT_CODES: ReadonlySet<LLMErrorCode> = new 
  * Local rate-limit codes: the call never reached the provider, so it says
  * nothing about the provider's health, and retrying either just requeues
  * behind the same limit (the two queue codes) or can never succeed at all
- * (`rate_limit_capacity_exceeded`). Shared for the same reason as
- * {@link NON_RETRYABLE_TOOL_CONTRACT_CODES}.
+ * (`rate_limit_capacity_exceeded`, `retry_budget_exhausted`). Shared for
+ * the same reason as {@link NON_RETRYABLE_TOOL_CONTRACT_CODES}.
  */
 export const LOCAL_RATE_LIMIT_CODES: ReadonlySet<LLMErrorCode> = new Set([
   'rate_limit_queue_full',
   'rate_limit_queue_timeout',
   'rate_limit_capacity_exceeded',
+  'retry_budget_exhausted',
 ]);
 
 /**

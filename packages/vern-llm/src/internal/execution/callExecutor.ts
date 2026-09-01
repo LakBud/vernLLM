@@ -1,5 +1,6 @@
 import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import { LLMError } from '../../types/errors.js';
+import { type RetryBudget } from '../retryBudget.js';
 import { makeEventReporter } from '../utils/circuitBreaker.utils.js';
 import { readRateLimitHint } from '../utils/rateLimitHint.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
@@ -50,6 +51,8 @@ export interface CallExecutorOptions {
   onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
   onEvent?: (event: VernLLMEvent) => void;
   breaker?: CircuitBreaker;
+  /** Caps retries against this target independent of `breaker`. See `VernLLMOptions.retryBudget`. */
+  budget?: RetryBudget;
   limiter?: RateLimiterAdapter;
   /** True for every target after the primary. Stamped onto reported `TokenUsage`. */
   isFallback?: boolean;
@@ -79,6 +82,7 @@ export class CallExecutor {
   private readonly usageReporter: UsageReporter;
   private readonly reportEvent: (event: VernLLMEvent) => void;
   private readonly breaker?: CircuitBreaker;
+  private readonly budget?: RetryBudget;
   private readonly limiter?: RateLimiterAdapter;
   private readonly isFallback: boolean;
   private readonly requestBuilder: RequestBuilder;
@@ -103,6 +107,7 @@ export class CallExecutor {
     this.redact = options.redact;
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
     this.breaker = options.breaker;
+    this.budget = options.budget;
     this.limiter = options.limiter;
     this.isFallback = options.isFallback ?? false;
     this.middleware = options.middleware ?? [];
@@ -150,6 +155,11 @@ export class CallExecutor {
   /** Failure counts by `LLMErrorCode` for this target's breaker, if configured. Undefined otherwise. */
   getFailureBreakdown(model?: string) {
     return this.breaker?.getFailureBreakdown(model);
+  }
+
+  /** This target's current retry budget traffic/ratio, if a budget is configured. Undefined otherwise. */
+  getRetryBudgetState() {
+    return this.budget?.getSnapshot();
   }
 
   /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured. */
@@ -202,6 +212,7 @@ export class CallExecutor {
       isFallback: this.isFallback,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
       breaker: this.breaker,
+      budget: this.budget,
       maxRetries: this.maxRetries,
       baseDelayMs: this.baseDelayMs,
       nonRetryableStatus: this.nonRetryableStatus,
@@ -237,6 +248,7 @@ export class CallExecutor {
       isFallback: this.isFallback,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
       breaker: this.breaker,
+      budget: this.budget,
       maxRetries: this.maxRetries,
       baseDelayMs: this.baseDelayMs,
       nonRetryableStatus: this.nonRetryableStatus,

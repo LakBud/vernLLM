@@ -10,6 +10,7 @@
     "usage-metering",
     "usage-tracking",
     "circuit-breaker",
+    "retry-budget",
     "middleware",
     "retries",
     "error-handling",

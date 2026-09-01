@@ -1,4 +1,5 @@
 import { CallExecutor } from './execution/callExecutor.js';
+import { RetryBudget } from './retryBudget.js';
 import { buildCircuitBreaker } from './utils/circuitBreaker.utils.js';
 import { buildRateLimit } from './utils/rateLimitAdapter.utils.js';
 
@@ -74,6 +75,11 @@ export function buildExecutors(
       target.client.supportsJsonObjectMode ?? true,
     );
 
+    // Independent of `breaker`, never inherited from `shared`, same as
+    // `circuitBreaker`/`rateLimit`: a budget tuned for one target's
+    // capacity is rarely right for another's.
+    const budget = target.retryBudget ? new RetryBudget(target.retryBudget) : undefined;
+
     return new CallExecutor(name, target.client, target.model, {
       maxRetries: target.maxRetries ?? shared.maxRetries ?? 1,
       timeoutMs: target.timeoutMs ?? shared.timeoutMs ?? 25_000,
@@ -101,6 +107,7 @@ export function buildExecutors(
       onUsageFailure: shared.onUsageFailure,
       onEvent: shared.onEvent,
       breaker,
+      budget,
       limiter: buildRateLimit(target.rateLimit),
       isFallback,
       middleware: shared.middleware,

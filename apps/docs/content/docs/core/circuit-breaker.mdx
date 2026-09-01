@@ -402,3 +402,9 @@ for a target with no breaker configured, or `{}` for a bucket that hasn't failed
 
 The breakdown is attribution only. It never decides whether the circuit trips, and clears whenever
 the bucket does, on a successful call, a successful half-open trial, or a manual `closeCircuit()`.
+
+<Callout type="info">
+  A circuit breaker asks whether a target is healthy. A separate, independent `retryBudget` asks
+  whether retrying is still worth it regardless of health. See [Retry
+  Budget](/docs/core/retry-budget).
+</Callout>

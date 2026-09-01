@@ -12,6 +12,7 @@ import type {
   VernLLMEvent,
   VernLLMMiddleware,
 } from '../../../../types/index.js';
+import type { RetryBudget } from '../../../retryBudget.js';
 
 /**
  * Everything `runAttemptLoop` needs beyond the per-call `fn` it retries.
@@ -32,6 +33,12 @@ export interface RunAttemptLoopParams<T> {
   isFallback: boolean;
   supportsJsonObjectMode: boolean;
   breaker?: CircuitBreaker;
+  /**
+   * Caps how much of this target's recent traffic is allowed to be
+   * retries, independent of `breaker`. See `RetryBudget`. Undefined
+   * means no budget, exactly today's behavior.
+   */
+  budget?: RetryBudget;
   maxRetries: number;
   baseDelayMs: number;
   nonRetryableStatus: number[];
@@ -75,6 +82,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     isFallback,
     supportsJsonObjectMode,
     breaker,
+    budget,
     maxRetries,
     baseDelayMs,
     nonRetryableStatus,
@@ -100,15 +108,33 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     supportsJsonObjectMode,
   });
 
+  // Set only when `budget.assertAvailable()` is what actually stopped a
+  // retry, so the terminal error below can report *that*, not whichever
+  // failure happened to be current when the budget ran out.
+  let budgetExhaustedError: LLMError | undefined;
+
   try {
     return await retryWithBackoff({
-      fn: (attempt, onRequest) => fn(attempt, onRequest, resolvedState, gateway),
+      fn: (attempt, onRequest) => {
+        budget?.recordAttempt(attempt > 0);
+        return fn(attempt, onRequest, resolvedState, gateway);
+      },
       maxRetries,
       signal,
       onAttempt,
       attempts,
-      shouldRetryAttempt: (error, signal) =>
-        shouldRetry(error, nonRetryableStatus, extractStatus, signal),
+      shouldRetryAttempt: (error, signal) => {
+        if (!shouldRetry(error, nonRetryableStatus, extractStatus, signal)) return false;
+        if (budget) {
+          try {
+            budget.assertAvailable();
+          } catch (err) {
+            budgetExhaustedError = err as LLMError;
+            return false;
+          }
+        }
+        return true;
+      },
       recoverDelayForAttempt: (attempt, error) =>
         recoverDelay({
           requestId,
@@ -136,7 +162,9 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     // `attempts` only holds prior attempts that were actually retried
     // past. It's `[]` when nothing was retried, so normalize that to
     // `undefined` per `LLMError.attempts`'s contract.
-    const normalized = normalizeError(error, signal, attempts.length > 0 ? attempts : undefined);
+    const normalized = budgetExhaustedError
+      ? budgetExhaustedError
+      : normalizeError(error, signal, attempts.length > 0 ? attempts : undefined);
 
     if (countsTowardBreaker(normalized)) {
       // `attempts` only holds prior attempts that were retried past (see
