@@ -2,7 +2,7 @@
 'vern-llm': minor
 ---
 
-Add `RateLimiterLike`, a pluggable extension point so `rateLimit` can be backed by a limiter
+Add `RateLimiterAdapter`, a pluggable extension point so `rateLimit` can be backed by a limiter
 that coordinates across processes, not just the built in in-process `RateLimiter`.
 
 Today, `rateLimit` on `VernLLMOptions` and `FallbackTarget` always builds a fresh in-process
@@ -11,9 +11,9 @@ deployment each get their own independent bucket, so the real ceiling a provider
 never actually shared across any of them, and there was no way to plug in a limiter that is.
 
 ```ts
-import { VernLLM, type RateLimiterLike } from 'vern-llm';
+import { VernLLM, type RateLimiterAdapter } from 'vern-llm';
 
-const sharedLimiter: RateLimiterLike = new MyRedisBackedRateLimiter(/* ... */);
+const sharedLimiter: RateLimiterAdapter = new MyRedisBackedRateLimiter(/* ... */);
 
 const llm = new VernLLM({
   client: fromOpenAI(openai),
@@ -22,7 +22,7 @@ const llm = new VernLLM({
 });
 ```
 
-`RateLimiterLike` is the same surface `RateLimiter` already exposes: `estimate`, `acquire`,
+`RateLimiterAdapter` is the same surface `RateLimiter` already exposes: `estimate`, `acquire`,
 `signalRateLimit`, `reactToRateLimitHint`. Handing over an object satisfying it, instead of a
 plain `RateLimitOptions` config, is used as is, no wrapping. The same instance can be shared
 across the primary and any fallback target on purpose, e.g. two targets that really do draw on

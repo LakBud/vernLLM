@@ -4,11 +4,11 @@ description: Plug in your own rate limiter
 ---
 
 VernLLM ships `RateLimiter`, an in-process limiter built from `rateLimit`'s config object, plus a
-`RateLimiterLike` interface for bringing your own (Redis, or anything else that coordinates across
+`RateLimiterAdapter` interface for bringing your own (Redis, or anything else that coordinates across
 processes):
 
 ```ts
-interface RateLimiterLike {
+interface RateLimiterAdapter {
   estimate(request: WireRequest): number;
   acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
   signalRateLimit(): void;
@@ -17,9 +17,9 @@ interface RateLimiterLike {
 ```
 
 ```ts title="redis-rate-limiter.ts"
-import type { RateLimiterLike } from 'vern-llm';
+import type { RateLimiterAdapter, VernLLM } from 'vern-llm';
 
-class RedisRateLimiter implements RateLimiterLike {
+class RedisRateLimiter implements RateLimiterAdapter {
   estimate(request) {
     return Math.ceil(JSON.stringify(request.messages).length / 4);
   }

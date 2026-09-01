@@ -414,8 +414,8 @@ describe('VernLLM, rateLimit option', () => {
     });
   });
 
-  describe('custom RateLimiterLike', () => {
-    it('uses a hand built RateLimiterLike instance directly, not a package-constructed RateLimiter', async () => {
+  describe('custom RateLimiterAdapter', () => {
+    it('uses a hand built RateLimiterAdapter instance directly, not a package-constructed RateLimiter', async () => {
       const { client } = createMockClient([jsonResponse({ ok: true })]);
 
       const acquire = vi.fn().mockResolvedValue({ release: () => {}, waitedMs: 0 });
@@ -434,7 +434,7 @@ describe('VernLLM, rateLimit option', () => {
       expect(acquire).toHaveBeenCalledTimes(1);
     });
 
-    it('shares one custom RateLimiterLike instance across the primary and a fallback target', async () => {
+    it('shares one custom RateLimiterAdapter instance across the primary and a fallback target', async () => {
       const { client: primaryClient } = createMockClient([
         async () => {
           throw new LLMError('down', 'api', { status: 500 });
@@ -464,6 +464,33 @@ describe('VernLLM, rateLimit option', () => {
       // One acquire for the failed primary attempt, one for the
       // fallback attempt, both drawing on the same shared instance.
       expect(acquire).toHaveBeenCalledTimes(2);
+    });
+
+    it('forwards a mid-stream rate_limit_hint chunk to a custom RateLimiterAdapter', async () => {
+      const hint = { remainingRequests: 4 };
+      const { client } = createMockStreamingClient([
+        [
+          { type: 'rate_limit_hint', hint },
+          { type: 'text-delta', delta: 'hi' },
+        ],
+      ]);
+
+      const reactToRateLimitHint = vi.fn();
+      const custom = {
+        estimate: () => 0,
+        acquire: vi.fn().mockResolvedValue({ release: () => {}, waitedMs: 0 }),
+        signalRateLimit: vi.fn(),
+        reactToRateLimitHint,
+      };
+
+      const llm = new VernLLM({ client, model: 'gpt-4o', rateLimit: custom });
+
+      const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+      await drain(result.chunks);
+      await result.finalResult;
+
+      expect(reactToRateLimitHint).toHaveBeenCalledTimes(1);
+      expect(reactToRateLimitHint).toHaveBeenCalledWith(hint);
     });
   });
 });

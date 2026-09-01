@@ -180,7 +180,7 @@ interface Waiter {
  * required, `RateLimiter` itself already no-ops the AIMD methods when
  * `aimd` isn't configured, so a custom limiter follows the same pattern.
  */
-export interface RateLimiterLike {
+export interface RateLimiterAdapter {
   estimate(request: WireRequest): number;
   acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
   signalRateLimit(): void;
@@ -193,7 +193,7 @@ export interface RateLimiterLike {
  * stream of small ones. Any bucket omitted from `options` has infinite
  * capacity and never blocks.
  */
-export class RateLimiter implements RateLimiterLike {
+export class RateLimiter implements RateLimiterAdapter {
   private readonly requests?: TokenBucket;
   private readonly tokens?: TokenBucket;
   private readonly concurrency?: TokenBucket;

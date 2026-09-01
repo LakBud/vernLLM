@@ -135,7 +135,7 @@ export interface VernLLMOptions {
    * limit in the first place. Omit for unlimited (the default).
    *
    * A plain config object builds an in-process limiter. Pass a
-   * `RateLimiterLike` instead for cross-process coordination.
+   * `RateLimiterAdapter` instead for cross-process coordination.
    */
   rateLimit?: RateLimitOption;
   /**

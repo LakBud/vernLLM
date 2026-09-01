@@ -341,13 +341,13 @@ limiter has no idea about any other process. Two VernLLM instances, or a horizon
 deployment, each get their own independent buckets, so the real ceiling a provider enforces is
 never actually shared across any of them.
 
-Pass a `RateLimiterLike` instead of a config object to use your own limiter, coordinated however
+Pass a `RateLimiterAdapter` instead of a config object to use your own limiter, coordinated however
 you like, Redis backed or otherwise:
 
 ```ts title="rate-limiting-shared-limiter.ts"
-import { VernLLM, type RateLimiterLike } from 'vern-llm';
+import { VernLLM, type RateLimiterAdapter } from 'vern-llm';
 
-const sharedLimiter: RateLimiterLike = new MyRedisBackedRateLimiter({
+const sharedLimiter: RateLimiterAdapter = new MyRedisBackedRateLimiter({
   redis,
   key: 'openai:gpt-4o',
   requestsPerMinute: 500,
@@ -360,10 +360,10 @@ const llm = new VernLLM({
 });
 ```
 
-`RateLimiterLike` is the exact surface the built in limiter exposes:
+`RateLimiterAdapter` is the exact surface the built in limiter exposes:
 
 ```ts title="rate-limiter-like.ts"
-interface RateLimiterLike {
+interface RateLimiterAdapter {
   estimate(request: WireRequest): number;
   acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
   signalRateLimit(): void;
@@ -379,7 +379,7 @@ each target's capacity separate.
 
 <Callout type="info">
   VernLLM ships no distributed limiter itself, only this seam. Coordinating across processes is
-  entirely up to whatever `RateLimiterLike` implementation you provide.
+  entirely up to whatever `RateLimiterAdapter` implementation you provide.
 </Callout>
 
 ## Options reference
