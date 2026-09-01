@@ -14,6 +14,7 @@ export {
 export {
   RateLimiter,
   defaultEstimateTokens,
+  type RateLimiterAdapter,
   type RateLimitOptions,
   type RateLimitReason,
   type RateLimitAcquireResult,

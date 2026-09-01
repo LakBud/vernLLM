@@ -24,6 +24,18 @@ describe('defaultEstimateTokens', () => {
     expect(() => defaultEstimateTokens(req)).not.toThrow();
     expect(defaultEstimateTokens(req)).toBeGreaterThan(100);
   });
+
+  it('falls back to 0 chars for a message whose content contains a circular reference', () => {
+    const circular: Record<string, unknown> = { text: 'hi' };
+    circular.self = circular; // JSON.stringify throws on this
+
+    const req = request({ messages: [{ role: 'user', content: circular as never }] });
+
+    // The circular message contributes 0 chars (caught, not thrown),
+    // so the estimate is just max_tokens.
+    expect(() => defaultEstimateTokens(req)).not.toThrow();
+    expect(defaultEstimateTokens(req)).toBe(100);
+  });
 });
 
 describe('RateLimiter', () => {
@@ -36,6 +48,16 @@ describe('RateLimiter', () => {
     const result = await limiter.acquire(10);
     expect(result.waitedMs).toBe(0);
     result.release();
+  });
+
+  it('rejects immediately with "aborted" when the signal is already aborted before acquire is even called', async () => {
+    const limiter = new RateLimiter({ maxConcurrent: 1 });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(limiter.acquire(1, controller.signal)).rejects.toMatchObject({
+      type: 'aborted',
+    });
   });
 
   it('maxConcurrent blocks a second call until the first releases', async () => {

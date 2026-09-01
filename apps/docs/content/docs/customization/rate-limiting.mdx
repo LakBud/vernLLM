@@ -1,0 +1,49 @@
+---
+title: Rate Limiting
+description: Plug in your own rate limiter
+---
+
+VernLLM ships `RateLimiter`, an in-process limiter built from `rateLimit`'s config object, plus a
+`RateLimiterAdapter` interface for bringing your own (Redis, or anything else that coordinates across
+processes):
+
+```ts
+interface RateLimiterAdapter {
+  estimate(request: WireRequest): number;
+  acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
+  signalRateLimit(): void;
+  reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
+}
+```
+
+```ts title="redis-rate-limiter.ts"
+import type { RateLimiterAdapter, VernLLM } from 'vern-llm';
+
+class RedisRateLimiter implements RateLimiterAdapter {
+  estimate(request) {
+    return Math.ceil(JSON.stringify(request.messages).length / 4);
+  }
+
+  async acquire(estimatedTokens, signal) {
+    await redis.acquire('llm:gpt-4o', estimatedTokens); // your own coordination
+    return { release: () => redis.release('llm:gpt-4o', estimatedTokens), waitedMs: 0 };
+  }
+
+  signalRateLimit() {}
+  reactToRateLimitHint() {}
+}
+
+const llm = new VernLLM({ client: openai, model: 'gpt-4o', rateLimit: new RedisRateLimiter() });
+```
+
+<Callout>
+  All four methods are required. The built-in `RateLimiter` already no-ops
+  `signalRateLimit`/`reactToRateLimitHint` when `aimd` isn't configured, so a minimal custom limiter
+  follows the same pattern rather than every call site needing an optional chain.
+</Callout>
+
+<Callout>
+  VernLLM ships no distributed limiter itself, only this interface. Coordinating across processes is
+  entirely up to your implementation. See [Sharing a limiter across
+  processes](/docs/core/rate-limiting#sharing-a-limiter-across-processes) in Core.
+</Callout>

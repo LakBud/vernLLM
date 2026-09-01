@@ -6,7 +6,12 @@ import {
   type CallExecutorOptions,
 } from '../../../../src/internal/execution/callExecutor.js';
 import { LLMError } from '../../../../src/types/errors.js';
-import { createMockClient, jsonResponse } from '../../../helpers.js';
+import {
+  createMockClient,
+  createMockStreamingClient,
+  drain,
+  jsonResponse,
+} from '../../../helpers.js';
 
 import type { Logger } from '../../../../src/logger.js';
 
@@ -223,6 +228,33 @@ describe('CallExecutor.countsTowardBreaker (via run/breaker state transitions)',
 
     await executor.run({ userContent: 'hi' }, 'req-1');
 
+    expect(executor.getCircuitState()).toBe('closed');
+  });
+
+  it('a streaming finalize-time soft failure excluded from the breaker (e.g. a tool-contract code) does not push it toward opening', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'hi' }]]);
+    const breaker = new CircuitBreaker({ threshold: 1 });
+    const executor = new CallExecutor(
+      'openai',
+      client,
+      'm',
+      baseOptions({
+        breaker,
+        maxRetries: 0,
+        // 'unexpected_tool_calls' is a tool-contract code, non-retryable
+        // and therefore excluded from the breaker regardless of type.
+        detectSoftFailure: () => 'unexpected_tool_calls',
+      }),
+    );
+
+    const { chunks, finalResult } = await executor.runStream(
+      { userContent: 'hi', jsonMode: false, stream: true },
+      'req-1',
+    );
+    await drain(chunks);
+
+    await expect(finalResult).rejects.toMatchObject({ code: 'unexpected_tool_calls' });
+    // threshold is 1, so if this counted, the breaker would now be open
     expect(executor.getCircuitState()).toBe('closed');
   });
 });

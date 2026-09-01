@@ -1,4 +1,4 @@
-import type { RateLimitReason, RateLimiter, WireRequest } from '../../../../rateLimit.js';
+import type { RateLimiterAdapter, RateLimitReason, WireRequest } from '../../../../rateLimit.js';
 
 /** Reports the `'rate_limited'` trace event; called only when `acquireRateLimit` actually waited. */
 export type RateLimitedEventReporter = (waitedMs: number, reason: RateLimitReason) => void;
@@ -13,7 +13,7 @@ export type RateLimitedEventReporter = (waitedMs: number, reason: RateLimitReaso
  * a slot is never leaked on a failed attempt (see `RateLimitAcquireResult`).
  */
 export async function acquireRateLimit(
-  limiter: RateLimiter | undefined,
+  limiter: RateLimiterAdapter | undefined,
   request: WireRequest,
   signal: AbortSignal | undefined,
   onRateLimited: RateLimitedEventReporter,

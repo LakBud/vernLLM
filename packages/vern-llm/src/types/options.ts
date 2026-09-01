@@ -1,7 +1,7 @@
 import type { CircuitBreakerOptions } from '../circuitBreaker.js';
 import type { CacheOption } from '../internal/utils/cacheAdapter.utils.js';
+import type { RateLimitOption } from '../internal/utils/rateLimitAdapter.utils.js';
 import type { Logger } from '../logger.js';
-import type { RateLimitOptions } from '../rateLimit.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
 import type { OnEvent } from './events.js';
@@ -133,8 +133,11 @@ export interface VernLLMOptions {
    * letting the provider reject them. Independent of the `Retry-After`
    * handling already applied to a provider 429: this avoids tripping the
    * limit in the first place. Omit for unlimited (the default).
+   *
+   * A plain config object builds an in-process limiter. Pass a
+   * `RateLimiterAdapter` instead for cross-process coordination.
    */
-  rateLimit?: RateLimitOptions;
+  rateLimit?: RateLimitOption;
   /**
    * Ordered targets tried after the primary, in order, once it (and its
    * own retries) is exhausted or abandoned. Order is the policy: VernLLM

@@ -334,6 +334,54 @@ const llm = new VernLLM({
 See [Event kinds](/docs/core/observability#event-kinds) for the rest of the `onEvent`
 union.
 
+## Sharing a limiter across processes
+
+`rateLimit` normally builds a fresh, in-process limiter from the config object above. That
+limiter has no idea about any other process. Two VernLLM instances, or a horizontally scaled
+deployment, each get their own independent buckets, so the real ceiling a provider enforces is
+never actually shared across any of them.
+
+Pass a `RateLimiterAdapter` instead of a config object to use your own limiter, coordinated however
+you like, Redis backed or otherwise:
+
+```ts title="rate-limiting-shared-limiter.ts"
+import { VernLLM, type RateLimiterAdapter } from 'vern-llm';
+
+const sharedLimiter: RateLimiterAdapter = new MyRedisBackedRateLimiter({
+  redis,
+  key: 'openai:gpt-4o',
+  requestsPerMinute: 500,
+});
+
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  rateLimit: sharedLimiter,
+});
+```
+
+`RateLimiterAdapter` is the exact surface the built in limiter exposes:
+
+```ts title="rate-limiter-like.ts"
+interface RateLimiterAdapter {
+  estimate(request: WireRequest): number;
+  acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
+  signalRateLimit(): void;
+  reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
+}
+```
+
+An object satisfying this shape is used exactly as given, never wrapped or reconstructed. The
+same instance can be shared across the primary and a fallback target on purpose, when two targets
+genuinely draw on one provider account's real ceiling, see [Bulkhead isolation with
+fallback](#bulkhead-isolation-with-fallback) above for the opposite, more common case of keeping
+each target's capacity separate.
+
+<Callout type="info">
+  VernLLM ships no distributed limiter itself, only this seam. Coordinating across processes is
+  entirely up to whatever `RateLimiterAdapter` implementation you provide.
+</Callout>
+
 ## Options reference
 
 | Option              | Default                | Notes                                                                                               |
