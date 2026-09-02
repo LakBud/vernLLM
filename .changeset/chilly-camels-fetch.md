@@ -5,8 +5,13 @@
 Fix a handful of small, non-breaking issues:
 
 - **Fix `call()`'s `toolChoice: 'none'` overload silently losing to the tools-enabled overload.** Calling `call({ tools: [...], toolChoice: 'none' })` with a plain inline `tools` array and no explicit `call<T>()` type argument previously resolved to `CallWithToolsResult<T, Tools>` instead of the intended `ContentResult<T>`, defeating the whole point of `toolChoice: 'none'` (proving at the type level that a `tool_calls` response can't happen). This happened because the tools-disabled overload didn't have its own `Tools` type parameter, so it lost inference to the tools-enabled overload's `const Tools`. Both the streaming and non-streaming tools-disabled overloads now declare `const Tools` themselves, matching the tools-enabled ones, so a plain `tools: [...]` array resolves correctly without needing a workaround type argument.
+
 - Replace the bare `crypto` import (`import { randomUUID } from 'crypto'`) with `globalThis.crypto.randomUUID()`. The bare specifier doesn't resolve to the Node builtin on edge runtimes, and bundlers targeting browsers would either pull in a deprecated `crypto` shim or fail outright. This matters for `fromCloudflareWorkersAI`, `fromVercelAIGateway`, and `fromFetch`, which exist specifically for edge deploys. `globalThis.crypto.randomUUID()` works in Node 19+, Deno, Bun, Workers, and browsers with no import at all.
+
 - Downgrade the `typescript` devDependency from `7.0.2` to `5.9.3`. TypeScript 7's API is still marked experimental by `tsdown` at build time, which is an unnecessary risk for a package whose main value is its published types.
+
 - Lower the `engines.node` floor from `>=24.20.0` to `>=22.22.0`. The full test suite passes on Node 22.22, and nothing in the codebase actually requires 24, so the stricter floor was excluding Node 22 LTS (supported into 2027) for no benefit.
+
 - Fix the Tool Execution Loop guide's "Full flow, put together" example, which only handled a single request/execute/continue round. If the model requested tools again after seeing the results, the old example's `final.type` would be `'tool_calls'` and the function would return `undefined`. The example now uses a bounded loop that accumulates `history` across hops.
+
 - Add a dedicated test file (`vernLLM.overloadMatrix.unit.test.ts`) pinning the return type of every `call()`/`cachedCall()` overload, in declaration order. The overload ordering is load-bearing and previously untested directly. A refactor reordering two signatures could silently change which one wins for a given call shape without any runtime test catching it.

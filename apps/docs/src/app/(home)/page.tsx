@@ -51,7 +51,7 @@ export default function HomePage() {
 
           <div className="flex flex-col items-start gap-6 lg:col-span-4 lg:items-end lg:text-right">
             <div className={buttonGroupClass}>
-              <Link href="/docs" className={primaryButtonClass}>
+              <Link href="/docs/core" className={primaryButtonClass}>
                 Read the docs
               </Link>
 
@@ -187,7 +187,7 @@ export default function HomePage() {
           </h2>
 
           <div className={buttonGroupClass}>
-            <Link href="/docs/getting-started" className={primaryButtonClass}>
+            <Link href="/docs" className={primaryButtonClass}>
               Get started
             </Link>
 

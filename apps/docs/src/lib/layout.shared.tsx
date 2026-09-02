@@ -22,17 +22,18 @@ export function baseOptions(): BaseLayoutProps {
     },
     links: [
       {
-        text: 'Documentation',
+        text: 'Get Started',
         url: '/docs',
         active: 'nested-url',
       },
       {
-        text: 'Get Started',
-        url: '/docs/getting-started',
-      },
-      {
         text: 'Features',
         url: '/docs/core',
+        active: 'nested-url',
+      },
+      {
+        text: 'Customization',
+        url: '/docs/customization',
         active: 'nested-url',
       },
       {
