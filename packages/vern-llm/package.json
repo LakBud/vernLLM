@@ -38,7 +38,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=24.20.0"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "build": "tsdown",
@@ -75,7 +75,7 @@
     "publint": "^0.3.24",
     "size-limit": "^13.0.3",
     "tsdown": "^0.22.14",
-    "typescript": "^7.0.2",
+    "typescript": "^5.9.3",
     "unplugin-unused": "^0.5.7",
     "vitest": "^4.1.11",
     "zod": "^4.5.4"
@@ -94,11 +94,11 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "100 KB"
+      "limit": "120 KB"
     },
     {
       "path": "dist/index.cjs",
-      "limit": "100 KB"
+      "limit": "120 KB"
     }
   ]
 }

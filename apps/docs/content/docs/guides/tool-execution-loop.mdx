@@ -191,36 +191,53 @@ rather skip the model deciding whether to call it at all.
 
 ## Full flow, put together
 
-```ts title="tool-calling-full-flow.ts"
-async function askAboutWeather(city: string) {
-  const first = await llm.call({
-    userContent: `What is the weather in ${city}?`,
-    tools: [weatherTool],
-  });
+A single request/execute/continue round only covers the case where the model asks for a tool
+once and then answers. In practice the model can look at your tool results and decide it needs
+_another_ tool call before it's ready to respond, so real usage needs a loop, not a single
+follow-up call. Bound it with an iteration cap so a model that keeps requesting tools can't run
+forever, and accumulate `history` across every hop rather than replacing it:
 
-  if (first.type !== 'tool_calls') {
-    return first.content;
+```ts title="tool-calling-full-flow.ts"
+async function askAboutWeather(city: string, maxIterations = 5) {
+  const userContent = `What is the weather in ${city}?`;
+  let history: ConversationTurn[] = [];
+
+  for (let i = 0; i < maxIterations; i++) {
+    const result = await llm.call({
+      userContent,
+      tools: [weatherTool],
+      history,
+    });
+
+    if (result.type !== 'tool_calls') {
+      return result.content;
+    }
+
+    const toolResults = await Promise.all(
+      result.toolCalls.map(async (call) => {
+        try {
+          return { toolCallId: call.id, content: await getWeather(call.arguments.city) };
+        } catch (error) {
+          return { toolCallId: call.id, content: String(error), isError: true };
+        }
+      }),
+    );
+
+    history = [
+      ...history,
+      { role: 'assistant', toolCalls: result.toolCalls },
+      { role: 'tool', toolResults },
+    ];
   }
 
-  const toolResults = await Promise.all(
-    first.toolCalls.map(async (call) => ({
-      toolCallId: call.id,
-      content: await getWeather(call.arguments.city),
-    })),
-  );
-
-  const final = await llm.call({
-    userContent: `What is the weather in ${city}?`,
-    tools: [weatherTool],
-    history: [
-      { role: 'assistant', toolCalls: first.toolCalls },
-      { role: 'tool', toolResults },
-    ],
-  });
-
-  return final.type === 'content' ? final.content : undefined;
+  throw new Error(`Tool loop did not resolve within ${maxIterations} iterations`);
 }
 ```
+
+`userContent` and `tools` stay the same on every hop; only `history` grows. If the model requests
+tools again after seeing the previous results, the loop just runs another round instead of
+returning `undefined`. Once `result.type` is `'content'`, that's the final answer and the loop
+returns it.
 
 See [Tool Calling](/docs/core/tool-calling) for the full reference on result shapes,
 `toolChoice`, caching behavior, and per-provider notes.
