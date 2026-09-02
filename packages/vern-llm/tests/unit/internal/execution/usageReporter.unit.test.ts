@@ -189,6 +189,57 @@ describe('createUsageReporter, reportSuccess', () => {
       message: 'unknown',
     });
   });
+
+  it('emits a usage event with the usage-reported provider when set', () => {
+    const reportEvent = vi.fn();
+    const reporter = createUsageReporter(baseOptions({ providerName: 'openai', reportEvent }));
+    const usage = baseUsage({ provider: 'fallback-provider' });
+
+    reporter.reportSuccess(usage);
+
+    expect(reportEvent).toHaveBeenCalledExactlyOnceWith({
+      kind: 'usage',
+      requestId: usage.requestId,
+      provider: 'fallback-provider',
+      model: usage.model,
+      usage,
+    });
+  });
+
+  it("falls back to the reporter's own providerName when usage.provider is unset", () => {
+    const reportEvent = vi.fn();
+    const reporter = createUsageReporter(baseOptions({ providerName: 'openai', reportEvent }));
+    const usage = baseUsage();
+
+    reporter.reportSuccess(usage);
+
+    expect(reportEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ provider: 'openai' }),
+    );
+  });
+
+  it('emits the usage event even when no onUsage hook is configured', () => {
+    const reportEvent = vi.fn();
+    const reporter = createUsageReporter(baseOptions({ reportEvent }));
+
+    reporter.reportSuccess(baseUsage());
+
+    expect(reportEvent).toHaveBeenCalledOnce();
+  });
+
+  it('does not emit a usage event when usage is undefined', () => {
+    const reportEvent = vi.fn();
+    const reporter = createUsageReporter(baseOptions({ reportEvent }));
+
+    reporter.reportSuccess(undefined);
+
+    expect(reportEvent).not.toHaveBeenCalled();
+  });
+
+  it('does nothing extra when no reportEvent is configured', () => {
+    const reporter = createUsageReporter(baseOptions());
+    expect(() => reporter.reportSuccess(baseUsage())).not.toThrow();
+  });
 });
 
 describe('createUsageReporter, reportFailure', () => {

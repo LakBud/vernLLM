@@ -1,5 +1,5 @@
 /** Stringifies a value with object keys sorted, so identical values always serialize the same regardless of insertion order. */
-function canonicalStringify(value: unknown): string {
+export function canonicalStringify(value: unknown): string {
   if (value === undefined) return 'undefined';
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
 

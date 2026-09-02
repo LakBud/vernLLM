@@ -420,6 +420,53 @@ describe('RateLimiter', () => {
   });
 });
 
+describe('RateLimiter, estimateFraction', () => {
+  it('scales the estimate returned by estimate()', () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 1000, estimateFraction: 0.5 });
+
+    // request() -> 102 raw tokens (see defaultEstimateTokens tests above).
+    expect(limiter.estimate(request())).toBe(51);
+  });
+
+  it('defaults to 1 (no scaling) when omitted, unchanged from today', () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 1000 });
+
+    expect(limiter.estimate(request())).toBe(102);
+  });
+
+  it('clamps a fraction at or below 0 to a near-zero positive value instead of 0', () => {
+    // A literal 0 would zero out the estimate entirely, letting every
+    // call reserve nothing at all and defeat the bucket. Clamping to
+    // Number.EPSILON keeps a real, if tiny, reservation instead.
+    const limiter = new RateLimiter({ tokensPerMinute: 1000, estimateFraction: 0 });
+
+    const estimate = limiter.estimate(request());
+    expect(estimate).toBeGreaterThan(0);
+    expect(estimate).toBeLessThan(1);
+  });
+
+  it('clamps a negative fraction the same way as 0', () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 1000, estimateFraction: -5 });
+
+    const estimate = limiter.estimate(request());
+    expect(estimate).toBeGreaterThan(0);
+    expect(estimate).toBeLessThan(1);
+  });
+
+  it('clamps a fraction above 1 down to 1', () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 1000, estimateFraction: 5 });
+
+    // Clamped to 1, so identical to the unscaled default.
+    expect(limiter.estimate(request())).toBe(102);
+  });
+
+  it('ignores a non-finite fraction and falls back to 1', () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 1000, estimateFraction: NaN });
+
+    expect(limiter.estimate(request())).toBe(102);
+  });
+});
+
 describe('RateLimiter, AIMD', () => {
   afterEach(() => {
     vi.useRealTimers();

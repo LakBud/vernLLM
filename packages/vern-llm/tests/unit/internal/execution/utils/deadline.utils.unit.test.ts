@@ -84,6 +84,43 @@ describe('setupDeadline', () => {
     expect(signal?.reason).toBe(DEADLINE_REASON);
     expect(timer).toBeUndefined();
   });
+
+  it('returns a fresh signal and timer for a future deadlineAt', () => {
+    const { signal, timer } = setupDeadline(undefined, undefined, Date.now() + 1000);
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+    expect(timer).toBeDefined();
+
+    clearTimeout(timer);
+  });
+
+  it('aborts synchronously with DEADLINE_REASON, no timer, when deadlineAt is already in the past', () => {
+    const { signal, timer } = setupDeadline(undefined, undefined, Date.now() - 1000);
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(DEADLINE_REASON);
+    expect(timer).toBeUndefined();
+  });
+
+  it('deadlineAt takes priority over deadlineMs when both are set', () => {
+    // deadlineMs alone (10_000ms out) would not fire yet; an already-past
+    // deadlineAt must still win and abort synchronously.
+    const { signal, timer } = setupDeadline(10_000, undefined, Date.now() - 1000);
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(DEADLINE_REASON);
+    expect(timer).toBeUndefined();
+  });
+
+  it('aborts the returned signal with DEADLINE_REASON once deadlineAt elapses', async () => {
+    const { signal } = setupDeadline(undefined, undefined, Date.now() + 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(DEADLINE_REASON);
+  });
 });
 
 describe('stampDeadlineCode', () => {
