@@ -214,10 +214,13 @@ async function askAboutWeather(city: string, maxIterations = 5) {
     }
 
     const toolResults = await Promise.all(
-      result.toolCalls.map(async (call) => ({
-        toolCallId: call.id,
-        content: await getWeather(call.arguments.city),
-      })),
+      result.toolCalls.map(async (call) => {
+        try {
+          return { toolCallId: call.id, content: await getWeather(call.arguments.city) };
+        } catch (error) {
+          return { toolCallId: call.id, content: String(error), isError: true };
+        }
+      }),
     );
 
     history = [
