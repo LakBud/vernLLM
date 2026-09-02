@@ -35,6 +35,23 @@ export interface RateLimitOptions {
    */
   estimateTokens?: (request: WireRequest) => number;
   /**
+   * Scales the pre flight token estimate before it reserves capacity in
+   * the `tokensPerMinute` bucket. Range `(0, 1]`, default `1` (reserve
+   * the full estimate, today's behavior).
+   *
+   * The default estimate reserves the full `max_tokens` up front. Most
+   * calls use less, so full reservation under throttles real throughput.
+   * A lower fraction reserves less; `release` still reconciles against
+   * real usage after. Never changes the `max_tokens` sent to the
+   * provider, only the bucket's own bookkeeping.
+   *
+   * A lower value admits more concurrent calls but risks briefly
+   * overdrawing the bucket if several large responses land before
+   * reconciling (the bucket tolerates this and self corrects on refill).
+   * Out of range values are clamped.
+   */
+  estimateFraction?: number;
+  /**
    * AIMD against the `requestsPerMinute` bucket. Omit for a fixed
    * ceiling, today's behavior. Requires `requestsPerMinute`.
    */
@@ -88,6 +105,13 @@ export function defaultEstimateTokens(request: WireRequest): number {
   }, 0);
 
   return Math.ceil(messagesChars / 4) + (request.max_tokens ?? 0);
+}
+
+/** Clamps `estimateFraction` into `(0, 1]`. Undefined defaults to `1`. */
+function clampEstimateFraction(fraction: number | undefined): number {
+  if (fraction === undefined || !Number.isFinite(fraction)) return 1;
+  if (fraction <= 0) return Number.EPSILON;
+  return Math.min(fraction, 1);
 }
 
 /**
@@ -204,6 +228,7 @@ export class RateLimiter implements RateLimiterAdapter {
   private readonly maxQueueMs: number;
   private readonly maxQueueSize: number;
   private readonly estimateTokensFn: (request: WireRequest) => number;
+  private readonly estimateFraction: number;
   private readonly aimd?: AimdOptions;
 
   private readonly queue: Waiter[] = [];
@@ -236,12 +261,13 @@ export class RateLimiter implements RateLimiterAdapter {
     this.maxQueueMs = options.maxQueueMs ?? 30_000;
     this.maxQueueSize = options.maxQueueSize ?? 0;
     this.estimateTokensFn = options.estimateTokens ?? defaultEstimateTokens;
+    this.estimateFraction = clampEstimateFraction(options.estimateFraction);
     this.aimd = this.requests ? buildAimdOptions(options.aimd) : undefined;
   }
 
-  /** Pre-flight token estimate for a request, per the configured (or default) heuristic. */
+  /** Token estimate for a request, scaled by `estimateFraction`. */
   estimate(request: WireRequest): number {
-    return this.estimateTokensFn(request);
+    return this.estimateTokensFn(request) * this.estimateFraction;
   }
 
   /**

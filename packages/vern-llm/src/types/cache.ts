@@ -111,19 +111,54 @@ export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
   }
 }
 
+/** Constructor options for `NormalizedCacheAdapter`. */
+export interface NormalizedCacheAdapterOptions {
+  /**
+   * Characters to exclude from punctuation stripping, kept literal in
+   * the normalized key instead of collapsed to a space. Default
+   * normalization treats all punctuation the same, so `"order A-1"` and
+   * `"order A:1"` both normalize to `"order a 1"`. `preserveChars: ':-'`
+   * keeps `-` and `:` literal, so they normalize differently.
+   *
+   * All or nothing per adapter: a preserved character stops collapsing
+   * everywhere, even where it was decorative (preserving `+` also stops
+   * `"2+2"` collapsing to match `"2 + 2"`). Pick characters that are
+   * consistently meaningful in your prompts. Default: none.
+   */
+  preserveChars?: string;
+}
+
+/** Escapes `chars` for a `[...]` character class. `\`, `]`, `^`, `-` are special there. */
+function escapeForCharClass(chars: string): string {
+  return chars.replace(/[\\\]^-]/g, '\\$&');
+}
+
 /**
  * Normalizes keys before caching to avoid duplicate entries from formatting differences.
+ *
+ * Collapsing case, whitespace, and all punctuation into one space also
+ * has a cost: two genuinely different values that differ only in which
+ * separator character they use, like `"order A-1"` and `"order A:1"`,
+ * both normalize to `"order a 1"` and can silently share an entry. If a
+ * small, fixed set of separators is causing this, `preserveChars` (see
+ * `NormalizedCacheAdapterOptions`) keeps them literal. For anything more
+ * specific, write a custom `resolveKey` instead (see the Normalized
+ * Caching guide).
  */
 export class NormalizedCacheAdapter<T = unknown> implements CacheAdapter<T> {
-  constructor(private readonly inner: CacheAdapter<T> = new InMemoryCacheAdapter<T>()) {}
+  private readonly stripRegex: RegExp;
+
+  constructor(
+    private readonly inner: CacheAdapter<T> = new InMemoryCacheAdapter<T>(),
+    options: NormalizedCacheAdapterOptions = {},
+  ) {
+    this.stripRegex = options.preserveChars
+      ? new RegExp(`[^\\p{L}\\p{N}\\s${escapeForCharClass(options.preserveChars)}]`, 'gu')
+      : /[^\p{L}\p{N}\s]/gu;
+  }
 
   private normalize(key: string): string {
-    return key
-      .toLowerCase()
-      .trim()
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return key.toLowerCase().trim().replace(this.stripRegex, ' ').replace(/\s+/g, ' ').trim();
   }
 
   async resolveKey(key: string): Promise<string> {

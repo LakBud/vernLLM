@@ -128,6 +128,24 @@ export interface LLMRequestShape<
   deadlineMs?: number;
 
   /**
+   * Absolute deadline (epoch ms) for this call. An alternative to
+   * `deadlineMs` for budgeting a whole sequence of calls against one
+   * shared deadline:
+   *
+   * ```ts
+   * const deadlineAt = Date.now() + 10_000;
+   * await llm.call({ userContent: '...', deadlineAt });
+   * await llm.call({ userContent: '...', deadlineAt, history });
+   * ```
+   *
+   * One 10 second budget across every call, instead of each call
+   * granting itself a fresh `deadlineMs`. Set only one of
+   * `deadlineMs`/`deadlineAt`. If both are set, `deadlineAt` wins. A
+   * deadline already in the past fails fast, without dispatching.
+   */
+  deadlineAt?: number;
+
+  /**
    * Per-call override for the instance's `chunkIdleTimeoutMs` (max gap
    * between stream chunks once opened). Only applies when `stream: true`.
    * Useful for routes using reasoning-heavy models with documented long

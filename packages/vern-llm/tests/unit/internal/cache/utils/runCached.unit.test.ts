@@ -79,6 +79,57 @@ describe('NormalizedCacheAdapter', () => {
     expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('hello world');
   });
 
+  it('documented collision risk: distinct punctuation-delimited identifiers can share an entry', async () => {
+    // Not a bug to fix here, see the class's own JSDoc and the
+    // Normalized Caching guide's "Collision risk" section: every kind
+    // of punctuation normalizes identically, so two genuinely different
+    // values that differ only in *which* separator character they use
+    // collide into the same cache entry. This test exists to catch a
+    // change in `normalize()`'s behavior, not to assert this is
+    // desirable.
+    const cache = new NormalizedCacheAdapter<string>();
+
+    await cache.set('order A-1', 'order A-1 details', 60);
+
+    expect(await cache.get('order A:1')).toEqual({
+      hit: true,
+      value: 'order A-1 details',
+    });
+  });
+
+  it('preserveChars keeps a specific separator literal, fixing the collision above for that character', async () => {
+    const cache = new NormalizedCacheAdapter<string>(undefined, { preserveChars: ':-' });
+
+    await cache.set('order A-1', 'order A-1 details', 60);
+    await cache.set('order A:1', 'order A:1 details', 60);
+
+    expect(await cache.get('order A-1')).toEqual({ hit: true, value: 'order A-1 details' });
+    expect(await cache.get('order A:1')).toEqual({ hit: true, value: 'order A:1 details' });
+  });
+
+  it('preserveChars still normalizes case, whitespace, and every other punctuation character normally', async () => {
+    const cache = new NormalizedCacheAdapter<string>(undefined, { preserveChars: ':-' });
+
+    await cache.set('  What is the Capital of France?  ', 'Paris', 60);
+
+    expect(await cache.get('what is the capital of france')).toEqual({
+      hit: true,
+      value: 'Paris',
+    });
+  });
+
+  it('resolveKey reflects preserveChars', async () => {
+    const cache = new NormalizedCacheAdapter<string>(undefined, { preserveChars: ':-' });
+    expect(await cache.resolveKey?.('Order A-1: Delayed')).toBe('order a-1: delayed');
+  });
+
+  it('preserveChars handles regex-special characters (], ^, -, \\) safely', async () => {
+    const cache = new NormalizedCacheAdapter<string>(undefined, { preserveChars: ']^-\\' });
+    // Should not throw constructing the adapter, and should still
+    // normalize ordinary text normally.
+    expect(await cache.resolveKey?.('Hello, World!')).toBe('hello world');
+  });
+
   it('deletes through to the wrapped adapter using the normalized key', async () => {
     const cache = new NormalizedCacheAdapter<string>();
 

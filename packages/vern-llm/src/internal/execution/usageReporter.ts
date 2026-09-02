@@ -2,7 +2,7 @@ import { toTokenUsage } from './utils/response/usage.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { LLMError } from '../../types/errors.js';
-import type { LLMClient, TokenUsage } from '../../types/index.js';
+import type { LLMClient, TokenUsage, VernLLMEvent } from '../../types/index.js';
 
 /** Everything one target's `UsageReporter` needs beyond the response/error being reported on. */
 export interface UsageReporterOptions {
@@ -12,6 +12,8 @@ export interface UsageReporterOptions {
   maxRetries: number;
   onUsage?: (usage: TokenUsage) => void;
   onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
+  /** Emits a `usage` event alongside `onUsage`, on success only. */
+  reportEvent?: (event: VernLLMEvent) => void;
   logger: Logger;
 }
 
@@ -47,7 +49,8 @@ export interface UsageReporter {
 }
 
 export function createUsageReporter(options: UsageReporterOptions): UsageReporter {
-  const { providerName, isFallback, maxRetries, onUsage, onUsageFailure, logger } = options;
+  const { providerName, isFallback, maxRetries, onUsage, onUsageFailure, reportEvent, logger } =
+    options;
 
   function extract(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
@@ -65,7 +68,19 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
   }
 
   function reportSuccess(usage: TokenUsage | undefined): void {
-    if (!usage || !onUsage) return;
+    if (!usage) return;
+
+    if (reportEvent) {
+      reportEvent({
+        kind: 'usage',
+        requestId: usage.requestId,
+        provider: usage.provider ?? providerName,
+        model: usage.model,
+        usage,
+      });
+    }
+
+    if (!onUsage) return;
 
     try {
       onUsage(usage);

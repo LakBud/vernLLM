@@ -14,18 +14,22 @@ export interface DeadlineSetup {
 }
 
 /**
- * Composes `deadlineMs` into a single `AbortSignal` the rest of `call()`
- * can treat exactly like a caller-supplied one, reusing the same
- * `AbortSignal.any` pattern `withTimeout` already uses to combine an
- * internal timeout with an external signal. When `deadlineMs` is omitted,
- * this is a no-op: the caller's own `signal` (or `undefined`) passes
- * straight through, and no controller or timer is created.
+ * Composes `deadlineMs`/`deadlineAt` into a single `AbortSignal`, reusing
+ * the same `AbortSignal.any` pattern `withTimeout` uses. Omitting both is
+ * a no op: the caller's own signal passes through unchanged.
+ *
+ * `deadlineAt` wins if both are set. It converts to a remaining budget
+ * by subtracting `Date.now()`; a deadline already in the past behaves
+ * like `deadlineMs: 0`, failing fast without dispatching.
  */
 export function setupDeadline(
   deadlineMs: number | undefined,
   callerSignal: AbortSignal | undefined,
+  deadlineAt?: number,
 ): DeadlineSetup {
-  if (deadlineMs === undefined) {
+  const remaining = deadlineAt !== undefined ? deadlineAt - Date.now() : deadlineMs;
+
+  if (remaining === undefined) {
     return { signal: callerSignal, timer: undefined };
   }
 
@@ -36,7 +40,7 @@ export function setupDeadline(
   // beat dispatch, the abort has to happen synchronously here instead, the
   // same way an already-aborted caller signal is treated as a fail-fast
   // case rather than raced.
-  if (deadlineMs <= 0) {
+  if (remaining <= 0) {
     controller.abort(DEADLINE_REASON);
     const signal = callerSignal
       ? AbortSignal.any([callerSignal, controller.signal])
@@ -44,7 +48,7 @@ export function setupDeadline(
     return { signal, timer: undefined };
   }
 
-  const timer = setTimeout(() => controller.abort(DEADLINE_REASON), deadlineMs);
+  const timer = setTimeout(() => controller.abort(DEADLINE_REASON), remaining);
   const signal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
     : controller.signal;

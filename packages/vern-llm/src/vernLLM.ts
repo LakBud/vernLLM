@@ -1,4 +1,5 @@
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
+import { deriveCacheKeyFromRequest } from './internal/cache/utils/deriveCacheKey.utils.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
 import {
   executeLogicalCall,
@@ -317,6 +318,7 @@ export class VernLLM {
     const { signal: effectiveSignal, timer: deadlineTimer } = setupDeadline(
       params.deadlineMs,
       params.signal,
+      params.deadlineAt,
     );
 
     const effectiveParams =
@@ -703,6 +705,24 @@ export class VernLLM {
       // See the matching comment in the streaming branch above.
       releaseMetaHolder();
     }
+  }
+
+  /**
+   * Derives a `cachedCall({ cacheKey })` value from `params` itself.
+   * Hashes the exact wire request the primary target would build,
+   * including all resolved defaults.
+   *
+   * Fixes the gap a hand picked key leaves open: change the prompt,
+   * model, or temperature without also updating that key, and
+   * `cachedCall` silently serves stale output. A derived key changes
+   * automatically whenever any of those change.
+   *
+   * Ignores fields that don't affect the response (`signal`,
+   * `requestId`, `deadlineMs`, usage hooks).
+   */
+  deriveCacheKey<T>(params: CallParams<T>): string {
+    const preview = this.executors[0]!.previewRequest(params);
+    return deriveCacheKeyFromRequest(preview);
   }
 
   /**

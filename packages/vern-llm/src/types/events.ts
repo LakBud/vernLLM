@@ -1,5 +1,6 @@
 import type { CircuitState } from '../circuitBreaker.js';
 import type { LLMError } from './errors.js';
+import type { TokenUsage } from './usage.js';
 
 /**
  * Reports what happened during a call. Fire and forget, mirroring
@@ -7,6 +8,13 @@ import type { LLMError } from './errors.js';
  * change what the call does, only what gets reported about it.
  */
 export type VernLLMEvent =
+  | {
+      kind: 'usage';
+      requestId: string;
+      provider: string;
+      model: string;
+      usage: TokenUsage;
+    }
   | {
       kind: 'retry';
       requestId: string;

@@ -120,6 +120,7 @@ export class CallExecutor {
       maxRetries: this.maxRetries,
       onUsage: options.onUsage,
       onUsageFailure: options.onUsageFailure,
+      reportEvent: this.reportEvent,
       logger: this.logger,
     });
     this.requestBuilder = new RequestBuilder({

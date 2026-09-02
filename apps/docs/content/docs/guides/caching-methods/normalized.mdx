@@ -58,6 +58,52 @@ Normalization is a text transform, not a parser; it doesn't understand what the 
   "different words, same meaning."
 </Callout>
 
+## Collision risk
+
+The tradeoff runs the other way too. Collapsing every kind of punctuation into the same single
+space closes the false-negative case above, but it can't tell "punctuation used as decoration"
+apart from "punctuation used to distinguish two different things": `"order A-1"` and
+`"order A:1"` both normalize to `"order a 1"`. If those are genuinely two different orders, a
+lookup for one silently returns the cached answer meant for the other, a wrong answer served with
+confidence, not a cache miss you'd notice.
+
+This mainly shows up when a prompt embeds a punctuation-delimited identifier, an order or ticket
+reference, a phone number, anything where the specific separator character actually distinguishes
+one value from another rather than just formatting it. Genuinely-equivalent formatting noise, like
+`"2024-01-01"` vs `"2024/01/01"` both meaning the same calendar date, is exactly what this adapter
+is supposed to collapse; there's no way for a generic text transform to tell that case apart from
+the order-reference case above, since both are "different punctuation, otherwise identical text."
+
+### Fixing it with `preserveChars`
+
+If it's a small, fixed set of separator characters causing the collision, `preserveChars` keeps
+them literal instead of stripping them, without writing a full custom adapter:
+
+```ts title="preserve-chars.ts"
+const cache = new NormalizedCacheAdapter(undefined, { preserveChars: ':-' });
+
+await cache.set('order A-1', 'Shipped'); // normalizes to "order a-1"
+await cache.set('order A:1', 'Delayed'); // normalizes to "order a:1", no longer the same key
+```
+
+Everything else still normalizes as before, case, whitespace, and every other punctuation
+character are collapsed exactly the way they were without `preserveChars`; only the characters
+you list are exempted.
+
+This is a per-adapter, all-or-nothing choice, not a per-key one: a preserved character stops
+collapsing everywhere, including cases where it really was decorative. Preserving `+` to protect
+an identifier would also un-collapse `"2+2"` from `"2 + 2"`, undoing the example earlier on this
+page. Pick characters that are consistently meaningful in your prompts, not ones that are
+sometimes decoration and sometimes a real separator, if a character plays both roles depending on
+context, `preserveChars` can't help either, and you're back to a custom `resolveKey`.
+
+<Callout type="warn">
+  If your prompts embed identifiers where the separator character is meaningful, not decorative, try
+  `preserveChars` first. If a single character plays both roles depending on context, or you need
+  something more domain-specific (stemming, filler-word stripping, digit-vs-word numbers), write a
+  custom `resolveKey` (see [Custom normalization](#custom-normalization) below) instead.
+</Callout>
+
 ## Wrapping a different inner adapter
 
 `NormalizedCacheAdapter` doesn't do its own storage, it normalizes the key, then delegates to
