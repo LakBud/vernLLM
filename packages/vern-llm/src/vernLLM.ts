@@ -1,5 +1,3 @@
-import { randomUUID } from 'crypto';
-
 import { CacheOrchestrator } from './internal/cache/cacheOrchestrator.js';
 import { CallExecutor } from './internal/execution/callExecutor.js';
 import {
@@ -251,8 +249,8 @@ export class VernLLM {
    * `CallWithToolsResult<T>` when `tools` is set, or a `{ chunks,
    * finalResult }` `StreamCallResult` when `stream: true`. See `StreamCallResult`.
    */
-  async call<T = unknown>(
-    params: StreamEnabledCallParams<T> & ToolsDisabledCallParams<T>,
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: StreamEnabledCallParams<T, Tools> & ToolsDisabledCallParams<T, Tools>,
   ): Promise<StreamCallResult<ContentResult<T>>>;
 
   async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
@@ -273,7 +271,9 @@ export class VernLLM {
 
   async call<T = unknown>(params: StreamEnabledCallParams<T>): Promise<StreamCallResult<T>>;
 
-  async call<T = unknown>(params: ToolsDisabledCallParams<T>): Promise<ContentResult<T>>;
+  async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
+    params: ToolsDisabledCallParams<T, Tools>,
+  ): Promise<ContentResult<T>>;
 
   async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: ToolEnabledCallParams<T, Tools>,
@@ -300,7 +300,7 @@ export class VernLLM {
       throw new LLMError('LLM request aborted', 'aborted');
     }
 
-    const requestId = params.requestId ?? randomUUID();
+    const requestId = params.requestId ?? globalThis.crypto.randomUUID();
 
     // Captured from the original `params` reference before any clone
     // below, so a later clone doesn't lose the marker. See
@@ -563,7 +563,7 @@ export class VernLLM {
       );
     }
 
-    const requestId = restCallParams.requestId ?? randomUUID();
+    const requestId = restCallParams.requestId ?? globalThis.crypto.randomUUID();
     const middlewareState = createMiddlewareStateBag();
 
     // Maps each inner `this.call()`'s own `params` object to this
@@ -783,7 +783,7 @@ export class VernLLM {
     warnIfModelUnsupported(executor.isolateByModel, target?.model, 'openCircuit', this.logger);
     // No logical call behind a manual invocation, so mint a fresh one.
     executor.openCircuit(target?.model ?? executor.model, {
-      requestId: randomUUID(),
+      requestId: globalThis.crypto.randomUUID(),
       state: createMiddlewareStateBag(),
     });
   }
@@ -801,7 +801,7 @@ export class VernLLM {
     warnIfModelUnsupported(executor.isolateByModel, target?.model, 'closeCircuit', this.logger);
     // See `openCircuit`.
     executor.closeCircuit(target?.model ?? executor.model, {
-      requestId: randomUUID(),
+      requestId: globalThis.crypto.randomUUID(),
       state: createMiddlewareStateBag(),
     });
   }
