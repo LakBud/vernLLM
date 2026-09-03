@@ -10,6 +10,18 @@ html {
   scrollbar-gutter: stable;
 }
 
+/* Safety net against phantom horizontal scroll on mobile (seen on some
+   phones with the install-command marquee): overflow-hidden on the
+   marquee's own wrapper clips it visually, but a very wide flex/motion
+   child deep in the tree can still let the page pick up extra scroll
+   width on iOS Safari in particular. Constraining html/body directly is
+   the standard fix. */
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
@@ -42,8 +54,8 @@ html > body[data-scroll-locked] {
   --shiki-token-constant: var(--shiki-amber);
 
   /* Values */
-  --shiki-token-string: var(--shiki-honey);
-  --shiki-token-string-expression: var(--shiki-honey);
+  --shiki-token-string: var(--shiki-gold);
+  --shiki-token-string-expression: var(--shiki-gold);
   --shiki-token-regexp: var(--shiki-flame);
 
   /* Metadata */
@@ -88,8 +100,8 @@ html > body[data-scroll-locked] {
   --shiki-token-constant: var(--shiki-amber);
 
   /* Values */
-  --shiki-token-string: var(--shiki-honey);
-  --shiki-token-string-expression: var(--shiki-honey);
+  --shiki-token-string: var(--shiki-gold);
+  --shiki-token-string-expression: var(--shiki-gold);
   --shiki-token-regexp: var(--shiki-flame);
 
   --shiki-token-attribute: var(--shiki-amber);
@@ -313,4 +325,13 @@ html > body[data-scroll-locked] {
 /* Fumadocs theme/nav active icons */
 svg.text-fd-accent-foreground {
   color: var(--color-fd-primary) !important;
+}
+
+/* [!code word:x] notation in code blocks: colored text only, no pill/box */
+.highlighted-word {
+  padding: 0 !important;
+  margin-block: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  color: var(--shiki-token-keyword) !important;
 }

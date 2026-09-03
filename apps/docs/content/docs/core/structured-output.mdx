@@ -7,10 +7,35 @@ description: Client-side validation with Zod and provider-native JSON Schema mod
 
 ### Remember to install zod first!
 
-<Tabs items={['pnpm', 'npm', 'yarn']}>
-  <Tab value="pnpm">``` pnpm add zod ```</Tab>
-  <Tab value="npm">``` npm install zod ```</Tab>
-  <Tab value="yarn">``` yarn add zod ```</Tab>
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add zod # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install zod # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add zod # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add zod # [!code word:add]
+```
+
+  </Tab>
 </Tabs>
 
 Pass a `schema` and get a typed, validated result. Works with any validator exposing `safeParse` (Zod v3/v4).

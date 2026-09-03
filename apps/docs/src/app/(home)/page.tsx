@@ -6,6 +6,7 @@ import { createCssVariablesTheme } from 'shiki';
 import Squares from '../../components/squares';
 
 import { AuroraBarsClient } from '@/components/aurora-bars-client';
+import { InstallCommand } from '@/components/install-command';
 import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
 import { annotations, codeExample, faqItems, providers } from '@/lib/home.utils';
 import { generateSoftwareApplication, JsonLd } from '@/lib/seo/jsonld';
@@ -70,14 +71,8 @@ export default function HomePage() {
 
       {/* INSTALL */}
       <section className="border-y border-fd-border">
-        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4 lg:px-16">
-          <code className="font-mono text-sm text-fd-foreground">
-            <span className="text-fd-muted-foreground">$</span> npm install vern-llm
-          </code>
-
-          <span className="hidden font-mono text-xs text-fd-muted-foreground sm:inline">
-            built around the clients you already use
-          </span>
+        <div className="w-full py-4">
+          <InstallCommand />
         </div>
       </section>
 

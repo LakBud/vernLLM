@@ -62,11 +62,16 @@ export default function Squares({ squareSize = 48, tripChance = 0.0001 }: Square
       canvas.height = canvas.offsetHeight;
       cols = Math.ceil(canvas.width / squareSize) + 1;
       rows = Math.ceil(canvas.height / squareSize) + 1;
-      cells = Array.from({ length: cols * rows }, () => ({
-        state: 'idle',
-        intensity: 0,
-        breakerState: 'closed',
-      }));
+      cells = Array.from({ length: cols * rows }, () => {
+        const seeded = Math.random() < 0.03;
+        return seeded
+          ? {
+              state: 'active' as CellState,
+              intensity: Math.random(),
+              breakerState: pickBreakerState(),
+            }
+          : { state: 'idle' as CellState, intensity: 0, breakerState: 'closed' as BreakerState };
+      });
     };
     resize();
     window.addEventListener('resize', resize);
