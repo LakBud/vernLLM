@@ -4,8 +4,8 @@
 
 <p align="center">
   <a href="https://vernllm.dev">Documentation</a> ·
-  <a href="https://npmjs.com/package/vern-llm">npm</a> ·
-  <a href="./packages/vern-llm">Package</a>
+  <a href="./packages/vern-llm">Package</a> ·
+  <a href="https://npmjs.com/package/vern-llm">npm</a>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 <p align="center">The LLM call framework. Resilience, observability, and control for every call.</p>
 
-<p align="center">One interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock, with retries, circuit breaking, provider fallback, rate limiting, caching, and middleware built in, all running in your own process rather than a new network hop.</p>
+<p align="center">One interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock, with retries, circuit breaking, fallback, rate limiting, caching, and middleware built in, all running in your own process rather than a new network hop.</p>
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk';

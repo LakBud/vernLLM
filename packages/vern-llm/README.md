@@ -26,7 +26,7 @@
 
 <p align="center">The LLM call framework. Resilience, observability, and control for every call, in your own process.</p>
 
-The `vern-llm` npm package: one client across OpenAI-compatible, Anthropic, Gemini, and Bedrock, with retries, circuit breaking, fallback, rate limiting, caching, and middleware built in. See the [root README](https://github.com/LakBud/vernLLM) for how this compares to a gateway.
+The `vern-llm` npm package: one client across OpenAI-compatible, Anthropic, Gemini, and Bedrock, with retries, circuit breaking, fallback, rate limiting, caching, and middleware built in.
 
 **Full documentation: [vernllm.dev](https://vernllm.dev)** for installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference. This README is a quick reference, not the manual.
 
