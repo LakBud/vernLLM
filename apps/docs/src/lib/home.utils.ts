@@ -160,7 +160,7 @@ export const faqItems = [
   {
     question: 'Why use VernLLM instead of a gateway?',
     answer:
-      "The customization is something a gateway can't match. VernLLM runs in your process, so you bring your own rate limiter, cache, and middlewares instead of picking from a config panel, and hooks like reserveUsage, onEvent and even more gives you superior control over billing and observability.",
+      'VernLLM runs in your own process, so there is no extra network hop or proxy to maintain. It is built around small interfaces rather than one config object, so caching, rate limiting, and the circuit breaker can each be swapped for your own implementation. Running in-process also means it can react to your own application logic, not just the request and response, catching failures a gateway watching traffic from outside your app would miss. A gateway is still the better choice for one shared setup across many services or languages.',
   },
   {
     question: 'Why use VernLLM instead of calling the client directly?',
