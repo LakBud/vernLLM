@@ -88,38 +88,48 @@ export const providers = [
   { name: 'Custom HTTPS API', Icon: Globe, href: '/docs/adapters/custom-fetch' },
 ];
 
-export const codeExample = `import OpenAI from 'openai';
-import { fromOpenAI, VernLLM } from 'vern-llm';
-import { getWeatherTool } from './tools';
+export const codeExample = `import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+import { fromAnthropic, fromOpenAI, VernLLM } from 'vern-llm';
 
 const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
-const backup = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_KEY_2 }));
+const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }));
 
 export const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
+  fallback: { client: anthropic, model: 'claude-sonnet-5', circuitBreaker: true },
+  rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000, maxConcurrent: 20 },
+  retryBudget: { windowMs: 60_000, minCalls: 20, retryRatio: 0.2 },
   maxRetries: 3,
   timeoutMs: 10_000,
-  circuitBreaker: true,
-  fallback: { client: backup, model: 'gpt-4o' },
-  rateLimit: { requestsPerMinute: 500 }
+  defaultMaxTokens: 1000,
+  defaultReasoningEffort: 'medium'
 });
 
-export const { chunks, finalResult } = await llm.cachedCall({
+const result = await llm.cachedCall({
   cacheKey: 'weather:new-york',
   ttl: 3600,
-  call: {
-    userContent: "What's the weather in New York?",
-    tools: [getWeatherTool],
-    stream: true
-  }
-});
-
-for await (const chunk of chunks) {
-  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
-}`;
+  call: { userContent: "What's the weather in New York?" }
+});`;
 
 export const annotations = [
+  {
+    line: 'fallback:',
+    note: 'Falls over to a backup target on failure, in process',
+  },
+  {
+    line: 'circuitBreaker: true',
+    note: 'Stops repeated failures from cascading',
+  },
+  {
+    line: 'rateLimit:',
+    note: 'Queues locally under a per-minute ceiling',
+  },
+  {
+    line: 'retryBudget:',
+    note: 'Caps how much recent traffic can be retries',
+  },
   {
     line: 'maxRetries: 3',
     note: 'Retries transient failures with backoff and jitter',
@@ -129,36 +139,16 @@ export const annotations = [
     note: 'Prevents attempts from hanging indefinitely',
   },
   {
-    line: 'circuitBreaker: true',
-    note: 'Stops repeated failures from cascading',
+    line: 'defaultMaxTokens: 1000',
+    note: 'Applied to any call that omits its own',
   },
   {
-    line: 'fallback:',
-    note: 'Falls over to a backup target on failure',
-  },
-  {
-    line: 'rateLimit:',
-    note: 'Queues locally under a per-minute ceiling',
+    line: "defaultReasoningEffort: 'medium'",
+    note: 'Sets reasoning depth across providers',
   },
   {
     line: 'cachedCall',
     note: 'Returns cached results without another API call',
-  },
-  {
-    line: 'cacheKey',
-    note: 'Identifies repeatable cached requests',
-  },
-  {
-    line: 'ttl: 3600',
-    note: 'Controls cache lifetime',
-  },
-  {
-    line: 'tools',
-    note: 'Lets the model request app defined functions',
-  },
-  {
-    line: 'stream: true',
-    note: 'Delivers live chunks with validated result',
   },
 ];
 export const faqItems = [
@@ -166,6 +156,11 @@ export const faqItems = [
     question: 'What problem does VernLLM solve?',
     answer:
       'LLM calls fail in ways plain SDK calls do not handle: timeouts, rate limit errors, a provider having an outage, or a request that just hangs. VernLLM adds retries with backoff, a circuit breaker, provider fallback, rate limiting, and caching around your existing client, so a single bad call does not take down your app.',
+  },
+  {
+    question: 'Why use VernLLM instead of a gateway?',
+    answer:
+      "The customization is something a gateway can't match. VernLLM runs in your process, so you bring your own rate limiter, cache, and middlewares instead of picking from a config panel, and hooks like reserveUsage, onEvent and even more gives you superior control over billing and observability.",
   },
   {
     question: 'Why use VernLLM instead of calling the client directly?',
