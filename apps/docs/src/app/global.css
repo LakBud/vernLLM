@@ -10,15 +10,8 @@ html {
   scrollbar-gutter: stable;
 }
 
-/* Safety net against phantom horizontal scroll on mobile (seen on some
-   phones with the install-command marquee): overflow-hidden on the
-   marquee's own wrapper clips it visually, but a very wide flex/motion
-   child deep in the tree can still let the page pick up extra scroll
-   width on iOS Safari in particular. Constraining html/body directly is
-   the standard fix. */
 html,
 body {
-  overflow-x: hidden;
   max-width: 100%;
 }
 

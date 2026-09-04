@@ -21,7 +21,7 @@ const secondaryButtonClass =
 
 export default function HomePage() {
   return (
-    <div className="flex flex-1 flex-col bg-fd-background">
+    <div className="flex flex-1 flex-col bg-fd-background overflow-x-hidden">
       <JsonLd
         data={generateSoftwareApplication({
           name: 'VernLLM',
