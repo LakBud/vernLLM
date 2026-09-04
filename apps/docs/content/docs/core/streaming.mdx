@@ -329,30 +329,63 @@ and cache adapters, all of which apply the same way to streaming calls.
 
 ## A note on the call() overload
 
-Typescript only resolves `call()` to the streaming overload, returning `StreamCallResult<T>`, when
-`stream: true` is visible as a literal at the call site. A similar caveat applies to `tools`, see
-[the Tool Calling docs](/docs/core/tool-calling#a-note-on-the-call-overload): unlike `tools`,
-`stream` currently has no conditional-value overload of its own, so a conditionally-set `stream`
-always falls back to the non-streaming `Promise<T>` overload, not just when `params` was
-pre-widened to `CallParams<T>`.
+Typescript resolves `call()` to the streaming overload, returning `StreamCallResult<T>`, when
+`stream: true` is visible as a literal at the call site. A conditionally-set `stream` (e.g. `stream:
+someCondition`) resolves to the honest union `T | StreamCallResult<T>` instead, the same idea as
+`tools`, see [the Tool Calling docs](/docs/core/tool-calling#a-note-on-the-call-overload). Pass the
+object literal straight to `call()`, or build it through `defineCallParams()` first if you need a
+named variable:
 
-If you build `params` as a plain `CallParams<T>` and conditionally set `stream` on it, TypeScript
-picks the non-streaming `Promise<T>` overload regardless of what `stream` turns out to be at
-runtime. The actual runtime result still follows `stream`, so this mismatch is silent rather than
-a compile error:
+```ts title="streaming-conditional.ts"
+import { defineCallParams, isStreamResult } from 'vern-llm';
 
-```ts title="streaming-runtime-check.ts"
-const params: CallParams<string> = {
+const params = defineCallParams({
   userContent: 'Write a short poem about the ocean.',
   jsonMode: false,
   stream: someCondition,
-};
+});
 
-// TypeScript infers Promise<string> here, but the real result is a
-// StreamCallResult<string> whenever `stream` evaluates to true. Narrow or
-// cast accordingly rather than relying on the static return type.
-const result = await llm.call(params);
+const result = await llm.call<string>(params);
+// result: string | StreamCallResult<string>
+
+if (isStreamResult(result)) {
+  for await (const chunk of result.chunks) {
+    if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+  }
+  const final = await result.finalResult;
+} else {
+  console.log(result);
+}
 ```
+
+<Callout type="warn">
+  Same caveat as `tools`: a variable explicitly annotated `: CallParams<T>` widens `stream` away
+  before `call()` ever sees it, so TypeScript falls back to the plain `Promise<T>` overload
+  regardless of `stream`'s real value. Prefer an inline literal or `defineCallParams()` over a `:`
+  annotation.
+</Callout>
+
+A literal `stream: true` is unaffected by any of this and keeps resolving through the overloads
+described earlier on this page. A literal `stream: false` is unaffected too, unless combined with
+an explicit `call<T>()` type argument:
+
+```ts title="streaming-literal-false-pinned.ts"
+const a = await llm.call({ userContent: '...', jsonMode: false, stream: false });
+// a: string, exact
+
+const b = await llm.call<string>({ userContent: '...', jsonMode: false, stream: false });
+// b: string | StreamCallResult<string>, over-widened
+```
+
+<Callout type="info">
+  TypeScript can't reliably resolve `S` (the internal type parameter this narrowing depends on)
+  once any explicit type argument is present in the call, so it falls back to `S`'s default and a
+  literal `stream: false` matches the conditional overload too in that one combination. This is a
+  known TypeScript limitation with inferring through a conditional type, not a bug: the result is
+  never *wrong*, `isStreamResult()` still correctly returns `false`, just wider than it needs to
+  be. Every other combination (`stream: true`, `stream: false` without a pinned `<T>`, `stream`
+  omitted) narrows exactly.
+</Callout>
 
 ## Provider support
 

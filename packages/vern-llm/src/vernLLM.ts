@@ -45,6 +45,7 @@ import {
   type JsonModeEnabledCallParams,
   type JsonValue,
   type LLMErrorCode,
+  type ConditionalStreamCallParams,
   type StreamCallResult,
   type StreamConditionalStringToolCallParams,
   type StreamJsonModeDisabledCallParams,
@@ -68,6 +69,11 @@ import { createMiddlewareStateBag, type MiddlewareStateBag } from './types/middl
 
 import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
+
+/** `call()`'s result when tools may or may not have run. Local alias, only to avoid repeating the union within a single overload signature. */
+type ToolAwareResult<T, Tools extends readonly ToolDefinition[]> =
+  | T
+  | CallWithToolsResult<T, Tools>;
 
 /**
  * A LLM call framework for resilience, observability and control. This is VernLLM!
@@ -270,6 +276,21 @@ export class VernLLM {
   async call(params: StreamJsonModeEnabledCallParams): Promise<StreamCallResult<JsonValue>>;
 
   async call<T = unknown>(params: StreamEnabledCallParams<T>): Promise<StreamCallResult<T>>;
+
+  // Conditional stream + conditional tools. Checked before the tools-omitted
+  // variant below so it wins for a params object carrying both.
+  async call<
+    T = unknown,
+    const Tools extends readonly ToolDefinition[] = ToolDefinition[],
+    S extends boolean = boolean,
+  >(
+    params: ConditionalStreamCallParams<T, Tools, S> & ConditionalToolCallParams<T, Tools>,
+  ): Promise<ToolAwareResult<T, Tools> | StreamCallResult<ToolAwareResult<T, Tools>>>;
+
+  // Conditional stream, no tools involved. See `ConditionalStreamCallParams`.
+  async call<T = unknown, S extends boolean = boolean>(
+    params: ConditionalStreamCallParams<T, ToolDefinition[], S>,
+  ): Promise<T | StreamCallResult<T>>;
 
   async call<T = unknown, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
     params: ToolsDisabledCallParams<T, Tools>,

@@ -1,14 +1,15 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 
 import {
+  isStreamResult,
   isToolCallResult,
   type CallWithToolsResult,
   type ContentResult,
   type JsonValue,
   type StreamCallResult,
   type ToolDefinition,
-} from '../../src/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
+} from '../../../src/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
 import {
   createMockClient,
   createMockStreamingClient,
@@ -16,7 +17,7 @@ import {
   textResponse,
   toolCallResponse,
   drain,
-} from '../helpers.js';
+} from '../../helpers.js';
 
 // Pins the return type of every `call()`/`cachedCall()` overload, in the
 // same order they're declared in `vernLLM.ts`. If a refactor reorders two
@@ -196,6 +197,89 @@ describe('call() overload matrix (declaration order)', () => {
 
     expectTypeOf(result).toEqualTypeOf<StreamCallResult<{ name: string }>>();
     expect(finalResult).toEqual({ name: 'Ada' });
+  });
+
+  it('7a. conditional stream + conditional tools -> ToolAwareResult<T, Tools> | StreamCallResult<ToolAwareResult<T, Tools>>', async () => {
+    const wantsStream = (): boolean => true;
+    const useTool = true;
+    const tools = useTool ? [weatherTool] : undefined;
+
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'sunny' }]]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const result = await llm.call<string>({
+      userContent: 'hi',
+      stream: wantsStream(),
+      tools,
+      jsonMode: false,
+    });
+
+    // A plain typed assignment here (both directions) is a more reliable
+    // equality check than `expectTypeOf().toEqualTypeOf()` for this shape:
+    // narrowing via `isStreamResult` on a 3-way union leaves an un-distributed
+    // intersection type that `expect-type`'s strict-equality branding doesn't
+    // simplify, even though it's genuinely equal to the expected shape.
+    type Expected = StreamCallResult<
+      string | CallWithToolsResult<string, NonNullable<typeof tools>>
+    >;
+    expect(isStreamResult(result)).toBe(true);
+    if (isStreamResult(result)) {
+      const pinned: Expected = result;
+      const _roundTrip: typeof result = pinned;
+      await drain(pinned.chunks);
+      expect(await pinned.finalResult).toEqual({ type: 'content', content: 'sunny' });
+    }
+  });
+
+  it('7b. conditional stream, no tools -> T | StreamCallResult<T>', async () => {
+    const wantsStream = (): boolean => true;
+
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'sunny' }]]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const result = await llm.call<string>({
+      userContent: 'hi',
+      stream: wantsStream(),
+      jsonMode: false,
+    });
+
+    expectTypeOf(result).toEqualTypeOf<string | StreamCallResult<string>>();
+    expect(isStreamResult(result)).toBe(true);
+    if (isStreamResult(result)) {
+      await drain(result.chunks);
+      expect(await result.finalResult).toBe('sunny');
+    }
+  });
+
+  it('7c. regression: a literal stream: false still resolves to plain string, not the conditional union', async () => {
+    const { client } = createMockClient([textResponse('sunny')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    // No explicit `call<T>()` here: `jsonMode: false` alone already pins T=string
+    // via `JsonModeDisabledCallParams`. See the note above `ConditionalStreamCallParams`
+    // for why an explicit `<T>` combined with a literal `stream: false` doesn't hold
+    // this guarantee.
+    const result = await llm.call({ userContent: 'hi', stream: false, jsonMode: false });
+
+    expectTypeOf(result).toEqualTypeOf<string>();
+    expect(result).toBe('sunny');
+  });
+
+  it('7d. known limitation: explicit call<T>() plus a literal stream: false over-widens instead of narrowing', async () => {
+    const { client } = createMockClient([textResponse('sunny')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    // TypeScript can't invert a conditional type to infer S once an explicit
+    // type argument is given, so S falls back to its `boolean` default here,
+    // matching the conditional overload even for a literal `false`. Safe
+    // (never wrong at runtime, only ever too wide) but not exact.
+    const result = await llm.call<string>({ userContent: 'hi', stream: false, jsonMode: false });
+
+    expectTypeOf(result).toEqualTypeOf<string | StreamCallResult<string>>();
+    expect(isStreamResult(result)).toBe(false);
+    if (!isStreamResult(result)) {
+      expect(result).toBe('sunny');
+    }
   });
 
   it('8. no stream + tools disabled -> ContentResult<T>', async () => {

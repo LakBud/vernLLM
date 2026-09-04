@@ -58,6 +58,67 @@ export type StreamConditionalStringToolCallParams<
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = StreamEnabledCallParams<string, Tools> & ConditionalStringToolCallParams<Tools>;
 
+/** `S` if `S` is exactly `boolean`, `never` for a literal `true`/`false`. Lets `ConditionalStreamCallParams` match only a genuinely widened `stream` value. */
+type OnlyWidenedBoolean<S extends boolean> = [boolean] extends [S] ? S : never;
+
+/**
+ * `CallParams` for `stream` set conditionally (e.g. `stream: someCondition`).
+ * Selects the `call()` overload returning `T | StreamCallResult<T>` instead of
+ * falling through to plain `T`. Ignores literal `stream: true`/`false`, those
+ * still resolve through the existing overloads. Same `defineCallParams()`
+ * caveat as `ConditionalToolCallParams`. See `isStreamResult` for narrowing.
+ *
+ * Known limitation: an explicit `call<T>()` type argument can prevent `S`
+ * from being inferred from `stream` at all (TypeScript can't reliably invert
+ * a conditional type here), falling back to `S`'s `boolean` default. A
+ * literal `stream: false` combined with an explicit `<T>` then over-widens
+ * to `T | StreamCallResult<T>` instead of narrowing to plain `T`. Safe (the
+ * real result is always a member of that union) but imprecise. Omitting the
+ * `<T>` (letting it infer, or pinning via `jsonMode`/`schema` instead) is
+ * unaffected.
+ */
+export type ConditionalStreamCallParams<
+  T,
+  Tools extends readonly ToolDefinition[] = ToolDefinition[],
+  S extends boolean = boolean,
+> = CallParams<T, Tools> & {
+  stream: OnlyWidenedBoolean<S>;
+};
+
+/** Recovers `T` from a `result` already typed `T | StreamCallResult<T>`. Falls back to `unknown`. */
+type ExtractStreamValue<R> =
+  Extract<R, StreamCallResult<unknown>> extends StreamCallResult<infer V> ? V : unknown;
+
+/** Minimal duck-typed `PromiseLike` check: anything with a callable `.then`. */
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * Runtime check for whether a `call()` result is a `StreamCallResult`. Use
+ * this instead of trusting static narrowing whenever `stream` was set
+ * conditionally, see `ConditionalStreamCallParams`.
+ *
+ * ```ts
+ * const result = await llm.call({ userContent: '...', stream: someCondition });
+ * if (isStreamResult(result)) {
+ *   for await (const chunk of result.chunks) { ... }
+ * }
+ * ```
+ */
+export function isStreamResult<R = unknown>(
+  result: R,
+): result is R & StreamCallResult<ExtractStreamValue<R>> {
+  if (typeof result !== 'object' || result === null) return false;
+
+  const candidate = result as Partial<StreamCallResult<unknown>>;
+  return 'chunks' in candidate && isPromiseLike(candidate.finalResult);
+}
+
 /**
  * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
  * `call()` overload whose `finalResult` resolves to a plain `string`.
