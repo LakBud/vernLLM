@@ -4,6 +4,7 @@ import {
   applyMiddlewareTransforms,
   assertModelAndResponseFormatUnchanged,
   assertNoDuplicateTools,
+  emitEvent,
   mergePatch,
   middlewareLabel,
   reclassifyMiddlewareThrow,
@@ -113,6 +114,24 @@ describe('mergePatch', () => {
     const { request, patchedFields } = mergePatch(baseRequest, patch);
     expect(request.model).toBe('sneaky');
     expect(patchedFields).toContain('model');
+  });
+
+  it('copies through a bypassed response_format field for the backstop guard to catch', () => {
+    const patch = { response_format: { type: 'json_object' } } as never;
+    const { request, patchedFields } = mergePatch(baseRequest, patch);
+    expect(request.response_format).toEqual({ type: 'json_object' });
+    expect(patchedFields).toContain('response_format');
+  });
+
+  it('a plain tools replace fully overwrites rather than appending', () => {
+    const withTools: WireCallRequest = {
+      ...baseRequest,
+      tools: [{ type: 'function', function: { name: 'old', description: 'o', parameters: {} } }],
+    };
+    const { request } = mergePatch(withTools, {
+      tools: [{ type: 'function', function: { name: 'new', description: 'n', parameters: {} } }],
+    });
+    expect(request.tools?.map((t) => t.function.name)).toEqual(['new']);
   });
 });
 
@@ -510,5 +529,38 @@ describe('applyMiddlewareTransforms', () => {
     await expect(applyMiddlewareTransforms(baseParams({ middleware }))).rejects.toMatchObject({
       type: 'invalid_params',
     });
+  });
+});
+
+describe('emitEvent', () => {
+  it('logs and swallows an onEvent handler that throws synchronously, not just one that rejects', async () => {
+    const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const event: VernLLMEvent = {
+      kind: 'middleware',
+      requestId: 'req-1',
+      middleware: 'some-middleware',
+      hook: 'enabled_skip',
+    };
+    const middleware: VernLLMMiddleware[] = [
+      {
+        name: 'throws-sync',
+        onEvent: () => {
+          throw new Error('sync boom');
+        },
+      },
+    ];
+
+    emitEvent(event, baseCtx(), () => {}, middleware, 1000, errorLogger);
+
+    // emitEvent's middleware fan-out is fire-and-forget; flush microtasks
+    // so the synchronous throw inside dispatchEventToMiddleware is caught
+    // and logged before we assert on it.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(errorLogger.error).toHaveBeenCalledWith(
+      '[VernLLM] middleware "throws-sync".onEvent failed',
+      expect.objectContaining({ message: 'sync boom' }),
+    );
   });
 });

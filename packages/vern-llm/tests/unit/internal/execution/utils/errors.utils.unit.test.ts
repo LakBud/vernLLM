@@ -335,4 +335,22 @@ describe('describeError', () => {
     expect(typeof result).toBe('string');
     expect(result.length).toBeGreaterThan(0);
   });
+
+  it('falls back to "[unprintable error]" when both JSON.stringify and String() throw', () => {
+    // Circular so JSON.stringify throws, and a toString/Symbol.toPrimitive
+    // that also throws so the String() fallback can't rescue it either.
+    const unprintable: Record<string, unknown> = {
+      toString() {
+        throw new Error('cannot stringify');
+      },
+      [Symbol.toPrimitive]() {
+        throw new Error('cannot coerce');
+      },
+    };
+    unprintable.self = unprintable;
+
+    const result = describeError({ error: unprintable });
+
+    expect(result).toBe('[unprintable error]');
+  });
 });

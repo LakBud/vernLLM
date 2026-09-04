@@ -33,6 +33,40 @@ describe('parseOpenAIRateLimitHeaders', () => {
     expect(hint.resetAfterMs).toBe(1_000);
   });
 
+  it('parses an hours-only duration like "2h"', () => {
+    const hint = parseOpenAIRateLimitHeaders(headers({ 'x-ratelimit-reset-requests': '2h' }));
+    expect(hint.resetAfterMs).toBe(2 * 3_600_000);
+  });
+
+  it('parses a milliseconds-only duration like "500ms"', () => {
+    const hint = parseOpenAIRateLimitHeaders(headers({ 'x-ratelimit-reset-requests': '500ms' }));
+    expect(hint.resetAfterMs).toBe(500);
+  });
+
+  it('parses a duration combining every unit, e.g. "1h2m3s4ms"', () => {
+    const hint = parseOpenAIRateLimitHeaders(
+      headers({ 'x-ratelimit-reset-requests': '1h2m3s4ms' }),
+    );
+    expect(hint.resetAfterMs).toBe(3_600_000 + 2 * 60_000 + 3_000 + 4);
+  });
+
+  it('tolerates surrounding whitespace in the duration string', () => {
+    const hint = parseOpenAIRateLimitHeaders(headers({ 'x-ratelimit-reset-requests': '  1s  ' }));
+    expect(hint.resetAfterMs).toBe(1_000);
+  });
+
+  it('returns undefined resetAfterMs for an unrecognized duration format', () => {
+    const hint = parseOpenAIRateLimitHeaders(
+      headers({ 'x-ratelimit-reset-requests': 'not-a-duration' }),
+    );
+    expect(hint.resetAfterMs).toBeUndefined();
+  });
+
+  it('returns undefined resetAfterMs for an empty-string duration', () => {
+    const hint = parseOpenAIRateLimitHeaders(headers({ 'x-ratelimit-reset-requests': '' }));
+    expect(hint.resetAfterMs).toBeUndefined();
+  });
+
   it('returns undefined fields when headers are absent, not throwing', () => {
     const hint = parseOpenAIRateLimitHeaders(headers({}));
     expect(hint.limitRequests).toBeUndefined();

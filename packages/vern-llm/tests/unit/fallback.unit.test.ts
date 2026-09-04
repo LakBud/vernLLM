@@ -375,6 +375,24 @@ describe('VernLLM, fallback', () => {
     }
   });
 
+  it('uses singular grammar ("1 provider") when there is exactly one attempt', () => {
+    const attempts = [
+      { index: -1, provider: 'primary', model: 'm', error: new LLMError('down', 'api') },
+    ];
+    const error = new FallbackExhaustedError(attempts);
+    expect(error.message).toMatch(/^1 provider attempted and failed:/);
+    expect(error.message).not.toMatch(/^1 providers/);
+  });
+
+  it('uses plural grammar ("N providers") when there is more than one attempt', () => {
+    const attempts = [
+      { index: -1, provider: 'primary', model: 'm', error: new LLMError('down', 'api') },
+      { index: 0, provider: 'fallback-1', model: 'm2', error: new LLMError('down', 'api') },
+    ];
+    const error = new FallbackExhaustedError(attempts);
+    expect(error.message).toMatch(/^2 providers attempted and failed:/);
+  });
+
   it('retryable defers to LLMError.retryable (super) when attempts is empty', () => {
     const error = new FallbackExhaustedError([]);
 
@@ -563,6 +581,12 @@ describe('VernLLM, fallback', () => {
       expect(defaultFallbackOn(new LLMError('m', 'api'), { isLastTarget: false })).toBe('next');
       expect(defaultFallbackOn(new LLMError('m', 'timeout'), { isLastTarget: false })).toBe('next');
       expect(defaultFallbackOn(new LLMError('m', 'unknown'), { isLastTarget: false })).toBe('next');
+    });
+
+    it('returns "next" for an error with no code at all, not just an unrecognized one', () => {
+      const noCode = new LLMError('m', 'api');
+      expect(noCode.code).toBeUndefined();
+      expect(defaultFallbackOn(noCode, { isLastTarget: false })).toBe('next');
     });
 
     it('returns "next" for unsupported capabilities', () => {
