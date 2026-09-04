@@ -95,85 +95,37 @@ export type CallWithToolsResult<T, Tools extends readonly ToolDefinition[] = Too
   | ContentResult<T>
   | ToolCallResult<Tools>;
 
-/**
- * Pulls `Tools` out of a `result` value's own static type, when that type
- * is already `ContentResult<T> | ToolCallResult<Tools>` (or a superset
- * including it) rather than plain `unknown`. `Extract` isolates just the
- * `ToolCallResult<...>` member(s) of a union before inferring, so this
- * degrades to the default cleanly when `result` doesn't carry a
- * `ToolCallResult` shape at all (e.g. `unknown`, or a `call()` result that
- * TypeScript could only type as plain `T`, see `isToolCallResult`'s docs).
- */
+/** Recovers `Tools` from a `result` already typed `ContentResult<T> | ToolCallResult<Tools>`. Falls back to `ToolDefinition[]`. */
 type ExtractTools<R> =
   Extract<R, ToolCallResult<ToolDefinition[]>> extends ToolCallResult<infer Tools>
     ? Tools
     : ToolDefinition[];
 
-/**
- * Resolves the `Tools` `isToolCallResult` actually narrows with: the
- * explicit `Tools` type argument if one was given, otherwise whatever
- * `ExtractTools` can infer from `R` (the `result` argument's own type).
- * `Tools` defaults to `never` as an "unset" sentinel, not a real tools
- * list, so this can tell "caller passed nothing" apart from "caller
- * genuinely passed `never`" (which would be an unusual thing to write on
- * purpose, and isn't a meaningful `Tools` value regardless).
- */
+/** Explicit `Tools` type argument if given, otherwise inferred via `ExtractTools`. `never` marks "unset". */
 type ResolvedTools<Tools, R> = [Tools] extends [never] ? ExtractTools<R> : Tools;
 
 /**
- * Runtime-safe check for whether a `call()` result is a `tool_calls`
- * result. Prefer this over relying on TypeScript's static narrowing
- * whenever `params` passed to `call()` wasn't a literal with `tools`
- * inlined (see the "note on the overload" in `VernLLM.call`'s docs), in
- * that case TS may have typed the result as plain `T` even though it's
- * actually a `CallWithToolsResult<T>` at runtime, and this check works
- * either way.
- *
- * Generic over `Tools`, same as `ToolCallResult` itself, so narrowing a
- * conditional-tools result (`tools: someCondition ? [myTool] : undefined`)
- * through this check doesn't erase the per-tool `arguments` typing that
- * `ConditionalToolCallParams` already captured. `Tools` is inferred
- * automatically from `result`'s own static type whenever that's already
- * `T | CallWithToolsResult<T, Tools>` (which it is whenever `call()`'s
- * overload resolution succeeded, the common case), no type argument
- * needed:
+ * Runtime check for whether a `call()` result is a `tool_calls` result. Use
+ * this instead of trusting static narrowing whenever `tools` was set
+ * conditionally, see `ConditionalToolCallParams`.
  *
  * ```ts
- * const tools = someCondition ? [myTool] : undefined;
- * const result = await llm.call({ userContent: '...', tools });
+ * const result = await llm.call({ userContent: '...', tools: someCondition ? [myTool] : undefined });
  * if (isToolCallResult(result)) {
- *   // result.toolCalls[number].arguments is typed per tool, inferred
- *   // automatically, not `unknown`
+ *   // result.toolCalls[number].arguments typed per tool, inferred automatically
  * }
  * ```
  *
- * If `result`'s static type is plain `unknown` (or otherwise doesn't
- * carry `Tools`, e.g. a variable annotated `: CallParams<T>` upstream
- * widened it away, see the overload note), there's nothing to infer from
- * and this falls back to the default `ToolCallResult` with `arguments:
- * unknown`, same as before `isToolCallResult` became generic. Pass
- * `Tools` explicitly as the first type argument to override the inferred
- * (or defaulted) type in either case; the second type argument (`R`, the
- * `result` value's own type) is always inferred from the argument itself
- * and should not be set manually:
- *
- * ```ts
- * if (isToolCallResult<typeof tools>(result)) {
- *   // arguments typed per tool via the explicit override
- * }
- * ```
+ * Pass `Tools` explicitly to override inference, e.g. `isToolCallResult<typeof tools>(result)`.
  */
 export function isToolCallResult<
   Tools extends readonly ToolDefinition[] | undefined = never,
   R = unknown,
 >(result: R): result is R & ToolCallResult<NonNullable<ResolvedTools<Tools, R>>> {
-  return (
-    typeof result === 'object' &&
-    result !== null &&
-    'type' in result &&
-    (result as { type: unknown }).type === 'tool_calls' &&
-    Array.isArray((result as { toolCalls?: unknown }).toolCalls)
-  );
+  if (typeof result !== 'object' || result === null) return false;
+
+  const candidate = result as Partial<ToolCallResult>;
+  return candidate.type === 'tool_calls' && Array.isArray(candidate.toolCalls);
 }
 
 /** What the model should do about tools on a given call. */
