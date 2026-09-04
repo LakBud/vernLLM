@@ -30,11 +30,10 @@ overrides:
   diff: ^9.0.0
   js-yaml: ^5.4.1
   read-yaml-file>js-yaml: ^5.4.1
+  browserslist: ^4.28.7
+  decode-uri-component: ^0.5.0
+  qs: ^6.16.0
 
 peerDependencyRules:
   allowedVersions:
-    # @emoji-mart/react@1.1.1 (pulled in transitively by fumadocs-ui, no
-    # newer release exists) declares a React 16-18 peer range but works
-    # fine under React 19 in practice; this only silences the false-alarm
-    # peer warning, it doesn't change what's installed.
     '@emoji-mart/react>react': '19'
