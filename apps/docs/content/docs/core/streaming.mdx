@@ -329,30 +329,46 @@ and cache adapters, all of which apply the same way to streaming calls.
 
 ## A note on the call() overload
 
-Typescript only resolves `call()` to the streaming overload, returning `StreamCallResult<T>`, when
-`stream: true` is visible as a literal at the call site. A similar caveat applies to `tools`, see
-[the Tool Calling docs](/docs/core/tool-calling#a-note-on-the-call-overload): unlike `tools`,
-`stream` currently has no conditional-value overload of its own, so a conditionally-set `stream`
-always falls back to the non-streaming `Promise<T>` overload, not just when `params` was
-pre-widened to `CallParams<T>`.
+Typescript resolves `call()` to the streaming overload, returning `StreamCallResult<T>`, only when
+`stream: true` is visible as a literal at the call site. A conditionally-set `stream` (e.g. `stream:
+someCondition`) currently falls back to the non-streaming `Promise<T>` overload regardless of what
+`stream` evaluates to at runtime, the same caveat `tools` has, see [the Tool Calling
+docs](/docs/core/tool-calling#a-note-on-the-call-overload). The real runtime result still follows
+`stream`, so this mismatch is silent rather than a compile error.
 
-If you build `params` as a plain `CallParams<T>` and conditionally set `stream` on it, TypeScript
-picks the non-streaming `Promise<T>` overload regardless of what `stream` turns out to be at
-runtime. The actual runtime result still follows `stream`, so this mismatch is silent rather than
-a compile error:
+`isStreamResult()` is exported for exactly this case: a runtime check that narrows a result
+whose static type couldn't reflect a conditional `stream`, without an unchecked cast. This
+matters most when `stream` arrives as a parameter into shared code, where branching into two
+full calls would mean duplicating everything else about the request too:
 
-```ts title="streaming-runtime-check.ts"
-const params: CallParams<string> = {
-  userContent: 'Write a short poem about the ocean.',
-  jsonMode: false,
-  stream: someCondition,
-};
+```ts title="streaming-conditional.ts"
+import { isStreamResult } from 'vern-llm';
 
-// TypeScript infers Promise<string> here, but the real result is a
-// StreamCallResult<string> whenever `stream` evaluates to true. Narrow or
-// cast accordingly rather than relying on the static return type.
-const result = await llm.call(params);
+async function askQuestion(userContent: string, stream: boolean) {
+  const result = await llm.call({
+    systemPrompt: 'Answer concisely.',
+    userContent,
+    jsonMode: false,
+    stream,
+  });
+
+  if (isStreamResult(result)) {
+    for await (const chunk of result.chunks) {
+      if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+    }
+    return result.finalResult;
+  }
+
+  return result;
+}
 ```
+
+<Callout type="info">
+  When `stream` is decided locally, right where `call()` is invoked, prefer branching into two
+  literal `stream: true`/`stream: false` calls instead. TypeScript then infers the correct type for
+  each branch on its own, and `isStreamResult()` isn't needed. Reach for it once `stream` genuinely
+  arrives as a value from elsewhere, as above.
+</Callout>
 
 ## Provider support
 

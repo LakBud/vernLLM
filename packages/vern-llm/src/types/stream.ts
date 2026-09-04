@@ -58,6 +58,52 @@ export type StreamConditionalStringToolCallParams<
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
 > = StreamEnabledCallParams<string, Tools> & ConditionalStringToolCallParams<Tools>;
 
+/** Recovers `T` from a `result` already typed `T | StreamCallResult<T>`. Falls back to `unknown`. */
+type ExtractStreamValue<R> =
+  Extract<R, StreamCallResult<unknown>> extends StreamCallResult<infer V> ? V : unknown;
+
+/** Minimal duck-typed `PromiseLike` check: anything with a callable `.then`. */
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/** Minimal duck-typed `AsyncIterable` check: anything with a callable `Symbol.asyncIterator`. */
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === 'function'
+  );
+}
+
+/**
+ * Runtime check for whether a `call()` result is a `StreamCallResult`
+ * (`{ chunks, finalResult }`) rather than the resolved value directly.
+ * Useful when `stream` was computed conditionally and cast/narrowed
+ * manually, since TypeScript's `call()` overloads only pick the streaming
+ * shape for a literal `stream: true` at the call site.
+ *
+ * ```ts
+ * const params = someCondition ? { userContent: '...', stream: true } : { userContent: '...' };
+ * const result = await llm.call(params as CallParams<string> | (CallParams<string> & { stream: true }));
+ * if (isStreamResult(result)) {
+ *   for await (const chunk of result.chunks) { ... }
+ * }
+ * ```
+ */
+export function isStreamResult<R = unknown>(
+  result: R,
+): result is R & StreamCallResult<ExtractStreamValue<R>> {
+  if (typeof result !== 'object' || result === null) return false;
+
+  const candidate = result as Partial<StreamCallResult<unknown>>;
+  return isAsyncIterable(candidate.chunks) && isPromiseLike(candidate.finalResult);
+}
+
 /**
  * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
  * `call()` overload whose `finalResult` resolves to a plain `string`.

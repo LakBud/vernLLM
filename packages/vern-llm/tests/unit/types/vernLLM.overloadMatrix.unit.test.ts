@@ -7,8 +7,8 @@ import {
   type JsonValue,
   type StreamCallResult,
   type ToolDefinition,
-} from '../../src/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
+} from '../../../src/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
 import {
   createMockClient,
   createMockStreamingClient,
@@ -16,7 +16,7 @@ import {
   textResponse,
   toolCallResponse,
   drain,
-} from '../helpers.js';
+} from '../../helpers.js';
 
 // Pins the return type of every `call()`/`cachedCall()` overload, in the
 // same order they're declared in `vernLLM.ts`. If a refactor reorders two
