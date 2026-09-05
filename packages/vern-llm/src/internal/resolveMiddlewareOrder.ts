@@ -61,6 +61,33 @@ function assertNoDuplicateLabels(entries: readonly VernLLMMiddleware[]): void {
   }
 }
 
+/**
+ * Resolves one `runsAfter`/`runsBefore` reference into a `mustPrecede`
+ * edge on the graph, or warns and drops it if `targetId` isn't a known
+ * entry. Pulled out of `buildNodes` so edge resolution (this) is
+ * testable independently of node/index construction.
+ */
+function resolveReference(
+  byId: Map<string, Node>,
+  knownIds: Set<string>,
+  fromId: string,
+  targetId: string,
+  precedes: boolean,
+  logger?: Logger,
+): void {
+  if (!knownIds.has(targetId)) {
+    logger?.warn?.(
+      `middleware "${fromId}" references unknown name "${targetId}" in runsAfter/runsBefore, ignoring it`,
+    );
+    return;
+  }
+  // precedes true: targetId (runsAfter) must come before fromId.
+  // precedes false: targetId (runsBefore) must come after fromId.
+  const before = precedes ? targetId : fromId;
+  const after = precedes ? fromId : targetId;
+  byId.get(before)!.mustPrecede.push(after);
+}
+
 function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Node[] {
   const ids = entries.map(idFor);
   const knownIds = new Set(ids);
@@ -72,59 +99,70 @@ function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Nod
   }));
   const byId = new Map(nodes.map((node) => [node.id, node]));
 
-  function resolveReference(fromId: string, targetId: string, precedes: boolean): void {
-    if (!knownIds.has(targetId)) {
-      logger?.warn?.(
-        `middleware "${fromId}" references unknown name "${targetId}" in runsAfter/runsBefore, ignoring it`,
-      );
-      return;
-    }
-    // precedes true: targetId (runsAfter) must come before fromId.
-    // precedes false: targetId (runsBefore) must come after fromId.
-    const before = precedes ? targetId : fromId;
-    const after = precedes ? fromId : targetId;
-    byId.get(before)!.mustPrecede.push(after);
-  }
-
   for (const node of nodes) {
-    for (const target of node.entry.runsAfter ?? []) resolveReference(node.id, target, true);
-    for (const target of node.entry.runsBefore ?? []) resolveReference(node.id, target, false);
+    for (const target of node.entry.runsAfter ?? []) {
+      resolveReference(byId, knownIds, node.id, target, true, logger);
+    }
+    for (const target of node.entry.runsBefore ?? []) {
+      resolveReference(byId, knownIds, node.id, target, false, logger);
+    }
   }
 
   return nodes;
 }
 
+/** Ascending by `priority` (default `0`), ties broken by original array index. */
+function byPriorityThenIndex(a: Node, b: Node): number {
+  const priorityDiff = (a.entry.priority ?? 0) - (b.entry.priority ?? 0);
+  return priorityDiff !== 0 ? priorityDiff : a.index - b.index;
+}
+
 /**
- * Throws a plain `Error`, not `LLMError`, since a cycle is a
- * construction time config mistake the caller made, not a failure that
- * came from a call. DFS with a recursion stack tracked as a `Set`; the
- * path itself is only materialized, as a small slice, once a cycle is
- * actually found, not on every recursive step.
+ * Kahn's algorithm over `nodes`' `mustPrecede` edges, ties among
+ * simultaneously-ready nodes broken by `byPriorityThenIndex`. Doubles
+ * as cycle detection: a valid DAG always drains the ready queue down to
+ * every node, so if any are left unvisited once it's empty, they and
+ * everything reachable among them form a cycle. This replaces a
+ * separate DFS pass that used to check for cycles before this ran;
+ * Kahn's already proves acyclicity as a side effect of ordering, so
+ * doing both was one full extra walk of the same graph for the same
+ * answer. Throws a plain `Error`, not `LLMError`, since a cycle is a
+ * construction-time config mistake the caller made, not a failure that
+ * came from a call.
  */
-function assertNoCycle(nodes: Node[]): void {
+function topologicalSort(nodes: Node[]): VernLLMMiddleware[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const visited = new Set<string>();
-  const onStack: string[] = [];
-  const onStackSet = new Set<string>();
-
-  function visit(id: string): void {
-    if (onStackSet.has(id)) {
-      const cycleStart = onStack.indexOf(id);
-      throw new Error(
-        `middleware ordering has a cycle: ${onStack.slice(cycleStart).concat(id).join(' -> ')}`,
-      );
-    }
-    if (visited.has(id)) return;
-
-    onStack.push(id);
-    onStackSet.add(id);
-    for (const next of byId.get(id)!.mustPrecede) visit(next);
-    onStack.pop();
-    onStackSet.delete(id);
-    visited.add(id);
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+  for (const node of nodes) {
+    for (const after of node.mustPrecede) indegree.set(after, indegree.get(after)! + 1);
   }
 
-  for (const node of nodes) visit(node.id);
+  // A small heap would beat re-sorting the ready set on every pop for a
+  // large graph, but middleware lists are small in practice; re-sorting
+  // a handful of ready ids each iteration is simpler and fast enough.
+  const ready = nodes.filter((node) => indegree.get(node.id) === 0);
+  const result: VernLLMMiddleware[] = [];
+  const emitted = new Set<string>();
+
+  while (ready.length > 0) {
+    ready.sort(byPriorityThenIndex);
+    const node = ready.shift()!;
+    result.push(node.entry);
+    emitted.add(node.id);
+
+    for (const afterId of node.mustPrecede) {
+      const remaining = indegree.get(afterId)! - 1;
+      indegree.set(afterId, remaining);
+      if (remaining === 0) ready.push(byId.get(afterId)!);
+    }
+  }
+
+  if (result.length < nodes.length) {
+    const stuck = nodes.filter((node) => !emitted.has(node.id)).map((node) => node.id);
+    throw new Error(`middleware ordering has a cycle among: ${stuck.join(', ')}`);
+  }
+
+  return result;
 }
 
 /**
@@ -147,42 +185,20 @@ export function resolveMiddlewareOrder(
   if (entries.length <= 1 && !hasEdges) return [...entries];
 
   if (!hasEdges) {
-    return [...entries].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+    // Same comparator the graph path uses for tie-breaking among
+    // simultaneously-ready nodes, so "what does a tie mean" has one
+    // definition regardless of which path an entry set takes.
+    const asNodes = entries.map((entry, index): Node => ({
+      id: idFor(entry, index),
+      entry,
+      index,
+      mustPrecede: [],
+    }));
+    return asNodes.sort(byPriorityThenIndex).map((node) => node.entry);
   }
 
   const nodes = buildNodes(entries, logger);
-  assertNoCycle(nodes);
-
-  const indegree = new Map(nodes.map((node) => [node.id, 0]));
-  for (const node of nodes) {
-    for (const after of node.mustPrecede) indegree.set(after, indegree.get(after)! + 1);
-  }
-
-  // A small heap would beat re-sorting the ready set on every pop for a
-  // large graph, but middleware lists are small in practice; re-sorting
-  // a handful of ready ids each iteration is simpler and fast enough.
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const ready = nodes.filter((node) => indegree.get(node.id) === 0);
-  const result: VernLLMMiddleware[] = [];
-
-  const byPriorityThenIndex = (a: Node, b: Node): number => {
-    const priorityDiff = (a.entry.priority ?? 0) - (b.entry.priority ?? 0);
-    return priorityDiff !== 0 ? priorityDiff : a.index - b.index;
-  };
-
-  while (ready.length > 0) {
-    ready.sort(byPriorityThenIndex);
-    const node = ready.shift()!;
-    result.push(node.entry);
-
-    for (const afterId of node.mustPrecede) {
-      const remaining = indegree.get(afterId)! - 1;
-      indegree.set(afterId, remaining);
-      if (remaining === 0) ready.push(byId.get(afterId)!);
-    }
-  }
-
-  return result;
+  return topologicalSort(nodes);
 }
 
 /**
@@ -196,11 +212,20 @@ export function resolveMiddlewareOrder(
  * order, so the first one registered holds the true outermost slot.
  */
 function applyPositionOverride(order: readonly VernLLMMiddleware[]): VernLLMMiddleware[] {
-  const outermost = order.filter((entry) => entry.position === 'outermost');
-  const innermost = order.filter((entry) => entry.position === 'innermost');
-  const middle = order.filter(
-    (entry) => entry.position !== 'outermost' && entry.position !== 'innermost',
-  );
+  const outermost: VernLLMMiddleware[] = [];
+  const innermost: VernLLMMiddleware[] = [];
+  const middle: VernLLMMiddleware[] = [];
+
+  // Single pass instead of three separate `.filter()` walks over
+  // `order`; each entry lands in exactly one bucket, so there's no risk
+  // of the buckets' predicates drifting out of sync with each other as
+  // position values are added later.
+  for (const entry of order) {
+    if (entry.position === 'outermost') outermost.push(entry);
+    else if (entry.position === 'innermost') innermost.push(entry);
+    else middle.push(entry);
+  }
+
   const sortedMiddle = [...middle].sort((a, b) => {
     const aPos = typeof a.position === 'number' ? a.position : 0;
     const bPos = typeof b.position === 'number' ? b.position : 0;

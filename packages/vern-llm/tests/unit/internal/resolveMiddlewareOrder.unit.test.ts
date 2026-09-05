@@ -136,6 +136,53 @@ describe('resolveMiddlewareOrder', () => {
 
     expect(() => resolveMiddlewareOrder([a, b])).not.toThrow();
   });
+
+  it('names every entry involved in a cycle of three, not just two', () => {
+    const a = mw({ name: 'a', runsAfter: ['c'] });
+    const b = mw({ name: 'b', runsAfter: ['a'] });
+    const c = mw({ name: 'c', runsAfter: ['b'] });
+
+    try {
+      resolveMiddlewareOrder([a, b, c]);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as Error).message).toMatch(/a/);
+      expect((error as Error).message).toMatch(/b/);
+      expect((error as Error).message).toMatch(/c/);
+    }
+  });
+
+  it('reports only the entries stuck in a cycle, not unrelated acyclic entries in the same graph', () => {
+    // `standalone` has no constraints at all; `x`/`y` cycle with each
+    // other. Cycle detection now falls out of the topological sort
+    // itself (nodes left over once the ready queue drains), so it must
+    // not accidentally sweep in every node in the input, only the ones
+    // that never became ready.
+    const standalone = mw({ name: 'standalone' });
+    const x = mw({ name: 'x', runsAfter: ['y'] });
+    const y = mw({ name: 'y', runsAfter: ['x'] });
+
+    try {
+      resolveMiddlewareOrder([standalone, x, y]);
+      expect.unreachable();
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toMatch(/x/);
+      expect(message).toMatch(/y/);
+      expect(message).not.toMatch(/standalone/);
+    }
+  });
+
+  it('reports a single self-referencing entry as the sole cycle member', () => {
+    const single = [mw({ name: 'solo', runsAfter: ['solo'] })];
+
+    try {
+      resolveMiddlewareOrder(single);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as Error).message).toContain('solo');
+    }
+  });
 });
 
 describe('buildMiddlewarePipeline', () => {
@@ -193,6 +240,36 @@ describe('buildMiddlewarePipeline', () => {
       expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual(['b', 'a', 'c']);
       // transformOrder is untouched by any position value.
       expect(pipeline.transformOrder.map((entry) => entry.name)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('interleaves unpositioned entries (default 0) with numeric-positioned entries rather than sorting them after', () => {
+      const noPosition = mw({ name: 'no-position' });
+      const negative = mw({ name: 'negative', position: -2 });
+      const positive = mw({ name: 'positive', position: 2 });
+
+      const pipeline = buildMiddlewarePipeline([positive, noPosition, negative]);
+
+      expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual([
+        'negative',
+        'no-position',
+        'positive',
+      ]);
+    });
+
+    it('keeps outermost/innermost pinned entries at the edges even when middle entries have numeric positions', () => {
+      const outer = mw({ name: 'outer', position: 'outermost' });
+      const low = mw({ name: 'low', position: -1 });
+      const high = mw({ name: 'high', position: 1 });
+      const inner = mw({ name: 'inner', position: 'innermost' });
+
+      const pipeline = buildMiddlewarePipeline([high, inner, low, outer]);
+
+      expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual([
+        'outer',
+        'low',
+        'high',
+        'inner',
+      ]);
     });
 
     it('leaves transformOrder untouched by any position value', () => {
