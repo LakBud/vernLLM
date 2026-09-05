@@ -1,5 +1,6 @@
 import { CircuitBreaker, type CircuitBreakerOptions } from '../../circuitBreaker.js';
-import { emitEvent } from '../execution/utils/middleware.utils.js';
+import { emitEvent } from '../execution/utils/middleware/middleware.utils.js';
+import { idFor } from '../resolveMiddlewareOrder.js';
 
 import type { Logger } from '../../logger.js';
 import type { VernLLMEvent } from '../../types/events.js';
@@ -129,6 +130,7 @@ export function buildCircuitBreaker(
           signal: context.signal,
           state: context.state,
           own: {},
+          registeredMiddlewareNames: middleware.map(idFor),
         };
 
         emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, logger);

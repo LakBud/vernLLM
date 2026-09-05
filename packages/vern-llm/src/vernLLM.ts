@@ -7,12 +7,16 @@ import {
 } from './internal/execution/logicalCall.js';
 import { runOperation, type RunOperationDependencies } from './internal/execution/runOperation.js';
 import { setupDeadline, stampDeadlineCode } from './internal/execution/utils/deadline.utils.js';
-import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './internal/execution/utils/middleware.utils.js';
+import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './internal/execution/utils/middleware/middleware.utils.js';
 import {
   withReservedUsage,
   withReservedUsageForStream,
 } from './internal/execution/utils/response/usage.utils.js';
 import { buildExecutors } from './internal/executorFactory.js';
+import {
+  buildMiddlewarePipeline,
+  type MiddlewarePipeline,
+} from './internal/resolveMiddlewareOrder.js';
 import { buildCache } from './internal/utils/cacheAdapter.utils.js';
 import {
   makeEventReporter,
@@ -53,7 +57,6 @@ import {
   type CachedStreamJsonModeEnabledCallParams,
   type CallMeta,
   type CallResult,
-  type VernLLMMiddleware,
   type StreamChunk,
   type TargetCircuitState,
   type CircuitTarget,
@@ -97,8 +100,14 @@ export class VernLLM {
   /** Owns cache reads/writes and in-flight coalescing for `cachedCall()`. Only calls back into `this.call()` as an opaque function. */
   private readonly cacheOrchestrator: CacheOrchestrator;
 
-  /** See `VernLLMOptions.middleware`. Sorted once here by `priority`, ascending, ties broken by original array order. */
-  private readonly middleware: VernLLMMiddleware[];
+  /**
+   * See `VernLLMOptions.middleware`. Every resolved view of composition
+   * order, built once here at construction time by
+   * `buildMiddlewarePipeline`. Nothing downstream computes order
+   * itself; each consumer reads `transformOrder`, `wrapOrder`, or
+   * `names`, whichever it actually needs.
+   */
+  private readonly pipeline: MiddlewarePipeline;
 
   /** See `VernLLMOptions.middlewareTimeoutMs`. Bounds `transform` and a function `enabled`; `wrap` itself is never bounded by this. */
   private readonly middlewareTimeoutMs: number;
@@ -137,9 +146,7 @@ export class VernLLM {
 
     this.fallbackOn = options.fallbackOn ?? defaultFallbackOn;
     this.reportEvent = makeEventReporter(options.onEvent, this.logger);
-    this.middleware = [...(options.middleware ?? [])].sort(
-      (a, b) => (a.priority ?? 0) - (b.priority ?? 0),
-    );
+    this.pipeline = buildMiddlewarePipeline(options.middleware ?? [], this.logger);
     this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
 
     // The primary target's shared knobs, resolved once here rather than
@@ -199,7 +206,7 @@ export class VernLLM {
       onUsageFailure: options.onUsageFailure,
       onEvent: options.onEvent,
       logger: this.logger,
-      middleware: this.middleware,
+      middleware: this.pipeline.transformOrder,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
       detectSoftFailure: options.detectSoftFailure,
     });
@@ -218,7 +225,7 @@ export class VernLLM {
       executors: this.executors,
       fallbackOn: this.fallbackOn,
       reportEvent: this.reportEvent,
-      middleware: this.middleware,
+      middleware: this.pipeline.transformOrder,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
       logger: this.logger,
     };
@@ -227,7 +234,7 @@ export class VernLLM {
   /** Everything `runOperation` (in `runOperation.ts`) needs from this instance, gathered once so `call()`/`cachedCall()` don't rebuild it per invocation. */
   private get runOperationDependencies(): RunOperationDependencies {
     return {
-      middleware: this.middleware,
+      pipeline: this.pipeline,
       primaryExecutor: this.executors[0]!,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
       logger: this.logger,

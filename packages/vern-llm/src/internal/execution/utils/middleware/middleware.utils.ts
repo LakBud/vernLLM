@@ -7,10 +7,10 @@ import {
   type VernLLMMiddleware,
   type WireCallRequest,
   type WireCallRequestPatch,
-} from '../../../types/index.js';
-import { normalizeError } from './errors.utils.js';
+} from '../../../../types/index.js';
+import { normalizeError } from '../errors.utils.js';
 
-import type { Logger } from '../../../logger.js';
+import type { Logger } from '../../../../logger.js';
 
 /** Default `middlewareTimeoutMs`, used both as `VernLLMOptions`'s own default and as the instance-level bound `CallExecutor` falls back to when none is passed in. Bounds `transform` and a function `enabled`; `wrap` itself is never bounded by this. */
 export const DEFAULT_MIDDLEWARE_TIMEOUT_MS = 5000;
@@ -220,6 +220,7 @@ export interface ApplyMiddlewareTransformsParams {
   attempt: number;
   signal: AbortSignal | undefined;
   state: MiddlewareStateBag;
+  /** Already in `transform`/`onEvent` order. Order is decided once, at `VernLLM` construction time, by `buildMiddlewarePipeline`/`resolveMiddlewareOrder` (`resolveMiddlewareOrder.ts`); this function trusts the order it's handed and never re-sorts it. */
   middleware: VernLLMMiddleware[];
   middlewareTimeoutMs: number;
   logger: Logger;
@@ -233,8 +234,9 @@ export interface ApplyMiddlewareTransformsParams {
 
 /**
  * Runs every applicable middleware's `transform` against `request`, in
- * priority order, merging each patch in immediately so a later
- * middleware sees what an earlier one already changed. Reports the
+ * the order `middleware` is already in (see `ApplyMiddlewareTransformsParams.middleware`),
+ * merging each patch in immediately so a later middleware sees what an
+ * earlier one already changed. Reports the
  * `'middleware'` trace event for each `transform` that actually changed
  * something, and for each `enabled` predicate that skipped its
  * middleware. `buildContext` builds the shared `AttemptContext` for this
@@ -261,11 +263,7 @@ export async function applyMiddlewareTransforms(
   const before = request;
   let current = request;
 
-  const ordered = middleware
-    .map((middlewareEntry, index) => ({ middlewareEntry, index }))
-    .sort((a, b) => (a.middlewareEntry.priority ?? 0) - (b.middlewareEntry.priority ?? 0));
-
-  for (const { middlewareEntry, index } of ordered) {
+  for (const [index, middlewareEntry] of middleware.entries()) {
     const label = middlewareLabel(middlewareEntry, index);
 
     const ctx = buildContext(attempt, signal, state);

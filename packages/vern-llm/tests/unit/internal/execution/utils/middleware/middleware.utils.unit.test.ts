@@ -10,16 +10,16 @@ import {
   reclassifyMiddlewareThrow,
   resolveEnabled,
   runTransform,
-} from '../../../../../src/internal/execution/utils/middleware.utils.js';
-import { LLMError } from '../../../../../src/types/errors.js';
+} from '../../../../../../src/internal/execution/utils/middleware/middleware.utils.js';
+import { LLMError } from '../../../../../../src/types/errors.js';
 
 import type {
   AttemptContext,
   MiddlewareStateBag,
   VernLLMEvent,
   VernLLMMiddleware,
-} from '../../../../../src/types/index.js';
-import type { WireCallRequest } from '../../../../../src/types/middleware.js';
+} from '../../../../../../src/types/index.js';
+import type { WireCallRequest } from '../../../../../../src/types/middleware.js';
 
 const baseRequest: WireCallRequest = {
   model: 'gpt-4o',
@@ -38,6 +38,7 @@ function baseCtx(overrides: Partial<AttemptContext> = {}): AttemptContext {
     capabilities: { supportsJsonObjectMode: true },
     state: { get: () => undefined, set: () => {} },
     own: {},
+    registeredMiddlewareNames: [],
     ...overrides,
   };
 }
@@ -357,13 +358,18 @@ describe('applyMiddlewareTransforms', () => {
     expect(result).toBe(baseRequest);
   });
 
-  it('runs transforms in priority order, ascending, ties broken by array order', async () => {
+  it("runs transforms in the order it's handed, trusting it without re-sorting", async () => {
     const order: string[] = [];
+    // Deliberately in an order a raw `priority` sort would *not*
+    // produce (descending priority), to prove `applyMiddlewareTransforms`
+    // no longer re-sorts by `priority` itself: order is decided once,
+    // upstream, by `resolveMiddlewareOrder`/`buildMiddlewarePipeline`.
     const middleware: VernLLMMiddleware[] = [
       {
-        name: 'no-priority',
+        name: 'high',
+        priority: 10,
         transform: () => {
-          order.push('no-priority');
+          order.push('high');
           return {};
         },
       },
@@ -376,18 +382,9 @@ describe('applyMiddlewareTransforms', () => {
         },
       },
       {
-        name: 'high',
-        priority: 10,
+        name: 'no-priority',
         transform: () => {
-          order.push('high');
-          return {};
-        },
-      },
-      {
-        name: 'zero',
-        priority: 0,
-        transform: () => {
-          order.push('zero');
+          order.push('no-priority');
           return {};
         },
       },
@@ -395,9 +392,7 @@ describe('applyMiddlewareTransforms', () => {
 
     await applyMiddlewareTransforms(baseParams({ middleware }));
 
-    // `no-priority` and `zero` both resolve to priority 0, so array order
-    // breaks the tie between them.
-    expect(order).toEqual(['no-priority', 'zero', 'low', 'high']);
+    expect(order).toEqual(['high', 'low', 'no-priority']);
   });
 
   it("merges each patch in before the next middleware runs, so a later one sees an earlier one's change", async () => {

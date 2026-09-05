@@ -9,6 +9,8 @@ export interface BreakerGatewayOptions {
   providerName: string;
   isFallback: boolean;
   supportsJsonObjectMode: boolean;
+  /** `MiddlewarePipeline.names`, threaded through for `AttemptContext.registeredMiddlewareNames`. */
+  registeredMiddlewareNames: readonly string[];
 }
 
 /**
@@ -40,7 +42,15 @@ export interface BreakerGateway {
 }
 
 export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGateway {
-  const { breaker, requestId, model, providerName, isFallback, supportsJsonObjectMode } = options;
+  const {
+    breaker,
+    requestId,
+    model,
+    providerName,
+    isFallback,
+    supportsJsonObjectMode,
+    registeredMiddlewareNames,
+  } = options;
 
   function buildAttemptContext(
     attempt: number,
@@ -58,6 +68,7 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
       signal,
       state,
       own: {},
+      registeredMiddlewareNames,
     };
   }
 

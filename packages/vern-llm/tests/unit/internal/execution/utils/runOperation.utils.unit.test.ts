@@ -4,6 +4,7 @@ import {
   runOperation,
   type RunOperationDependencies,
 } from '../../../../../src/internal/execution/runOperation.js';
+import { buildMiddlewarePipeline } from '../../../../../src/internal/resolveMiddlewareOrder.js';
 import { LLMError } from '../../../../../src/types/errors.js';
 import { createMiddlewareStateBag } from '../../../../../src/types/middleware.js';
 
@@ -37,9 +38,13 @@ function fakeLogger(): Logger {
   return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
-function dependencies(overrides: Partial<RunOperationDependencies> = {}): RunOperationDependencies {
+function dependencies(
+  overrides: Partial<Omit<RunOperationDependencies, 'pipeline'>> & {
+    middleware?: VernLLMMiddleware[];
+  } = {},
+): RunOperationDependencies {
   return {
-    middleware: overrides.middleware ?? [],
+    pipeline: buildMiddlewarePipeline(overrides.middleware ?? []),
     primaryExecutor: overrides.primaryExecutor ?? fakePrimaryExecutor(),
     middlewareTimeoutMs: overrides.middlewareTimeoutMs ?? 5000,
     logger: overrides.logger ?? fakeLogger(),
@@ -197,6 +202,35 @@ describe('runOperation', () => {
     expect(coreOperation).not.toHaveBeenCalled();
     expect(events).toEqual([
       { kind: 'middleware', requestId, middleware: 'short-circuit', hook: 'wrap_short_circuit' },
+    ]);
+  });
+
+  it("labels an unnamed middleware by its transformOrder index, not wrapOrder's, when position reorders wrap nesting", async () => {
+    const events: VernLLMEvent[] = [];
+    const coreOperation = vi.fn(async () => ({ value: 'never' }) satisfies CallResult);
+
+    // transformOrder: [named (index 0), unnamed (index 1)] since priority ties
+    // break by original array order. `position: 'outermost'` on the unnamed
+    // entry moves it to the front of wrapOrder, so wrapOrder's own loop index
+    // for it is 0, not its transformOrder index of 1. Its label must still
+    // read "[1]" to match `ctx.registeredMiddlewareNames`.
+    const named: VernLLMMiddleware = { name: 'named', wrap: async (_r, next) => next() };
+    const unnamed: VernLLMMiddleware = {
+      position: 'outermost',
+      wrap: async () => ({ value: 'canned' }),
+    };
+
+    const outcome = await runOperation(
+      dependencies({ middleware: [named, unnamed], reportEvent: (event) => events.push(event) }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      coreOperation,
+    );
+
+    expect(outcome).toEqual({ value: 'canned' });
+    expect(events).toEqual([
+      { kind: 'middleware', requestId, middleware: '[1]', hook: 'wrap_short_circuit' },
     ]);
   });
 
@@ -466,6 +500,30 @@ describe('runOperation', () => {
     );
 
     expect(seenInSecond).toBe(state);
+  });
+
+  it("ctx.registeredMiddlewareNames lists every registered middleware's resolved label, in transformOrder", async () => {
+    let seenNames: readonly string[] = [];
+
+    const first: VernLLMMiddleware = {
+      name: 'first',
+      priority: 0,
+      wrap: async (_request, next, ctx) => {
+        seenNames = ctx.registeredMiddlewareNames;
+        return next();
+      },
+    };
+    const second: VernLLMMiddleware = { name: 'second', priority: 1 };
+
+    await runOperation(
+      dependencies({ middleware: [first, second] }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      async () => ({ value: 'ok' }),
+    );
+
+    expect(seenNames).toEqual(['first', 'second']);
   });
 
   it('ctx is a PreDispatchContext describing the primary target only, since wrap runs before next() decides the real target', async () => {

@@ -3,7 +3,7 @@ import {
   reclassifyMiddlewareThrow,
   middlewareLabel,
   resolveEnabled,
-} from './utils/middleware.utils.js';
+} from './utils/middleware/middleware.utils.js';
 import { createOnceAsync } from './utils/once.utils.js';
 
 import type { Logger } from '../../logger.js';
@@ -13,8 +13,8 @@ import type {
   MiddlewareStateBag,
   PreDispatchContext,
   VernLLMEvent,
-  VernLLMMiddleware,
 } from '../../types/index.js';
+import type { MiddlewarePipeline } from '../resolveMiddlewareOrder.js';
 import type { CallExecutor } from './callExecutor.js';
 
 /**
@@ -23,8 +23,13 @@ import type { CallExecutor } from './callExecutor.js';
  * independently testable function instead of a private method.
  */
 export interface RunOperationDependencies {
-  /** See `VernLLMOptions.middleware`. Already sorted by `priority`, ascending, ties broken by original array order. */
-  middleware: VernLLMMiddleware[];
+  /**
+   * Every resolved view of middleware composition order, built once at
+   * `VernLLM` construction time by `buildMiddlewarePipeline`. `wrap`
+   * nesting reads `pipeline.wrapOrder`; the `'middleware'` trace event
+   * fan-out and `registeredMiddlewareNames` read `pipeline.transformOrder`/`pipeline.names`.
+   */
+  pipeline: MiddlewarePipeline;
   /** The primary target, used to build the `previewRequest` handed to every `wrap` (and the `primaryProvider`/`primaryModel` its `ctx` carries). */
   primaryExecutor: CallExecutor;
   /** See `VernLLMOptions.middlewareTimeoutMs`. Bounds `transform` and a function `enabled`; `wrap` itself is never bounded by this. */
@@ -74,22 +79,28 @@ export async function runOperation(
    */
   skipWrap = false,
 ): Promise<CallResult> {
-  if (dependencies.middleware.length === 0 || skipWrap) {
+  const { wrapOrder, transformOrder, names } = dependencies.pipeline;
+
+  if (wrapOrder.length === 0 || skipWrap) {
     return coreOperation();
   }
 
   const primary = dependencies.primaryExecutor;
   const { model, request } = primary.previewRequest(params);
 
+  // `position` can reorder `wrapOrder` relative to `transformOrder`, so an
+  // anonymous entry's positional index in the two arrays can differ. Labels
+  // (and `registeredMiddlewareNames`, via `names`) are always derived from
+  // `transformOrder` position; looking the index up here instead of reusing
+  // `wrapOrder`'s own loop index keeps an unnamed middleware's label
+  // consistent with `names` regardless of any `position` pin.
+  const transformIndexByEntry = new Map(transformOrder.map((entry, index) => [entry, index]));
+
   let next: () => Promise<CallResult> = coreOperation;
 
-  for (
-    let middlewareIndex = dependencies.middleware.length - 1;
-    middlewareIndex >= 0;
-    middlewareIndex--
-  ) {
-    const middleware = dependencies.middleware[middlewareIndex]!;
-    const label = middlewareLabel(middleware, middlewareIndex);
+  for (let middlewareIndex = wrapOrder.length - 1; middlewareIndex >= 0; middlewareIndex--) {
+    const middleware = wrapOrder[middlewareIndex]!;
+    const label = middlewareLabel(middleware, transformIndexByEntry.get(middleware)!);
     const inner = next;
 
     next = async (): Promise<CallResult> => {
@@ -102,6 +113,7 @@ export async function runOperation(
         signal: params.signal,
         state,
         own: {},
+        registeredMiddlewareNames: names,
       };
 
       const isEnabled = await resolveEnabled(
@@ -118,7 +130,7 @@ export async function runOperation(
             { kind: 'middleware', requestId, middleware: label, hook: 'enabled_skip' },
             ctx,
             dependencies.reportEvent,
-            dependencies.middleware,
+            transformOrder,
             dependencies.middlewareTimeoutMs,
             dependencies.logger,
           );
@@ -138,7 +150,7 @@ export async function runOperation(
             { kind: 'middleware', requestId, middleware: label, hook: 'wrap_short_circuit' },
             ctx,
             dependencies.reportEvent,
-            dependencies.middleware,
+            transformOrder,
             dependencies.middlewareTimeoutMs,
             dependencies.logger,
           );

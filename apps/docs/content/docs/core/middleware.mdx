@@ -278,7 +278,92 @@ call; for `transform`, it's evaluated again on every attempt, since `transform` 
 per attempt. A middleware that doesn't apply is skipped entirely; for `wrap`, it's simply absent
 from the nesting.
 
-## Timeouts
+### `runsAfter` / `runsBefore`
+
+`priority` alone can't express "run after whatever redacts PII" without both middleware agreeing
+on a number ahead of time, which breaks the moment a third party's middleware nobody coordinated
+with is added. `runsAfter`/`runsBefore` reference another entry's `name` directly instead:
+
+```ts title="runs-after-example.ts"
+middleware: [
+  { name: 'pii-redaction', transform: (request) => ({ messages: redact(request.messages) }) },
+  {
+    name: 'audit-log',
+    runsAfter: ['pii-redaction'], // always sees the redacted request, regardless of priority
+    transform: (request) => {
+      auditLog.record(request);
+      return {};
+    },
+  },
+];
+```
+
+`runsAfter`/`runsBefore` resolve `transform`/`onEvent` order (the same order `priority` sorts, see
+above), and that resolved order is also the baseline `wrap` nesting starts from. `position` only
+overrides that baseline for entries that set it: see `position` below for that. A name referenced by
+`runsAfter`/`runsBefore` that isn't registered is dropped with a warning, not an error, since a
+third-party middleware may reasonably reference a well-known name that isn't installed everywhere.
+A cycle across `runsAfter`/`runsBefore` throws at `VernLLM` construction time rather than silently
+falling back to `priority`-only order for the affected middleware, since running with an order
+nobody asked for, with no signal anything is wrong, is worse than failing loud at startup.
+
+Among middleware with no `runsAfter`/`runsBefore` constraint between them, `priority` (then
+original array order) still breaks the tie, exactly as it does with no edges at all.
+
+### `position` (`wrap` nesting only)
+
+`priority`/`runsAfter`/`runsBefore` decide `transform`/`onEvent` order; `position` decides `wrap`
+nesting only, since a `wrap` middleware often needs a slot regardless of what else gets registered
+later. `'outermost'` sees the net `CallResult` of every retry, fallback target, and other
+middleware's `wrap`; `'innermost'` sits closest to the real dispatch:
+
+```ts title="position-example.ts"
+{
+  name: 'billing-metering',
+  position: 'outermost', // must see the whole logical call's net result, retries included
+  wrap: async (request, next, ctx) => {
+    const result = await next();
+    if (result.meta?.usage) reportUsage(ctx.requestId, result.meta.usage);
+    return result;
+  },
+}
+```
+
+Multiple `'outermost'` (or `'innermost'`) claimants keep their relative registration order, so the
+first one registered holds the true outermost (or innermost) slot. A numeric `position` behaves
+like `priority`, but only for `wrap` nesting; an entry with no `position` at all defaults to `0`,
+so it interleaves with numeric-positioned entries rather than always sorting after them.
+
+<Callout type="info">
+  `position` never touches `transformOrder`. `transform` already has its own answer to "who runs
+  near the wire", the `addMessages`/`addTools` append order described above, so a second competing
+  ordering concept on the same hook would just be two ways to express the same intent with no clear
+  precedence between them.
+</Callout>
+
+### Priority bands (convention, not enforced)
+
+A loose convention for `priority` when composing middleware from more than one source: below `0`
+for platform-level concerns (redaction, auth), `0` to `999` for ordinary app middleware (the
+implicit default for anything that omits `priority`), and `1000` and up for observability that
+wants the net effect of everything else. Nothing in VernLLM enforces these ranges; a
+priority-only setup keeps its exact current order regardless of which band anything falls in.
+
+### `ctx.registeredMiddlewareNames`
+
+Every `transform`/`wrap`/`onEvent` hook's `ctx` carries `registeredMiddlewareNames`: every
+registered middleware's resolved label (`name`, or its position in `transformOrder` if unnamed),
+frozen, in `transformOrder`. Lets a middleware make an informed call, like skipping a duplicate
+action when it detects another known middleware by name already handles it, without needing to
+know anything else about that middleware's own configuration:
+
+```ts title="registered-names-example.ts"
+{
+  name: 'fallback-tracing',
+  enabled: (ctx) => !ctx.registeredMiddlewareNames.includes('primary-tracing'),
+  wrap: async (request, next, ctx) => next(), // only runs if the app hasn't already added tracing
+}
+```
 
 `transform` and a function `enabled` are bounded by `middlewareTimeoutMs` on `VernLLMOptions`
 (default `5000`), overridable per middleware via `timeoutMs`. A value `<= 0` disables the
@@ -327,10 +412,10 @@ See [Caching](/docs/core/caching) for `cachedCall()` itself.
 
 ## Options reference
 
-| Option                | Default | Notes                                                                                                                         |
-| --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `middleware`          | `[]`    | Ordered `VernLLMMiddleware[]`, sorted by `priority` ascending, ties by array order.                                           |
-| `middlewareTimeoutMs` | `5000`  | Bounds `transform` and a function `enabled`. A value `<= 0` disables the timeout. Overridable per middleware via `timeoutMs`. |
+| Option                | Default | Notes                                                                                                                                                                                                  |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `middleware`          | `[]`    | Ordered `VernLLMMiddleware[]`. `transform`/`onEvent` order: `priority` ascending, `runsAfter`/`runsBefore` resolved, ties by array order. `wrap` nesting: the same order with `position` pins applied. |
+| `middlewareTimeoutMs` | `5000`  | Bounds `transform` and a function `enabled`. A value `<= 0` disables the timeout. Overridable per middleware via `timeoutMs`.                                                                          |
 
 See [Configuration](/docs/API-reference/configuration) for where `middleware` sits among every
 other `VernLLMOptions` field.

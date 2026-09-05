@@ -64,6 +64,7 @@ function baseParams<T>(
       providerName: 'openai',
       isFallback: false,
       supportsJsonObjectMode: true,
+      registeredMiddlewareNames: [],
     });
 
   return {

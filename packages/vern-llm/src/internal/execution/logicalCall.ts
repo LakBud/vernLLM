@@ -1,7 +1,8 @@
 import { LLMError } from '../../types/errors.js';
 import { FallbackExhaustedError } from '../../types/fallback.js';
+import { idFor } from '../resolveMiddlewareOrder.js';
 import { normalizeError } from './utils/errors.utils.js';
-import { emitEvent } from './utils/middleware.utils.js';
+import { emitEvent } from './utils/middleware/middleware.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type {
@@ -31,7 +32,7 @@ export interface LogicalCallDependencies {
   fallbackOn: FallbackOn;
   /** Reports a `'fallback'` event when the chain moves to the next target. */
   reportEvent: (event: VernLLMEvent) => void;
-  /** See `VernLLMOptions.middleware`. Already sorted by `priority`. */
+  /** See `VernLLMOptions.middleware`. Already in `transform`/`onEvent` order: `priority`, with `runsAfter`/`runsBefore` resolved first. */
   middleware: VernLLMMiddleware[];
   /** See `VernLLMOptions.middlewareTimeoutMs`. */
   middlewareTimeoutMs: number;
@@ -150,6 +151,7 @@ export async function runFallbackChain<R>(
         signal: params.signal,
         state: middlewareState,
         own: {},
+        registeredMiddlewareNames: dependencies.middleware.map(idFor),
       };
 
       emitEvent(

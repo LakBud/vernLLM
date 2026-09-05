@@ -4,7 +4,7 @@ import {
   extractStatus,
   normalizeError,
 } from '../../../../../../src/internal/execution/utils/errors.utils.js';
-import { emitEvent } from '../../../../../../src/internal/execution/utils/middleware.utils.js';
+import { emitEvent } from '../../../../../../src/internal/execution/utils/middleware/middleware.utils.js';
 import {
   extractRetryAfterMs,
   getBackoffDelay,
@@ -50,6 +50,7 @@ function baseRecoverDelayParams(overrides: Partial<RecoverDelayParams> = {}): Re
       signal,
       state,
       own: {},
+      registeredMiddlewareNames: [],
     }),
     extractStatus,
     normalizeError,
