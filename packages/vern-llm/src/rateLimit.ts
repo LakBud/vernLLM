@@ -35,6 +35,16 @@ export interface RateLimitOptions {
    */
   estimateTokens?: (request: WireRequest) => number;
   /**
+   * Scales the pre-flight estimate down before it's reserved against
+   * `tokensPerMinute`, since most calls don't use their full `max_tokens`
+   * budget. Applied after `estimateTokens`, as rate-limiter bookkeeping
+   * only; never changes the `max_tokens` sent to the provider.
+   * `release`'s `actualTokens` still reconciles against real usage
+   * afterward. Default `1` (today's behavior, no scaling). Must be a
+   * finite number greater than `0`; values above `1` are clamped to `1`.
+   */
+  estimateFraction?: number;
+  /**
    * AIMD against the `requestsPerMinute` bucket. Omit for a fixed
    * ceiling, today's behavior. Requires `requestsPerMinute`.
    */
@@ -44,7 +54,7 @@ export interface RateLimitOptions {
 export interface AimdOptions {
   /** Added to the requests-per-minute ceiling on every clean release. */
   increaseBy: number;
-  /** Multiplied against the ceiling on a rate-limit signal. Must be in `(0, 1]`; clamped otherwise. */
+  /** Multiplied against the ceiling on a rate-limit signal. Must be greater than `0` and at most `1`; clamped otherwise. */
   decreaseFactor: number;
   /** Floor the ceiling never shrinks below. */
   minCapacity: number;
@@ -88,6 +98,26 @@ export function defaultEstimateTokens(request: WireRequest): number {
   }, 0);
 
   return Math.ceil(messagesChars / 4) + (request.max_tokens ?? 0);
+}
+
+/**
+ * Validates `estimateFraction` at construction. Non-finite or `<= 0` is
+ * a config mistake that would zero out or invert the reservation, so it
+ * throws rather than silently misbehaving. A value above `1` isn't
+ * unsafe, just wasteful (it would over-reserve past today's default
+ * behavior), so it's clamped to `1` instead of thrown.
+ */
+function buildEstimateFraction(fraction: number | undefined): number {
+  if (fraction === undefined) return 1;
+
+  if (!Number.isFinite(fraction) || fraction <= 0) {
+    throw new LLMError(
+      `estimateFraction (${fraction}) must be a finite number greater than 0.`,
+      'invalid_params',
+    );
+  }
+
+  return Math.min(fraction, 1);
 }
 
 /**
@@ -204,6 +234,7 @@ export class RateLimiter implements RateLimiterAdapter {
   private readonly maxQueueMs: number;
   private readonly maxQueueSize: number;
   private readonly estimateTokensFn: (request: WireRequest) => number;
+  private readonly estimateFraction: number;
   private readonly aimd?: AimdOptions;
 
   private readonly queue: Waiter[] = [];
@@ -236,12 +267,19 @@ export class RateLimiter implements RateLimiterAdapter {
     this.maxQueueMs = options.maxQueueMs ?? 30_000;
     this.maxQueueSize = options.maxQueueSize ?? 0;
     this.estimateTokensFn = options.estimateTokens ?? defaultEstimateTokens;
+    this.estimateFraction = buildEstimateFraction(options.estimateFraction);
     this.aimd = this.requests ? buildAimdOptions(options.aimd) : undefined;
   }
 
-  /** Pre-flight token estimate for a request, per the configured (or default) heuristic. */
+  /**
+   * Pre-flight token estimate for a request, per the configured (or
+   * default) heuristic, scaled by `estimateFraction`. This is the sole
+   * value reserved against `tokensPerMinute` and later reconciled in
+   * `release`; the provider-facing `max_tokens` on the request itself is
+   * never touched.
+   */
   estimate(request: WireRequest): number {
-    return this.estimateTokensFn(request);
+    return Math.ceil(this.estimateTokensFn(request) * this.estimateFraction);
   }
 
   /**

@@ -213,3 +213,73 @@ const llm = new VernLLM({
 
 See [Estimating tokens](/docs/core/rate-limiting#estimating-tokens) for exactly how the
 estimate and the post-call reconciliation interact.
+
+## Reserving less than max_tokens
+
+The default estimate reserves the full `max_tokens` against `tokensPerMinute`, since real usage
+isn't known until the call finishes. If most calls stop well short of that budget, this
+under-throttles real throughput, the bucket looks fuller than it actually is:
+
+```ts title="rate-limiting-estimate-fraction.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: {
+    tokensPerMinute: 720_000,
+    estimateFraction: 0.5, // most calls use ~50% of max_tokens
+  },
+});
+```
+
+`estimateFraction` scales the reservation, not `max_tokens` itself, so the provider still gets the
+same safety ceiling you configured. Reconciliation after each call still corrects for the gap
+between the scaled estimate and real usage, so a fraction that's off in either direction
+self-corrects the same way the default estimate does. See
+[estimateFraction](/docs/core/rate-limiting#estimatefraction) for the full contract.
+
+## Letting the ceiling adapt instead of guessing one number
+
+A fixed `requestsPerMinute` forces a choice: set it conservatively and leave real headroom unused,
+or set it close to the provider's real number and risk 429s the moment traffic ticks up. `aimd`
+avoids the guess by growing the ceiling on success and shrinking it on a real rate limit:
+
+```ts title="rate-limiting-aimd-starting-point.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: {
+    requestsPerMinute: 500, // starting ceiling, not a hard cap anymore
+    aimd: { increaseBy: 10, decreaseFactor: 0.5, minCapacity: 100, maxCapacity: 5_000 },
+  },
+});
+```
+
+Start `requestsPerMinute` at a conservative number and let `aimd` climb from there. `minCapacity`
+should still sit comfortably below what your traffic actually needs at its quietest, `maxCapacity`
+at or a little under the provider's real published ceiling, the same headroom reasoning as the
+fixed case above.
+
+If your adapter can read a remaining-capacity header (see the adapter table in
+[AIMD](/docs/core/rate-limiting#aimd)), add `proactiveFloor` so the ceiling shrinks before a 429
+actually happens rather than only after:
+
+```ts title="rate-limiting-aimd-proactive.ts"
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  rateLimit: {
+    requestsPerMinute: 500,
+    aimd: {
+      increaseBy: 10,
+      decreaseFactor: 0.5,
+      minCapacity: 100,
+      maxCapacity: 5_000,
+      proactiveFloor: 20,
+    },
+  },
+});
+```
+
+`aimd` only ever resizes `requestsPerMinute`. `tokensPerMinute` and `maxConcurrent` stay fixed and
+still need their own headroom, sized the same way as in
+[Start from your plan's real numbers](#start-from-your-plans-real-numbers-not-a-guess).

@@ -111,6 +111,26 @@ This is intentionally rough. Once the call completes, the estimate is reconciled
 provider's real reported usage, so a systematically over- or under-estimating heuristic
 self-corrects over time rather than compounding.
 
+### estimateFraction
+
+Most calls don't use their whole `max_tokens` budget, so reserving the full estimate under-throttles
+real throughput. `estimateFraction` scales the estimate down before it's reserved:
+
+```ts title="rate-limiting-estimate-fraction.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  rateLimit: {
+    tokensPerMinute: 200_000,
+    estimateFraction: 0.5, // reserve half the estimate
+  },
+});
+```
+
+Default `1`, today's behavior. Must be greater than `0` and at most `1`; a value above `1` is clamped to `1`. This only
+changes what the rate limiter reserves for itself. The `max_tokens` sent to the provider never
+changes, and `release`'s reconciliation against real usage still happens the same way.
+
 Provide `estimateTokens` to use a real tokenizer, or any other heuristic your provider or model
 mix calls for:
 
@@ -292,13 +312,13 @@ client can produce this hint:
 `supportsWithResponse` only ever affects the proactive path; every adapter above still reacts to a
 real 429 regardless, since that only needs the response status, not header access.
 
-| AIMD option      | Default   | Notes                                                                                    |
-| ---------------- | --------- | ---------------------------------------------------------------------------------------- |
-| `increaseBy`     | required  | Added to the ceiling on every clean release.                                             |
-| `decreaseFactor` | required  | Multiplied against the ceiling on a rate-limit signal. Must be `0-1`; clamped otherwise. |
-| `minCapacity`    | required  | Floor the ceiling never shrinks below.                                                   |
-| `maxCapacity`    | required  | Ceiling the bucket never grows above.                                                    |
-| `proactiveFloor` | `0` (off) | Shrink once a hint reports remaining capacity at or below this.                          |
+| AIMD option      | Default   | Notes                                                                                                               |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------- |
+| `increaseBy`     | required  | Added to the ceiling on every clean release.                                                                        |
+| `decreaseFactor` | required  | Multiplied against the ceiling on a rate-limit signal. Must be greater than `0` and at most `1`; clamped otherwise. |
+| `minCapacity`    | required  | Floor the ceiling never shrinks below.                                                                              |
+| `maxCapacity`    | required  | Ceiling the bucket never grows above.                                                                               |
+| `proactiveFloor` | `0` (off) | Shrink once a hint reports remaining capacity at or below this.                                                     |
 
 ## Observing waits
 
@@ -392,6 +412,7 @@ each target's capacity separate.
 | `maxQueueMs`        | `30000`                | Max time a call may sit queued. Pass `0` to wait indefinitely.                                      |
 | `maxQueueSize`      | `0`                    | Max queued calls before new ones fail immediately instead of queueing. Pass `0` for unbounded.      |
 | `estimateTokens`    | chars/4 + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes. |
+| `estimateFraction`  | `1`                    | Scales the estimate down before it's reserved. See [estimateFraction](#estimatefraction).           |
 | `aimd`              | unset (fixed ceiling)  | Grows/shrinks `requestsPerMinute`'s ceiling instead of keeping it fixed. See [AIMD](#aimd).         |
 
 See [Configuration](/docs/API-reference/configuration#rate-limiting) for how `rateLimit`
