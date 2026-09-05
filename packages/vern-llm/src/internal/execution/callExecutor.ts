@@ -11,7 +11,7 @@ import { createUsageReporter, type UsageReporter } from './usageReporter.js';
 import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
 import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
 import { extractStatus } from './utils/errors.utils.js';
-import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware.utils.js';
+import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
 import { withTimeout } from './utils/retry/retry.utils.js';
 

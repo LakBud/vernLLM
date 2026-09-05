@@ -1,7 +1,8 @@
 import { LLMError } from '../../types/errors.js';
 import { FallbackExhaustedError } from '../../types/fallback.js';
+import { idFor } from '../resolveMiddlewareOrder.js';
 import { normalizeError } from './utils/errors.utils.js';
-import { emitEvent } from './utils/middleware.utils.js';
+import { emitEvent } from './utils/middleware/middleware.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type {
@@ -150,6 +151,7 @@ export async function runFallbackChain<R>(
         signal: params.signal,
         state: middlewareState,
         own: {},
+        registeredMiddlewareNames: dependencies.middleware.map(idFor),
       };
 
       emitEvent(

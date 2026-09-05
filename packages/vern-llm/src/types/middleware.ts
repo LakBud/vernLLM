@@ -77,6 +77,15 @@ export interface MiddlewareContextBase {
 
   /** Simple, string-keyed scratch space, pre-namespaced to this one middleware so two middleware can never collide here even by accident. */
   own: Record<string, unknown>;
+
+  /**
+   * Every registered middleware's resolved label, in `transformOrder`,
+   * frozen. Lets a middleware make an informed call, like skipping a
+   * duplicate action when it detects another known middleware by name
+   * already handles it, without needing to know anything else about
+   * that middleware's own configuration.
+   */
+  registeredMiddlewareNames: readonly string[];
 }
 
 /**
@@ -224,6 +233,32 @@ export interface VernLLMMiddleware {
   name?: string;
   /** Sort key for composition order, ascending, ties broken by array order. See the middleware docs for what "lower runs first" means for `wrap`. */
   priority?: number;
+
+  /**
+   * Names of other middleware this entry must run after, breaking ties
+   * `priority` alone can't express. A referenced name absent from the
+   * registered set is dropped, not an error, since a third party may
+   * reasonably reference a well known name that isn't installed
+   * everywhere. A cycle across `runsAfter`/`runsBefore` throws at
+   * `VernLLM` construction time.
+   */
+  runsAfter?: string[];
+
+  /**
+   * Names of other middleware this entry must run before. See
+   * `runsAfter`; an absent reference is dropped, not an error.
+   */
+  runsBefore?: string[];
+
+  /**
+   * Pins this entry's slot in `wrap` nesting only, independent of
+   * `priority`/`runsAfter`/`runsBefore`, which still govern
+   * `transform`/`onEvent` order. `'outermost'` sees the net
+   * `CallResult` of every retry, fallback, and other middleware's
+   * `wrap`; `'innermost'` sits closest to the real dispatch. A numeric
+   * value behaves like `priority`, but only for `wrap` nesting.
+   */
+  position?: 'outermost' | 'innermost' | number;
 
   /**
    * Boolean for a static on/off switch, or a predicate evaluated per

@@ -15,6 +15,7 @@ function baseOptions(overrides: Partial<BreakerGatewayOptions> = {}): BreakerGat
     providerName: 'openai',
     isFallback: false,
     supportsJsonObjectMode: true,
+    registeredMiddlewareNames: [],
     ...overrides,
   };
 }
@@ -167,5 +168,15 @@ describe('createBreakerGateway, recordSuccess/recordFailure', () => {
     breaker.close();
     gateway.recordSuccess(0, undefined, state);
     expect(breaker.getState()).toBe('closed');
+  });
+
+  it('threads registeredMiddlewareNames through as the same reference it was given, not a copy', () => {
+    const names = Object.freeze(['first', 'second']);
+    const gateway = createBreakerGateway(baseOptions({ registeredMiddlewareNames: names }));
+    const state = createMiddlewareStateBag();
+
+    const ctx = gateway.buildAttemptContext(0, undefined, state);
+
+    expect(ctx.registeredMiddlewareNames).toBe(names);
   });
 });

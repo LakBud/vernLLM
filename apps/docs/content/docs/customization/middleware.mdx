@@ -55,7 +55,8 @@ rethrown afterward; `onError` only observes it, the same fire and forget contrac
 already have.
 
 Everything else on `CreateMiddlewareOptions` passes through unchanged: `transform`, `enabled`,
-`priority`, `onEvent`. `wrap` itself can't be set alongside `onError`: `onError` builds its own
+`priority`, `runsAfter`, `runsBefore`, `position`, `onEvent`. `wrap` itself can't be set alongside
+`onError`: `onError` builds its own
 `wrap` internally, and supplying both would silently drop one of the two.
 
 ## Sharing state with `createStateKey`
@@ -104,85 +105,16 @@ variable, a compile error, not a silently created new property.
   is order independent versus order dependent.
 </Callout>
 
-## Writing your own ordering
+## Ordering across independently written middleware
 
-`priority` is a plain number VernLLM sorts by. Nothing stops a small helper computing that number
-from `before`/`after` name references, entirely in userland, without VernLLM ever knowing:
+`priority` alone breaks down once middleware from more than one source composes: two independent
+authors can pick the same number by coincidence, and there's no way to say "run after whatever
+redacts PII" since that's a dependency, not a number. Reach for `runsAfter`/`runsBefore` (for
+`transform`/`onEvent` order) and `position: 'outermost' | 'innermost' | number` (for `wrap` nesting
+only) instead of hand-rolling a topological sort in userland:
 
-```ts title="resolve-order.ts"
-import type { VernLLMMiddleware } from 'vern-llm';
-
-type OrderedMiddleware = VernLLMMiddleware & {
-  name: string; // required here, optional on VernLLMMiddleware itself
-  before?: string[];
-  after?: string[];
-};
-
-/**
- * Topologically sorts before/after references into priority numbers, then
- * strips them, returning a plain VernLLMMiddleware[]. Throws on a cycle or
- * an unknown middleware name, naming the offending middleware either way.
- */
-export function resolveOrder(entries: OrderedMiddleware[]): VernLLMMiddleware[] {
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
-
-  const dependsOn = new Map<string, Set<string>>();
-  const edgesFor = (name: string): Set<string> => {
-    let edges = dependsOn.get(name);
-    if (!edges) {
-      edges = new Set();
-      dependsOn.set(name, edges);
-    }
-    return edges;
-  };
-
-  for (const entry of entries) {
-    edgesFor(entry.name);
-
-    for (const afterName of entry.after ?? []) {
-      if (!byName.has(afterName)) {
-        throw new Error(`resolveOrder: "${entry.name}" is after unknown middleware "${afterName}"`);
-      }
-      edgesFor(entry.name).add(afterName);
-    }
-
-    for (const beforeName of entry.before ?? []) {
-      if (!byName.has(beforeName)) {
-        throw new Error(
-          `resolveOrder: "${entry.name}" is before unknown middleware "${beforeName}"`,
-        );
-      }
-      edgesFor(beforeName).add(entry.name);
-    }
-  }
-
-  const priority = new Map<string, number>();
-  const visiting = new Set<string>();
-
-  function assign(name: string): number {
-    if (priority.has(name)) return priority.get(name)!;
-    if (visiting.has(name)) throw new Error(`resolveOrder: cycle detected at "${name}"`);
-
-    visiting.add(name);
-    const deps = [...(dependsOn.get(name) ?? [])];
-    const resolved = deps.length === 0 ? 0 : Math.max(...deps.map(assign)) + 1;
-    priority.set(name, resolved);
-    visiting.delete(name);
-    return resolved;
-  }
-
-  for (const entry of entries) assign(entry.name);
-
-  return entries.map(({ before, after, ...rest }) => ({
-    ...rest,
-    priority: priority.get(rest.name!),
-  }));
-}
-```
-
-```ts title="resolve-order-usage.ts"
+```ts title="ordering-across-sources.ts"
 import { VernLLM } from 'vern-llm';
-import { resolveOrder } from './resolve-order'; // the helper defined above
 import { openai } from './openai-client'; // your configured OpenAI client
 import { redact } from './redact'; // your redaction helper: (messages) => messages
 import { tracingWrap } from './tracing-wrap'; // your tracing `wrap` middleware fn
@@ -191,17 +123,23 @@ import { costWrap } from './cost-wrap'; // your cost-tracking `wrap` middleware 
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
-  middleware: resolveOrder([
+  middleware: [
     { name: 'redaction', transform: (request) => ({ messages: redact(request.messages) }) },
-    { name: 'tracing', after: ['redaction'], wrap: tracingWrap },
-    { name: 'cost-tracking', before: ['tracing'], wrap: costWrap },
-  ]),
+    { name: 'tracing', runsAfter: ['redaction'], wrap: tracingWrap },
+    { name: 'cost-tracking', position: 'outermost', wrap: costWrap }, // sees the net result of every retry
+  ],
 });
 ```
 
-`middleware` only ever needs to be a plain `VernLLMMiddleware[]` by the time it reaches the
-constructor, so an addon like this, or one that scopes a set of middleware to a single fallback
-target via `enabled`, needs no change inside VernLLM itself.
+A referenced name that isn't registered is dropped with a warning, not an error; a cycle across
+`runsAfter`/`runsBefore` throws at construction time, naming every middleware in the cycle.
+
+<Callout>
+  See [Composition order](/docs/core/middleware#composition-order) in Core for the full contract:
+  how `runsAfter`/`runsBefore` interact with `priority`, why `position` only affects `wrap` nesting,
+  and `ctx.registeredMiddlewareNames` for a middleware that wants to detect another one by name at
+  runtime instead of coordinating at registration time.
+</Callout>
 
 <Callout>
   See the [Middleware guide](/docs/guides/middleware-tracing-and-cost-tracking) for a full worked

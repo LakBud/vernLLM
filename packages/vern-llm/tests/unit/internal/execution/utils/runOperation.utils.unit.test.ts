@@ -4,6 +4,7 @@ import {
   runOperation,
   type RunOperationDependencies,
 } from '../../../../../src/internal/execution/runOperation.js';
+import { buildMiddlewarePipeline } from '../../../../../src/internal/resolveMiddlewareOrder.js';
 import { LLMError } from '../../../../../src/types/errors.js';
 import { createMiddlewareStateBag } from '../../../../../src/types/middleware.js';
 
@@ -37,9 +38,13 @@ function fakeLogger(): Logger {
   return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
-function dependencies(overrides: Partial<RunOperationDependencies> = {}): RunOperationDependencies {
+function dependencies(
+  overrides: Partial<Omit<RunOperationDependencies, 'pipeline'>> & {
+    middleware?: VernLLMMiddleware[];
+  } = {},
+): RunOperationDependencies {
   return {
-    middleware: overrides.middleware ?? [],
+    pipeline: buildMiddlewarePipeline(overrides.middleware ?? []),
     primaryExecutor: overrides.primaryExecutor ?? fakePrimaryExecutor(),
     middlewareTimeoutMs: overrides.middlewareTimeoutMs ?? 5000,
     logger: overrides.logger ?? fakeLogger(),
@@ -466,6 +471,30 @@ describe('runOperation', () => {
     );
 
     expect(seenInSecond).toBe(state);
+  });
+
+  it("ctx.registeredMiddlewareNames lists every registered middleware's resolved label, in transformOrder", async () => {
+    let seenNames: readonly string[] = [];
+
+    const first: VernLLMMiddleware = {
+      name: 'first',
+      priority: 0,
+      wrap: async (_request, next, ctx) => {
+        seenNames = ctx.registeredMiddlewareNames;
+        return next();
+      },
+    };
+    const second: VernLLMMiddleware = { name: 'second', priority: 1 };
+
+    await runOperation(
+      dependencies({ middleware: [first, second] }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      async () => ({ value: 'ok' }),
+    );
+
+    expect(seenNames).toEqual(['first', 'second']);
   });
 
   it('ctx is a PreDispatchContext describing the primary target only, since wrap runs before next() decides the real target', async () => {

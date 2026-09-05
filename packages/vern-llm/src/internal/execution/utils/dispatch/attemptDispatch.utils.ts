@@ -1,6 +1,6 @@
 import { toRequestSnapshot, type LLMRequestSnapshot } from '../../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../../types/middleware.js';
-import { applyMiddlewareTransforms, emitEvent } from '../middleware.utils.js';
+import { applyMiddlewareTransforms, emitEvent } from '../middleware/middleware.utils.js';
 import { acquireRateLimit } from './rateLimitDispatch.utils.js';
 
 import type { Logger } from '../../../../logger.js';
