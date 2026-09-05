@@ -38,7 +38,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.22.0"
+    "node": ">=22.23.2"
   },
   "scripts": {
     "build": "tsdown",
@@ -60,13 +60,13 @@
     "size": "size-limit"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.122.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1121.0",
-    "@changesets/cli": "^3.0.1",
-    "@google/genai": "^2.19.0",
+    "@anthropic-ai/sdk": "^0.123.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1127.0",
+    "@changesets/cli": "^3.0.2",
+    "@google/genai": "^2.21.0",
     "@size-limit/file": "^13.0.3",
     "@smithy/eventstream-serde-node": "^4.5.2",
-    "@smithy/node-http-handler": "^4.11.3",
+    "@smithy/node-http-handler": "^4.12.1",
     "@smithy/util-utf8": "^4.5.2",
     "@types/node": "^26.4.0",
     "@vitest/coverage-v8": "^4.1.11",
@@ -76,11 +76,11 @@
     "size-limit": "^13.0.3",
     "tsdown": "^0.22.14",
     "typescript": "^5.9.3",
-    "unplugin-unused": "^0.5.7",
+    "unplugin-unused": "^0.6.0",
     "vitest": "^4.1.11",
     "zod": "^4.5.4"
   },
-  "packageManager": "pnpm@11.24.0",
+  "packageManager": "pnpm@11.25.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LakBud/vernLLM.git",
