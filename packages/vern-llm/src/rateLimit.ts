@@ -40,8 +40,8 @@ export interface RateLimitOptions {
    * budget. Applied after `estimateTokens`, as rate-limiter bookkeeping
    * only; never changes the `max_tokens` sent to the provider.
    * `release`'s `actualTokens` still reconciles against real usage
-   * afterward. Default `1` (today's behavior, no scaling). Must be in
-   * `(0, 1]`; values above `1` are clamped to `1`.
+   * afterward. Default `1` (today's behavior, no scaling). Must be a
+   * finite number greater than `0`; values above `1` are clamped to `1`.
    */
   estimateFraction?: number;
   /**
@@ -54,7 +54,7 @@ export interface RateLimitOptions {
 export interface AimdOptions {
   /** Added to the requests-per-minute ceiling on every clean release. */
   increaseBy: number;
-  /** Multiplied against the ceiling on a rate-limit signal. Must be in `(0, 1]`; clamped otherwise. */
+  /** Multiplied against the ceiling on a rate-limit signal. Must be greater than `0` and at most `1`; clamped otherwise. */
   decreaseFactor: number;
   /** Floor the ceiling never shrinks below. */
   minCapacity: number;

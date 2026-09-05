@@ -312,13 +312,13 @@ client can produce this hint:
 `supportsWithResponse` only ever affects the proactive path; every adapter above still reacts to a
 real 429 regardless, since that only needs the response status, not header access.
 
-| AIMD option      | Default   | Notes                                                                                    |
-| ---------------- | --------- | ---------------------------------------------------------------------------------------- |
-| `increaseBy`     | required  | Added to the ceiling on every clean release.                                             |
-| `decreaseFactor` | required  | Multiplied against the ceiling on a rate-limit signal. Must be `0-1`; clamped otherwise. |
-| `minCapacity`    | required  | Floor the ceiling never shrinks below.                                                   |
-| `maxCapacity`    | required  | Ceiling the bucket never grows above.                                                    |
-| `proactiveFloor` | `0` (off) | Shrink once a hint reports remaining capacity at or below this.                          |
+| AIMD option      | Default   | Notes                                                                                                               |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------- |
+| `increaseBy`     | required  | Added to the ceiling on every clean release.                                                                        |
+| `decreaseFactor` | required  | Multiplied against the ceiling on a rate-limit signal. Must be greater than `0` and at most `1`; clamped otherwise. |
+| `minCapacity`    | required  | Floor the ceiling never shrinks below.                                                                              |
+| `maxCapacity`    | required  | Ceiling the bucket never grows above.                                                                               |
+| `proactiveFloor` | `0` (off) | Shrink once a hint reports remaining capacity at or below this.                                                     |
 
 ## Observing waits
 
