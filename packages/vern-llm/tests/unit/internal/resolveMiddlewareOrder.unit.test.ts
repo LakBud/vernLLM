@@ -74,6 +74,28 @@ describe('resolveMiddlewareOrder', () => {
     expect(result).toEqual(['c', 'd', 'a', 'b']);
   });
 
+  it('throws on a single self-referencing entry instead of bypassing validation', () => {
+    const single = [mw({ name: 'solo', runsAfter: ['solo'] })];
+    expect(() => resolveMiddlewareOrder(single)).toThrow(/cycle/);
+  });
+
+  it('warns on a single entry referencing an unknown name instead of bypassing validation', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
+    const single = [mw({ name: 'solo', runsAfter: ['missing'] })];
+    expect(resolveMiddlewareOrder(single, logger)).toEqual(single);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws on duplicate explicit names', () => {
+    const entries = [mw({ name: 'dup' }), mw({ name: 'dup' })];
+    expect(() => resolveMiddlewareOrder(entries)).toThrow(/duplicate name/);
+  });
+
+  it("throws when an unnamed entry's index label collides with an explicit name", () => {
+    const entries = [mw({ name: '1' }), mw()];
+    expect(() => resolveMiddlewareOrder(entries)).toThrow(/duplicate name/);
+  });
+
   it('warns once and drops an unknown runsAfter/runsBefore reference instead of erroring', () => {
     const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const a = mw({ name: 'a', runsAfter: ['does-not-exist'] });

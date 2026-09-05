@@ -32,7 +32,7 @@ export interface LogicalCallDependencies {
   fallbackOn: FallbackOn;
   /** Reports a `'fallback'` event when the chain moves to the next target. */
   reportEvent: (event: VernLLMEvent) => void;
-  /** See `VernLLMOptions.middleware`. Already sorted by `priority`. */
+  /** See `VernLLMOptions.middleware`. Already in `transform`/`onEvent` order: `priority`, with `runsAfter`/`runsBefore` resolved first. */
   middleware: VernLLMMiddleware[];
   /** See `VernLLMOptions.middlewareTimeoutMs`. */
   middlewareTimeoutMs: number;

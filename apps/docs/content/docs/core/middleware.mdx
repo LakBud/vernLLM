@@ -298,8 +298,9 @@ middleware: [
 ];
 ```
 
-`runsAfter`/`runsBefore` only affect `transform`/`onEvent` order (the same order `priority` sorts,
-see above), not `wrap` nesting: see `position` below for that. A name referenced by
+`runsAfter`/`runsBefore` resolve `transform`/`onEvent` order (the same order `priority` sorts, see
+above), and that resolved order is also the baseline `wrap` nesting starts from. `position` only
+overrides that baseline for entries that set it: see `position` below for that. A name referenced by
 `runsAfter`/`runsBefore` that isn't registered is dropped with a warning, not an error, since a
 third-party middleware may reasonably reference a well-known name that isn't installed everywhere.
 A cycle across `runsAfter`/`runsBefore` throws at `VernLLM` construction time rather than silently

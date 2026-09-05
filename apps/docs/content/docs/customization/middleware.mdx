@@ -125,6 +125,9 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   middleware: [
     { name: 'redaction', transform: (request) => ({ messages: redact(request.messages) }) },
+    // No `position`, so `tracing`'s `wrap` nesting falls back to its `transform`/`onEvent`
+    // order: after `redaction` via `runsAfter`, and before `cost-tracking` once that's
+    // pinned `'outermost'` and moved ahead of it.
     { name: 'tracing', runsAfter: ['redaction'], wrap: tracingWrap },
     { name: 'cost-tracking', position: 'outermost', wrap: costWrap }, // sees the net result of every retry
   ],
@@ -136,8 +139,9 @@ A referenced name that isn't registered is dropped with a warning, not an error;
 
 <Callout>
   See [Composition order](/docs/core/middleware#composition-order) in Core for the full contract:
-  how `runsAfter`/`runsBefore` interact with `priority`, why `position` only affects `wrap` nesting,
-  and `ctx.registeredMiddlewareNames` for a middleware that wants to detect another one by name at
+  how `runsAfter`/`runsBefore` interact with `priority` to set the baseline order `wrap` nesting
+  starts from, how `position` overrides that baseline for `wrap` nesting only, and
+  `ctx.registeredMiddlewareNames` for a middleware that wants to detect another one by name at
   runtime instead of coordinating at registration time.
 </Callout>
 

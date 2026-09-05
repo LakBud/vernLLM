@@ -205,6 +205,35 @@ describe('runOperation', () => {
     ]);
   });
 
+  it("labels an unnamed middleware by its transformOrder index, not wrapOrder's, when position reorders wrap nesting", async () => {
+    const events: VernLLMEvent[] = [];
+    const coreOperation = vi.fn(async () => ({ value: 'never' }) satisfies CallResult);
+
+    // transformOrder: [named (index 0), unnamed (index 1)] since priority ties
+    // break by original array order. `position: 'outermost'` on the unnamed
+    // entry moves it to the front of wrapOrder, so wrapOrder's own loop index
+    // for it is 0, not its transformOrder index of 1. Its label must still
+    // read "[1]" to match `ctx.registeredMiddlewareNames`.
+    const named: VernLLMMiddleware = { name: 'named', wrap: async (_r, next) => next() };
+    const unnamed: VernLLMMiddleware = {
+      position: 'outermost',
+      wrap: async () => ({ value: 'canned' }),
+    };
+
+    const outcome = await runOperation(
+      dependencies({ middleware: [named, unnamed], reportEvent: (event) => events.push(event) }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      coreOperation,
+    );
+
+    expect(outcome).toEqual({ value: 'canned' });
+    expect(events).toEqual([
+      { kind: 'middleware', requestId, middleware: '[1]', hook: 'wrap_short_circuit' },
+    ]);
+  });
+
   it('calling next() more than once dispatches coreOperation only once, reusing the first call for every subsequent one', async () => {
     const coreOperation = vi.fn(async () => ({ value: 'result' }) satisfies CallResult);
 

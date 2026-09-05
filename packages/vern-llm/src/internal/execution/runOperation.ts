@@ -88,11 +88,19 @@ export async function runOperation(
   const primary = dependencies.primaryExecutor;
   const { model, request } = primary.previewRequest(params);
 
+  // `position` can reorder `wrapOrder` relative to `transformOrder`, so an
+  // anonymous entry's positional index in the two arrays can differ. Labels
+  // (and `registeredMiddlewareNames`, via `names`) are always derived from
+  // `transformOrder` position; looking the index up here instead of reusing
+  // `wrapOrder`'s own loop index keeps an unnamed middleware's label
+  // consistent with `names` regardless of any `position` pin.
+  const transformIndexByEntry = new Map(transformOrder.map((entry, index) => [entry, index]));
+
   let next: () => Promise<CallResult> = coreOperation;
 
   for (let middlewareIndex = wrapOrder.length - 1; middlewareIndex >= 0; middlewareIndex--) {
     const middleware = wrapOrder[middlewareIndex]!;
-    const label = middlewareLabel(middleware, middlewareIndex);
+    const label = middlewareLabel(middleware, transformIndexByEntry.get(middleware)!);
     const inner = next;
 
     next = async (): Promise<CallResult> => {

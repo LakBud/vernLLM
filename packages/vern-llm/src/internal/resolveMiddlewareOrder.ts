@@ -47,6 +47,20 @@ interface Node {
   mustPrecede: string[];
 }
 
+/** Throws if two entries resolve to the same `idFor` label. Duplicate labels would silently merge two middleware into one `Node` in `buildNodes`, corrupting edges and `registeredMiddlewareNames`. */
+function assertNoDuplicateLabels(entries: readonly VernLLMMiddleware[]): void {
+  const ids = entries.map(idFor);
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) {
+      throw new Error(
+        `middleware ordering has a duplicate name "${id}"; every middleware's resolved name must be unique`,
+      );
+    }
+    seen.add(id);
+  }
+}
+
 function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Node[] {
   const ids = entries.map(idFor);
   const knownIds = new Set(ids);
@@ -126,9 +140,11 @@ export function resolveMiddlewareOrder(
   entries: readonly VernLLMMiddleware[],
   logger?: Logger,
 ): VernLLMMiddleware[] {
-  if (entries.length <= 1) return [...entries];
+  assertNoDuplicateLabels(entries);
 
   const hasEdges = entries.some((entry) => entry.runsAfter?.length || entry.runsBefore?.length);
+
+  if (entries.length <= 1 && !hasEdges) return [...entries];
 
   if (!hasEdges) {
     return [...entries].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));

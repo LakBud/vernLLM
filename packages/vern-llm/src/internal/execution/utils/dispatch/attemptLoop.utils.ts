@@ -107,7 +107,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     providerName,
     isFallback,
     supportsJsonObjectMode,
-    registeredMiddlewareNames: middleware.map(idFor),
+    registeredMiddlewareNames: Object.freeze(middleware.map(idFor)),
   });
 
   // Set only when `budget.assertAvailable()` is what actually stopped a
