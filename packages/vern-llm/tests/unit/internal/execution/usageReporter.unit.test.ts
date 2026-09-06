@@ -174,6 +174,7 @@ describe('createUsageReporter, reportSuccess', () => {
     expect(() => reporter.reportSuccess(baseUsage())).not.toThrow();
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsage failed', {
       message: 'onUsage boom',
+      stack: expect.any(String),
     });
   });
 
@@ -265,6 +266,7 @@ describe('createUsageReporter, reportFailure', () => {
     expect(() => reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 0)).not.toThrow();
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsageFailure failed', {
       message: 'onUsageFailure boom',
+      stack: expect.any(String),
     });
   });
 

@@ -34,6 +34,11 @@ wrapper that expects a `meta` argument on every level (many structured loggers d
 default it itself, as `pinoLogger.error` does above.
 
 <Callout type="info">
+  Just want to turn logs off? Pass `logger: 'silent'` instead of writing a no-op `Logger`:
+  `new VernLLM({ client: openai, model: 'gpt-4o', logger: 'silent' })`.
+</Callout>
+
+<Callout type="info">
   Whatever you pass in is wrapped so a throwing (or promise-rejecting) implementation can never
   break the call it's describing, the failure is caught and dropped, at most that one log line is
   lost.

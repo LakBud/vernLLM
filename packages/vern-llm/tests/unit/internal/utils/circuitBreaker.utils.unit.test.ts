@@ -200,6 +200,7 @@ describe('buildCircuitBreaker', () => {
     expect(() => breaker.open()).not.toThrow();
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] onEvent failed', {
       message: 'onEvent boom',
+      stack: expect.any(String),
     });
   });
 
@@ -249,6 +250,7 @@ describe('buildCircuitBreaker', () => {
     expect(userOnStateChange).toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] circuitBreaker.onStateChange failed', {
       message: 'onStateChange boom',
+      stack: expect.any(String),
     });
   });
 

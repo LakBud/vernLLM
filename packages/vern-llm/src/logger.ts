@@ -23,3 +23,13 @@ export class ConsoleLogger implements Logger {
     console.error(message, meta ?? '');
   }
 }
+
+/**
+ * Logger that discards every call. Used when `logger: 'silent'` is passed
+ * to VernLLM, so silencing logs doesn't require stubbing all three methods.
+ */
+export class NoopLogger implements Logger {
+  debug(_message: string): void {}
+  warn(_message: string): void {}
+  error(_message: string, _meta?: Record<string, unknown>): void {}
+}

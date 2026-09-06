@@ -16,6 +16,11 @@ interface Logger {
 Note `debug` and `warn` only ever receive a single `message` string, `meta` is `error`-only.
 
 <Callout type="info">
+  Need to turn logging off entirely? Pass `logger: 'silent'` instead of stubbing all three methods
+  yourself. See [Silencing logs](#silencing-logs) below.
+</Callout>
+
+<Callout type="info">
   A logger you pass in is wrapped internally so a throwing implementation can never break the call
   it's describing. If your `debug`, `warn`, or `error` throws, the error is caught and dropped, and
   the operation it was logging still completes normally. An async logger (one that returns a
@@ -43,29 +48,46 @@ const llm = new VernLLM({
 });
 ```
 
+## Silencing logs
+
+Pass `logger: 'silent'` to discard every log line without writing your own no-op `Logger`:
+
+```ts title="silent-logger.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  logger: 'silent',
+});
+```
+
+This resolves to an internal `NoopLogger` class, so it composes the same way a custom
+`logger` does (wrapped for safety, unaffected by `debug`). Useful for tests and CI where log output
+is just noise.
+
 ## What gets logged, at each level
 
 Every internal log line is prefixed `[VernLLM]` or `[VernLLM:<requestId>]` so multiple concurrent
 calls (and multiple `VernLLM` instances) stay distinguishable in one log stream:
 
-| Level   | When                                                                                                 | Example                                                                        |
-| ------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `debug` | A call succeeds (output, truncated to 800 chars)                                                     | `[VernLLM:req_abc] output:\n{"name": "..."}`                                   |
-| `debug` | A call attempt fails                                                                                 | `[VernLLM:req_abc] error:\n<provider error>`                                   |
-| `debug` | A stream fails to open                                                                               | `[VernLLM:req_abc] stream-open error:\n<provider error>`                       |
-| `warn`  | A retry is about to happen                                                                           | `[VernLLM:req_abc] recovery attempt 2/3, waiting 840ms (honoring Retry-After)` |
-| `warn`  | Usage was spent on an attempt that then failed                                                       | `[VernLLM:req_abc] usage failure, attempt 2/3: type=timeout tokens=412`        |
-| `warn`  | A cache adapter's `get` throws (treated as a miss)                                                   | `[VernLLM] cache read failed: <message>`                                       |
-| `warn`  | A cache adapter's `set` throws (swallowed)                                                           | `[VernLLM] cache write failed: <message>`                                      |
-| `warn`  | A cache adapter's `delete` throws (swallowed)                                                        | `[VernLLM] cache delete failed: <message>`                                     |
-| `warn`  | `model` was passed but has no effect (`isolateByModel` off)                                          | ``[VernLLM] call: `model: 'x'` has no effect here...``                         |
-| `error` | A user-supplied hook throws (`onUsage`, `onUsageFailure`, `onEvent`, `circuitBreaker.onStateChange`) | `[VernLLM] onUsage failed` with `meta: { message }`                            |
+| Level   | When                                                                                                                           | Example                                                                        |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `debug` | A call succeeds (output, truncated to 800 chars, with a truncation notice appended if it was cut)                              | `[VernLLM:req_abc] output:\n{"name": "..."}... (truncated, 1240 chars total)`  |
+| `debug` | A call attempt fails                                                                                                           | `[VernLLM:req_abc] error:\n<provider error>`                                   |
+| `debug` | A stream fails to open                                                                                                         | `[VernLLM:req_abc] stream-open error:\n<provider error>`                       |
+| `warn`  | A retry is about to happen                                                                                                     | `[VernLLM:req_abc] recovery attempt 2/3, waiting 840ms (honoring Retry-After)` |
+| `warn`  | Usage was spent on an attempt that then failed                                                                                 | `[VernLLM:req_abc] usage failure, attempt 2/3: type=timeout tokens=412`        |
+| `warn`  | A cache adapter's `get` throws (treated as a miss)                                                                             | `[VernLLM] cache read failed: <message>`                                       |
+| `warn`  | A cache adapter's `set` throws (swallowed)                                                                                     | `[VernLLM] cache write failed: <message>`                                      |
+| `warn`  | A cache adapter's `delete` throws (swallowed)                                                                                  | `[VernLLM] cache delete failed: <message>`                                     |
+| `warn`  | `model` was passed but has no effect (`isolateByModel` off)                                                                    | ``[VernLLM] call: `model: 'x'` has no effect here...``                         |
+| `warn`  | `detectSoftFailure` itself throws (treated as no soft failure)                                                                 | `[VernLLM] detectSoftFailure threw and was ignored: <message>\n<stack>`        |
+| `error` | A user-supplied hook throws (`onUsage`, `onUsageFailure`, `onEvent`, `circuitBreaker.onStateChange`, labeled middleware hooks) | `[VernLLM] onUsage failed` with `meta: { message, stack }`                     |
 
 <Callout type="info">
-  `error` calls always pass `meta` as `{ message: string }`, the caught error's `.message` (or
-  `'unknown'` if it wasn't an `Error`), never the original error object itself. If you need the
-  original error/stack for these hook-failure logs, capture it at the hook boundary yourself,
-  VernLLM only forwards the message string here.
+  Every hook-failure `error` call above shares one shape: `[VernLLM] <hook> failed` as the message,
+  and `meta: { message, stack }`, the caught error's `.message` and `.stack` (`stack` is `undefined`
+  and `message` is `'unknown'` if the thrown value wasn't an `Error`). This is produced by a single
+  internal helper, so every hook failure logs the same way, stack included.
 </Callout>
 
 ## Default logger behavior

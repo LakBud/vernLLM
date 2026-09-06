@@ -196,6 +196,29 @@ describe('shapeResponse, debug logging', () => {
     ).toThrow();
     expect(logger.debug).not.toHaveBeenCalled();
   });
+
+  it('logs the full content untruncated when it is 800 chars or fewer', () => {
+    const logger = fakeLogger();
+    const content = 'x'.repeat(800);
+
+    shapeResponse(baseShapeParams({ rawContent: content, logger }));
+
+    const [line] = logger.debug.mock.calls[0]!;
+    expect(line).toContain(content);
+    expect(line).not.toContain('truncated');
+  });
+
+  it('truncates content over 800 chars and appends a truncation notice with the full length', () => {
+    const logger = fakeLogger();
+    const content = 'y'.repeat(950);
+
+    shapeResponse(baseShapeParams({ rawContent: content, logger }));
+
+    const [line] = logger.debug.mock.calls[0]!;
+    expect(line).toContain('y'.repeat(800));
+    expect(line).not.toContain('y'.repeat(801));
+    expect(line).toContain('... (truncated, 950 chars total)');
+  });
 });
 
 describe('parseAndValidate', () => {

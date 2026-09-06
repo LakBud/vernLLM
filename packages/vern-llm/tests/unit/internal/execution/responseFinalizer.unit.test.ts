@@ -247,8 +247,9 @@ describe('finalizeResponse, detectSoftFailure', () => {
   });
 
   it('treats a throwing hook as no soft failure, logging instead of failing the call', () => {
+    const error = new Error('hook bug');
     const detectSoftFailure = vi.fn(() => {
-      throw new Error('hook bug');
+      throw error;
     });
     const deps = baseDeps({ detectSoftFailure });
 
@@ -267,6 +268,33 @@ describe('finalizeResponse, detectSoftFailure', () => {
     expect(result).toBe('hello');
     expect(deps.gateway.recordSuccess).toHaveBeenCalledOnce();
     expect(deps.logger.warn).toHaveBeenCalledOnce();
+    expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining('[VernLLM]'));
+    expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining('hook bug'));
+    expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining(error.stack!));
+  });
+
+  it('logs a non-Error throw from the hook without a stack, falling back to String(error)', () => {
+    const detectSoftFailure = vi.fn(() => {
+      throw 'not an Error instance';
+    });
+    const deps = baseDeps({ detectSoftFailure });
+
+    const result = finalizeResponse(
+      'hello',
+      undefined,
+      baseParams(),
+      false,
+      usage,
+      'req-1',
+      0,
+      state,
+      deps,
+    );
+
+    expect(result).toBe('hello');
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      '[VernLLM] detectSoftFailure threw and was ignored, treated as no soft failure: not an Error instance',
+    );
   });
 
   it('is never consulted when a shaping error already occurred', () => {

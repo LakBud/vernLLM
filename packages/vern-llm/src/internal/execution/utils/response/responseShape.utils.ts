@@ -151,9 +151,13 @@ export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithTo
     throw new LLMError('Empty LLM response', 'api', { code: 'empty_response' });
   }
 
+  const debugOutput = redactText(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`);
+  const truncated = debugOutput.length > 800;
+
   logger.debug(
     `[VernLLM:${requestId}] output:\n` +
-      redactText(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`).slice(0, 800),
+      debugOutput.slice(0, 800) +
+      (truncated ? `... (truncated, ${debugOutput.length} chars total)` : ''),
   );
 
   if (wireToolCalls?.length) {
