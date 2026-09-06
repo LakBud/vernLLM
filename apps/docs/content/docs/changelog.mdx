@@ -8,6 +8,27 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 2.7.0
+
+### Minor Changes
+
+- e149039: Add `logger: 'silent'` shorthand to `VernLLMOptions`, backed by an internal no-op logger. Silencing all output no longer requires stubbing `debug`, `warn`, and `error` yourself.
+
+  Also improved internal log message consistency. Every "hook failed" log (`onEvent`, `onUsage`, `onUsageFailure`, `circuitBreaker.onStateChange`, and labeled middleware hooks) now goes through a shared `logHookError` helper, always includes the error's `stack` alongside `message`, and uses the same `[VernLLM] <hook> failed` shape. Fixed a `detectSoftFailure` warning that was missing the `[VernLLM]` prefix. The debug output line for a call's raw response now appends a truncation notice with the full character count when the logged content is cut off, instead of silently dropping the rest.
+
+- 55a87b3: Add `estimateFraction` to `RateLimitOptions`. Scales the pre-flight token estimate down before it's reserved against `tokensPerMinute`, since most calls don't use their full `max_tokens` budget. Default `1`, matching prior behavior. Never changes the `max_tokens` sent to the provider; reconciliation against real usage on `release` is unaffected.
+- 5c4b677: Add `runsAfter`/`runsBefore` and `position` to `VernLLMMiddleware` for composing middleware from more than one source without every author agreeing on the same `priority` numbers ahead of time.
+
+  `runsAfter`/`runsBefore` reference another entry's `name` and resolve into `transform`/`onEvent` order alongside `priority`; a referenced name that isn't registered is dropped with a warning, and a cycle throws at `VernLLM` construction time naming every middleware in the cycle. `position: 'outermost' | 'innermost' | number` pins a middleware's slot in `wrap` nesting independently of `transform`/`onEvent` order, so a middleware like a billing meter can guarantee it sees the net `CallResult` of every retry and fallback target regardless of what else gets registered later.
+
+  Every hook's `ctx` now also carries `registeredMiddlewareNames`, every registered middleware's resolved label, so a middleware can detect another one by name (e.g. skip a duplicate action) without coordinating at registration time.
+
+  A priority-only setup keeps its exact current order; this also fixes an internal bug where `applyMiddlewareTransforms` re-sorted an already-ordered middleware array a second time, which was harmless while ordering was a flat `priority` sort but would have silently diverged from `wrap`'s own ordering once `runsAfter`/`runsBefore`/`position` were introduced. Order is now decided once, at construction time, in a single `MiddlewarePipeline`, and every consumer (`transform`, `wrap`, `onEvent`, context construction) reads the one view it needs off that instead of re-deriving it.
+
+- b910eb6: Add `getRateLimitState(target?)`, rounding out rate limiting's introspection to match the circuit breaker's `getCircuitState()` and the retry budget's `getRetryBudgetState()`. Returns `{ requestsRemaining, tokensRemaining, concurrentInFlight }`, each `undefined` if that bucket isn't configured, or `undefined` entirely if the target has no `rateLimit` configured.
+
+  `RateLimiterAdapter` gains an optional `getState?()` method powering this. It's optional, not required: an existing custom adapter that omits it keeps working unchanged, and `getRateLimitState()` simply returns `undefined` for it, same as no limiter at all.
+
 ## 2.6.2
 
 ### Patch Changes
