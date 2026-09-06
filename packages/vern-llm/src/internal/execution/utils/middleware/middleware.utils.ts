@@ -8,6 +8,7 @@ import {
   type WireCallRequest,
   type WireCallRequestPatch,
 } from '../../../../types/index.js';
+import { logHookError } from '../../../utils/logger.utils.js';
 import { normalizeError } from '../errors.utils.js';
 
 import type { Logger } from '../../../../logger.js';
@@ -92,6 +93,7 @@ export async function resolveEnabled(
       `[VernLLM] middleware "${label}".enabled threw or timed out, treating as disabled`,
       {
         message: error instanceof Error ? error.message : 'unknown',
+        stack: error instanceof Error ? error.stack : undefined,
       },
     );
     return false;
@@ -408,14 +410,10 @@ async function dispatchEventToMiddleware(
 
     try {
       void Promise.resolve(entry.onEvent(event, { ...ctx, own: {} })).catch((error: unknown) => {
-        logger.error(`[VernLLM] middleware "${label}".onEvent failed`, {
-          message: error instanceof Error ? error.message : 'unknown',
-        });
+        logHookError(logger, `middleware "${label}".onEvent`, error);
       });
     } catch (error) {
-      logger.error(`[VernLLM] middleware "${label}".onEvent failed`, {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
+      logHookError(logger, `middleware "${label}".onEvent`, error);
     }
   }
 }

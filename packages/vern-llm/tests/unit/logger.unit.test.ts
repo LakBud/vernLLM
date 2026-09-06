@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { createSafeLogger } from '../../src/internal/utils/logger.utils.js';
-import { ConsoleLogger } from '../../src/logger.js';
+import { createSafeLogger, logHookError } from '../../src/internal/utils/logger.utils.js';
+import { ConsoleLogger, NoopLogger } from '../../src/logger.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
@@ -235,5 +235,111 @@ describe('createSafeLogger', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(unhandled).not.toHaveBeenCalled();
+  });
+});
+
+describe('NoopLogger', () => {
+  it('discards debug(), warn(), and error() without throwing', () => {
+    const logger = new NoopLogger();
+
+    expect(() => logger.debug('d')).not.toThrow();
+    expect(() => logger.warn('w')).not.toThrow();
+    expect(() => logger.error('e', { detail: 1 })).not.toThrow();
+  });
+
+  it('never writes to the console', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const logger = new NoopLogger();
+    logger.debug('d');
+    logger.warn('w');
+    logger.error('e');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+});
+
+describe("VernLLM: logger: 'silent' shorthand", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('produces no console output, even with debug: true', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { client } = createMockClient([new Error('boom'), jsonResponse({ ok: true })]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 1,
+      baseDelayMs: 0,
+      debug: true,
+      logger: 'silent',
+    });
+
+    await llm.call({ systemPrompt: 's', userContent: 'u' });
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled(); // retry warning also silenced
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not require stubbing all three Logger methods, unlike a plain custom logger', () => {
+    // The whole point of the shorthand: this must type-check and construct
+    // without the caller providing { debug() {}, warn() {}, error() {} }.
+    expect(() => new VernLLM({ client: {} as never, model: 'm', logger: 'silent' })).not.toThrow();
+  });
+});
+
+describe('logHookError', () => {
+  it('logs with the shared "[VernLLM] <hook> failed" message shape', () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    logHookError(logger, 'onEvent', new Error('boom'));
+
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VernLLM] onEvent failed',
+      expect.objectContaining({ message: 'boom' }),
+    );
+  });
+
+  it('includes the stack trace when the thrown value is an Error', () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const error = new Error('boom');
+
+    logHookError(logger, 'onUsage', error);
+
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsage failed', {
+      message: 'boom',
+      stack: error.stack,
+    });
+  });
+
+  it('falls back to message "unknown" and an undefined stack for a non-Error throw', () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    logHookError(logger, 'onUsageFailure', 'a plain string throw');
+
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsageFailure failed', {
+      message: 'unknown',
+      stack: undefined,
+    });
+  });
+
+  it('interpolates an arbitrary hook name into the message, e.g. a labeled middleware hook', () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    logHookError(logger, 'middleware "auth".onEvent', new Error('mw boom'));
+
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VernLLM] middleware "auth".onEvent failed',
+      expect.objectContaining({ message: 'mw boom' }),
+    );
   });
 });

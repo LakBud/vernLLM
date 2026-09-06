@@ -1,3 +1,4 @@
+import { logHookError } from '../utils/logger.utils.js';
 import { toTokenUsage } from './utils/response/usage.utils.js';
 
 import type { Logger } from '../../logger.js';
@@ -70,9 +71,7 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
     try {
       onUsage(usage);
     } catch (error) {
-      logger.error('[VernLLM] onUsage failed', {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
+      logHookError(logger, 'onUsage', error);
     }
   }
 
@@ -105,9 +104,7 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
     try {
       onUsageFailure(usage, error);
     } catch (hookError) {
-      logger.error('[VernLLM] onUsageFailure failed', {
-        message: hookError instanceof Error ? hookError.message : 'unknown',
-      });
+      logHookError(logger, 'onUsageFailure', hookError);
     }
   }
 

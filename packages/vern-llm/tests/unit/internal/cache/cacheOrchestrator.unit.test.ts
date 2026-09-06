@@ -172,6 +172,7 @@ describe('CacheOrchestrator.runCached, joinInFlight/registerTrigger', () => {
     await expect(joiner).rejects.toThrow('trigger failed');
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed', {
       message: 'refund boom',
+      stack: expect.any(String),
     });
   });
 
@@ -230,6 +231,7 @@ describe('CacheOrchestrator.runCached, joinInFlight/registerTrigger', () => {
 
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed', {
       message: 'refund boom',
+      stack: expect.any(String),
     });
   });
 
@@ -487,6 +489,7 @@ describe('CacheOrchestrator.runCachedStream, registerStreamTrigger', () => {
     await expect(finalResult).rejects.toThrow('mid-stream failure');
     expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed after stream error', {
       message: 'refund boom',
+      stack: expect.any(String),
     });
   });
 });

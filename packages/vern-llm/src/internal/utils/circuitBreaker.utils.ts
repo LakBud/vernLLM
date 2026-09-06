@@ -1,6 +1,7 @@
 import { CircuitBreaker, type CircuitBreakerOptions } from '../../circuitBreaker.js';
 import { emitEvent } from '../execution/utils/middleware/middleware.utils.js';
 import { idFor } from '../resolveMiddlewareOrder.js';
+import { logHookError } from './logger.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { VernLLMEvent } from '../../types/events.js';
@@ -25,9 +26,7 @@ export function makeEventReporter(
     try {
       onEvent(event);
     } catch (error) {
-      logger.error('[VernLLM] onEvent failed', {
-        message: error instanceof Error ? error.message : 'unknown',
-      });
+      logHookError(logger, 'onEvent', error);
     }
   };
 }
@@ -148,9 +147,7 @@ export function buildCircuitBreaker(
       try {
         userOnStateChange(from, to, consecutiveFailures, model, context);
       } catch (error) {
-        logger.error('[VernLLM] circuitBreaker.onStateChange failed', {
-          message: error instanceof Error ? error.message : 'unknown',
-        });
+        logHookError(logger, 'circuitBreaker.onStateChange', error);
       }
     },
   });

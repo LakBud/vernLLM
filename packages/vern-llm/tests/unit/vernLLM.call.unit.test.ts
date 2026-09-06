@@ -1016,6 +1016,43 @@ describe('VernLLM.call, reserveUsage/refundUsage', () => {
     expect(refundUsage).toHaveBeenCalledWith({ coalesced: false });
   });
 
+  it('logs, instead of throwing, when refundUsage itself throws after a call failure', async () => {
+    const reserveUsage = vi.fn();
+    const refundError = new Error('refund boom');
+    const refundUsage = vi.fn(async () => {
+      throw refundError;
+    });
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { client } = createMockClient([new Error('boom')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, logger });
+
+    await expect(
+      llm.call({ systemPrompt: 's', userContent: 'u', reserveUsage, refundUsage }),
+    ).rejects.toMatchObject({ type: 'unknown' }); // original error still propagates
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed', {
+      message: 'refund boom',
+      stack: refundError.stack,
+    });
+  });
+
+  it('falls back to an undefined stack when refundUsage throws a non-Error value', async () => {
+    const reserveUsage = vi.fn();
+    const refundUsage = vi.fn(async () => {
+      throw 'not an Error instance';
+    });
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { client } = createMockClient([new Error('boom')]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0, logger });
+
+    await expect(
+      llm.call({ systemPrompt: 's', userContent: 'u', reserveUsage, refundUsage }),
+    ).rejects.toMatchObject({ type: 'unknown' });
+    expect(logger.error).toHaveBeenCalledWith('[VernLLM] refundUsage failed', {
+      message: 'unknown',
+      stack: undefined,
+    });
+  });
+
   it('does not call refundUsage on a successful call', async () => {
     const reserveUsage = vi.fn();
     const refundUsage = vi.fn();

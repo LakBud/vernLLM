@@ -1,6 +1,19 @@
 import type { Logger } from '../../logger.js';
 
 /**
+ * Logs a user-supplied hook (`onEvent`, `onUsage`, a middleware method, etc.)
+ * throwing, in the shared `[VernLLM] <hookName> failed` shape. Centralized so
+ * every call site reduces the error the same way instead of re-deriving
+ * `message`/`stack` inline, and so the `[VernLLM]` prefix can't drift.
+ */
+export function logHookError(logger: Logger, hookName: string, error: unknown): void {
+  logger.error(`[VernLLM] ${hookName} failed`, {
+    message: error instanceof Error ? error.message : 'unknown',
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+}
+
+/**
  * Wraps a `Logger` so a throwing implementation can never break the call
  * it's trying to describe. `logger` is user-supplied (`VernLLMOptions.logger`),
  * so a custom logger that ships to a file, Datadog, etc. can throw for

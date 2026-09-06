@@ -131,10 +131,10 @@ function detectSoftFailureSafely<T>(
   try {
     return detectSoftFailure(result, meta);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error && error.stack ? `\n${error.stack}` : '';
     logger.warn(
-      `detectSoftFailure threw and was ignored, treated as no soft failure: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `[VernLLM] detectSoftFailure threw and was ignored, treated as no soft failure: ${message}${stack}`,
     );
     return undefined;
   }

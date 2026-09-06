@@ -166,7 +166,10 @@ export async function runOperation(
           // successful, already-billed call into a false failure.
           dependencies.logger.error(
             `[VernLLM] middleware "${label}".wrap threw after next() resolved; keeping the original result`,
-            { message: error instanceof Error ? error.message : 'unknown' },
+            {
+              message: error instanceof Error ? error.message : 'unknown',
+              stack: error instanceof Error ? error.stack : undefined,
+            },
           );
           return resolvedResult;
         }

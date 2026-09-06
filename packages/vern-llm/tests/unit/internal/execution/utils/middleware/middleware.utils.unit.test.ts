@@ -236,6 +236,26 @@ describe('resolveEnabled', () => {
     expect(errorLogger.error.mock.calls[0]![0]).toContain('flaky');
   });
 
+  it('falls back to an undefined stack when the predicate throws a non-Error value', async () => {
+    const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const result = await resolveEnabled(
+      {
+        enabled: () => {
+          throw 'not an Error instance';
+        },
+      },
+      baseCtx(),
+      'flaky',
+      5000,
+      errorLogger,
+    );
+    expect(result).toBe(false);
+    expect(errorLogger.error).toHaveBeenCalledWith(expect.stringContaining('flaky'), {
+      message: 'unknown',
+      stack: undefined,
+    });
+  });
+
   it('treats a timed-out predicate as disabled', async () => {
     const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const result = await resolveEnabled(

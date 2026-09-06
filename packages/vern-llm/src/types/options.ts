@@ -114,8 +114,11 @@ export interface VernLLMOptions {
    * for the final close), in which case this does fire.
    */
   onUsageFailure?: OnUsageFailure;
-  /** Injectable logger. Defaults to a console-based logger gated by `debug` */
-  logger?: Logger;
+  /**
+   * Injectable logger. Defaults to a console-based logger gated by `debug`.
+   * Pass `'silent'` to discard all log output without stubbing a Logger.
+   */
+  logger?: Logger | 'silent';
   /**
    * Enables a circuit breaker that short-circuits calls after repeated
    * consecutive failures, instead of continuing to hammer a down provider

@@ -52,6 +52,7 @@ export class CacheOrchestrator {
   private logRefundError(logMessage: string, error: unknown): void {
     this.logger.error(logMessage, {
       message: error instanceof Error ? error.message : 'unknown',
+      stack: error instanceof Error ? error.stack : undefined,
     });
   }
 

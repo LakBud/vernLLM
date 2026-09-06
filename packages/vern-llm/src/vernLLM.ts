@@ -24,7 +24,7 @@ import {
   warnIfModelUnsupported,
 } from './internal/utils/circuitBreaker.utils.js';
 import { createSafeLogger } from './internal/utils/logger.utils.js';
-import { ConsoleLogger, type Logger } from './logger.js';
+import { ConsoleLogger, NoopLogger, type Logger } from './logger.js';
 import {
   LLMError,
   defaultFallbackOn,
@@ -138,7 +138,11 @@ export class VernLLM {
    * `nonRetryableStatus` `[400, 401, 403, 404, 422]`, `debug` false.
    */
   constructor(options: VernLLMOptions) {
-    this.logger = createSafeLogger(options.logger ?? new ConsoleLogger(options.debug ?? false));
+    this.logger = createSafeLogger(
+      options.logger === 'silent'
+        ? new NoopLogger()
+        : (options.logger ?? new ConsoleLogger(options.debug ?? false)),
+    );
 
     const providerName = options.name ?? 'primary';
 
@@ -216,6 +220,7 @@ export class VernLLM {
   private logRefundError(logMessage: string, error: unknown): void {
     this.logger.error(logMessage, {
       message: error instanceof Error ? error.message : 'unknown',
+      stack: error instanceof Error ? error.stack : undefined,
     });
   }
 
