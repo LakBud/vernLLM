@@ -367,7 +367,7 @@ const llm = new VernLLM({
 });
 
 llm.getRateLimitState();
-// { requestsRemaining: 480, tokensRemaining: 150_000, concurrentInFlight: 3 }
+// { requestsRemaining: 500, tokensRemaining: 200_000, concurrentInFlight: 0 }
 ```
 
 Each field mirrors one bucket, `undefined` if that bucket isn't configured:

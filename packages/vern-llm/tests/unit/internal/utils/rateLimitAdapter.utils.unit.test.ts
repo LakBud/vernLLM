@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildRateLimit } from '../../../../src/internal/utils/rateLimitAdapter.utils.js';
 import { RateLimiter, type RateLimiterAdapter } from '../../../../src/rateLimit.js';
+import { LLMError } from '../../../../src/types/errors.js';
 
 describe('buildRateLimit', () => {
   it('returns undefined when option is omitted, no default limiter created', () => {
@@ -68,6 +69,39 @@ describe('buildRateLimit', () => {
       expect(() => buildRateLimit(partial as never)).toThrow(
         /missing: signalRateLimit, reactToRateLimitHint/,
       );
+    });
+  });
+
+  describe('an adapter with a non-function getState', () => {
+    const fullAdapter = {
+      estimate: () => 0,
+      acquire: async () => ({ release: () => {}, waitedMs: 0 }),
+      signalRateLimit: () => {},
+      reactToRateLimitHint: () => {},
+    };
+
+    it('throws instead of silently accepting getState: {} (a present, non-callable value)', () => {
+      const withBadGetState = { ...fullAdapter, getState: {} };
+
+      expect(() => buildRateLimit(withBadGetState as never)).toThrow(
+        /getState.*must be a function/,
+      );
+    });
+
+    it('throws for a non-function getState even when it is the only problem (all four required methods valid)', () => {
+      const withBadGetState = { ...fullAdapter, getState: 'not-a-function' };
+
+      expect(() => buildRateLimit(withBadGetState as never)).toThrow(LLMError);
+    });
+
+    it('accepts a real adapter when getState is a genuine function', () => {
+      const withGoodGetState = { ...fullAdapter, getState: () => ({}) };
+
+      expect(buildRateLimit(withGoodGetState as never)).toBe(withGoodGetState);
+    });
+
+    it('accepts a real adapter when getState is omitted entirely', () => {
+      expect(buildRateLimit(fullAdapter as never)).toBe(fullAdapter);
     });
   });
 });

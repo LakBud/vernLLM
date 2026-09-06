@@ -21,21 +21,25 @@ interface RateLimiterAdapter {
 import type { RateLimiterAdapter, VernLLM } from 'vern-llm';
 
 class RedisRateLimiter implements RateLimiterAdapter {
+  private cachedRemaining = 0;
+
   estimate(request) {
     return Math.ceil(JSON.stringify(request.messages).length / 4);
   }
 
   async acquire(estimatedTokens, signal) {
     await redis.acquire('llm:gpt-4o', estimatedTokens); // your own coordination
+    this.cachedRemaining = await redis.remaining('llm:gpt-4o');
     return { release: () => redis.release('llm:gpt-4o', estimatedTokens), waitedMs: 0 };
   }
 
   signalRateLimit() {}
   reactToRateLimitHint() {}
 
-  async getState() {
-    const remaining = await redis.remaining('llm:gpt-4o');
-    return { requestsRemaining: remaining };
+  getState() {
+    // getState is synchronous, so it reports the value cached on the last
+    // acquire rather than making a fresh Redis round trip.
+    return { requestsRemaining: this.cachedRemaining };
   }
 }
 
