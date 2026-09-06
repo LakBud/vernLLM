@@ -151,7 +151,11 @@ export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithTo
     throw new LLMError('Empty LLM response', 'api', { code: 'empty_response' });
   }
 
-  const debugOutput = redactText(content ?? `[${wireToolCalls?.length ?? 0} tool call(s)]`);
+  // wireToolCalls is guaranteed to have at least one entry whenever content
+  // is falsy: the throw above only lets us reach this line when content ||
+  // wireToolCalls?.length is true (De Morgan's law on that guard), so if
+  // content is falsy, wireToolCalls?.length must be truthy.
+  const debugOutput = redactText(content ?? `[${wireToolCalls!.length} tool call(s)]`);
   const truncated = debugOutput.length > 800;
 
   logger.debug(
