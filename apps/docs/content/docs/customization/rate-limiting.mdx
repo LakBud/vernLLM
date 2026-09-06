@@ -13,6 +13,7 @@ interface RateLimiterAdapter {
   acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
   signalRateLimit(): void;
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
+  getState?(): RateLimitState;
 }
 ```
 
@@ -20,26 +21,38 @@ interface RateLimiterAdapter {
 import type { RateLimiterAdapter, VernLLM } from 'vern-llm';
 
 class RedisRateLimiter implements RateLimiterAdapter {
+  private cachedRemaining = 0;
+
   estimate(request) {
     return Math.ceil(JSON.stringify(request.messages).length / 4);
   }
 
   async acquire(estimatedTokens, signal) {
     await redis.acquire('llm:gpt-4o', estimatedTokens); // your own coordination
+    this.cachedRemaining = await redis.remaining('llm:gpt-4o');
     return { release: () => redis.release('llm:gpt-4o', estimatedTokens), waitedMs: 0 };
   }
 
   signalRateLimit() {}
   reactToRateLimitHint() {}
+
+  getState() {
+    // getState is synchronous, so it reports the value cached on the last
+    // acquire rather than making a fresh Redis round trip.
+    return { requestsRemaining: this.cachedRemaining };
+  }
 }
 
 const llm = new VernLLM({ client: openai, model: 'gpt-4o', rateLimit: new RedisRateLimiter() });
 ```
 
 <Callout>
-  All four methods are required. The built-in `RateLimiter` already no-ops
-  `signalRateLimit`/`reactToRateLimitHint` when `aimd` isn't configured, so a minimal custom limiter
-  follows the same pattern rather than every call site needing an optional chain.
+  `estimate`, `acquire`, `signalRateLimit`, and `reactToRateLimitHint` are required. The built-in
+  `RateLimiter` already no-ops `signalRateLimit`/`reactToRateLimitHint` when `aimd` isn't
+  configured, so a minimal custom limiter follows the same pattern rather than every call site
+  needing an optional chain. `getState` is optional: leave it out if your limiter has no state worth
+  reporting, and `llm.getRateLimitState()` simply returns `undefined`, same as it does for no
+  limiter at all.
 </Callout>
 
 <Callout>

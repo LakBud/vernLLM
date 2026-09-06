@@ -414,8 +414,62 @@ describe('VernLLM, rateLimit option', () => {
     });
   });
 
+  describe('getRateLimitState', () => {
+    it('returns undefined when the target has no limiter configured', async () => {
+      const { client } = createMockClient([jsonResponse({ ok: true })]);
+      const llm = new VernLLM({ client, model: 'gpt-4o' });
+
+      expect(llm.getRateLimitState()).toBeUndefined();
+    });
+
+    it('reflects live bucket levels for the primary target', async () => {
+      const { client } = createMockClient([jsonResponse({ ok: true })]);
+      const llm = new VernLLM({
+        client,
+        model: 'gpt-4o',
+        rateLimit: { requestsPerMinute: 5 },
+      });
+
+      expect(llm.getRateLimitState()).toEqual({
+        requestsRemaining: 5,
+        tokensRemaining: undefined,
+        concurrentInFlight: undefined,
+      });
+
+      await llm.call<{ ok: boolean }>({ userContent: 'hi' });
+
+      expect(llm.getRateLimitState()?.requestsRemaining).toBe(4);
+    });
+
+    it('reads a fallback target by index, independent of the primary', async () => {
+      const { client: primaryClient } = createMockClient([jsonResponse({ ok: true })]);
+      const { client: fallbackClient } = createMockClient([jsonResponse({ ok: true })]);
+
+      const llm = new VernLLM({
+        client: primaryClient,
+        model: 'gpt-4o',
+        rateLimit: { requestsPerMinute: 5 },
+        fallback: {
+          client: fallbackClient,
+          model: 'gpt-4o-mini',
+          rateLimit: { requestsPerMinute: 20 },
+        },
+      });
+
+      expect(llm.getRateLimitState({ index: 0 })?.requestsRemaining).toBe(5);
+      expect(llm.getRateLimitState({ index: 1 })?.requestsRemaining).toBe(20);
+    });
+
+    it('throws when target.index names no target', () => {
+      const { client } = createMockClient([jsonResponse({ ok: true })]);
+      const llm = new VernLLM({ client, model: 'gpt-4o' });
+
+      expect(() => llm.getRateLimitState({ index: 1 })).toThrow(RangeError);
+    });
+  });
+
   describe('custom RateLimiterAdapter', () => {
-    it('uses a hand built RateLimiterAdapter instance directly, not a package-constructed RateLimiter', async () => {
+    it('uses a hand built RateLimiterAdapter instance directly, not a package-constructed RateLimiter, even without getState', async () => {
       const { client } = createMockClient([jsonResponse({ ok: true })]);
 
       const acquire = vi.fn().mockResolvedValue({ release: () => {}, waitedMs: 0 });
@@ -432,6 +486,7 @@ describe('VernLLM, rateLimit option', () => {
 
       expect(result).toEqual({ ok: true });
       expect(acquire).toHaveBeenCalledTimes(1);
+      expect(llm.getRateLimitState()).toBeUndefined();
     });
 
     it('shares one custom RateLimiterAdapter instance across the primary and a fallback target', async () => {

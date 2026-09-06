@@ -162,6 +162,11 @@ export class CallExecutor {
     return this.budget?.getSnapshot();
   }
 
+  /** This target's current rate limit levels, if a limiter is configured and reports state. Undefined otherwise. */
+  getRateLimitState() {
+    return this.limiter?.getState?.();
+  }
+
   /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured. */
   get isolateByModel(): boolean {
     return this.breaker?.isolateByModel ?? false;

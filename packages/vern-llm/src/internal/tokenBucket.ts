@@ -78,6 +78,12 @@ export class TokenBucket {
     return this.capacity;
   }
 
+  /** Refills, then reports how much capacity is available right now. */
+  getAvailable(): number {
+    this.refill();
+    return this.available;
+  }
+
   /**
    * Changes capacity in place. A shrink clamps `available` down but
    * never raises it. `refillPerMs` rescales by the same ratio, so a

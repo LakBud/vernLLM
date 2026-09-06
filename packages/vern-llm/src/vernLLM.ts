@@ -71,6 +71,7 @@ import { createMiddlewareStateBag, type MiddlewareStateBag } from './types/middl
 
 import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
+import type { RateLimitState } from './rateLimit.js';
 
 /**
  * A LLM call framework for resilience, observability and control. This is VernLLM!
@@ -766,6 +767,19 @@ export class VernLLM {
   ): { attempts: number; retryRatio: number } | undefined {
     const executor = resolveExecutor(this.executors, target?.index ?? 0, 'getRetryBudgetState');
     return executor.getRetryBudgetState();
+  }
+
+  /**
+   * @param target.index Which target to read. Defaults to the primary.
+   * @returns This target's current rate limit levels, or `undefined` if
+   * that target has no limiter configured. A limiter is target-scoped,
+   * not model-scoped, so unlike `getFailureBreakdown` there's no
+   * `target.model` to pass.
+   * @throws {RangeError} If `target.index` names no target.
+   */
+  getRateLimitState(target?: Pick<CircuitTarget, 'index'>): RateLimitState | undefined {
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'getRateLimitState');
+    return executor.getRateLimitState();
   }
 
   /**
