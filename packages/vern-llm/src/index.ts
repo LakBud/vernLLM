@@ -18,6 +18,7 @@ export {
   type RateLimitOptions,
   type RateLimitReason,
   type RateLimitAcquireResult,
+  type RateLimitState,
   type WireRequest,
 } from './rateLimit.js';
 export { RetryBudget, type RetryBudgetOptions } from './internal/retryBudget.js';

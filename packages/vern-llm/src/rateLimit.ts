@@ -68,6 +68,15 @@ export interface AimdOptions {
   proactiveFloor?: number;
 }
 
+export interface RateLimitState {
+  /** Requests still available this window, or `undefined` if `requestsPerMinute` isn't configured. */
+  requestsRemaining?: number;
+  /** Tokens still available this window, or `undefined` if `tokensPerMinute` isn't configured. */
+  tokensRemaining?: number;
+  /** Concurrency slots currently in use, or `undefined` if `maxConcurrent` isn't configured. */
+  concurrentInFlight?: number;
+}
+
 export interface RateLimitAcquireResult {
   /**
    * Releases the concurrency slot this attempt held and reconciles the
@@ -215,6 +224,8 @@ export interface RateLimiterAdapter {
   acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
   signalRateLimit(): void;
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
+  /** Optional: current bucket levels, for introspection. Omit if the adapter has no state worth reporting. */
+  getState?(): RateLimitState;
 }
 
 /**
@@ -558,5 +569,20 @@ export class RateLimiter implements RateLimiterAdapter {
     if (floor > 0 && hint.remainingRequests <= floor) {
       this.signalRateLimit();
     }
+  }
+
+  /**
+   * Current bucket levels, read live rather than cached. `concurrency`
+   * tracks free slots internally, so `concurrentInFlight` is reported as
+   * `capacity - available`, the inverse of what the bucket itself holds.
+   */
+  getState(): RateLimitState {
+    return {
+      requestsRemaining: this.requests?.getAvailable(),
+      tokensRemaining: this.tokens?.getAvailable(),
+      concurrentInFlight: this.concurrency
+        ? this.concurrency.getCapacity() - this.concurrency.getAvailable()
+        : undefined,
+    };
   }
 }

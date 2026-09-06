@@ -354,6 +354,42 @@ const llm = new VernLLM({
 See [Event kinds](/docs/core/observability#event-kinds) for the rest of the `onEvent`
 union.
 
+## Reading rate limit state
+
+`onEvent`'s `rate_limited` only fires when a call actually had to wait. To check current headroom
+at any time, without waiting for one, use `getRateLimitState()`:
+
+```ts title="rate-limiting-get-state.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  rateLimit: { requestsPerMinute: 500, tokensPerMinute: 200_000, maxConcurrent: 20 },
+});
+
+llm.getRateLimitState();
+// { requestsRemaining: 480, tokensRemaining: 150_000, concurrentInFlight: 3 }
+```
+
+Each field mirrors one bucket, `undefined` if that bucket isn't configured:
+
+| Field                | Meaning                                                             |
+| -------------------- | ------------------------------------------------------------------- |
+| `requestsRemaining`  | Requests still available this window, live, refilling continuously. |
+| `tokensRemaining`    | Tokens still available this window, live, refilling continuously.   |
+| `concurrentInFlight` | Slots currently in use, not slots still free.                       |
+
+`getRateLimitState({ index })` reads a fallback target the same way
+[`getRetryBudgetState`](/docs/core/retry-budget#reading-budget-state) does, and returns `undefined`
+outright if that target has no `rateLimit` configured:
+
+```ts title="rate-limiting-get-state-fallback.ts"
+llm.getRateLimitState({ index: 1 }); // first fallback target's own buckets
+```
+
+A custom `RateLimiterAdapter` (see [Sharing a limiter across
+processes](#sharing-a-limiter-across-processes) below) can omit `getState`, in which case
+`getRateLimitState()` also returns `undefined`, exactly like no limiter being configured at all.
+
 ## Sharing a limiter across processes
 
 `rateLimit` normally builds a fresh, in-process limiter from the config object above. That
@@ -388,10 +424,15 @@ interface RateLimiterAdapter {
   acquire(estimatedTokens: number, signal?: AbortSignal): Promise<RateLimitAcquireResult>;
   signalRateLimit(): void;
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
+  getState?(): RateLimitState; // optional, powers getRateLimitState()
 }
 ```
 
-An object satisfying this shape is used exactly as given, never wrapped or reconstructed. The
+An object satisfying this shape is used exactly as given, never wrapped or reconstructed. Every
+method above except `getState` is required; a partial adapter missing any of the other four throws
+at construction rather than failing later with a confusing "not a function" error. `getState` is
+the one exception, an adapter with no state worth reporting can simply leave it out, see [Reading
+rate limit state](#reading-rate-limit-state) above. The
 same instance can be shared across the primary and a fallback target on purpose, when two targets
 genuinely draw on one provider account's real ceiling, see [Bulkhead isolation with
 fallback](#bulkhead-isolation-with-fallback) above for the opposite, more common case of keeping

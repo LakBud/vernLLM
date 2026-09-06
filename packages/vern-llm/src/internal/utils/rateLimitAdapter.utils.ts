@@ -11,7 +11,7 @@ const ADAPTER_METHOD_NAMES = [
   'reactToRateLimitHint',
 ] as const;
 
-/** All four `RateLimiterAdapter` methods present and callable. */
+/** All four `RateLimiterAdapter` methods present and callable. `getState` is optional and not part of this check. */
 function isRateLimiterAdapter(option: RateLimitOption): option is RateLimiterAdapter {
   const candidate = option as Partial<RateLimiterAdapter>;
   return ADAPTER_METHOD_NAMES.every((name) => typeof candidate[name] === 'function');
