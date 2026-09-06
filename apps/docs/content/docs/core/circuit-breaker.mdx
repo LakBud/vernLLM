@@ -152,6 +152,16 @@ const llm = new VernLLM({
 });
 ```
 
+<Callout type="warn">
+  Size `windowMs` against your real concurrent request volume, not a demo number. A short window
+  like `300ms` only makes sense at very high throughput, where `minCalls` calls genuinely land in
+  that span. At normal traffic the same window collects too few calls, so a brief burst of failures
+  can trip and immediately reopen the circuit repeatedly. If you see the circuit flapping between
+  `open` and `closed`, that usually means `windowMs` is too small for how many requests per second
+  you actually send, not that the failure ratio itself is wrong. Widen `windowMs` until `minCalls`
+  reliably fills within it under normal load.
+</Callout>
+
 For anything else, pass a `TrippingPolicy`: an object with `onSuccess(key)`, `onFailure(key)`
 (returning whether this failure should open the circuit), and `reset(key)`. No class is required, a
 plain object satisfying the interface works. `key` is the resolved model under `isolateByModel`, or
