@@ -148,4 +148,105 @@ describe('detectSoftFailure end to end', () => {
     await expect(second.finalResult).rejects.toMatchObject({ code: 'empty_response' });
     expect(llm.getCircuitStates()[0]?.state).toBe('open');
   });
+
+  it('passes the real extracted usage through to the hook on a non-streaming call', async () => {
+    let seenUsage: unknown;
+    const { client } = createMockClient([
+      {
+        choices: [{ message: { content: 'real answer' } }],
+        usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
+      },
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      detectSoftFailure: (result, meta) => {
+        seenUsage = meta.usage;
+        return undefined;
+      },
+    });
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(seenUsage).toMatchObject({ promptTokens: 12, completionTokens: 7, totalTokens: 19 });
+  });
+
+  it('keeps usage defined with zero values, distinct from omitted usage, on a non-streaming call', async () => {
+    let seenUsage: unknown = 'not set';
+    const { client } = createMockClient([
+      {
+        choices: [{ message: { content: 'real answer' } }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      },
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      detectSoftFailure: (result, meta) => {
+        seenUsage = meta.usage;
+        return undefined;
+      },
+    });
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(seenUsage).toBeDefined();
+    expect(seenUsage).toMatchObject({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  });
+
+  it('passes usage through as undefined when the provider omits it, on a non-streaming call', async () => {
+    let sawHook = false;
+    let seenUsage: unknown = 'not set';
+    const { client } = createMockClient([textResponse('real answer')]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      detectSoftFailure: (result, meta) => {
+        sawHook = true;
+        seenUsage = meta.usage;
+        return undefined;
+      },
+    });
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(sawHook).toBe(true);
+    expect(seenUsage).toBeUndefined();
+  });
+
+  it('passes the real extracted usage through to the hook on a streaming call', async () => {
+    let seenUsage: unknown;
+    const { client } = createMockStreamingClient([
+      [
+        { type: 'text-delta', delta: 'real text' },
+        { type: 'usage', usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 } },
+      ],
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      detectSoftFailure: (result, meta) => {
+        seenUsage = meta.usage;
+        return undefined;
+      },
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hello',
+      jsonMode: false,
+      stream: true,
+    });
+    await drain(chunks);
+    await finalResult;
+
+    expect(seenUsage).toMatchObject({ promptTokens: 8, completionTokens: 3, totalTokens: 11 });
+  });
 });
