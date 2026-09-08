@@ -307,3 +307,31 @@ describe('buildMiddlewarePipeline', () => {
     });
   });
 });
+
+describe('resolveMiddlewareOrder ref identity edge cases', () => {
+  it('throws when the same MiddlewareRef object is reused across two entries', () => {
+    const sharedRef = createMiddlewareRef('shared');
+    const a = mw({ name: 'a', ref: sharedRef });
+    const b = mw({ name: 'b', ref: sharedRef });
+    const c = mw({ name: 'c', runsAfter: [sharedRef] });
+
+    expect(() => resolveMiddlewareOrder([c, a, b])).toThrow(/reused/);
+  });
+
+  it('never resolves a runsAfter/runsBefore target against a different ref that merely shares a debugName', () => {
+    const realRef = createMiddlewareRef('auth');
+    const lookalikeRef = createMiddlewareRef('auth'); // same debugName, distinct object, never attached to anything
+    const logging = mw({ name: 'logging', runsAfter: [lookalikeRef] });
+    const auth = mw({ name: 'auth', ref: realRef });
+
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const result = resolveMiddlewareOrder([logging, auth], logger);
+
+    // lookalikeRef was never attached to any entry via `ref`, so it
+    // never resolves, even though a differently-identitied ref with the
+    // same debugName ("auth") does exist in the graph.
+    expect(result).toEqual([logging, auth]);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('auth'));
+  });
+});

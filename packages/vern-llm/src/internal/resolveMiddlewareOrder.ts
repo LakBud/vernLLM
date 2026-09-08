@@ -106,10 +106,22 @@ function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Nod
 
   // Only entries that opted into a `ref` are targetable by
   // `runsAfter`/`runsBefore` at all. Keyed by the ref object itself,
-  // not `name`, so ordering and display labels never interact.
-  const byRef = new Map(
-    nodes.filter((node) => node.entry.ref).map((node) => [node.entry.ref!, node]),
-  );
+  // not `name`, so ordering and display labels never interact. Built
+  // by hand (not `new Map(...)`) so a `ref` reused across two entries
+  // is caught and thrown on, rather than the `Map` constructor silently
+  // keeping only the last write and dropping the earlier entry's edges
+  // with no warning.
+  const byRef = new Map<MiddlewareRef, Node>();
+  for (const node of nodes) {
+    const ref = node.entry.ref;
+    if (!ref) continue;
+    if (byRef.has(ref)) {
+      throw new Error(
+        `middleware ordering has a ref reused across two entries ("${idFor(byRef.get(ref)!.entry, byRef.get(ref)!.index)}" and "${idFor(node.entry, node.index)}"); each middleware's ref must be unique to that middleware`,
+      );
+    }
+    byRef.set(ref, node);
+  }
 
   for (const node of nodes) {
     for (const target of node.entry.runsAfter ?? []) {

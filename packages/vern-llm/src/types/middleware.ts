@@ -14,16 +14,27 @@ export interface MiddlewareCapabilities {
 
 /**
  * Not exported. Builds the `{ debugName }` shape both `createStateKey`
- * and `createMiddlewareRef` return. `MiddlewareStateKey<T>` and
- * `MiddlewareRef` stay distinct public types on purpose (a state key
- * carries a phantom value type it unlocks; a ref doesn't unlock
- * anything, it *is* the thing referenced), so a state key can never be
- * passed where a middleware ref belongs, or vice versa, even though the
- * runtime shape is identical. Only the construction logic is shared.
+ * and `createMiddlewareRef` return before each stamps its own brand on
+ * it. Only the `debugName` construction is shared; branding happens at
+ * each call site since the two brands differ.
  */
 function createIdentityToken(debugName: string): { debugName: string } {
   return { debugName };
 }
+
+/**
+ * Not exported. Distinguishes `MiddlewareStateKey<T>` from
+ * `MiddlewareRef` and from a plain `{ debugName }` object literal at
+ * the type level, even though all three have the identical runtime
+ * shape. Without this, `MiddlewareStateKey<T>`/`MiddlewareRef` are
+ * structurally just `{ debugName: string }`, so TypeScript would treat
+ * a state key as a valid middleware ref (or vice versa), and would let
+ * anyone hand-write `{ debugName: 'auth' }` in place of a real
+ * `createMiddlewareRef` result. Neither is possible once this brand is
+ * required: only `createStateKey`, which alone has access to this
+ * symbol, can produce a value satisfying `MiddlewareStateKey<T>`.
+ */
+declare const stateKeyBrand: unique symbol;
 
 /**
  * A typed reference to one slot in `ctx.state`. Create one with
@@ -35,6 +46,7 @@ function createIdentityToken(debugName: string): { debugName: string } {
  */
 export interface MiddlewareStateKey<T> {
   readonly debugName: string;
+  readonly [stateKeyBrand]: true;
 
   /**
    * Never set at runtime; exists purely so `T` is actually used
@@ -48,8 +60,11 @@ export interface MiddlewareStateKey<T> {
 
 /** Creates a new, distinct `MiddlewareStateKey`. `debugName` is used only in log lines and the `'middleware'` event; it never affects equality. */
 export function createStateKey<T>(debugName: string): MiddlewareStateKey<T> {
-  return createIdentityToken(debugName);
+  return createIdentityToken(debugName) as MiddlewareStateKey<T>;
 }
+
+/** Not exported. See `stateKeyBrand`; same reasoning, distinct symbol, so the two token types can't be cross-assigned either. */
+declare const middlewareRefBrand: unique symbol;
 
 /**
  * A typed reference to one middleware's identity, for `runsAfter`/
@@ -65,11 +80,12 @@ export function createStateKey<T>(debugName: string): MiddlewareStateKey<T> {
  */
 export interface MiddlewareRef {
   readonly debugName: string;
+  readonly [middlewareRefBrand]: true;
 }
 
 /** Creates a new, distinct `MiddlewareRef`. `debugName` is used only in error messages when a reference doesn't resolve; it never affects equality, so two refs with the same `debugName` never collide. */
 export function createMiddlewareRef(debugName: string): MiddlewareRef {
-  return createIdentityToken(debugName);
+  return createIdentityToken(debugName) as MiddlewareRef;
 }
 
 /**
