@@ -109,33 +109,40 @@ variable, a compile error, not a silently created new property.
 
 `priority` alone breaks down once middleware from more than one source composes: two independent
 authors can pick the same number by coincidence, and there's no way to say "run after whatever
-redacts PII" since that's a dependency, not a number. Reach for `runsAfter`/`runsBefore` (for
-`transform`/`onEvent` order) and `position: 'outermost' | 'innermost' | number` (for `wrap` nesting
-only) instead of hand-rolling a topological sort in userland:
+redacts PII" since that's a dependency, not a number. Reach for `runsAfter`/`runsBefore` keyed by
+shared `MiddlewareRef`s (for `transform`/`onEvent` order) and `position: 'outermost' | 'innermost' | number`
+(for `wrap` nesting only) instead of hand-rolling a topological sort in userland:
 
 ```ts title="ordering-across-sources.ts"
-import { VernLLM } from 'vern-llm';
+import { createMiddlewareRef, VernLLM } from 'vern-llm';
 import { openai } from './openai-client'; // your configured OpenAI client
 import { redact } from './redact'; // your redaction helper: (messages) => messages
 import { tracingWrap } from './tracing-wrap'; // your tracing `wrap` middleware fn
 import { costWrap } from './cost-wrap'; // your cost-tracking `wrap` middleware fn
 
+const redactionRef = createMiddlewareRef('redaction');
+
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-4o',
   middleware: [
-    { name: 'redaction', transform: (request) => ({ messages: redact(request.messages) }) },
+    {
+      name: 'redaction',
+      ref: redactionRef,
+      transform: (request) => ({ messages: redact(request.messages) }),
+    },
     // No `position`, so `tracing`'s `wrap` nesting falls back to its `transform`/`onEvent`
     // order: after `redaction` via `runsAfter`, and before `cost-tracking` once that's
     // pinned `'outermost'` and moved ahead of it.
-    { name: 'tracing', runsAfter: ['redaction'], wrap: tracingWrap },
+    { name: 'tracing', runsAfter: [redactionRef], wrap: tracingWrap },
     { name: 'cost-tracking', position: 'outermost', wrap: costWrap }, // sees the net result of every retry
   ],
 });
 ```
 
-A referenced name that isn't registered is dropped with a warning, not an error; a cycle across
-`runsAfter`/`runsBefore` throws at construction time, naming every middleware in the cycle.
+A referenced `ref` that isn't registered is dropped with a warning, not an error; a cycle across
+`runsAfter`/`runsBefore` throws at construction time, naming every middleware in the cycle. `name`
+still sets the log label and `'middleware'` event display name; it never participates in ordering.
 
 <Callout>
   See [Composition order](/docs/core/middleware#composition-order) in Core for the full contract:

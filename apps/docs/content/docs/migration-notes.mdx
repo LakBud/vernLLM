@@ -7,6 +7,44 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 2.8.0: `runsAfter`/`runsBefore` switch to `MiddlewareRef`
+
+`runsAfter` and `runsBefore` used to match by `name` string. They now match by shared object
+identity via a `MiddlewareRef`, created with `createMiddlewareRef` and exported/imported from the
+module that owns the middleware. `name` remains the log label and `'middleware'` event display
+name only; it no longer affects ordering.
+
+```ts
+// Before
+const llm = new VernLLM({
+  middleware: [
+    { name: 'pii-redaction', transform: ... },
+    { name: 'audit-log', runsAfter: ['pii-redaction'], transform: ... },
+  ],
+});
+
+// After
+import { createMiddlewareRef } from 'vern-llm';
+
+const piiRedactionRef = createMiddlewareRef('pii-redaction');
+
+const llm = new VernLLM({
+  middleware: [
+    { name: 'pii-redaction', ref: piiRedactionRef, transform: ... },
+    { name: 'audit-log', runsAfter: [piiRedactionRef], transform: ... },
+  ],
+});
+```
+
+A stale or misspelled `name` was silently ignored or mis-targeted before; a stale or missing ref now
+simply resolves to nothing with a warning, which is much safer than silently using a string that may
+still look valid. A cycle across the ref graph still fails fast at construction time.
+
+<Callout type="warn">
+  This is a breaking change for `runsAfter`/`runsBefore` only. Existing string values there need to
+  become `MiddlewareRef`s, but `name`, `priority`, and `position` are unaffected.
+</Callout>
+
 ## 2.3.0: `LLMError` taxonomy rework
 
 `type` stays a small, closed set a caller can exhaustively `switch` over, while `code` carries the

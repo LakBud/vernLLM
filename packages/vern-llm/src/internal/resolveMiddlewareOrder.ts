@@ -1,5 +1,5 @@
 import type { Logger } from '../logger.js';
-import type { VernLLMMiddleware } from '../types/middleware.js';
+import type { MiddlewareRef, VernLLMMiddleware } from '../types/middleware.js';
 
 /**
  * Every resolved view of middleware order, built once at `VernLLM`
@@ -62,35 +62,40 @@ function assertNoDuplicateLabels(entries: readonly VernLLMMiddleware[]): void {
 }
 
 /**
- * Resolves one `runsAfter`/`runsBefore` reference into a `mustPrecede`
- * edge on the graph, or warns and drops it if `targetId` isn't a known
- * entry. Pulled out of `buildNodes` so edge resolution (this) is
- * testable independently of node/index construction.
+ * Resolves one `runsAfter`/`runsBefore` ref into a `mustPrecede` edge on
+ * the graph, or warns and drops it if it doesn't resolve to a known
+ * entry. Matched by `ref` identity (`byRef`), never by `name`: a typo,
+ * a stale copy, or a ref nobody attached simply doesn't resolve, and
+ * two entries that happen to share a `name` are never confused with
+ * each other, since the map key is the ref object itself. Pulled out
+ * of `buildNodes` so edge resolution (this) is testable independently
+ * of node/index construction.
  */
 function resolveReference(
   byId: Map<string, Node>,
-  knownIds: Set<string>,
+  byRef: Map<MiddlewareRef, Node>,
   fromId: string,
-  targetId: string,
+  target: MiddlewareRef,
   precedes: boolean,
   logger?: Logger,
 ): void {
-  if (!knownIds.has(targetId)) {
+  const targetNode = byRef.get(target);
+
+  if (!targetNode) {
     logger?.warn?.(
-      `middleware "${fromId}" references unknown name "${targetId}" in runsAfter/runsBefore, ignoring it`,
+      `middleware "${fromId}" references unknown ref "${target.debugName}" in runsAfter/runsBefore, ignoring it`,
     );
     return;
   }
-  // precedes true: targetId (runsAfter) must come before fromId.
-  // precedes false: targetId (runsBefore) must come after fromId.
-  const before = precedes ? targetId : fromId;
-  const after = precedes ? fromId : targetId;
+  // precedes true: target (runsAfter) must come before fromId.
+  // precedes false: target (runsBefore) must come after fromId.
+  const before = precedes ? targetNode.id : fromId;
+  const after = precedes ? fromId : targetNode.id;
   byId.get(before)!.mustPrecede.push(after);
 }
 
 function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Node[] {
   const ids = entries.map(idFor);
-  const knownIds = new Set(ids);
   const nodes = entries.map((entry, index): Node => ({
     id: ids[index]!,
     entry,
@@ -99,12 +104,19 @@ function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Nod
   }));
   const byId = new Map(nodes.map((node) => [node.id, node]));
 
+  // Only entries that opted into a `ref` are targetable by
+  // `runsAfter`/`runsBefore` at all. Keyed by the ref object itself,
+  // not `name`, so ordering and display labels never interact.
+  const byRef = new Map(
+    nodes.filter((node) => node.entry.ref).map((node) => [node.entry.ref!, node]),
+  );
+
   for (const node of nodes) {
     for (const target of node.entry.runsAfter ?? []) {
-      resolveReference(byId, knownIds, node.id, target, true, logger);
+      resolveReference(byId, byRef, node.id, target, true, logger);
     }
     for (const target of node.entry.runsBefore ?? []) {
-      resolveReference(byId, knownIds, node.id, target, false, logger);
+      resolveReference(byId, byRef, node.id, target, false, logger);
     }
   }
 

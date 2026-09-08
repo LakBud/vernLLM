@@ -282,14 +282,23 @@ from the nesting.
 
 `priority` alone can't express "run after whatever redacts PII" without both middleware agreeing
 on a number ahead of time, which breaks the moment a third party's middleware nobody coordinated
-with is added. `runsAfter`/`runsBefore` reference another entry's `name` directly instead:
+with is added. `runsAfter`/`runsBefore` instead target another entry's `ref`, created once with
+`createMiddlewareRef` and shared by import, not a string `name` that can silently drift:
 
 ```ts title="runs-after-example.ts"
-middleware: [
-  { name: 'pii-redaction', transform: (request) => ({ messages: redact(request.messages) }) },
+import { createMiddlewareRef, type VernLLMMiddleware } from 'vern-llm';
+
+export const piiRedactionRef = createMiddlewareRef('pii-redaction');
+
+const middleware: VernLLMMiddleware[] = [
+  {
+    name: 'pii-redaction',
+    ref: piiRedactionRef,
+    transform: (request) => ({ messages: redact(request.messages) }),
+  },
   {
     name: 'audit-log',
-    runsAfter: ['pii-redaction'], // always sees the redacted request, regardless of priority
+    runsAfter: [piiRedactionRef], // always sees the redacted request, regardless of priority
     transform: (request) => {
       auditLog.record(request);
       return {};
@@ -300,12 +309,14 @@ middleware: [
 
 `runsAfter`/`runsBefore` resolve `transform`/`onEvent` order (the same order `priority` sorts, see
 above), and that resolved order is also the baseline `wrap` nesting starts from. `position` only
-overrides that baseline for entries that set it: see `position` below for that. A name referenced by
-`runsAfter`/`runsBefore` that isn't registered is dropped with a warning, not an error, since a
-third-party middleware may reasonably reference a well-known name that isn't installed everywhere.
+overrides that baseline for entries that set it: see `position` below for that. A `ref` referenced
+by `runsAfter`/`runsBefore` that isn't registered is dropped with a warning, not an error, since a
+third-party middleware may reasonably reference a well-known entry that isn't installed everywhere.
 A cycle across `runsAfter`/`runsBefore` throws at `VernLLM` construction time rather than silently
 falling back to `priority`-only order for the affected middleware, since running with an order
 nobody asked for, with no signal anything is wrong, is worse than failing loud at startup.
+`name` is unchanged: it still sets the middleware's display label and the `'middleware'` event's
+name, and it plays no part in ordering.
 
 Among middleware with no `runsAfter`/`runsBefore` constraint between them, `priority` (then
 original array order) still breaks the tie, exactly as it does with no edges at all.

@@ -13,6 +13,19 @@ export interface MiddlewareCapabilities {
 }
 
 /**
+ * Not exported. Builds the `{ debugName }` shape both `createStateKey`
+ * and `createMiddlewareRef` return. `MiddlewareStateKey<T>` and
+ * `MiddlewareRef` stay distinct public types on purpose (a state key
+ * carries a phantom value type it unlocks; a ref doesn't unlock
+ * anything, it *is* the thing referenced), so a state key can never be
+ * passed where a middleware ref belongs, or vice versa, even though the
+ * runtime shape is identical. Only the construction logic is shared.
+ */
+function createIdentityToken(debugName: string): { debugName: string } {
+  return { debugName };
+}
+
+/**
  * A typed reference to one slot in `ctx.state`. Create one with
  * `createStateKey`, export it, and import the same reference wherever
  * another middleware needs to read or write the same value. There's no
@@ -35,7 +48,28 @@ export interface MiddlewareStateKey<T> {
 
 /** Creates a new, distinct `MiddlewareStateKey`. `debugName` is used only in log lines and the `'middleware'` event; it never affects equality. */
 export function createStateKey<T>(debugName: string): MiddlewareStateKey<T> {
-  return { debugName };
+  return createIdentityToken(debugName);
+}
+
+/**
+ * A typed reference to one middleware's identity, for `runsAfter`/
+ * `runsBefore` to target. Purely an ordering concern: unlike `name`,
+ * `ref` is never used as a display label anywhere (`name` still covers
+ * that), only as a `runsAfter`/`runsBefore` match target. Create one
+ * with `createMiddlewareRef`, export it from the package that owns the
+ * middleware, and have any dependent import the same reference instead
+ * of typing a matching `name` string. Same reasoning as
+ * `MiddlewareStateKey`: a typo becomes a missing import, a compile
+ * error, instead of a silently unresolved (or worse, silently
+ * colliding) string.
+ */
+export interface MiddlewareRef {
+  readonly debugName: string;
+}
+
+/** Creates a new, distinct `MiddlewareRef`. `debugName` is used only in error messages when a reference doesn't resolve; it never affects equality, so two refs with the same `debugName` never collide. */
+export function createMiddlewareRef(debugName: string): MiddlewareRef {
+  return createIdentityToken(debugName);
 }
 
 /**
@@ -231,24 +265,37 @@ export interface CallResult<T = unknown> {
 export interface VernLLMMiddleware {
   /** Used in log lines and the `'middleware'` event. Defaults to this entry's array position when omitted. */
   name?: string;
+
+  /**
+   * This entry's own identity, purely for another middleware's
+   * `runsAfter`/`runsBefore` to target. Create with `createMiddlewareRef`,
+   * export it, and have a dependent import the same reference. Optional:
+   * only needed if something else must be able to depend on this
+   * specific entry. Unrelated to `name`: `ref` is never shown in logs,
+   * `name` is never matched against for ordering.
+   */
+  ref?: MiddlewareRef;
+
   /** Sort key for composition order, ascending, ties broken by array order. See the middleware docs for what "lower runs first" means for `wrap`. */
   priority?: number;
 
   /**
-   * Names of other middleware this entry must run after, breaking ties
-   * `priority` alone can't express. A referenced name absent from the
+   * Other middleware this entry must run after, breaking ties
+   * `priority` alone can't express. Matched by `ref` identity, so a
+   * typo or a stale copy simply fails to resolve instead of silently
+   * matching the wrong entry. A referenced target absent from the
    * registered set is dropped, not an error, since a third party may
-   * reasonably reference a well known name that isn't installed
+   * reasonably reference a well known middleware that isn't installed
    * everywhere. A cycle across `runsAfter`/`runsBefore` throws at
    * `VernLLM` construction time.
    */
-  runsAfter?: string[];
+  runsAfter?: MiddlewareRef[];
 
   /**
-   * Names of other middleware this entry must run before. See
-   * `runsAfter`; an absent reference is dropped, not an error.
+   * Other middleware this entry must run before. See `runsAfter`; an
+   * absent reference is dropped, not an error.
    */
-  runsBefore?: string[];
+  runsBefore?: MiddlewareRef[];
 
   /**
    * Pins this entry's slot in `wrap` nesting only, independent of
