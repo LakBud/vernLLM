@@ -25,6 +25,8 @@ concerns, it's probably the wrong framework.
 
 Anything that comes from a call, meaning a timeout, a bad response, a circuit trip, a provider error, should come out the other end as an `LLMError` with a clear `type` and `code` if it is possible, never a bare exception or a raw provider error. This only applies to the call path though. An internal bug, like an out of range index inside `vernLLM.ts`, is a plain thrown error or assertion, not an `LLMError`, since it isn't something a caller should branch on.
 
+Middleware ordering is a concrete case of this split. Registering middleware, meaning a duplicate name, a duplicate ref, a cycle, a missing required dependency, throws a plain `Error` in `resolveMiddlewareOrder.ts`, since it is a config mistake caught once at construction, not something that can recur at runtime. A middleware's `transform`/`wrap` throwing during an actual call goes through `LLMError` instead, since the retry loop needs `type`/`code` to decide what to do with it.
+
 Reliability code such as `circuitBreaker.ts`, `rateLimit.ts`, and `retry.utils.ts` should handle the weird inputs on purpose (zero, negative, `Infinity`, concurrent calls) instead of assuming the happy path. Explain unusual decisions with a short comment describing why, not a restatement of the code. Provider quirks stay inside `src/adapters/*`; everything else works against the shared `LLMClient` shape and stays provider agnostic. Tests run entirely on fakes and mocks, never real network calls.
 
 Keep types precise. `any` is a final escape hatch, not a shortcut. Reach for it only when a provider SDK genuinely gives you no usable type (see the Gemini adapter's `thinkingLevel`), and when you do, leave a comment explaining why it's there instead of a narrower type.

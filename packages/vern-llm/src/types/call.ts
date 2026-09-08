@@ -8,7 +8,7 @@ import type {
   ToolResult,
   CallWithToolsResult,
 } from './tools.js';
-import type { UsageHooks } from './usage.js';
+import type { TokenUsage, UsageHooks } from './usage.js';
 
 /**
  * Any valid JSON value: a primitive, `null`, or a JSON array/object made
@@ -408,6 +408,13 @@ export interface SoftFailureMeta {
   isFallback: boolean;
   /** 1-based, matching `CallMeta.attempts`. */
   attempt: number;
+  /**
+   * Token usage for this attempt, if the provider reported it on this
+   * response. `undefined` when the provider omitted usage, not when
+   * usage was zero, so a cost check should treat a missing value as
+   * unknown rather than as free.
+   */
+  usage?: TokenUsage;
 }
 
 /**

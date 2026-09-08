@@ -243,7 +243,20 @@ describe('finalizeResponse, detectSoftFailure', () => {
       providerName: 'anthropic',
       isFallback: true,
       attempt: 3,
+      usage,
     });
+  });
+
+  it('passes usage through as undefined when no usage was extracted for this attempt', () => {
+    const detectSoftFailure = vi.fn(() => undefined);
+    const deps = baseDeps({ detectSoftFailure });
+
+    finalizeResponse('hello', undefined, baseParams(), false, undefined, 'req-1', 0, state, deps);
+
+    expect(detectSoftFailure).toHaveBeenCalledExactlyOnceWith(
+      'hello',
+      expect.objectContaining({ usage: undefined }),
+    );
   });
 
   it('treats a throwing hook as no soft failure, logging instead of failing the call', () => {
