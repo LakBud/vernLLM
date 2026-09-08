@@ -165,6 +165,8 @@ export {
   type MiddlewareCapabilities,
   type MiddlewareStateKey,
   createStateKey,
+  type MiddlewareRef,
+  createMiddlewareRef,
   type MiddlewareStateBag,
   createMiddlewareStateBag,
   type WireCallRequest,

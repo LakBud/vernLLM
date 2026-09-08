@@ -4,6 +4,7 @@ import {
   buildMiddlewarePipeline,
   resolveMiddlewareOrder,
 } from '../../../src/internal/resolveMiddlewareOrder.js';
+import { createMiddlewareRef } from '../../../src/types/middleware.js';
 
 import type { VernLLMMiddleware } from '../../../src/types/index.js';
 
@@ -32,16 +33,20 @@ describe('resolveMiddlewareOrder', () => {
   });
 
   it('resolves runsAfter into the same order the equivalent runsBefore graph produces', () => {
-    const a = mw({ name: 'a' });
-    const b = mw({ name: 'b', runsAfter: ['a'] });
-    const c = mw({ name: 'c', runsAfter: ['b'] });
+    const refA = createMiddlewareRef('a');
+    const refB = createMiddlewareRef('b');
+    const a = mw({ name: 'a', ref: refA });
+    const b = mw({ name: 'b', ref: refB, runsAfter: [refA] });
+    const c = mw({ name: 'c', runsAfter: [refB] });
 
     const viaRunsAfter = resolveMiddlewareOrder([c, a, b]);
     expect(viaRunsAfter.map((entry) => entry.name)).toEqual(['a', 'b', 'c']);
 
-    const a2 = mw({ name: 'a', runsBefore: ['b'] });
-    const b2 = mw({ name: 'b', runsBefore: ['c'] });
-    const c2 = mw({ name: 'c' });
+    const refB2 = createMiddlewareRef('b');
+    const refC2 = createMiddlewareRef('c');
+    const a2 = mw({ name: 'a', runsBefore: [refB2] });
+    const b2 = mw({ name: 'b', ref: refB2, runsBefore: [refC2] });
+    const c2 = mw({ name: 'c', ref: refC2 });
 
     const viaRunsBefore = resolveMiddlewareOrder([c2, a2, b2]);
     expect(viaRunsBefore.map((entry) => entry.name)).toEqual(['a', 'b', 'c']);
@@ -49,10 +54,12 @@ describe('resolveMiddlewareOrder', () => {
 
   it('resolves a diamond shaped dependency', () => {
     // top -> { left, right } -> bottom
-    const top = mw({ name: 'top' });
-    const left = mw({ name: 'left', runsAfter: ['top'], runsBefore: ['bottom'] });
-    const right = mw({ name: 'right', runsAfter: ['top'], runsBefore: ['bottom'] });
-    const bottom = mw({ name: 'bottom' });
+    const topRef = createMiddlewareRef('top');
+    const bottomRef = createMiddlewareRef('bottom');
+    const top = mw({ name: 'top', ref: topRef });
+    const left = mw({ name: 'left', runsAfter: [topRef], runsBefore: [bottomRef] });
+    const right = mw({ name: 'right', runsAfter: [topRef], runsBefore: [bottomRef] });
+    const bottom = mw({ name: 'bottom', ref: bottomRef });
 
     const result = resolveMiddlewareOrder([bottom, right, top, left]).map((entry) => entry.name);
 
@@ -62,8 +69,9 @@ describe('resolveMiddlewareOrder', () => {
   });
 
   it('breaks ties among unconstrained nodes by priority, then original index', () => {
-    const a = mw({ name: 'a', priority: 5 });
-    const b = mw({ name: 'b', priority: 1, runsAfter: ['a'] });
+    const refA = createMiddlewareRef('a');
+    const a = mw({ name: 'a', ref: refA, priority: 5 });
+    const b = mw({ name: 'b', priority: 1, runsAfter: [refA] });
     const c = mw({ name: 'c', priority: 2 });
     const d = mw({ name: 'd', priority: 2 });
 
@@ -75,13 +83,15 @@ describe('resolveMiddlewareOrder', () => {
   });
 
   it('throws on a single self-referencing entry instead of bypassing validation', () => {
-    const single = [mw({ name: 'solo', runsAfter: ['solo'] })];
+    const ref = createMiddlewareRef('solo');
+    const single = [mw({ name: 'solo', ref, runsAfter: [ref] })];
     expect(() => resolveMiddlewareOrder(single)).toThrow(/cycle/);
   });
 
-  it('warns on a single entry referencing an unknown name instead of bypassing validation', () => {
+  it('warns on a single entry referencing an unknown ref instead of bypassing validation', () => {
     const logger = { warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
-    const single = [mw({ name: 'solo', runsAfter: ['missing'] })];
+    const missing = createMiddlewareRef('missing');
+    const single = [mw({ name: 'solo', runsAfter: [missing] })];
     expect(resolveMiddlewareOrder(single, logger)).toEqual(single);
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
@@ -98,7 +108,8 @@ describe('resolveMiddlewareOrder', () => {
 
   it('warns once and drops an unknown runsAfter/runsBefore reference instead of erroring', () => {
     const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const a = mw({ name: 'a', runsAfter: ['does-not-exist'] });
+    const dangling = createMiddlewareRef('does-not-exist');
+    const a = mw({ name: 'a', runsAfter: [dangling] });
     const b = mw({ name: 'b' });
 
     const result = resolveMiddlewareOrder([a, b], logger);
@@ -109,8 +120,10 @@ describe('resolveMiddlewareOrder', () => {
   });
 
   it('throws a plain Error (not LLMError) on a cycle of two', () => {
-    const a = mw({ name: 'a', runsAfter: ['b'] });
-    const b = mw({ name: 'b', runsAfter: ['a'] });
+    const refA = createMiddlewareRef('a');
+    const refB = createMiddlewareRef('b');
+    const a = mw({ name: 'a', ref: refA, runsAfter: [refB] });
+    const b = mw({ name: 'b', ref: refB, runsAfter: [refA] });
 
     expect(() => resolveMiddlewareOrder([a, b])).toThrow(/cycle/);
     try {
@@ -123,24 +136,31 @@ describe('resolveMiddlewareOrder', () => {
   });
 
   it('throws on a cycle of three', () => {
-    const a = mw({ name: 'a', runsAfter: ['c'] });
-    const b = mw({ name: 'b', runsAfter: ['a'] });
-    const c = mw({ name: 'c', runsAfter: ['b'] });
+    const refA = createMiddlewareRef('a');
+    const refB = createMiddlewareRef('b');
+    const refC = createMiddlewareRef('c');
+    const a = mw({ name: 'a', ref: refA, runsAfter: [refC] });
+    const b = mw({ name: 'b', ref: refB, runsAfter: [refA] });
+    const c = mw({ name: 'c', ref: refC, runsAfter: [refB] });
 
     expect(() => resolveMiddlewareOrder([a, b, c])).toThrow(/cycle/);
   });
 
   it('does not throw on a self-referencing runsBefore-only graph with no actual cycle', () => {
-    const a = mw({ name: 'a' });
-    const b = mw({ name: 'b', runsBefore: ['a'] });
+    const refA = createMiddlewareRef('a');
+    const a = mw({ name: 'a', ref: refA });
+    const b = mw({ name: 'b', runsBefore: [refA] });
 
     expect(() => resolveMiddlewareOrder([a, b])).not.toThrow();
   });
 
   it('names every entry involved in a cycle of three, not just two', () => {
-    const a = mw({ name: 'a', runsAfter: ['c'] });
-    const b = mw({ name: 'b', runsAfter: ['a'] });
-    const c = mw({ name: 'c', runsAfter: ['b'] });
+    const refA = createMiddlewareRef('a');
+    const refB = createMiddlewareRef('b');
+    const refC = createMiddlewareRef('c');
+    const a = mw({ name: 'a', ref: refA, runsAfter: [refC] });
+    const b = mw({ name: 'b', ref: refB, runsAfter: [refA] });
+    const c = mw({ name: 'c', ref: refC, runsAfter: [refB] });
 
     try {
       resolveMiddlewareOrder([a, b, c]);
@@ -158,9 +178,11 @@ describe('resolveMiddlewareOrder', () => {
     // itself (nodes left over once the ready queue drains), so it must
     // not accidentally sweep in every node in the input, only the ones
     // that never became ready.
+    const refX = createMiddlewareRef('x');
+    const refY = createMiddlewareRef('y');
     const standalone = mw({ name: 'standalone' });
-    const x = mw({ name: 'x', runsAfter: ['y'] });
-    const y = mw({ name: 'y', runsAfter: ['x'] });
+    const x = mw({ name: 'x', ref: refX, runsAfter: [refY] });
+    const y = mw({ name: 'y', ref: refY, runsAfter: [refX] });
 
     try {
       resolveMiddlewareOrder([standalone, x, y]);
@@ -174,7 +196,8 @@ describe('resolveMiddlewareOrder', () => {
   });
 
   it('reports a single self-referencing entry as the sole cycle member', () => {
-    const single = [mw({ name: 'solo', runsAfter: ['solo'] })];
+    const ref = createMiddlewareRef('solo');
+    const single = [mw({ name: 'solo', ref, runsAfter: [ref] })];
 
     try {
       resolveMiddlewareOrder(single);
@@ -282,5 +305,56 @@ describe('buildMiddlewarePipeline', () => {
       expect(pipeline.transformOrder.map((entry) => entry.name)).toEqual(['a', 'b', 'c']);
       expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual(['b', 'c', 'a']);
     });
+  });
+});
+
+describe('resolveMiddlewareOrder ref identity edge cases', () => {
+  it('throws when the same MiddlewareRef object is reused across two entries', () => {
+    const sharedRef = createMiddlewareRef('shared');
+    const a = mw({ name: 'a', ref: sharedRef });
+    const b = mw({ name: 'b', ref: sharedRef });
+    const c = mw({ name: 'c', runsAfter: [sharedRef] });
+
+    expect(() => resolveMiddlewareOrder([c, a, b])).toThrow(/reused/);
+  });
+
+  it('throws on a reused ref even when nothing in the whole entry set uses runsAfter/runsBefore', () => {
+    // Regression: assertNoDuplicateRefs must run unconditionally, not
+    // just inside buildNodes. buildNodes only runs on the `hasEdges`
+    // path; with zero runsAfter/runsBefore anywhere, resolveMiddlewareOrder
+    // takes its fast, edge-free path instead, so a check placed only
+    // inside buildNodes would never fire here.
+    const sharedRef = createMiddlewareRef('shared');
+    const a = mw({ name: 'a', ref: sharedRef });
+    const b = mw({ name: 'b', ref: sharedRef });
+
+    expect(() => resolveMiddlewareOrder([a, b])).toThrow(/reused/);
+  });
+
+  it('throws on a reused ref even with exactly one entry and no edges', () => {
+    // The `entries.length <= 1 && !hasEdges` fast path returns before
+    // any edge-based logic runs at all; a single entry can't reuse a
+    // ref against itself in a meaningful way, but this pins that the
+    // duplicate-ref check still runs ahead of that early return, not
+    // conditionally skipped by it.
+    const single = [mw({ name: 'solo', ref: createMiddlewareRef('solo') })];
+    expect(() => resolveMiddlewareOrder(single)).not.toThrow();
+  });
+
+  it('never resolves a runsAfter/runsBefore target against a different ref that merely shares a debugName', () => {
+    const realRef = createMiddlewareRef('auth');
+    const lookalikeRef = createMiddlewareRef('auth'); // same debugName, distinct object, never attached to anything
+    const logging = mw({ name: 'logging', runsAfter: [lookalikeRef] });
+    const auth = mw({ name: 'auth', ref: realRef });
+
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const result = resolveMiddlewareOrder([logging, auth], logger);
+
+    // lookalikeRef was never attached to any entry via `ref`, so it
+    // never resolves, even though a differently-identitied ref with the
+    // same debugName ("auth") does exist in the graph.
+    expect(result).toEqual([logging, auth]);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('auth'));
   });
 });

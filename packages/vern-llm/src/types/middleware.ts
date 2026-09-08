@@ -13,6 +13,30 @@ export interface MiddlewareCapabilities {
 }
 
 /**
+ * Not exported. Builds the `{ debugName }` shape both `createStateKey`
+ * and `createMiddlewareRef` return before each stamps its own brand on
+ * it. Only the `debugName` construction is shared; branding happens at
+ * each call site since the two brands differ.
+ */
+function createIdentityToken(debugName: string): { debugName: string } {
+  return { debugName };
+}
+
+/**
+ * Not exported. Distinguishes `MiddlewareStateKey<T>` from
+ * `MiddlewareRef` and from a plain `{ debugName }` object literal at
+ * the type level, even though all three have the identical runtime
+ * shape. Without this, `MiddlewareStateKey<T>`/`MiddlewareRef` are
+ * structurally just `{ debugName: string }`, so TypeScript would treat
+ * a state key as a valid middleware ref (or vice versa), and would let
+ * anyone hand-write `{ debugName: 'auth' }` in place of a real
+ * `createMiddlewareRef` result. Neither is possible once this brand is
+ * required: only `createStateKey`, which alone has access to this
+ * symbol, can produce a value satisfying `MiddlewareStateKey<T>`.
+ */
+declare const stateKeyBrand: unique symbol;
+
+/**
  * A typed reference to one slot in `ctx.state`. Create one with
  * `createStateKey`, export it, and import the same reference wherever
  * another middleware needs to read or write the same value. There's no
@@ -22,6 +46,7 @@ export interface MiddlewareCapabilities {
  */
 export interface MiddlewareStateKey<T> {
   readonly debugName: string;
+  readonly [stateKeyBrand]: true;
 
   /**
    * Never set at runtime; exists purely so `T` is actually used
@@ -35,7 +60,32 @@ export interface MiddlewareStateKey<T> {
 
 /** Creates a new, distinct `MiddlewareStateKey`. `debugName` is used only in log lines and the `'middleware'` event; it never affects equality. */
 export function createStateKey<T>(debugName: string): MiddlewareStateKey<T> {
-  return { debugName };
+  return createIdentityToken(debugName) as MiddlewareStateKey<T>;
+}
+
+/** Not exported. See `stateKeyBrand`; same reasoning, distinct symbol, so the two token types can't be cross-assigned either. */
+declare const middlewareRefBrand: unique symbol;
+
+/**
+ * A typed reference to one middleware's identity, for `runsAfter`/
+ * `runsBefore` to target. Purely an ordering concern: unlike `name`,
+ * `ref` is never used as a display label anywhere (`name` still covers
+ * that), only as a `runsAfter`/`runsBefore` match target. Create one
+ * with `createMiddlewareRef`, export it from the package that owns the
+ * middleware, and have any dependent import the same reference instead
+ * of typing a matching `name` string. Same reasoning as
+ * `MiddlewareStateKey`: a typo becomes a missing import, a compile
+ * error, instead of a silently unresolved (or worse, silently
+ * colliding) string.
+ */
+export interface MiddlewareRef {
+  readonly debugName: string;
+  readonly [middlewareRefBrand]: true;
+}
+
+/** Creates a new, distinct `MiddlewareRef`. `debugName` is used only in error messages when a reference doesn't resolve; it never affects equality, so two refs with the same `debugName` never collide. */
+export function createMiddlewareRef(debugName: string): MiddlewareRef {
+  return createIdentityToken(debugName) as MiddlewareRef;
 }
 
 /**
@@ -231,24 +281,37 @@ export interface CallResult<T = unknown> {
 export interface VernLLMMiddleware {
   /** Used in log lines and the `'middleware'` event. Defaults to this entry's array position when omitted. */
   name?: string;
+
+  /**
+   * This entry's own identity, purely for another middleware's
+   * `runsAfter`/`runsBefore` to target. Create with `createMiddlewareRef`,
+   * export it, and have a dependent import the same reference. Optional:
+   * only needed if something else must be able to depend on this
+   * specific entry. Unrelated to `name`: `ref` is never shown in logs,
+   * `name` is never matched against for ordering.
+   */
+  ref?: MiddlewareRef;
+
   /** Sort key for composition order, ascending, ties broken by array order. See the middleware docs for what "lower runs first" means for `wrap`. */
   priority?: number;
 
   /**
-   * Names of other middleware this entry must run after, breaking ties
-   * `priority` alone can't express. A referenced name absent from the
+   * Other middleware this entry must run after, breaking ties
+   * `priority` alone can't express. Matched by `ref` identity, so a
+   * typo or a stale copy simply fails to resolve instead of silently
+   * matching the wrong entry. A referenced target absent from the
    * registered set is dropped, not an error, since a third party may
-   * reasonably reference a well known name that isn't installed
+   * reasonably reference a well known middleware that isn't installed
    * everywhere. A cycle across `runsAfter`/`runsBefore` throws at
    * `VernLLM` construction time.
    */
-  runsAfter?: string[];
+  runsAfter?: MiddlewareRef[];
 
   /**
-   * Names of other middleware this entry must run before. See
-   * `runsAfter`; an absent reference is dropped, not an error.
+   * Other middleware this entry must run before. See `runsAfter`; an
+   * absent reference is dropped, not an error.
    */
-  runsBefore?: string[];
+  runsBefore?: MiddlewareRef[];
 
   /**
    * Pins this entry's slot in `wrap` nesting only, independent of
