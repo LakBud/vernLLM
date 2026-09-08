@@ -140,9 +140,22 @@ const llm = new VernLLM({
 });
 ```
 
-A referenced `ref` that isn't registered is dropped with a warning, not an error; a cycle across
+A referenced `ref` that isn't registered is dropped with a warning, not an error; wrap a ref in
+`requireRef(...)` when that dependency must be present or startup should fail instead. A cycle across
 `runsAfter`/`runsBefore` throws at construction time, naming every middleware in the cycle. `name`
 still sets the log label and `'middleware'` event display name; it never participates in ordering.
+
+```ts title="required-ref.ts"
+import { createMiddlewareRef, requireRef } from 'vern-llm';
+
+const moderationRef = createMiddlewareRef('moderation');
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [{ name: 'audit-log', runsAfter: [requireRef(moderationRef)] }],
+});
+```
 
 <Callout>
   See [Composition order](/docs/core/middleware#composition-order) in Core for the full contract:

@@ -1,5 +1,9 @@
 import type { Logger } from '../logger.js';
-import type { MiddlewareRef, VernLLMMiddleware } from '../types/middleware.js';
+import type {
+  MiddlewareRef,
+  RequiredMiddlewareRef,
+  VernLLMMiddleware,
+} from '../types/middleware.js';
 
 /**
  * Every resolved view of middleware order, built once at `VernLLM`
@@ -89,29 +93,55 @@ function assertNoDuplicateRefs(entries: readonly VernLLMMiddleware[]): void {
 }
 
 /**
- * Resolves one `runsAfter`/`runsBefore` ref into a `mustPrecede` edge on
- * the graph, or warns and drops it if it doesn't resolve to a known
- * entry. Matched by `ref` identity (`byRef`), never by `name`: a typo,
- * a stale copy, or a ref nobody attached simply doesn't resolve, and
- * two entries that happen to share a `name` are never confused with
- * each other, since the map key is the ref object itself. Pulled out
- * of `buildNodes` so edge resolution (this) is testable independently
- * of node/index construction.
+ * Normalizes one `runsAfter`/`runsBefore` entry into its `ref` and
+ * whether it's required. A bare `MiddlewareRef` is always optional; a
+ * `RequiredMiddlewareRef` carries its own `required` flag (in practice
+ * always `true`, since `requireRef` is the only way to produce one, but
+ * read rather than assumed, in case a caller builds one by hand).
+ */
+function unwrapReference(target: MiddlewareRef | RequiredMiddlewareRef): {
+  ref: MiddlewareRef;
+  required: boolean;
+} {
+  return 'ref' in target
+    ? { ref: target.ref, required: target.required }
+    : { ref: target, required: false };
+}
+
+/**
+ * Resolves one `runsAfter`/`runsBefore` entry into a `mustPrecede` edge
+ * on the graph. Matched by `ref` identity (`byRef`), never by `name`: a
+ * typo, a stale copy, or a ref nobody attached simply doesn't resolve,
+ * and two entries that happen to share a `name` are never confused with
+ * each other, since the map key is the ref object itself. An
+ * unresolved bare `MiddlewareRef` warns and is dropped; an unresolved
+ * `RequiredMiddlewareRef` (built via `requireRef`) throws instead,
+ * since its author declared the dependency mandatory. Pulled out of
+ * `buildNodes` so edge resolution (this) is testable independently of
+ * node/index construction.
  */
 function resolveReference(
   byId: Map<string, Node>,
   byRef: Map<MiddlewareRef, Node>,
   fromId: string,
-  target: MiddlewareRef,
+  target: MiddlewareRef | RequiredMiddlewareRef,
   precedes: boolean,
   logger?: Logger,
 ): void {
-  const targetNode = byRef.get(target);
+  const { ref, required } = unwrapReference(target);
+  const targetNode = byRef.get(ref);
 
   if (!targetNode) {
+    if (required) {
+      throw new Error(
+        `middleware "${fromId}" requires ref "${ref.debugName}", which is not registered; this dependency is not optional`,
+      );
+    }
+
     logger?.warn?.(
-      `middleware "${fromId}" references unknown ref "${target.debugName}" in runsAfter/runsBefore, ignoring it`,
+      `[VernLLM] middleware "${fromId}" references unknown ref "${ref.debugName}" in runsAfter/runsBefore, ignoring it`,
     );
+
     return;
   }
   // precedes true: target (runsAfter) must come before fromId.

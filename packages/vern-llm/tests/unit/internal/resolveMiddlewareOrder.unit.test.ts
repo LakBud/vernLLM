@@ -4,7 +4,7 @@ import {
   buildMiddlewarePipeline,
   resolveMiddlewareOrder,
 } from '../../../src/internal/resolveMiddlewareOrder.js';
-import { createMiddlewareRef } from '../../../src/types/middleware.js';
+import { createMiddlewareRef, requireRef } from '../../../src/types/middleware.js';
 
 import type { VernLLMMiddleware } from '../../../src/types/index.js';
 
@@ -117,6 +117,16 @@ describe('resolveMiddlewareOrder', () => {
     expect(result.map((entry) => entry.name)).toEqual(['a', 'b']);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('does-not-exist'));
+  });
+
+  it('prefixes the unresolved-ref warning with [VernLLM], per the logging consistency convention', () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const dangling = createMiddlewareRef('missing');
+    const a = mw({ name: 'a', runsAfter: [dangling] });
+
+    resolveMiddlewareOrder([a], logger);
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/^\[VernLLM\]/));
   });
 
   it('throws a plain Error (not LLMError) on a cycle of two', () => {
@@ -356,5 +366,86 @@ describe('resolveMiddlewareOrder ref identity edge cases', () => {
     expect(result).toEqual([logging, auth]);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('auth'));
+  });
+});
+
+describe('resolveMiddlewareOrder requireRef severity', () => {
+  it('resolves a required ref exactly like a bare one when it does resolve', () => {
+    const authRef = createMiddlewareRef('auth');
+    const auth = mw({ name: 'auth', ref: authRef });
+    const logging = mw({ name: 'logging', runsAfter: [requireRef(authRef)] });
+
+    const result = resolveMiddlewareOrder([logging, auth]);
+    expect(result).toEqual([auth, logging]);
+  });
+
+  it('throws at resolution time when a required ref is missing, instead of warning', () => {
+    const missingRef = createMiddlewareRef('moderation');
+    const logging = mw({ name: 'logging', runsAfter: [requireRef(missingRef)] });
+
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    expect(() => resolveMiddlewareOrder([logging], logger)).toThrow(
+      /requires ref "moderation", which is not registered/,
+    );
+    // A throw is the whole point: no warning should also fire for the
+    // same missing dependency.
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('a bare MiddlewareRef earlier in the same list still warns before a later required one throws', () => {
+    // Verified, not assumed: resolveReference processes runsAfter/
+    // runsBefore in array order, so the optional entry (index 0) is
+    // resolved and warned on before the required entry (index 1) is
+    // even reached. The throw still aborts construction overall, but
+    // it doesn't retroactively suppress a warning that already fired
+    // for an earlier, unrelated optional entry in the same list.
+    const missingOptional = createMiddlewareRef('tracing');
+    const missingRequired = createMiddlewareRef('moderation');
+    const logging = mw({
+      name: 'logging',
+      runsAfter: [missingOptional, requireRef(missingRequired)],
+    });
+
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    expect(() => resolveMiddlewareOrder([logging], logger)).toThrow(/moderation/);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('tracing'));
+  });
+
+  it('a required entry that does resolve does not prevent a later optional entry in the same list from warning when missing', () => {
+    const authRef = createMiddlewareRef('auth');
+    const missingOptional = createMiddlewareRef('tracing');
+    const auth = mw({ name: 'auth', ref: authRef });
+    const logging = mw({
+      name: 'logging',
+      runsAfter: [requireRef(authRef), missingOptional],
+    });
+
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const result = resolveMiddlewareOrder([logging, auth], logger);
+
+    expect(result).toEqual([auth, logging]);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('tracing'));
+  });
+
+  it('works the same way for runsBefore as it does for runsAfter', () => {
+    const missingRef = createMiddlewareRef('downstream');
+    const upstream = mw({ name: 'upstream', runsBefore: [requireRef(missingRef)] });
+
+    expect(() => resolveMiddlewareOrder([upstream])).toThrow(
+      /requires ref "downstream", which is not registered/,
+    );
+  });
+
+  it('a required dependency participates in cycle detection like any other edge', () => {
+    const refA = createMiddlewareRef('a');
+    const refB = createMiddlewareRef('b');
+    const a = mw({ name: 'a', ref: refA, runsAfter: [requireRef(refB)] });
+    const b = mw({ name: 'b', ref: refB, runsAfter: [requireRef(refA)] });
+
+    expect(() => resolveMiddlewareOrder([a, b])).toThrow(/cycle/);
   });
 });
