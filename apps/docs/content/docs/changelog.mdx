@@ -8,6 +8,41 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 2.8.0
+
+### Minor Changes
+
+- 2565924: Add `requireRef` and `RequiredMiddlewareRef` for mandatory `runsAfter`/`runsBefore` dependencies.
+
+  A bare `MiddlewareRef` in `runsAfter`/`runsBefore` stays optional: if it doesn't resolve, `VernLLM` warns and continues. Wrap a ref with `requireRef` to make it mandatory instead: if it doesn't resolve, construction throws immediately, naming the missing dependency.
+
+  ```ts
+  import { createMiddlewareRef, requireRef, type VernLLMMiddleware } from 'vern-llm';
+
+  const moderationRef = createMiddlewareRef('moderation');
+
+  const logging: VernLLMMiddleware = {
+    name: 'logging',
+    runsAfter: [requireRef(moderationRef)], // must run after moderation, no exceptions
+  };
+  ```
+
+  Purely additive. `runsAfter`/`runsBefore` still accept bare `MiddlewareRef`s unchanged; nothing existing needs to change.
+
+- f17e8e0: Add `MiddlewareRef` and `createMiddlewareRef` for `runsAfter`/`runsBefore`.
+
+  `runsAfter`/`runsBefore` now take a `MiddlewareRef` instead of a `name` string. Create one with `createMiddlewareRef`, attach it to a middleware via `ref`, and have a dependent import the same reference to target it. A typo or a stale copy simply fails to resolve, since matching is by object identity, not string equality.
+
+  `name` is unchanged. It still sets a middleware's log label and the `'middleware'` event's display name; it plays no role in ordering.
+
+  This is a breaking change for `runsAfter`/`runsBefore` only. Existing string values there need to become `MiddlewareRef`s. `name`, `priority`, and `position` are unaffected.
+
+- 1e4f6e8: Add `usage` to `SoftFailureMeta`, the context object passed to `detectSoftFailure`. Carries the same `TokenUsage` `onUsage` would report for the attempt, `undefined` when the provider omitted it on that response, not when usage was zero.
+
+  `detectSoftFailure` is the only hook that runs before the circuit breaker records a result and whose return value can turn a technically successful response into a real failure. `onUsage` and `onUsageFailure` can already see usage, but `onUsage` fires after the breaker already recorded success and cannot change the outcome, and `onUsageFailure` only fires when a call already failed for another reason, never for a clean but expensive one. This lets a caller trip on real spend, for example reclassifying a response over a token cap as `soft_failure_detected`, using the same mechanism already used for empty or low confidence responses.
+
+  Purely additive. `usage` is optional and every existing `detectSoftFailure` implementation keeps working unchanged.
+
 ## 2.7.0
 
 ### Minor Changes
