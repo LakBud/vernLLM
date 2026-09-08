@@ -44,9 +44,9 @@ export default function HomePage() {
             </h1>
 
             <p className="mt-6 max-w-xl text-base text-fd-muted-foreground lg:text-lg">
-              The LLM call framework. Resilience, observability, and control for every call.
-              Retries, timeouts, provider fallback, rate limiting, circuit breaking and more,
-              dependency-light and typed from the start.
+              The LLM call framework. Resilience, observability, and control for every call. Retry
+              budgets, provider fallback, rate limiting, circuit breaking and more, dependency-light
+              and typed from the start.
             </p>
           </div>
 
