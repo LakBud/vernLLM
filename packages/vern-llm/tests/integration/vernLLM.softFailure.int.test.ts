@@ -173,6 +173,31 @@ describe('detectSoftFailure end to end', () => {
     expect(seenUsage).toMatchObject({ promptTokens: 12, completionTokens: 7, totalTokens: 19 });
   });
 
+  it('keeps usage defined with zero values, distinct from omitted usage, on a non-streaming call', async () => {
+    let seenUsage: unknown = 'not set';
+    const { client } = createMockClient([
+      {
+        choices: [{ message: { content: 'real answer' } }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      },
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      detectSoftFailure: (result, meta) => {
+        seenUsage = meta.usage;
+        return undefined;
+      },
+    });
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(seenUsage).toBeDefined();
+    expect(seenUsage).toMatchObject({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  });
+
   it('passes usage through as undefined when the provider omits it, on a non-streaming call', async () => {
     let sawHook = false;
     let seenUsage: unknown = 'not set';
@@ -182,7 +207,7 @@ describe('detectSoftFailure end to end', () => {
       client,
       model: 'test-model',
       maxRetries: 0,
-      detectSoftFailure: (_result, meta) => {
+      detectSoftFailure: (result, meta) => {
         sawHook = true;
         seenUsage = meta.usage;
         return undefined;
@@ -208,7 +233,7 @@ describe('detectSoftFailure end to end', () => {
       client,
       model: 'test-model',
       maxRetries: 0,
-      detectSoftFailure: (_result, meta) => {
+      detectSoftFailure: (result, meta) => {
         seenUsage = meta.usage;
         return undefined;
       },
