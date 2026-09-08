@@ -318,6 +318,29 @@ describe('resolveMiddlewareOrder ref identity edge cases', () => {
     expect(() => resolveMiddlewareOrder([c, a, b])).toThrow(/reused/);
   });
 
+  it('throws on a reused ref even when nothing in the whole entry set uses runsAfter/runsBefore', () => {
+    // Regression: assertNoDuplicateRefs must run unconditionally, not
+    // just inside buildNodes. buildNodes only runs on the `hasEdges`
+    // path; with zero runsAfter/runsBefore anywhere, resolveMiddlewareOrder
+    // takes its fast, edge-free path instead, so a check placed only
+    // inside buildNodes would never fire here.
+    const sharedRef = createMiddlewareRef('shared');
+    const a = mw({ name: 'a', ref: sharedRef });
+    const b = mw({ name: 'b', ref: sharedRef });
+
+    expect(() => resolveMiddlewareOrder([a, b])).toThrow(/reused/);
+  });
+
+  it('throws on a reused ref even with exactly one entry and no edges', () => {
+    // The `entries.length <= 1 && !hasEdges` fast path returns before
+    // any edge-based logic runs at all; a single entry can't reuse a
+    // ref against itself in a meaningful way, but this pins that the
+    // duplicate-ref check still runs ahead of that early return, not
+    // conditionally skipped by it.
+    const single = [mw({ name: 'solo', ref: createMiddlewareRef('solo') })];
+    expect(() => resolveMiddlewareOrder(single)).not.toThrow();
+  });
+
   it('never resolves a runsAfter/runsBefore target against a different ref that merely shares a debugName', () => {
     const realRef = createMiddlewareRef('auth');
     const lookalikeRef = createMiddlewareRef('auth'); // same debugName, distinct object, never attached to anything

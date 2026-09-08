@@ -62,6 +62,33 @@ function assertNoDuplicateLabels(entries: readonly VernLLMMiddleware[]): void {
 }
 
 /**
+ * Throws if two entries share the same `ref` object. Runs unconditionally,
+ * not just when `buildNodes` runs: a duplicate `ref` is a real misuse
+ * regardless of whether anything currently targets it via `runsAfter`/
+ * `runsBefore` (the fast `!hasEdges` path in `resolveMiddlewareOrder`
+ * would otherwise skip `buildNodes`, and with it this check, letting a
+ * duplicate `ref` sit silently until some future edit adds an edge that
+ * targets it and gets the wrong node). Every entry with a `ref` set is
+ * checked here, so this is the single source of truth for ref
+ * uniqueness; `buildNodes`'s own `byRef` construction never needs to
+ * re-check it.
+ */
+function assertNoDuplicateRefs(entries: readonly VernLLMMiddleware[]): void {
+  const seen = new Map<MiddlewareRef, number>();
+  entries.forEach((entry, index) => {
+    const ref = entry.ref;
+    if (!ref) return;
+    const firstIndex = seen.get(ref);
+    if (firstIndex !== undefined) {
+      throw new Error(
+        `middleware ordering has a ref reused across two entries ("${idFor(entries[firstIndex]!, firstIndex)}" and "${idFor(entry, index)}"); each middleware's ref must be unique to that middleware`,
+      );
+    }
+    seen.set(ref, index);
+  });
+}
+
+/**
  * Resolves one `runsAfter`/`runsBefore` ref into a `mustPrecede` edge on
  * the graph, or warns and drops it if it doesn't resolve to a known
  * entry. Matched by `ref` identity (`byRef`), never by `name`: a typo,
@@ -106,22 +133,14 @@ function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Nod
 
   // Only entries that opted into a `ref` are targetable by
   // `runsAfter`/`runsBefore` at all. Keyed by the ref object itself,
-  // not `name`, so ordering and display labels never interact. Built
-  // by hand (not `new Map(...)`) so a `ref` reused across two entries
-  // is caught and thrown on, rather than the `Map` constructor silently
-  // keeping only the last write and dropping the earlier entry's edges
-  // with no warning.
-  const byRef = new Map<MiddlewareRef, Node>();
-  for (const node of nodes) {
-    const ref = node.entry.ref;
-    if (!ref) continue;
-    if (byRef.has(ref)) {
-      throw new Error(
-        `middleware ordering has a ref reused across two entries ("${idFor(byRef.get(ref)!.entry, byRef.get(ref)!.index)}" and "${idFor(node.entry, node.index)}"); each middleware's ref must be unique to that middleware`,
-      );
-    }
-    byRef.set(ref, node);
-  }
+  // not `name`, so ordering and display labels never interact.
+  // `resolveMiddlewareOrder` already ran `assertNoDuplicateRefs` over
+  // every entry, unconditionally, before this function is ever called,
+  // so a plain `Map` construction is safe here: two different nodes
+  // can never share a `ref` by the time this runs.
+  const byRef = new Map(
+    nodes.filter((node) => node.entry.ref).map((node) => [node.entry.ref!, node]),
+  );
 
   for (const node of nodes) {
     for (const target of node.entry.runsAfter ?? []) {
@@ -203,6 +222,7 @@ export function resolveMiddlewareOrder(
   logger?: Logger,
 ): VernLLMMiddleware[] {
   assertNoDuplicateLabels(entries);
+  assertNoDuplicateRefs(entries);
 
   const hasEdges = entries.some((entry) => entry.runsAfter?.length || entry.runsBefore?.length);
 

@@ -152,7 +152,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
           middlewareTimeoutMs,
           logger,
           reportEvent,
-          buildEventContext: (requestId, model, attempt, signal, state) =>
+          buildEventContext: (_requestId, _model, attempt, signal, state) =>
             gateway.buildAttemptContext(attempt, signal, state),
           extractStatus,
           normalizeError,
