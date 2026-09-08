@@ -167,6 +167,8 @@ export {
   createStateKey,
   type MiddlewareRef,
   createMiddlewareRef,
+  type RequiredMiddlewareRef,
+  requireRef,
   type MiddlewareStateBag,
   createMiddlewareStateBag,
   type WireCallRequest,

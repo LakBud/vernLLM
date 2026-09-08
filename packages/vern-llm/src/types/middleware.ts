@@ -89,6 +89,26 @@ export function createMiddlewareRef(debugName: string): MiddlewareRef {
 }
 
 /**
+ * A `runsAfter`/`runsBefore` entry that escalates an unresolved
+ * reference from a warning to a construction-time throw. Wrap a
+ * `MiddlewareRef` with `requireRef` when the dependency isn't optional:
+ * a bare `MiddlewareRef` in `runsAfter`/`runsBefore` means "order
+ * relative to this if it's registered," which is the right default for
+ * a dependency a third party may reasonably not have installed. A
+ * `RequiredMiddlewareRef` means "this middleware must not run without
+ * that dependency having already run". The app should fail to start
+ * rather than run with a silently-missing ordering guarantee.
+ */
+export interface RequiredMiddlewareRef {
+  readonly ref: MiddlewareRef;
+}
+
+/** Wraps `ref` so `runsAfter`/`runsBefore` throws at `VernLLM` construction time if it doesn't resolve, instead of warning and continuing. */
+export function requireRef(ref: MiddlewareRef): RequiredMiddlewareRef {
+  return { ref };
+}
+
+/**
  * Typed, per-logical-call storage two middleware can deliberately share a
  * value through (a span ID one sets, another reads). Backed by a plain
  * `Map` internally, created once per logical call and never read or
@@ -299,19 +319,22 @@ export interface VernLLMMiddleware {
    * Other middleware this entry must run after, breaking ties
    * `priority` alone can't express. Matched by `ref` identity, so a
    * typo or a stale copy simply fails to resolve instead of silently
-   * matching the wrong entry. A referenced target absent from the
-   * registered set is dropped, not an error, since a third party may
+   * matching the wrong entry. A bare `MiddlewareRef` that doesn't
+   * resolve is dropped, not an error, since a third party may
    * reasonably reference a well known middleware that isn't installed
-   * everywhere. A cycle across `runsAfter`/`runsBefore` throws at
-   * `VernLLM` construction time.
+   * everywhere; wrap it with `requireRef` to make that same target
+   * mandatory instead, throwing at `VernLLM` construction time if it's
+   * missing. A cycle across `runsAfter`/`runsBefore` always throws,
+   * regardless of whether any individual entry is required.
    */
-  runsAfter?: MiddlewareRef[];
+  runsAfter?: (MiddlewareRef | RequiredMiddlewareRef)[];
 
   /**
-   * Other middleware this entry must run before. See `runsAfter`; an
-   * absent reference is dropped, not an error.
+   * Other middleware this entry must run before. See `runsAfter`; a
+   * bare reference is dropped if unresolved, a `requireRef`-wrapped one
+   * throws.
    */
-  runsBefore?: MiddlewareRef[];
+  runsBefore?: (MiddlewareRef | RequiredMiddlewareRef)[];
 
   /**
    * Pins this entry's slot in `wrap` nesting only, independent of

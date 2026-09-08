@@ -312,11 +312,27 @@ above), and that resolved order is also the baseline `wrap` nesting starts from.
 overrides that baseline for entries that set it: see `position` below for that. A `ref` referenced
 by `runsAfter`/`runsBefore` that isn't registered is dropped with a warning, not an error, since a
 third-party middleware may reasonably reference a well-known entry that isn't installed everywhere.
-A cycle across `runsAfter`/`runsBefore` throws at `VernLLM` construction time rather than silently
-falling back to `priority`-only order for the affected middleware, since running with an order
-nobody asked for, with no signal anything is wrong, is worse than failing loud at startup.
-`name` is unchanged: it still sets the middleware's display label and the `'middleware'` event's
-name, and it plays no part in ordering.
+Wrap a `ref` in `requireRef(...)` when the dependency is mandatory: those refs still use the same
+`ref` identity match, but an unresolved required ref throws at `VernLLM` construction time instead
+of warning and continuing. A cycle across `runsAfter`/`runsBefore` throws at `VernLLM`
+construction time rather than silently falling back to `priority`-only order for the affected
+middleware, since running with an order nobody asked for, with no signal anything is wrong, is
+worse than failing loud at startup. `name` is unchanged: it still sets the middleware's display
+label and the `'middleware'` event's name, and it plays no part in ordering.
+
+```ts title="required-ref-example.ts"
+import { createMiddlewareRef, requireRef } from 'vern-llm';
+
+const moderationRef = createMiddlewareRef('moderation');
+
+const middleware = [
+  {
+    name: 'logging',
+    runsAfter: [requireRef(moderationRef)], // must run after moderation or startup fails
+    transform: (request) => request,
+  },
+];
+```
 
 Among middleware with no `runsAfter`/`runsBefore` constraint between them, `priority` (then
 original array order) still breaks the tie, exactly as it does with no edges at all.
