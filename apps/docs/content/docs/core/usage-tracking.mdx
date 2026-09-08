@@ -97,6 +97,14 @@ const llm = new VernLLM({
 - **With caching**, a cache hit in `cachedCall` does not run the underlying LLM call, so `onUsage`
   does not fire for cached results. It only fires when a provider response is actually received.
 
+<Callout>
+  Neither `onUsage` nor `onUsageFailure` can turn a successful response into a failure: `onUsage`
+  fires after the circuit breaker already recorded success, and `onUsageFailure` only fires when a
+  call already failed for another reason. To reclassify a response as a failure based on real spend,
+  such as tripping on a token cap, use `meta.usage` inside `detectSoftFailure` instead. See [Soft
+  Failure Detection](/docs/core/error-handling#soft-failure-detection).
+</Callout>
+
 ## Reporting usage on failure
 
 ```ts title="usage-failure-setup.ts"

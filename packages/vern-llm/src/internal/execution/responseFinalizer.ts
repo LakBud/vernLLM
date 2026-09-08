@@ -78,6 +78,7 @@ export function finalizeResponse<T>(
         providerName: deps.providerName,
         isFallback: deps.isFallback,
         attempt: attempt + 1,
+        usage,
       },
       logger,
     );

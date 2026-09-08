@@ -190,7 +190,7 @@ const llm = new VernLLM({
   client: fromOpenAI(openai),
   model: 'gpt-4o',
   detectSoftFailure: (result, meta) => {
-    // meta: { requestId, model, providerName, isFallback, attempt }
+    // meta: { requestId, model, providerName, isFallback, attempt, usage }
     if (typeof result === 'string' && result.trim() === 'N/A') {
       return 'soft_failure_detected';
     }
@@ -202,6 +202,25 @@ const llm = new VernLLM({
 Returning `undefined` leaves the result as a success. Returning an `LLMErrorCode` throws
 `LLMError('api', code)`, using `soft_failure_detected` as a reasonable default when no more
 specific code applies.
+
+`meta.usage` carries the same `TokenUsage` `onUsage` would report for this attempt, letting a hook
+reclassify a response as a failure based on real spend rather than content alone:
+
+```ts title="soft-failure-cost-cap.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  detectSoftFailure: (result, meta) => {
+    if (meta.usage && meta.usage.totalTokens > 40_000) {
+      return 'soft_failure_detected';
+    }
+    return undefined;
+  },
+});
+```
+
+`meta.usage` is `undefined` when the provider omitted usage on that response, not when usage was
+zero, so a cost check should treat a missing value as unknown rather than as free.
 
 <Callout type="info">
   The thrown type is `api`, not `validation`. `validation` errors are never retried and never count
