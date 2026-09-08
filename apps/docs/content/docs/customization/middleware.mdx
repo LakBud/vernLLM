@@ -146,7 +146,8 @@ A referenced `ref` that isn't registered is dropped with a warning, not an error
 still sets the log label and `'middleware'` event display name; it never participates in ordering.
 
 ```ts title="required-ref.ts"
-import { createMiddlewareRef, requireRef } from 'vern-llm';
+import { VernLLM, createMiddlewareRef, requireRef } from 'vern-llm';
+import { openai } from './openai-client';
 
 const moderationRef = createMiddlewareRef('moderation');
 

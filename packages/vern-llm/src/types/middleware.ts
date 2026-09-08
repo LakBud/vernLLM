@@ -101,12 +101,11 @@ export function createMiddlewareRef(debugName: string): MiddlewareRef {
  */
 export interface RequiredMiddlewareRef {
   readonly ref: MiddlewareRef;
-  readonly required: boolean;
 }
 
 /** Wraps `ref` so `runsAfter`/`runsBefore` throws at `VernLLM` construction time if it doesn't resolve, instead of warning and continuing. */
 export function requireRef(ref: MiddlewareRef): RequiredMiddlewareRef {
-  return { ref, required: true };
+  return { ref };
 }
 
 /**

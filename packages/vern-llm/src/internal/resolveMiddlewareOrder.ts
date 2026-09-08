@@ -94,18 +94,16 @@ function assertNoDuplicateRefs(entries: readonly VernLLMMiddleware[]): void {
 
 /**
  * Normalizes one `runsAfter`/`runsBefore` entry into its `ref` and
- * whether it's required. A bare `MiddlewareRef` is always optional; a
- * `RequiredMiddlewareRef` carries its own `required` flag (in practice
- * always `true`, since `requireRef` is the only way to produce one, but
- * read rather than assumed, in case a caller builds one by hand).
+ * whether it's required. Told apart by shape alone: a bare
+ * `MiddlewareRef` is always optional; a `RequiredMiddlewareRef` (only
+ * producible via `requireRef`) is always required, so presence of the
+ * `ref` property is itself the required/optional signal.
  */
 function unwrapReference(target: MiddlewareRef | RequiredMiddlewareRef): {
   ref: MiddlewareRef;
   required: boolean;
 } {
-  return 'ref' in target
-    ? { ref: target.ref, required: target.required }
-    : { ref: target, required: false };
+  return 'ref' in target ? { ref: target.ref, required: true } : { ref: target, required: false };
 }
 
 /**

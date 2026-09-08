@@ -448,4 +448,16 @@ describe('resolveMiddlewareOrder requireRef severity', () => {
 
     expect(() => resolveMiddlewareOrder([a, b])).toThrow(/cycle/);
   });
+
+  it('treats a manually constructed wrapper as required based on shape alone', () => {
+    const missingRef = createMiddlewareRef('audit');
+    // `RequiredMiddlewareRef` has no `required` flag to set or omit; a
+    // hand-built object with a `ref` property is required by shape
+    // alone, same as one built via `requireRef`.
+    const logging = mw({ name: 'logging', runsAfter: [{ ref: missingRef }] });
+
+    expect(() => resolveMiddlewareOrder([logging])).toThrow(
+      /requires ref "audit", which is not registered/,
+    );
+  });
 });
