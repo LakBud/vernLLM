@@ -16,12 +16,27 @@ Instead, report it privately using [GitHub's private vulnerability reporting](ht
 
 Please include:
 
-- A description of the vulnerability and its potential impact
-- Steps to reproduce, or a minimal repro if possible
-- The affected version(s)
+1. A description of the vulnerability and its potential impact
+2. Steps to reproduce, or a minimal repro if possible
+3. The affected version(s)
 
 You should expect an initial response within a few days. Once a fix is confirmed, we'll coordinate on disclosure timing and credit (if you'd like it) before a public advisory is published.
 
 ## Scope
 
 This policy covers the `vern-llm` package itself (`packages/vern-llm`). Vulnerabilities in third-party dependencies should be reported upstream, though we're happy to hear about them too if they affect this project.
+
+## Handling API keys
+
+VernLLM does not construct provider clients or manage credentials itself. It wraps a client you've already authenticated (for example `fromGemini(ai)`, `fromAnthropic(client)`) or, for the generic fetch adapter, uses the `headers` you supply. This means VernLLM never stores, logs, or transmits your API key on its own. The key only ever exists inside the underlying provider SDK or your own header config.
+
+A few practical implications:
+
+1. Keys live wherever you construct the SDK client, not inside VernLLM. Follow that SDK's own security guidance for storage.
+2. For the fetch adapter's `headers` option, you can pass a function instead of a static value. This is the place to refresh short-lived tokens, so a raw key never sits in memory longer than needed.
+3. VernLLM's retry and logging features operate on requests and responses, not on the headers or client internals, so your credentials are never written to logs by the library itself.
+4. If you build a custom adapter, treat the same rule as any client code: never hardcode a key, and avoid embedding it in browser-shipped bundles.
+
+## Dependency updates
+
+This project uses Renovate to keep dependencies current, including security patches. Run `pnpm audit` locally if you fork or vendor the package to catch issues Renovate hasn't picked up yet.
