@@ -21,15 +21,19 @@ const llm = new VernLLM({
       case 'fallback':
         metrics.increment('llm.fallback', { from: event.from, to: event.to });
         break;
+      case 'usage':
+        metrics.observe('llm.usage.total_tokens', event.usage.totalTokens);
+        break;
     }
   },
 });
 ```
 
 `onEvent` reports what happened during a call as it happens: a retry about to wait out its backoff
-delay, a circuit breaker changing state, an attempt that had to wait for `rateLimit` capacity, or
-the chain moving to the next `fallback` target. It's a single event stream instead of a separate
-option per concern, so handling one kind doesn't require leaving the others unset.
+delay, a circuit breaker changing state, an attempt that had to wait for `rateLimit` capacity, the
+chain moving to the next `fallback` target, or a real spend once a response is extracted. It's a
+single event stream instead of a separate option per concern, so handling one kind doesn't require
+leaving the others unset.
 
 ## Fire and forget
 
@@ -61,7 +65,9 @@ Every event kind but `fallback` carries `provider`, the `name` resolved for the 
 (default `'primary'` for a lone target), so a single handler shared across multiple `VernLLM`
 instances, or across the targets in one instance's `fallback` chain, can tell them apart.
 `fallback` carries `from`/`to` instead, since it's reporting a transition between two targets
-rather than something that happened to one. See [Provider identity](/docs/API-reference/configuration#provider-identity).
+rather than something that happened to one. `usage` and `usage_failure` carry `requestId` and a
+full `TokenUsage`/`LLMError` instead of `provider`/`model` directly, since that information is
+already inside `usage` itself. See [Provider identity](/docs/API-reference/configuration#provider-identity).
 
 <Cards>
   <Card title="retry" href="#retry">
@@ -75,6 +81,12 @@ rather than something that happened to one. See [Provider identity](/docs/API-re
   </Card>
   <Card title="fallback" href="#fallback">
     Fires when the chain moves to the next `fallback` target.
+  </Card>
+  <Card title="usage" href="#usage-and-usage_failure">
+    Fires once a call fully succeeds, carrying the real `TokenUsage`.
+  </Card>
+  <Card title="usage_failure" href="#usage-and-usage_failure">
+    Fires when a response carried usage but VernLLM's own post-processing then failed.
   </Card>
 </Cards>
 
@@ -188,6 +200,53 @@ onEvent: (event) => {
 See [Provider Fallback](/docs/core/provider-fallback) for the `fallback` option itself
 and [turning this event into an alert](/docs/guides/provider-fallback-patterns#turn-onevents-fallback-event-into-an-alert-not-just-a-log-line) in the companion guide.
 
+### `usage` and `usage_failure`
+
+Emitted from the same place `VernLLMOptions.onUsage`/`onUsageFailure` are, since those two options
+are sugar over these two events, not a second reporting path. A call to `onEvent` and a call to
+`onUsage`/`onUsageFailure` happen independently off the same underlying event: neither knows the
+other ran, and a throwing handler in one can't stop the other from running. See [Usage
+Tracking](/docs/core/usage-tracking) for the full field-by-field breakdown of `TokenUsage`, the
+success/failure split, and when each one does and doesn't fire.
+
+```ts title="usage-event.ts"
+{
+  kind: 'usage',
+  requestId: string,
+  usage: TokenUsage,
+}
+```
+
+```ts title="usage-failure-event.ts"
+{
+  kind: 'usage_failure',
+  requestId: string,
+  usage: TokenUsage,
+  error: LLMError,
+}
+```
+
+Reading usage this way, through a middleware's own `onEvent`, is most useful when the middleware
+needs to correlate usage back to state it set earlier in the same logical call, without also
+requiring the app to wire a separate top-level `onUsage` option:
+
+```ts title="middleware-usage-event.ts"
+{
+  name: 'cost-tracking',
+  onEvent: (event, ctx) => {
+    if (event.kind !== 'usage') return;
+    recordCost(ctx.state.get(spanIdKey), event.usage.totalTokens);
+  },
+}
+```
+
+<Callout type="info">
+  `onEvent` is called for `usage`/`usage_failure` the same way it's called for every other kind:
+  once per real occurrence, not once per attempt for `usage_failure` specifically, matching
+  `onUsageFailure`'s own granularity. See [When it does and doesn't
+  fire](/docs/core/usage-tracking#when-it-does-and-doesnt-fire).
+</Callout>
+
 ## Narrowing by kind
 
 `event.kind` discriminates the union, so a handler that only cares about one kind can narrow with a
@@ -223,14 +282,15 @@ of other hooks in VernLLM that genuinely do participate in the call:
   </Card>
 </Cards>
 
-`onUsage` and `onUsageFailure` are close cousins of `onEvent`, fire and forget in exactly the same
-way, but scoped to token usage rather than call mechanics. See [Usage Tracking](/docs/core/usage-tracking).
+`onUsage` and `onUsageFailure` fire and forget in exactly the same way as `onEvent`, and are no
+longer a separate mechanism scoped to token usage: they're driven from the exact same `usage`/
+`usage_failure` events documented above. See [Usage Tracking](/docs/core/usage-tracking).
 
 ## Options reference
 
-| Option    | Default | Notes                                                                                                                                                  |
-| --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, `rate_limited`, or `fallback` occurrence. Fire and forget; cannot change the call's outcome. |
+| Option    | Default | Notes                                                                                                                                                                            |
+| --------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, `rate_limited`, `fallback`, `usage`, or `usage_failure` occurrence. Fire and forget; cannot change the call's outcome. |
 
 See [Configuration](/docs/API-reference/configuration#observability) for how `onEvent`
 sits alongside `onUsage`, `onUsageFailure`, `logger`, and `debug`.

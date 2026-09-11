@@ -14,6 +14,19 @@ export function logHookError(logger: Logger, hookName: string, error: unknown): 
 }
 
 /**
+ * Calls a synchronous, user-supplied hook and swallows/logs anything it
+ * throws via `logHookError`, so a broken hook can never break the call
+ * that triggered it.
+ */
+export function callHookSafely(logger: Logger, hookName: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (error) {
+    logHookError(logger, hookName, error);
+  }
+}
+
+/**
  * Wraps a `Logger` so a throwing implementation can never break the call
  * it's trying to describe. `logger` is user-supplied (`VernLLMOptions.logger`),
  * so a custom logger that ships to a file, Datadog, etc. can throw for
