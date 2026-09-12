@@ -38,7 +38,7 @@ jobs:
       - if: steps.filter.outputs.code == 'true'
         uses: actions/setup-node@v7
         with:
-          node-version: 24.20.0
+          node-version: 24.21.0
           cache: pnpm
 
       - if: steps.filter.outputs.code == 'true'
@@ -46,7 +46,7 @@ jobs:
 
       - if: steps.filter.outputs.code == 'true'
         name: Open or update the Version Packages PR
-        uses: changesets/action@v2.1.1
+        uses: changesets/action@v2.1.2
         with:
           version-script: pnpm changeset version
           commit-message: 'chore: version packages'
