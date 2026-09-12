@@ -95,7 +95,7 @@ export function finalizeResponse<T>(
     }
 
     gateway.recordSuccess(attempt, params.signal, state);
-    usageReporter.reportSuccess(usage);
+    usageReporter.reportSuccess(usage, gateway.buildAttemptContext(attempt, params.signal, state));
 
     return result;
   } catch (error) {
@@ -108,7 +108,12 @@ export function finalizeResponse<T>(
     const normalized = normalizeError(error, params.signal);
 
     if (usage && normalized.type !== 'aborted') {
-      usageReporter.reportFailure(usage, normalized, attempt);
+      usageReporter.reportFailure(
+        usage,
+        normalized,
+        attempt,
+        gateway.buildAttemptContext(attempt, params.signal, state),
+      );
     }
 
     throw normalized;

@@ -42,6 +42,13 @@ interface TokenUsage {
   [Call Params reference](/docs/API-reference/call-params) for how to set a limit and per provider
   notes on when this field is populated.
 
+<Callout type="info">
+  `onUsage`/`onUsageFailure` are sugar over the `'usage'`/`'usage_failure'` events documented in
+  [Observability](/docs/core/observability#usage-and-usage_failure). If you're authoring a
+  middleware rather than configuring `VernLLMOptions` directly, that middleware's own `onEvent` can
+  read the same data without the app needing to also set `onUsage` at the top level.
+</Callout>
+
 The same instance label is included in usage callbacks for both successful and failed responses:
 
 ```ts title="usage-provider-information.ts"

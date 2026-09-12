@@ -6,10 +6,35 @@ import {
 } from '../../../../src/internal/execution/usageReporter.js';
 import { LLMError } from '../../../../src/types/errors.js';
 
-import type { LLMClient, TokenUsage } from '../../../../src/types/index.js';
+import type {
+  AttemptContext,
+  LLMClient,
+  MiddlewareStateBag,
+  TokenUsage,
+} from '../../../../src/types/index.js';
 
 function fakeLogger() {
   return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+}
+
+function fakeState(): MiddlewareStateBag {
+  return { get: vi.fn(), set: vi.fn() };
+}
+
+function fakeCtx(overrides: Partial<AttemptContext> = {}): AttemptContext {
+  return {
+    stage: 'attempt',
+    requestId: 'req-1',
+    requestedProvider: 'openai',
+    requestedModel: 'gpt-test',
+    isFallbackAttempt: false,
+    attempt: 1,
+    capabilities: { supportsJsonObjectMode: true },
+    state: fakeState(),
+    own: {},
+    registeredMiddlewareNames: [],
+    ...overrides,
+  };
 }
 
 function baseOptions(overrides: Partial<UsageReporterOptions> = {}): UsageReporterOptions {
@@ -18,6 +43,7 @@ function baseOptions(overrides: Partial<UsageReporterOptions> = {}): UsageReport
     isFallback: false,
     maxRetries: 3,
     logger: fakeLogger(),
+    emitEvent: vi.fn(),
     ...overrides,
   };
 }
@@ -141,54 +167,32 @@ describe('createUsageReporter, actualTokensFor', () => {
   });
 });
 
+// `reportSuccess`/`reportFailure` only build the `'usage'`/`'usage_failure'`
+// event and hand it to `emitEvent`. Whether onUsage/onUsageFailure get
+// called, and what happens if one of them throws, is `makeEventReporter`'s
+// job now (see circuitBreaker.utils.unit.test.ts), not this reporter's:
+// UsageReporter has exactly one way to report usage, this call, and
+// doesn't know or care who's listening on the other end.
 describe('createUsageReporter, reportSuccess', () => {
   it('does nothing when usage is undefined', () => {
-    const onUsage = vi.fn();
-    const reporter = createUsageReporter(baseOptions({ onUsage }));
-    reporter.reportSuccess(undefined);
-    expect(onUsage).not.toHaveBeenCalled();
+    const emitEvent = vi.fn();
+    const reporter = createUsageReporter(baseOptions({ emitEvent }));
+    reporter.reportSuccess(undefined, fakeCtx());
+    expect(emitEvent).not.toHaveBeenCalled();
   });
 
-  it('does nothing when no onUsage hook was configured', () => {
-    const reporter = createUsageReporter(baseOptions());
-    expect(() => reporter.reportSuccess(baseUsage())).not.toThrow();
-  });
-
-  it('calls onUsage with the usage', () => {
-    const onUsage = vi.fn();
-    const reporter = createUsageReporter(baseOptions({ onUsage }));
+  it('emits a usage event carrying the usage and requestId', () => {
+    const emitEvent = vi.fn();
+    const reporter = createUsageReporter(baseOptions({ emitEvent }));
     const usage = baseUsage();
+    const ctx = fakeCtx();
 
-    reporter.reportSuccess(usage);
+    reporter.reportSuccess(usage, ctx);
 
-    expect(onUsage).toHaveBeenCalledExactlyOnceWith(usage);
-  });
-
-  it('swallows and logs an error thrown by onUsage, instead of propagating it', () => {
-    const logger = fakeLogger();
-    const onUsage = vi.fn(() => {
-      throw new Error('onUsage boom');
-    });
-    const reporter = createUsageReporter(baseOptions({ onUsage, logger }));
-
-    expect(() => reporter.reportSuccess(baseUsage())).not.toThrow();
-    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsage failed', {
-      message: 'onUsage boom',
-      stack: expect.any(String),
-    });
-  });
-
-  it('logs "unknown" when onUsage throws a non-Error value', () => {
-    const logger = fakeLogger();
-    const onUsage = vi.fn(() => {
-      throw 'not an Error instance';
-    });
-    const reporter = createUsageReporter(baseOptions({ onUsage, logger }));
-
-    expect(() => reporter.reportSuccess(baseUsage())).not.toThrow();
-    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsage failed', {
-      message: 'unknown',
-    });
+    expect(emitEvent).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'usage', requestId: usage.requestId, usage },
+      ctx,
+    );
   });
 });
 
@@ -197,7 +201,7 @@ describe('createUsageReporter, reportFailure', () => {
     const logger = fakeLogger();
     const reporter = createUsageReporter(baseOptions({ logger, maxRetries: 4 }));
 
-    reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 1);
+    reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 1, fakeCtx());
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('attempt 2/5'));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('mid-stream'));
@@ -207,7 +211,7 @@ describe('createUsageReporter, reportFailure', () => {
     const logger = fakeLogger();
     const reporter = createUsageReporter(baseOptions({ logger }));
 
-    reporter.reportFailure(baseUsage(), new LLMError('boom', 'timeout'), 0, true);
+    reporter.reportFailure(baseUsage(), new LLMError('boom', 'timeout'), 0, fakeCtx(), true);
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('mid-stream failure (terminal, no further attempts)'),
@@ -222,6 +226,7 @@ describe('createUsageReporter, reportFailure', () => {
       baseUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 15 }),
       new LLMError('boom', 'api'),
       0,
+      fakeCtx(),
     );
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('tokens=15'));
@@ -235,51 +240,24 @@ describe('createUsageReporter, reportFailure', () => {
       baseUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 0 }),
       new LLMError('boom', 'api'),
       0,
+      fakeCtx(),
     );
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('tokens=15'));
   });
 
-  it('does nothing beyond logging when no onUsageFailure hook was configured', () => {
-    const reporter = createUsageReporter(baseOptions());
-    expect(() => reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 0)).not.toThrow();
-  });
-
-  it('calls onUsageFailure with the usage and error', () => {
-    const onUsageFailure = vi.fn();
-    const reporter = createUsageReporter(baseOptions({ onUsageFailure }));
+  it('emits a usage_failure event carrying the usage, error, and requestId', () => {
+    const emitEvent = vi.fn();
+    const reporter = createUsageReporter(baseOptions({ emitEvent }));
     const usage = baseUsage();
     const error = new LLMError('boom', 'api');
+    const ctx = fakeCtx();
 
-    reporter.reportFailure(usage, error, 0);
+    reporter.reportFailure(usage, error, 0, ctx);
 
-    expect(onUsageFailure).toHaveBeenCalledExactlyOnceWith(usage, error);
-  });
-
-  it('swallows and logs an error thrown by onUsageFailure, instead of propagating it', () => {
-    const logger = fakeLogger();
-    const onUsageFailure = vi.fn(() => {
-      throw new Error('onUsageFailure boom');
-    });
-    const reporter = createUsageReporter(baseOptions({ onUsageFailure, logger }));
-
-    expect(() => reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 0)).not.toThrow();
-    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsageFailure failed', {
-      message: 'onUsageFailure boom',
-      stack: expect.any(String),
-    });
-  });
-
-  it('logs "unknown" when onUsageFailure throws a non-Error value', () => {
-    const logger = fakeLogger();
-    const onUsageFailure = vi.fn(() => {
-      throw 'not an Error instance';
-    });
-    const reporter = createUsageReporter(baseOptions({ onUsageFailure, logger }));
-
-    expect(() => reporter.reportFailure(baseUsage(), new LLMError('boom', 'api'), 0)).not.toThrow();
-    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsageFailure failed', {
-      message: 'unknown',
-    });
+    expect(emitEvent).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'usage_failure', requestId: usage.requestId, usage, error },
+      ctx,
+    );
   });
 });

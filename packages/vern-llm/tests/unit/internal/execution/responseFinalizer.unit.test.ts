@@ -9,11 +9,25 @@ import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
 
 import type { BreakerGateway } from '../../../../src/internal/execution/circuitBreakerContext.js';
 import type { UsageReporter } from '../../../../src/internal/execution/usageReporter.js';
-import type { CallParams, TokenUsage } from '../../../../src/types/index.js';
+import type { AttemptContext, CallParams, TokenUsage } from '../../../../src/types/index.js';
+
+/** Fixed instance so tests can assert `reportSuccess`/`reportFailure` received exactly this ctx. */
+const fakeAttemptContext: AttemptContext = {
+  stage: 'attempt',
+  requestId: 'req-1',
+  requestedProvider: 'test-provider',
+  requestedModel: 'gpt-test',
+  isFallbackAttempt: false,
+  attempt: 1,
+  capabilities: { supportsJsonObjectMode: true },
+  state: createMiddlewareStateBag(),
+  own: {},
+  registeredMiddlewareNames: [],
+};
 
 function fakeGateway(): BreakerGateway {
   return {
-    buildAttemptContext: vi.fn(),
+    buildAttemptContext: vi.fn().mockReturnValue(fakeAttemptContext),
     buildCallContext: vi.fn(),
     recordSuccess: vi.fn(),
     recordFailure: vi.fn(),
@@ -74,7 +88,10 @@ describe('finalizeResponse, success path', () => {
 
     expect(result).toBe('hello');
     expect(deps.gateway.recordSuccess).toHaveBeenCalledExactlyOnceWith(0, undefined, state);
-    expect(deps.usageReporter.reportSuccess).toHaveBeenCalledExactlyOnceWith(usage);
+    expect(deps.usageReporter.reportSuccess).toHaveBeenCalledExactlyOnceWith(
+      usage,
+      fakeAttemptContext,
+    );
     expect(deps.usageReporter.reportFailure).not.toHaveBeenCalled();
     expect(deps.gateway.recordFailure).not.toHaveBeenCalled();
   });
@@ -112,6 +129,7 @@ describe('finalizeResponse, failure path', () => {
       usage,
       expect.objectContaining({ code: 'empty_response' }),
       2,
+      fakeAttemptContext,
     );
   });
 
@@ -211,6 +229,7 @@ describe('finalizeResponse, detectSoftFailure', () => {
       usage,
       expect.objectContaining({ code: 'empty_response' }),
       0,
+      fakeAttemptContext,
     );
   });
 

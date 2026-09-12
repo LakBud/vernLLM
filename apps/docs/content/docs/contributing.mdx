@@ -35,6 +35,19 @@ Keep types precise. `any` is a final escape hatch, not a shortcut. Reach for it 
 
 New log calls must prefix `[VernLLM]` (or `[VernLLM:<requestId>]`). For a caught hook error, use `logHookError` from `internal/utils/logger.utils.ts`, never drop the `stack` (append it to the message string for `warn`, since `Logger.warn` takes no `meta`), and keep `apps/docs/content/docs/core/logging.mdx`'s table in sync.
 
+## Docs conventions
+
+[Migration Notes](/docs/migration-notes) headings follow `## {version}: {title}` for a
+version-level entry and `### {version}: {title}` for a sub-entry, always repeating the version
+number in the heading text itself rather than relying on section nesting. Keep new entries on that
+pattern so a reader can jump to any heading and immediately see which release it covers.
+
+This page and [Development](/docs/development) intentionally split the same ground differently:
+this page is the pre-PR checklist with local-equivalent commands, Development is the CI-workflow
+reference and test layout. When a workflow's name, trigger, or behavior changes, update it in
+Development first, since that's the source of truth, then check whether this page's checklist
+still lines up.
+
 ## Tests
 
 Add or update tests alongside any change to `packages/vern-llm`:
@@ -90,7 +103,7 @@ pnpm run changeset
 
 CI checks every PR touching `packages/vern-llm` for a changeset. If your change doesn't need a release, run `pnpm changeset add --empty` instead of skipping it.
 
-This drives versioned release notes. Releases themselves are automated through `.github/workflows/version.yml` and `.github/workflows/publish.yml`, so there are no manual version bumps or publishing steps.
+This drives versioned release notes. Releases themselves are automated through `version-packages.yml`, `version.yml`, and `publish.yml` in `.github/workflows/`, so there are no manual version bumps or publishing steps. See [Development](/docs/development#ci) for what each workflow does.
 
 ## Code of Conduct
 

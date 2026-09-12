@@ -1,12 +1,18 @@
 import { CircuitBreaker, type CircuitBreakerOptions } from '../../circuitBreaker.js';
 import { emitEvent } from '../execution/utils/middleware/middleware.utils.js';
 import { idFor } from '../resolveMiddlewareOrder.js';
-import { logHookError } from './logger.utils.js';
+import { callHookSafely } from './logger.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { VernLLMEvent } from '../../types/events.js';
-import type { AttemptContext, VernLLMMiddleware } from '../../types/index.js';
+import type { AttemptContext, LLMError, TokenUsage, VernLLMMiddleware } from '../../types/index.js';
 import type { CallExecutor } from '../execution/callExecutor.js';
+
+/** `onUsage`/`onUsageFailure` from `VernLLMOptions`, plumbed alongside `onEvent` so `makeEventReporter` can drive both off the one dispatch point. */
+export interface UsageReporterHooks {
+  onUsage?: (usage: TokenUsage) => void;
+  onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
+}
 
 /**
  * Builds a `(event) => void` reporter that no-ops when `onEvent` is unset,
@@ -15,18 +21,31 @@ import type { CallExecutor } from '../execution/callExecutor.js';
  * Shared by `buildCircuitBreaker` (which needs to report before any
  * executor exists) and `CallExecutor.reportEvent`, kept independent of the
  * executor for that reason.
+ *
+ * Also the single place `onUsage`/`onUsageFailure` are driven from: a
+ * `'usage'`/`'usage_failure'` event always reaches `onEvent` like any
+ * other event, and additionally, separately, reaches the matching plain
+ * callback here. Neither call knows the other happened; a throwing
+ * `onUsage` can't stop `onEvent` from running or vice versa. This makes
+ * the plain options sugar over the event stream, not a second reporting
+ * path UsageReporter has to call directly.
  */
 export function makeEventReporter(
   onEvent: ((event: VernLLMEvent) => void) | undefined,
   logger: Logger,
+  usageHooks: UsageReporterHooks = {},
 ): (event: VernLLMEvent) => void {
   return (event) => {
-    if (!onEvent) return;
+    if (onEvent) callHookSafely(logger, 'onEvent', () => onEvent(event));
 
-    try {
-      onEvent(event);
-    } catch (error) {
-      logHookError(logger, 'onEvent', error);
+    if (event.kind === 'usage' && usageHooks.onUsage) {
+      callHookSafely(logger, 'onUsage', () => usageHooks.onUsage!(event.usage));
+    }
+
+    if (event.kind === 'usage_failure' && usageHooks.onUsageFailure) {
+      callHookSafely(logger, 'onUsageFailure', () =>
+        usageHooks.onUsageFailure!(event.usage, event.error),
+      );
     }
   };
 }
@@ -144,11 +163,9 @@ export function buildCircuitBreaker(
       // bookkeeping or the call that triggered it.
       if (!userOnStateChange) return;
 
-      try {
-        userOnStateChange(from, to, consecutiveFailures, model, context);
-      } catch (error) {
-        logHookError(logger, 'circuitBreaker.onStateChange', error);
-      }
+      callHookSafely(logger, 'circuitBreaker.onStateChange', () =>
+        userOnStateChange(from, to, consecutiveFailures, model, context),
+      );
     },
   });
 }

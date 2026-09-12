@@ -7,6 +7,32 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 2.9.0: New `usage`/`usage_failure` members on `VernLLMEvent`
+
+`VernLLMEvent` gains two new members, `'usage'` and `'usage_failure'`, so a middleware's own
+`onEvent` can observe token usage the same way it already observes
+`retry`/`fallback`/`rate_limited`/`circuit_state`/`middleware`. `VernLLMOptions.onUsage`/
+`onUsageFailure` are unchanged in behavior, timing, and field shape; they now share this same
+underlying event with `onEvent` instead of a separate reporting path.
+
+```ts
+onEvent: (event) => {
+  if (event.kind === 'usage') {
+    recordTokenCost(event.requestId, event.usage.totalTokens);
+  }
+};
+```
+
+<Callout type="warn">
+  Being accepted on a minor rather than a major since nothing changes at runtime. What breaks is an
+  exhaustive `switch` over `event.kind` with no `default` case (an `assertNever(event)` style
+  check): it no longer compiles until it adds cases for `'usage'` and `'usage_failure'`. A `switch`
+  with a `default` branch, or a plain `if (event.kind === 'usage')` check, is unaffected.
+</Callout>
+
+See [Observability](/docs/core/observability#usage-and-usage_failure) for the current event
+reference.
+
 ## 2.8.0: `runsAfter`/`runsBefore` switch to `MiddlewareRef`
 
 `runsAfter` and `runsBefore` used to match by `name` string. They now match by shared object
@@ -359,7 +385,7 @@ certain assumptions, or code that hand-writes an `LLMClient` implementation inst
 built-in adapter. Plain `call()` usage without `tools`, and history built from
 `{ role: 'user' | 'assistant', content }` objects, are unaffected either way.
 
-### `ConversationTurn` is now a discriminated union
+### 2.0.0: `ConversationTurn` is now a discriminated union
 
 Previously every entry in `history` shared one flat shape:
 
@@ -401,7 +427,7 @@ is no longer narrowed to `never`.
 See [Multi-turn Conversations](/docs/guides/multi-turn-conversations) for the full
 updated history rules.
 
-### `LLMClient.messages` is a wider union
+### 2.0.0: `LLMClient.messages` is a wider union
 
 `LLMClient` is the interface every built-in adapter implements (`fromAnthropic`, `fromGemini`,
 `fromBedrock`, `fromFetch`, or an OpenAI SDK instance passed straight through), and the shape you
@@ -434,7 +460,7 @@ rejects `role === 'tool'`, since VernLLM only ever sends one when the caller opt
 
 See [Tool Calling](/docs/core/tool-calling) for the full feature, and [Configuration](/docs/API-reference/configuration) for the `LLMClient` field reference.
 
-### `LLMClient.temperature` is now optional
+### 2.0.0: `LLMClient.temperature` is now optional
 
 Unrelated to tool calling, but shipping in the same `2.0.0` release since a major bump was already
 required. Added a way to opt out of VernLLM's `temperature: 0.2` default (`temperature: null` per
@@ -462,7 +488,7 @@ already handle any other optional field, omit it from the outgoing request, or s
 default before forwarding it. See [Configuration](/docs/API-reference/configuration) for `defaultTemperature`'s full
 behavior.
 
-## Nothing else changed
+## 2.0.0: Nothing else changed
 
 Calls that don't set `tools` keep returning `T` from `call()` exactly as before, `jsonMode` keeps
 defaulting to `true`, and existing plain user/assistant `history` arrays keep working with no
