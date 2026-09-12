@@ -154,27 +154,31 @@ describe('RateLimiter', () => {
   });
 
   it('rolls back an earlier bucket already taken in the same attempt when a later bucket in the chain fails', async () => {
-    // Precedence order is concurrency, rpm, tpm, so rpm is checked and
-    // taken before tpm; when tpm then fails, the just-taken rpm slot
-    // must be given back rather than leaked into a permanently-consumed
-    // rpm count.
+    // Precedence order is concurrency, rpm, tpm, so concurrency is
+    // checked and taken before tpm; when tpm then fails, the
+    // just-taken concurrency slot must be given back rather than
+    // leaked. concurrency is used as the earlier bucket here (rather
+    // than rpm) specifically because it never refills from the clock
+    // (its TokenBucket is constructed with refillPerMs: 0), so its
+    // exact remaining count can't drift from real wall-clock time the
+    // way rpm's or tpm's would, keeping this assertion flake-free.
     const limiter = new RateLimiter({
-      requestsPerMinute: 10,
+      maxConcurrent: 2,
       tokensPerMinute: 5,
       maxQueueMs: 0,
     });
 
-    const first = await limiter.acquire(5); // exhausts all 5 tpm tokens
+    const first = await limiter.acquire(5); // exhausts all 5 tpm tokens, holds 1 concurrency slot
     expect(first.waitedMs).toBe(0);
-    expect(limiter.getState().requestsRemaining).toBe(9);
+    expect(limiter.getState().concurrentInFlight).toBe(1);
 
-    // rpm has room (1/10 used), but tpm has none left, so this attempt
-    // fails on tpm after already taking an rpm slot; that rpm slot must
-    // be rolled back rather than leaked.
+    // concurrency has room (1/2 used), but tpm has none left, so this
+    // attempt fails on tpm after already taking a concurrency slot;
+    // that slot must be rolled back rather than leaked.
     void limiter.acquire(3); // queues (maxQueueMs: 0 never times it out)
-    await Promise.resolve();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    expect(limiter.getState().requestsRemaining).toBe(9); // unchanged, not 8
+    expect(limiter.getState().concurrentInFlight).toBe(1); // unchanged, not 2
 
     first.release();
   });
