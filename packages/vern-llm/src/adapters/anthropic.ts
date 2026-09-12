@@ -10,6 +10,10 @@ import {
   type WireToolCall,
 } from '../types/index.js';
 import {
+  assertForcedJsonSchemaToolInputIsObject,
+  throwMissingForcedJsonSchemaTool,
+} from './internal/forcedJsonSchemaTool.js';
+import {
   assertSupportedImageMimeType,
   type SupportedImageMimeType,
 } from './internal/imageFormat.js';
@@ -580,23 +584,9 @@ export function fromAnthropic(
               (block) => block.type === 'tool_use' && block.name === toolName,
             );
 
-            if (!toolUse) {
-              throw new LLMError(
-                `Anthropic did not return the required structured output tool "${toolName}".`,
-                'validation',
-              );
-            }
+            if (!toolUse) throwMissingForcedJsonSchemaTool('Anthropic', toolName);
 
-            if (
-              !toolUse.input ||
-              typeof toolUse.input !== 'object' ||
-              Array.isArray(toolUse.input)
-            ) {
-              throw new LLMError(
-                `Anthropic returned invalid structured output for tool "${toolName}". Expected an object.`,
-                'validation',
-              );
-            }
+            assertForcedJsonSchemaToolInputIsObject('Anthropic', toolName, toolUse.input);
 
             text = JSON.stringify(toolUse.input);
           } else {
@@ -779,12 +769,7 @@ export function fromAnthropic(
             }
           }
 
-          if (toolName && !sawJsonTool) {
-            throw new LLMError(
-              `Anthropic did not return the required structured output tool "${toolName}".`,
-              'validation',
-            );
-          }
+          if (toolName && !sawJsonTool) throwMissingForcedJsonSchemaTool('Anthropic', toolName);
         },
       },
     },

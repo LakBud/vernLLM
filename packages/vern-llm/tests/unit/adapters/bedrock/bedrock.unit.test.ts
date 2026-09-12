@@ -274,24 +274,96 @@ describe('fromBedrock', () => {
     expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
   });
 
-  it('yields empty content when json_schema mode is forced but Bedrock never returns the matching toolUse block', async () => {
+  it('throws a validation LLMError when json_schema mode is forced but Bedrock never returns the matching toolUse block', async () => {
     const { client } = makeFakeBedrockClient('plain text instead of a tool call');
     const adapted = fromBedrock(client);
 
-    const result = await adapted.chat.completions.create(
-      {
-        model: 'anthropic.claude-test',
-        max_tokens: 10,
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'Candidate', schema: { type: 'object' } },
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
         },
-        messages: [{ role: 'user', content: 'hi' }],
-      },
-      { signal: new AbortController().signal },
-    );
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
 
-    expect(result.choices?.[0]?.message?.content).toBe('');
+  it("throws validation when the forced tool's input is null", async () => {
+    const { client } = makeFakeBedrockToolClient('Candidate', null);
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('Expected an object'),
+    });
+  });
+
+  it("throws validation when the forced tool's input is a bare string", async () => {
+    const { client } = makeFakeBedrockToolClient('Candidate', 'not an object');
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('Expected an object'),
+    });
+  });
+
+  it("throws validation when the forced tool's input is an array", async () => {
+    const { client } = makeFakeBedrockToolClient('Candidate', ['not', 'an', 'object']);
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('Expected an object'),
+    });
   });
 
   it('forwards json_schema name and description into Bedrock toolSpec', async () => {
@@ -459,7 +531,7 @@ describe('fromBedrock', () => {
     });
 
     it('proceeds normally when the model is in the allowlist', async () => {
-      const { client, converse } = makeFakeBedrockClient('ok');
+      const { client, converse } = makeFakeBedrockToolClient('Candidate', { ok: true });
       const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
 
       await adapted.chat.completions.create(
@@ -505,7 +577,7 @@ describe('fromBedrock', () => {
     });
 
     it('proceeds normally and passes the model ID to a predicate that returns true', async () => {
-      const { client, converse } = makeFakeBedrockClient('ok');
+      const { client, converse } = makeFakeBedrockToolClient('Candidate', { ok: true });
       const predicate = vi.fn((modelId: string) => modelId.startsWith('anthropic.'));
       const adapted = fromBedrock(client, { toolUseSupportedModels: predicate });
 
@@ -546,7 +618,7 @@ describe('fromBedrock', () => {
     });
 
     it('skips the preflight check entirely when no toolUseSupportedModels is configured', async () => {
-      const { client, converse } = makeFakeBedrockClient('ok');
+      const { client, converse } = makeFakeBedrockToolClient('Candidate', { ok: true });
       const adapted = fromBedrock(client);
 
       await adapted.chat.completions.create(
