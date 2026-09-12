@@ -130,7 +130,10 @@ export const costTracking: VernLLMMiddleware = {
   },
   onEvent: (event) => {
     if (event.kind === 'usage') {
-      recordTokenCost(event.requestId, event.usage.totalTokens);
+      recordTokenCost(
+        event.requestId,
+        event.usage.totalTokens || event.usage.promptTokens + event.usage.completionTokens,
+      );
     }
   },
 };
@@ -154,7 +157,10 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   middleware: [tracing, costTracking],
   onUsage: (usage) => {
-    recordTokenCost(usage.requestId, usage.totalTokens);
+    recordTokenCost(
+      usage.requestId,
+      usage.totalTokens || usage.promptTokens + usage.completionTokens,
+    );
   },
 });
 ```

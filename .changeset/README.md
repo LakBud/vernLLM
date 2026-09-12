@@ -20,6 +20,26 @@ IMPORTANT: Currently some breaking changes will be on minor changes
 
 Write a short summary explaining what changed and why.
 
+## Changeset format
+
+A changeset file has a YAML frontmatter block naming the package and bump type, then the release note body:
+
+```md
+---
+'vern-llm': minor
+---
+
+One sentence summary of what changed and why.
+```
+
+Keep the body to this shape:
+
+- First paragraph: what changed, in plain terms a user of the package would understand.
+- A `ts` code block showing before/after usage, only when the change is visible in code a caller writes.
+- A closing line stating the practical impact. Say plainly whether existing code keeps compiling and keeps behaving the same at runtime. Don't write "Purely additive" if a type level change (e.g. a new member on an exported union) can break an exhaustive `switch`, say that instead.
+
+If the change is breaking enough to need migration steps, add a matching entry to [Migration Notes](/docs/migration-notes) and link it from the changeset body.
+
 ## Release process
 
 Changesets are reviewed with pull requests. When changesets are merged, they are used to generate releases and changelogs automatically and is updated within the documentation websites changelog

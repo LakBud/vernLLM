@@ -19,4 +19,6 @@ const costTracking: VernLLMMiddleware = {
 };
 ```
 
-Purely additive. Nothing about `onUsage`/`onUsageFailure`'s existing behavior, timing, or field shape changes; a handler written as a `switch` with a `default` branch should already treat unknown `kind` values as expected, the same as every prior addition to this union.
+Minor, not breaking at runtime. Nothing about `onUsage`/`onUsageFailure`'s existing behavior, timing, or field shape changes, and a handler written as a `switch` with a `default` branch already treats unknown `kind` values as expected.
+
+An exhaustive `switch` over `event.kind` with no `default` (e.g. an `assertNever(event)` fallback) will fail to compile until it adds cases for `'usage'` and `'usage_failure'`, the same as every prior addition to this union. Add the two new cases wherever such a switch exists; each new case can simply call the same logic as `default` used to, or a no op if usage was never handled there.

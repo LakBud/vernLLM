@@ -241,9 +241,9 @@ requiring the app to wire a separate top-level `onUsage` option:
 ```
 
 <Callout type="info">
-  `onEvent` is called for `usage`/`usage_failure` the same way it's called for every other kind:
-  once per real occurrence, not once per attempt for `usage_failure` specifically, matching
-  `onUsageFailure`'s own granularity. See [When it does and doesn't
+  `reportFailure` emits a `usage_failure` event once per failed attempt with extractable usage, so a
+  call that retries can produce multiple `usage_failure` events, plus one terminal event for a
+  midstream failure. This matches `onUsageFailure`'s own granularity. See [When it does and doesn't
   fire](/docs/core/usage-tracking#when-it-does-and-doesnt-fire).
 </Callout>
 
