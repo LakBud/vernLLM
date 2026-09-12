@@ -144,6 +144,13 @@ export async function startRealSdkServer(responses: ScriptedResponse[]): Promise
 
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
 
+    // Defensive: covers a genuine socket-level error (e.g. a mid-request
+    // reset) distinct from the client-initiated destroy() used in the
+    // "client already disconnected" test below, which surfaces as a
+    // 'close' event instead. Deliberately a no-op either way, and not
+    // reliably triggerable from a test without flaky low-level socket
+    // manipulation.
+    /* v8 ignore next 3 */
     req.on('error', () => {
       // Client aborts/socket resets are expected during cancellation tests.
     });
@@ -216,6 +223,11 @@ export async function startRealSdkServer(responses: ScriptedResponse[]): Promise
   });
 
   const address = server.address();
+  // Defensive: `address()` only returns null before the server is
+  // listening (already awaited above) or a string for a Unix domain
+  // socket (never used here, always TCP host/port), so this can't
+  // actually happen through this function's own call to `listen()`.
+  /* v8 ignore next 3 */
   if (address === null || typeof address === 'string') {
     throw new Error('realSdkServer: failed to bind to a port');
   }

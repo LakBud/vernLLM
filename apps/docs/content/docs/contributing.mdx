@@ -27,7 +27,7 @@ Anything that comes from a call, meaning a timeout, a bad response, a circuit tr
 
 Middleware ordering is a concrete case of this split. Registering middleware, meaning a duplicate name, a duplicate ref, a cycle, a missing required dependency, throws a plain `Error` in `resolveMiddlewareOrder.ts`, since it is a config mistake caught once at construction, not something that can recur at runtime. A middleware's `transform`/`wrap` throwing during an actual call goes through `LLMError` instead, since the retry loop needs `type`/`code` to decide what to do with it.
 
-Reliability code such as `circuitBreaker.ts`, `rateLimit.ts`, and `retry.utils.ts` should handle the weird inputs on purpose (zero, negative, `Infinity`, concurrent calls) instead of assuming the happy path. Explain unusual decisions with a short comment describing why, not a restatement of the code. Provider quirks stay inside `src/adapters/*`; everything else works against the shared `LLMClient` shape and stays provider agnostic. Tests run entirely on fakes and mocks, never real network calls.
+Reliability code such as `circuitBreaker.ts`, `rateLimit.ts`, and `retry.utils.ts` should handle the weird inputs on purpose (zero, negative, `Infinity`, concurrent calls) instead of assuming the happy path. Explain unusual decisions with a short comment describing why, not a restatement of the code. Provider quirks stay inside `src/adapters/*`; everything else works against the shared `LLMClient` shape and stays provider agnostic. Tests run on fakes and mocks, or, for the real SDK suites, real HTTP requests against a local loopback server standing in for the provider; no test ever calls a live provider API.
 
 Keep types precise. `any` is a final escape hatch, not a shortcut. Reach for it only when a provider SDK genuinely gives you no usable type (see the Gemini adapter's `thinkingLevel`), and when you do, leave a comment explaining why it's there instead of a narrower type.
 
@@ -55,7 +55,7 @@ Add or update tests alongside any change to `packages/vern-llm`:
 - `tests/unit/` for isolated behavior
 - `tests/integration/` for cross-cutting workflows
 
-No real API calls are made anywhere in the suite; everything runs against fakes and mocks. See [Development](/docs/development) for the full test layout.
+No live provider API is called anywhere in the suite; most tests run against fakes and mocks, and the real SDK suites talk over real HTTP to a local loopback server standing in for the provider. See [Development](/docs/development) for the full test layout.
 
 New or changed lines in `packages/vern-llm` need at least 80% test coverage; CI enforces this through Codecov's patch check. Overall project coverage is also tracked and shouldn't regress by more than a small margin. Run `pnpm run test:coverage` locally to see where you stand before opening a PR.
 

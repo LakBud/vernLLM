@@ -176,9 +176,15 @@ function toAnthropicToolChoice(
   | { type: 'none' }
   | { type: 'tool'; name: string }
   | undefined {
-  if (!toolChoice || toolChoice === 'auto') return { type: 'auto' };
-  if (toolChoice === 'none') return { type: 'none' };
-  if (toolChoice === 'required') return { type: 'any' };
+  if (!toolChoice || toolChoice === 'auto') {
+    return { type: 'auto' };
+  }
+  if (toolChoice === 'none') {
+    return { type: 'none' };
+  }
+  if (toolChoice === 'required') {
+    return { type: 'any' };
+  }
 
   return { type: 'tool', name: toolChoice.function.name };
 }

@@ -72,6 +72,117 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     ]);
   });
 
+  it('defaults prompt_tokens to 0 when message_start carries no input_tokens', async () => {
+    const { client } = makeFakeStreamingAnthropicClient([
+      { type: 'message_start', message: { usage: {} } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ]);
+    const adapted = fromAnthropic(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toContainEqual({
+      type: 'usage',
+      usage: { prompt_tokens: 0, completion_tokens: 1, total_tokens: 1 },
+    });
+  });
+
+  it('defaults completion_tokens to 0 when message_delta carries no output_tokens', async () => {
+    const { client } = makeFakeStreamingAnthropicClient([
+      { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', usage: {} },
+      { type: 'message_stop' },
+    ]);
+    const adapted = fromAnthropic(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toContainEqual({
+      type: 'usage',
+      usage: { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5 },
+    });
+  });
+
+  it('yields a rate_limit_hint chunk from response headers when supportsWithResponse is enabled', async () => {
+    const create = vi.fn().mockReturnValue({
+      withResponse: async () => ({
+        data: fakeAnthropicStream([
+          { type: 'message_start', message: { usage: { input_tokens: 1 } } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', usage: { output_tokens: 1 } },
+          { type: 'message_stop' },
+        ]),
+        response: {
+          headers: {
+            get: (name: string) => (name === 'anthropic-ratelimit-requests-remaining' ? '5' : null),
+          },
+        },
+      }),
+    });
+    const adapted = fromAnthropic({ messages: { create } } as unknown as AnthropicClient, {
+      supportsWithResponse: true,
+    });
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks[0]).toMatchObject({
+      type: 'rate_limit_hint',
+      hint: { remainingRequests: 5 },
+    });
+  });
+
+  it('does not yield a rate_limit_hint chunk when the headers carry neither remainingRequests nor limitRequests', async () => {
+    const create = vi.fn().mockReturnValue({
+      withResponse: async () => ({
+        data: fakeAnthropicStream([
+          { type: 'message_start', message: { usage: { input_tokens: 1 } } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', usage: { output_tokens: 1 } },
+          { type: 'message_stop' },
+        ]),
+        response: { headers: { get: () => null } },
+      }),
+    });
+    const adapted = fromAnthropic({ messages: { create } } as unknown as AnthropicClient, {
+      supportsWithResponse: true,
+    });
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks.some((c) => (c as { type?: string }).type === 'rate_limit_hint')).toBe(false);
+  });
+
   it('translates a ping event into a WireStreamChunk ping, keeping the idle-timeout clock alive', async () => {
     const { client } = makeFakeStreamingAnthropicClient([
       { type: 'message_start', message: { usage: { input_tokens: 5 } } },
@@ -347,5 +458,28 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     await iterator.return?.(undefined);
 
     expect(onReturn).toHaveBeenCalledOnce();
+  });
+
+  it('silently ignores an unrecognized content_block_delta kind (e.g. a future thinking_delta), instead of crashing', async () => {
+    const { client } = makeFakeStreamingAnthropicClient([
+      { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ]);
+    const adapted = fromAnthropic(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toContainEqual({ type: 'text-delta', delta: 'hi' });
+    expect(chunks.filter((c) => (c as { type?: string }).type === 'text-delta')).toHaveLength(1);
   });
 });

@@ -199,7 +199,10 @@ export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithTo
     return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
   }
 
-  // No tool_calls here, so content must be present.
+  // No tool_calls here, so content must be present: the empty-response
+  // guard above throws unless content is truthy when wireToolCalls is
+  // empty, so the `?? ''` fallback here is defensive only.
+  /* v8 ignore next */
   const textContent = content ?? '';
 
   if (!useJson) {

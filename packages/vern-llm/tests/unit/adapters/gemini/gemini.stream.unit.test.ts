@@ -69,6 +69,31 @@ describe('fromGemini().chat.completions.createStream', () => {
     ]);
   });
 
+  it('defaults arguments to "{}" and id to undefined when a streamed functionCall has no args, name, or native id', async () => {
+    const { client } = makeFakeStreamingGeminiClient([
+      { candidates: [{ content: { parts: [{ functionCall: {} }] } }] },
+    ]);
+    const adapted = fromGemini(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        {
+          model: 'gemini-3.1-flash-lite',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks[0]).toMatchObject({
+      type: 'tool_call_delta',
+      id: undefined,
+      name: undefined,
+      argumentsDelta: '{}',
+    });
+  });
+
   it('INVARIANT: hardcodes complete: true on tool_call_delta (Gemini does not stream tool-call arguments incrementally); if this ever fails, Gemini changed and gemini.ts needs a real completion signal', async () => {
     const { client } = makeFakeStreamingGeminiClient([
       {

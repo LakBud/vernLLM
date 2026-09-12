@@ -284,6 +284,12 @@ describe('turnToWireMessages, user turn', () => {
       { role: 'user', content: 'hi' },
     ]);
   });
+
+  it('defaults missing user content to an empty string', () => {
+    expect(turnToWireMessages({ role: 'user' } as ConversationTurn)).toEqual([
+      { role: 'user', content: '' },
+    ]);
+  });
 });
 
 describe('turnToWireMessages, assistant turn', () => {
@@ -360,6 +366,10 @@ describe('turnToWireMessages, tool turn', () => {
 
   it('returns an empty array for a tool turn with no toolResults', () => {
     expect(turnToWireMessages({ role: 'tool', toolResults: [] })).toEqual([]);
+  });
+
+  it('returns an empty array for a tool turn with toolResults omitted entirely', () => {
+    expect(turnToWireMessages({ role: 'tool' } as ConversationTurn)).toEqual([]);
   });
 });
 

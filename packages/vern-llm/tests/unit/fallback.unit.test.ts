@@ -402,6 +402,17 @@ describe('VernLLM, fallback', () => {
     expect(error.retryable).toBe(new LLMError(error.message, error.type).retryable);
   });
 
+  it("retryable defers to the last attempt's own retryable when attempts is non-empty", () => {
+    const nonRetryable = new LLMError('bad request', 'validation');
+    const attempts = [
+      { index: -1, provider: 'primary', model: 'm', error: new LLMError('down', 'api') },
+      { index: 0, provider: 'fallback-1', model: 'm2', error: nonRetryable },
+    ];
+    const error = new FallbackExhaustedError(attempts);
+
+    expect(error.retryable).toBe(nonRetryable.retryable);
+  });
+
   it('isFallbackExhaustedError narrows a caught error and rejects a plain LLMError', () => {
     const attempts = [
       { index: -1, provider: 'primary', model: 'm', error: new LLMError('down', 'api') },
@@ -575,6 +586,16 @@ describe('VernLLM, fallback', () => {
 
       expect(defaultFallbackOn(unknownTool, { isLastTarget: false })).toBe('stop');
       expect(defaultFallbackOn(dup, { isLastTarget: false })).toBe('stop');
+    });
+
+    it('returns "stop" for a tool-contract code even on a non-parse/validation error type', () => {
+      // type: 'api' skips the first two checks entirely, so this only
+      // returns 'stop' if the code check itself is reached and matched.
+      const toolChoiceViolated = new LLMError('m', 'api', {
+        code: 'tool_choice_none_violated',
+      });
+
+      expect(defaultFallbackOn(toolChoiceViolated, { isLastTarget: false })).toBe('stop');
     });
 
     it('returns "next" for a generic api/timeout/unknown error', () => {

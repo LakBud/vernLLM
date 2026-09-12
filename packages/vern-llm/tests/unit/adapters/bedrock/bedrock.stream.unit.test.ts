@@ -206,6 +206,55 @@ describe('fromBedrock().chat.completions.createStream', () => {
     ]);
   });
 
+  it('silently drops an unexpected non-matching toolUse delta that arrives while a jsonSchema tool is forced', async () => {
+    const { client } = makeFakeStreamingBedrockClient([
+      // A stray toolUse block for a DIFFERENT tool than the one forced by
+      // jsonSchema mode: kind is 'tool_use', not 'json-tool', so its delta
+      // must not surface as either text or a tool_call_delta.
+      {
+        contentBlockStart: {
+          contentBlockIndex: 0,
+          start: { toolUse: { toolUseId: 'stray_1', name: 'unexpected_tool' } },
+        },
+      },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"x":1}' } } } },
+      {
+        contentBlockStart: {
+          contentBlockIndex: 1,
+          start: { toolUse: { toolUseId: 'tool_1', name: 'extract' } },
+        },
+      },
+      {
+        contentBlockDelta: {
+          contentBlockIndex: 1,
+          delta: { toolUse: { input: '{"answer":"42"}' } },
+        },
+      },
+      { metadata: { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } } },
+    ]);
+    const adapted = fromBedrock(client);
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        {
+          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'question' }],
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'extract', schema: { type: 'object' } },
+          },
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([
+      { type: 'text-delta', delta: '{"answer":"42"}' },
+      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+    ]);
+  });
+
   it('throws LLMError(validation) when the client has no converseStream', async () => {
     const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({}));
     const adapted = fromBedrock({ converse });
@@ -325,6 +374,71 @@ describe('fromBedrock().chat.completions.createStream', () => {
           ),
         ),
       ).rejects.toMatchObject({ type: 'api', status: 424, message: 'Model stream failed' });
+    });
+
+    it('falls back to a generic message when throttlingException carries none', async () => {
+      const { client } = makeFakeStreamingBedrockClient([{ throttlingException: {} }]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({
+        type: 'api',
+        status: 429,
+        message: 'Bedrock throttled the request mid-stream',
+      });
+    });
+
+    it('falls back to a generic message when validationException carries none', async () => {
+      const { client } = makeFakeStreamingBedrockClient([{ validationException: {} }]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({
+        type: 'validation',
+        message: 'Bedrock rejected the request mid-stream',
+      });
+    });
+
+    it('falls back to a generic message and status 500 when internalServerException carries no message', async () => {
+      const { client } = makeFakeStreamingBedrockClient([{ internalServerException: {} }]);
+      const adapted = fromBedrock(client);
+
+      await expect(
+        collect(
+          adapted.chat.completions.createStream!(
+            {
+              model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+              max_tokens: 100,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal: new AbortController().signal },
+          ),
+        ),
+      ).rejects.toMatchObject({
+        type: 'api',
+        status: 500,
+        message: 'Bedrock reported a mid-stream error',
+      });
     });
 
     it('does not treat an exception event as if the stream simply ended (regression: previously silently truncated instead of throwing)', async () => {

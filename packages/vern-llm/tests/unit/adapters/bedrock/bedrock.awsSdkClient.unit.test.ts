@@ -106,6 +106,45 @@ describe('fromBedrock, given a raw AWS SDK client directly (.send() only)', () =
     expect(send.mock.calls[0]?.[0]).toBeInstanceOf(ConverseStreamCommand);
   });
 
+  it.each([
+    ['internalServerException', { message: 'Something went wrong on AWS' }, { status: 500 }],
+    ['validationException', { message: 'Malformed request' }, { type: 'validation' }],
+    ['throttlingException', { message: 'Too many requests' }, { status: 429 }],
+    [
+      'serviceUnavailableException',
+      { message: 'Bedrock is temporarily unavailable' },
+      { status: 503 },
+    ],
+    [
+      'modelStreamErrorException',
+      { message: 'Model stream failed', originalStatusCode: 424 },
+      { status: 424 },
+    ],
+  ] as const)(
+    'surfaces a raw-AWS-client %s stream event as a classified LLMError (normalizeBedrockStreamEvent)',
+    async (key, body, expected) => {
+      async function* fakeStream() {
+        yield { [key]: body };
+      }
+
+      const { client } = makeFakeAwsClient(async () => ({ stream: fakeStream() }));
+      const adapted = fromBedrock(client);
+      const createStream = adapted.chat.completions.createStream;
+      if (!createStream) throw new Error('fromBedrock should always define createStream');
+
+      await expect(
+        (async () => {
+          for await (const _ of createStream(
+            { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+            { signal: new AbortController().signal },
+          )) {
+            // draining the stream
+          }
+        })(),
+      ).rejects.toMatchObject(expected);
+    },
+  );
+
   it('throws a clear, actionable LLMError instead of a raw module-resolution error when @aws-sdk/client-bedrock-runtime cannot be imported', async () => {
     // Simulates the package not being installed: `import()` inside
     // `wrapAwsSendClient` rejects, same as Node's real module-resolution

@@ -307,6 +307,37 @@ describe('runOperation', () => {
     ]);
   });
 
+  it('does not report enabled_skip when `enabled` reads as undefined by the time it is re-checked, even though resolveEnabled saw it defined', async () => {
+    // `enabled` is read once inside resolveEnabled to decide whether the
+    // middleware runs, and again afterward to decide whether to report
+    // enabled_skip. A getter that changes what it returns between those
+    // two reads exercises the branch where the second read no longer
+    // sees a defined `enabled`.
+    const events: VernLLMEvent[] = [];
+    const wrap = vi.fn(async (_request, next: () => Promise<CallResult>) => next());
+    let reads = 0;
+    const middleware: VernLLMMiddleware = {
+      name: 'shifting-enabled',
+      wrap,
+      get enabled() {
+        reads += 1;
+        return reads === 1 ? false : undefined;
+      },
+    };
+
+    const outcome = await runOperation(
+      dependencies({ middleware: [middleware], reportEvent: (event) => events.push(event) }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      async () => ({ value: 'ok' }),
+    );
+
+    expect(outcome).toEqual({ value: 'ok' });
+    expect(wrap).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+  });
+
   it('does not report enabled_skip when enabled was never set at all (only when it was explicitly configured)', async () => {
     const events: VernLLMEvent[] = [];
     const middleware: VernLLMMiddleware = {

@@ -102,6 +102,35 @@ describe('fromBedrock', () => {
     );
   });
 
+  it.each([
+    ['image/jpeg', 'jpeg'],
+    ['image/gif', 'gif'],
+    ['image/webp', 'webp'],
+  ] as const)('maps %s to Converse image format %s', async (mimeType, format) => {
+    const { client, converse } = makeFakeBedrockClient('described');
+    const adapted = fromBedrock(client);
+    const base64 = 'ZmFrZWJhc2U2NA==';
+
+    await adapted.chat.completions.create(
+      {
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        temperature: 0.2,
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'image', data: base64, mimeType }],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentParams = at(converse.mock.calls, 0)[0];
+    const content = sentParams.messages[0]!.content;
+    expect(content[0]).toMatchObject({ image: { format } });
+  });
+
   it('throws an invalid_params LLMError for an unsupported image mimeType', async () => {
     const { client } = makeFakeBedrockClient('unused');
     const adapted = fromBedrock(client);
@@ -178,6 +207,31 @@ describe('fromBedrock', () => {
     expect(converse).not.toHaveBeenCalled();
   });
 
+  it('throws a validation LLMError when json_schema.name is empty or whitespace-only', async () => {
+    const { client, converse } = makeFakeBedrockClient('unused');
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: '   ', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      type: 'validation',
+      message: expect.stringContaining('json_schema.name must not be empty'),
+    });
+
+    expect(converse).not.toHaveBeenCalled();
+  });
+
   it('forces tool-use via toolConfig for json_schema mode instead of a prompt instruction', async () => {
     const { client, converse } = makeFakeBedrockToolClient('Candidate', { name: 'Ada' });
     const adapted = fromBedrock(client);
@@ -218,6 +272,26 @@ describe('fromBedrock', () => {
 
     // The toolUse block's already-parsed input is re-serialized to a JSON string
     expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
+  });
+
+  it('yields empty content when json_schema mode is forced but Bedrock never returns the matching toolUse block', async () => {
+    const { client } = makeFakeBedrockClient('plain text instead of a tool call');
+    const adapted = fromBedrock(client);
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'anthropic.claude-test',
+        max_tokens: 10,
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'Candidate', schema: { type: 'object' } },
+        },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.content).toBe('');
   });
 
   it('forwards json_schema name and description into Bedrock toolSpec', async () => {
@@ -307,6 +381,24 @@ describe('fromBedrock', () => {
       { role: 'user', content: [{ text: "What's the capital of France?" }] },
       { role: 'assistant', content: [{ text: 'Paris.' }] },
       { role: 'user', content: [{ text: "What's its population?" }] },
+    ]);
+  });
+
+  it('defaults a plain assistant/user message with no content at all to an empty text block', async () => {
+    const { client, converse } = makeFakeBedrockClient('hi');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        messages: [{ role: 'assistant' } as unknown as { role: 'assistant'; content: string }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(at(converse.mock.calls, 0)[0].messages).toEqual([
+      { role: 'assistant', content: [{ text: '' }] },
     ]);
   });
 
@@ -559,6 +651,49 @@ describe('fromBedrock, tools', () => {
     ]);
   });
 
+  it('defaults tool_calls arguments to "{}" when the toolUse block has no input at all', async () => {
+    const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
+      output: {
+        message: { content: [{ toolUse: { toolUseId: 'call_1', name: 'get_weather' } }] },
+      },
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+    }));
+    const adapted = fromBedrock({ converse });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [{ role: 'user', content: 'weather?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.tool_calls?.[0]).toMatchObject({
+      function: { arguments: '{}' },
+    });
+  });
+
+  it('defaults text content to an empty string when Bedrock omits message.content entirely', async () => {
+    const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
+      output: { message: {} },
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+    }));
+    const adapted = fromBedrock({ converse });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.content).toBe('');
+  });
+
   it('round-trips an assistant tool_calls turn and a tool-result turn into assistant/user Converse messages', async () => {
     const { client, converse } = makeFakeBedrockClient('sunny');
     const adapted = fromBedrock(client);
@@ -607,6 +742,39 @@ describe('fromBedrock, tools', () => {
         ],
       },
       { role: 'user', content: [{ text: 'thanks, what about tomorrow?' }] },
+    ]);
+  });
+
+  it('defaults an assistant tool_call with empty/whitespace-only arguments to an empty input object', async () => {
+    const { client, converse } = makeFakeBedrockClient('sunny');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '  ' },
+              },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(converse.mock.calls[0]![0].messages).toEqual([
+      {
+        role: 'assistant',
+        content: [{ toolUse: { toolUseId: 'call_1', name: 'get_weather', input: {} } }],
+      },
     ]);
   });
 

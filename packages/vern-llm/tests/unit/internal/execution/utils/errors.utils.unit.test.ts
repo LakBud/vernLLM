@@ -265,6 +265,18 @@ describe('normalizeError', () => {
     expect(result.code).toBe('connection_failed');
   });
 
+  it('does not tag a wrapped cause carrying an unrelated (non-libuv) error code as network', () => {
+    const cause = Object.assign(new Error('app-level failure'), { code: 'SOME_APP_ERROR' });
+    const err = new TypeError('outer wrapper message not matching any network phrasing', {
+      cause,
+    });
+
+    const result = normalizeError(err);
+
+    expect(result.type).toBe('unknown');
+    expect(result.code).toBeUndefined();
+  });
+
   it('does not tag an unrelated error code as "connection_failed"', () => {
     const err = Object.assign(new Error('boom'), { code: 'SOME_APP_ERROR' });
 
@@ -320,6 +332,12 @@ describe('describeError', () => {
     expect(result).toBe(JSON.stringify({ code: 'bad_request' }, null, 2));
   });
 
+  it('formats a non-object thrown value directly, skipping the field checks entirely', () => {
+    expect(describeError('just a string')).toBe(JSON.stringify('just a string', null, 2));
+    expect(describeError(404)).toBe('404');
+    expect(describeError(null)).toBe('null');
+  });
+
   it('falls back to the Error message when no `error` payload exists', () => {
     const result = describeError(new Error('boom'));
 
@@ -352,5 +370,49 @@ describe('describeError', () => {
     const result = describeError({ error: unprintable });
 
     expect(result).toBe('[unprintable error]');
+  });
+
+  it('falls back to String() when JSON.stringify returns undefined for the value', () => {
+    // JSON.stringify(fn) is undefined, so formatSafely must fall back to String().
+    const result = describeError({ error: () => {} });
+
+    expect(result).toContain('=>');
+  });
+});
+
+describe('normalizeError, non-object thrown values', () => {
+  it('treats a thrown string with no extractable status as an unknown error', () => {
+    const result = normalizeError('just a string');
+
+    expect(result).toBeInstanceOf(LLMError);
+    expect(result.type).toBe('unknown');
+    expect(result.status).toBeUndefined();
+  });
+
+  it('treats a thrown number as an unknown error', () => {
+    const result = normalizeError(404);
+
+    expect(result.type).toBe('unknown');
+    expect(result.status).toBeUndefined();
+  });
+
+  it('treats a thrown null as an unknown error', () => {
+    const result = normalizeError(null);
+
+    expect(result.type).toBe('unknown');
+  });
+
+  it('reads the status from a $metadata.httpStatusCode field (AWS SDK v3 style)', () => {
+    const result = normalizeError({ $metadata: { httpStatusCode: 503 } });
+
+    expect(result.status).toBe(503);
+    expect(result.code).toBe('server_error');
+  });
+
+  it('reads the status from a statusCode field when status is absent', () => {
+    const result = normalizeError({ statusCode: 429 });
+
+    expect(result.status).toBe(429);
+    expect(result.code).toBe('provider_rate_limited');
   });
 });
