@@ -228,3 +228,79 @@ describe('fromOpenAICompatible and its aliases', () => {
     expect(fn).toBe(fromOpenAICompatible);
   });
 });
+
+describe('fromOpenAICompatible, supportsWithResponse', () => {
+  function fakeHeaders(values: Record<string, string>) {
+    return { get: (name: string) => values[name.toLowerCase()] ?? null };
+  }
+
+  it('does not attach a rate limit hint when the resolved data is not an object', async () => {
+    const create = vi.fn().mockReturnValue({
+      withResponse: async () => ({
+        data: 'not-an-object',
+        response: { headers: fakeHeaders({ 'x-ratelimit-remaining-requests': '5' }) },
+      }),
+    });
+    const adapted = fromOpenAICompatible(
+      { chat: { completions: { create } } },
+      { supportsWithResponse: true },
+    );
+
+    const result = await adapted.chat.completions.create(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).toBe('not-an-object');
+  });
+
+  it('does not yield a rate_limit_hint chunk when neither remainingRequests nor limitRequests is present', async () => {
+    const create = vi.fn().mockReturnValue({
+      withResponse: async () => ({
+        data: (async function* () {
+          yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+        })(),
+        response: { headers: fakeHeaders({}) },
+      }),
+    });
+    const adapted = fromOpenAICompatible(
+      { chat: { completions: { create } } },
+      { supportsWithResponse: true },
+    );
+
+    const chunks: unknown[] = [];
+    for await (const chunk of adapted.chat.completions.createStream!(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.some((c) => (c as { type?: string }).type === 'rate_limit_hint')).toBe(false);
+  });
+
+  it('yields a rate_limit_hint chunk when only limitRequests is present', async () => {
+    const create = vi.fn().mockReturnValue({
+      withResponse: async () => ({
+        data: (async function* () {
+          yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+        })(),
+        response: { headers: fakeHeaders({ 'x-ratelimit-limit-requests': '100' }) },
+      }),
+    });
+    const adapted = fromOpenAICompatible(
+      { chat: { completions: { create } } },
+      { supportsWithResponse: true },
+    );
+
+    const chunks: unknown[] = [];
+    for await (const chunk of adapted.chat.completions.createStream!(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks[0]).toMatchObject({ type: 'rate_limit_hint', hint: { limitRequests: 100 } });
+  });
+});

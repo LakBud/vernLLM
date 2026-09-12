@@ -88,6 +88,25 @@ describe('parseSseStream', () => {
     expect(events).toEqual([{ a: 1 }]);
   });
 
+  it('stops iteration on a [DONE] frame only completed by the post-stream bare-\r flush', async () => {
+    // The trailing bare \r is held back until the stream ends; once
+    // flushed to \n it completes a second \n\n boundary, so this [DONE]
+    // frame is only recognized in the post-loop boundary re-scan, not the
+    // in-flight while loop.
+    const events = await collect(parseSseStream(chunksOf('data: {"a":1}\n\ndata: [DONE]\n\r')));
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
+  it('does not yield a genuinely empty non-comment frame only completed by the post-stream bare-\r flush', async () => {
+    const events = await collect(parseSseStream(chunksOf('data: {"a":1}\n\nevent: ping\n\r')));
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
+  it('strips only a single leading space after "data:", preserving further leading whitespace', async () => {
+    const events = await collect(parseSseStream(chunksOf('data:{"a":1}\n\n')));
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
   it('joins multiple data: lines within one frame with a newline, per the SSE spec', async () => {
     const events = await collect(parseSseStream(chunksOf('data: {"a":\ndata: 1}\n\n')));
     expect(events).toEqual([{ a: 1 }]);

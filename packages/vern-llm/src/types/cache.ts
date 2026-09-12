@@ -27,6 +27,12 @@ const FIFO: Eviction = {
 
 /** Moves `key` to the end of `store`'s iteration order. No-op if `key` isn't present. */
 function touch(store: Map<string, unknown>, key: string): void {
+  // Defensive: both call sites (onAccess in get(), onInsert in set())
+  // only invoke this after confirming the key is already in the store,
+  // so this guard never actually trips today. Kept in case a future
+  // eviction policy calls touch() from a context that can't make the
+  // same guarantee.
+  /* v8 ignore next */
   if (!store.has(key)) return;
 
   const value = store.get(key);

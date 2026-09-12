@@ -153,6 +153,36 @@ describe('RateLimiter', () => {
     expect(secondSettled).toBe(true);
   });
 
+  it('rolls back an earlier bucket already taken in the same attempt when a later bucket in the chain fails', async () => {
+    // Precedence order is concurrency, rpm, tpm, so concurrency is
+    // checked and taken before tpm; when tpm then fails, the
+    // just-taken concurrency slot must be given back rather than
+    // leaked. concurrency is used as the earlier bucket here (rather
+    // than rpm) specifically because it never refills from the clock
+    // (its TokenBucket is constructed with refillPerMs: 0), so its
+    // exact remaining count can't drift from real wall-clock time the
+    // way rpm's or tpm's would, keeping this assertion flake-free.
+    const limiter = new RateLimiter({
+      maxConcurrent: 2,
+      tokensPerMinute: 5,
+      maxQueueMs: 0,
+    });
+
+    const first = await limiter.acquire(5); // exhausts all 5 tpm tokens, holds 1 concurrency slot
+    expect(first.waitedMs).toBe(0);
+    expect(limiter.getState().concurrentInFlight).toBe(1);
+
+    // concurrency has room (1/2 used), but tpm has none left, so this
+    // attempt fails on tpm after already taking a concurrency slot;
+    // that slot must be rolled back rather than leaked.
+    void limiter.acquire(3); // queues (maxQueueMs: 0 never times it out)
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(limiter.getState().concurrentInFlight).toBe(1); // unchanged, not 2
+
+    first.release();
+  });
+
   it('maxQueueMs throws a rate_limit_queue_timeout-coded rate_limited error', async () => {
     vi.useFakeTimers();
     const limiter = new RateLimiter({ maxConcurrent: 1, maxQueueMs: 1000 });
@@ -603,6 +633,26 @@ describe('RateLimiter, AIMD', () => {
     expect(await isPending(fourth)).toBe(true);
 
     for (const h of held) h.release();
+  });
+
+  it('never schedules a wake timer when the bucket reports a non-finite wait (refillPerMs underflows to 0)', async () => {
+    // requestsPerMinute this tiny makes TokenBucket's own
+    // `capacityPerMinute / 60_000` refill rate underflow to exactly 0,
+    // which msUntilAvailable treats as "never refills" and reports as
+    // Infinity. scheduleWake must recognize that as non-finite and bail
+    // out rather than scheduling a timer with an Infinity/NaN delay.
+    // maxQueueMs: 0 disables the unrelated queue-timeout rejection, so
+    // only a genuine wake (or its absence) can settle this promise.
+    vi.useFakeTimers();
+    const limiter = new RateLimiter({ requestsPerMinute: 1e-320, maxQueueMs: 0 });
+
+    const blocked = limiter.acquire(0);
+    expect(await isPending(blocked)).toBe(true);
+
+    // No wake was scheduled, so advancing time (even a lot) never
+    // re-drains the queue on its own; it stays pending indefinitely.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(await isPending(blocked)).toBe(true);
   });
 
   it('signalRateLimit shrinks the ceiling by decreaseFactor, confirmed via a full-window refill', async () => {

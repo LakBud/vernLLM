@@ -11,6 +11,7 @@ import {
   recoverDelay,
   retryWithBackoff,
   shouldRetry,
+  waitForRetry,
   withChunkIdleTimeout,
   withTimeout,
   type RecoverDelayParams,
@@ -582,6 +583,17 @@ describe('recoverDelay', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('waitForRetry', () => {
+  it('rejects immediately with an aborted LLMError when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(waitForRetry(1000, controller.signal)).rejects.toMatchObject({
+      type: 'aborted',
+    });
   });
 });
 

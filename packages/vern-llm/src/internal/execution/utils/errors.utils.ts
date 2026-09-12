@@ -172,6 +172,12 @@ function isEmptyObject(value: object): boolean {
 }
 
 function hasNoDiagnosticDetail(error: unknown): boolean {
+  // Defensive: this function's only call site (below, in normalizeError)
+  // reaches it via a status extracted by extractStatus, which itself
+  // only returns a status for an object input, so `error` is always an
+  // object here in practice. Kept for callers this function doesn't
+  // control yet, and as a safe fallback if that invariant ever changes.
+  /* v8 ignore next */
   if (error && typeof error === 'object') {
     const { error: errorField, message } = error as { error?: unknown; message?: unknown };
 
@@ -202,7 +208,10 @@ function hasNoDiagnosticDetail(error: unknown): boolean {
   }
 
   // A non-object thrown value (string, number, etc.) has no `.error`/
-  // `.message` fields to check at all.
+  // `.message` fields to check at all. Also unreachable in practice for
+  // the same reason as the guard above (extractStatus already filters
+  // non-object errors before this function is ever called).
+  /* v8 ignore next */
   return true;
 }
 

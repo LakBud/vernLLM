@@ -114,6 +114,30 @@ describe('withReservedUsage', () => {
     expect(getResult).not.toHaveBeenCalled();
   });
 
+  it('uses a generic message for a quota_exceeded error when reserveUsage rejects with a non-Error value', async () => {
+    const reserveUsage = vi.fn().mockRejectedValue('not an Error instance');
+    const getResult = vi.fn();
+
+    await expect(
+      withReservedUsage({ reserveUsage }, false, getResult, undefined, vi.fn()),
+    ).rejects.toMatchObject({ type: 'quota_exceeded', message: 'Usage reservation failed' });
+  });
+
+  it('does not attempt a refund when the signal aborts after getResult and no reservation was made', async () => {
+    const controller = new AbortController();
+    const getResult = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      return 'value';
+    });
+    const refundUsage = vi.fn();
+
+    await expect(
+      withReservedUsage({ refundUsage }, false, getResult, controller.signal, vi.fn()),
+    ).rejects.toMatchObject({ type: 'aborted' });
+
+    expect(refundUsage).not.toHaveBeenCalled();
+  });
+
   it('refunds when getResult throws after a successful reservation, then rethrows the original error', async () => {
     const reserveUsage = vi.fn().mockResolvedValue(undefined);
     const refundUsage = vi.fn().mockResolvedValue(undefined);
@@ -214,6 +238,37 @@ describe('withReservedUsage', () => {
 });
 
 describe('withReservedUsageForStream', () => {
+  it('short-circuits with an aborted LLMError before reserveUsage runs at all, when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const openStream = vi.fn();
+
+    await expect(
+      withReservedUsageForStream({ reserveUsage }, openStream, controller.signal, vi.fn()),
+    ).rejects.toMatchObject({ type: 'aborted' });
+
+    expect(reserveUsage).not.toHaveBeenCalled();
+    expect(openStream).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt a refund on post-reserve abort when no reservation was made', async () => {
+    const controller = new AbortController();
+    const openStream = vi.fn();
+    const refundUsage = vi.fn();
+    // No reserveUsage hook, so `reserved` stays false. Abort right after the
+    // function starts (in a microtask), so it lands after the initial
+    // "already aborted" check but before the post-reserve abort check.
+    queueMicrotask(() => controller.abort());
+
+    await expect(
+      withReservedUsageForStream({ refundUsage }, openStream, controller.signal, vi.fn()),
+    ).rejects.toMatchObject({ type: 'aborted' });
+
+    expect(refundUsage).not.toHaveBeenCalled();
+    expect(openStream).not.toHaveBeenCalled();
+  });
+
   it('refunds and rejects as aborted, without ever calling openStream, when the signal aborts while reserveUsage is pending', async () => {
     const controller = new AbortController();
     const reserveUsage = vi.fn().mockImplementation(async () => {

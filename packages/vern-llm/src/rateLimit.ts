@@ -399,6 +399,13 @@ export class RateLimiter implements RateLimiterAdapter {
         signal?.removeEventListener('abort', onAbort);
 
         const index = this.queue.indexOf(waiter);
+        // Defensive: every current call site removes this waiter from
+        // the queue at most once (the abort listener is `{ once: true }`,
+        // and the queue timer is cleared above before it could also
+        // fire), so `index` should always be found. Guards against
+        // `splice(-1, 1)` silently deleting an unrelated waiter if that
+        // invariant is ever broken by a future change.
+        /* v8 ignore next */
         if (index !== -1) this.queue.splice(index, 1);
       };
 
@@ -565,6 +572,12 @@ export class RateLimiter implements RateLimiterAdapter {
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void {
     if (!this.aimd || !hint || hint.remainingRequests === undefined) return;
 
+    // Defensive: `buildAimdOptions` always normalizes `proactiveFloor` to
+    // a number (`?? 0`) at construction, so `this.aimd.proactiveFloor` is
+    // never actually undefined here. Guards against a `NaN`/`undefined`
+    // floor silently breaking the comparison below if that invariant is
+    // ever broken by a future change.
+    /* v8 ignore next */
     const floor = this.aimd.proactiveFloor ?? 0;
     if (floor > 0 && hint.remainingRequests <= floor) {
       this.signalRateLimit();
