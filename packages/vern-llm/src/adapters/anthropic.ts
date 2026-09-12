@@ -176,11 +176,18 @@ function toAnthropicToolChoice(
   | { type: 'none' }
   | { type: 'tool'; name: string }
   | undefined {
-  if (!toolChoice || toolChoice === 'auto') return { type: 'auto' };
-  if (toolChoice === 'none') return { type: 'none' };
-  if (toolChoice === 'required') return { type: 'any' };
+  const normalized = !toolChoice ? 'auto' : toolChoice;
 
-  return { type: 'tool', name: toolChoice.function.name };
+  switch (normalized) {
+    case 'auto':
+      return { type: 'auto' };
+    case 'none':
+      return { type: 'none' };
+    case 'required':
+      return { type: 'any' };
+    default:
+      return { type: 'tool', name: normalized.function.name };
+  }
 }
 
 /** One SSE event of an Anthropic `messages.create({ stream: true })` stream. */

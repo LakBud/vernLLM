@@ -193,6 +193,31 @@ describe('fromAnthropic', () => {
     expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
   });
 
+  it('throws a validation LLMError when json_schema.name is empty or whitespace-only', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi there');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'm',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: '   ', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      type: 'validation',
+      message: expect.stringContaining('json_schema.name must not be empty'),
+    });
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('forwards json_schema name and description into the Anthropic tool definition', async () => {
     const { client, create } = makeFakeAnthropicToolClient('Profile', { ok: true });
     const adapted = fromAnthropic(client);
@@ -290,6 +315,38 @@ describe('fromAnthropic', () => {
         { signal: new AbortController().signal },
       ),
     ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
+
+  it('defaults a text block with no text field to an empty string, and a tool_use block with no input to an empty object', async () => {
+    const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+      content: [{ type: 'text' }, { type: 'tool_use', id: 'call_1', name: 'get_weather' }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }));
+    const adapted = fromAnthropic({ messages: { create } });
+
+    const result = await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 10,
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather', description: 'd', parameters: { type: 'object' } },
+          },
+        ],
+        messages: [{ role: 'user', content: 'weather?' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.choices?.[0]?.message?.content).toBe('');
+    expect(result.choices?.[0]?.message?.tool_calls).toEqual([
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'get_weather', arguments: '{}' },
+      },
+    ]);
   });
 
   it('handles parallel tool_use responses and continuation requests with merged tool_result blocks', async () => {
@@ -526,6 +583,114 @@ describe('fromAnthropic', () => {
       { role: 'user', content: "What's its population?" },
     ]);
   });
+
+  it('defaults an assistant tool_call with empty/whitespace-only arguments to an empty input object', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 10,
+        messages: [
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '  ' },
+              },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(at(create.mock.calls, 0)[0].messages).toEqual([
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_1', name: 'get_weather', input: {} }],
+      },
+    ]);
+  });
+
+  it("throws validation when an assistant tool_call's arguments parse to a non-object (e.g. an array)", async () => {
+    const { client } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          max_tokens: 10,
+          messages: [
+            {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'get_weather', arguments: '[1,2,3]' },
+                },
+              ],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      type: 'validation',
+      message: expect.stringContaining('arguments must be a JSON object'),
+    });
+  });
+
+  it("throws validation when an assistant tool_call's arguments are not valid JSON at all", async () => {
+    const { client } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-x',
+          max_tokens: 10,
+          messages: [
+            {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'get_weather', arguments: '{not valid json' },
+                },
+              ],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      type: 'validation',
+      message: expect.stringContaining('are not valid JSON'),
+    });
+  });
+
+  it('defaults a plain user/assistant message with no content at all to an empty string', async () => {
+    const { client, create } = makeFakeAnthropicClient('hi');
+    const adapted = fromAnthropic(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 10,
+        messages: [{ role: 'assistant' } as unknown as { role: 'assistant'; content: string }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(at(create.mock.calls, 0)[0].messages).toEqual([{ role: 'assistant', content: '' }]);
+  });
 });
 
 describe('fromAnthropic, merges multiple tool results into one user turn', () => {
@@ -713,6 +878,58 @@ describe('fromAnthropic, native structured output', () => {
     expect(result.choices?.[0]?.message?.content).toBe('{"ok":true}');
   });
 
+  it('maps tool_choice: "none" to Anthropic\'s { type: "none" }', async () => {
+    const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+      content: [{ type: 'text', text: 'hi' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+    const adapted = fromAnthropic({ messages: { create } });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 10,
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'f', description: 'd', parameters: { type: 'object' } },
+          },
+        ],
+        tool_choice: 'none',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(at(create.mock.calls, 0)[0].tool_choice).toEqual({ type: 'none' });
+  });
+
+  it('maps tool_choice: "required" to Anthropic\'s { type: "any" }', async () => {
+    const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+      content: [{ type: 'text', text: 'hi' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+    const adapted = fromAnthropic({ messages: { create } });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'claude-x',
+        max_tokens: 10,
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'f', description: 'd', parameters: { type: 'object' } },
+          },
+        ],
+        tool_choice: 'required',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(at(create.mock.calls, 0)[0].tool_choice).toEqual({ type: 'any' });
+  });
+
   it('sends jsonSchema alone as output_config.format (not a forced tool call) on a covered model, even with no real tools present', async () => {
     const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
       content: [{ type: 'text', text: '{"name":"Ada"}' }],
@@ -774,6 +991,55 @@ describe('fromAnthropic, native structured output', () => {
     ]);
     expect(sentParams.output_config).toBeUndefined();
     expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
+  });
+
+  it('throws validation when Anthropic never returns the required structured-output tool_use block', async () => {
+    const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+      content: [{ type: 'text', text: 'I refuse to use tools' }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }));
+    const adapted = fromAnthropic({ messages: { create } });
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-legacy-model',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      type: 'validation',
+      message: expect.stringContaining('did not return the required structured output tool'),
+    });
+  });
+
+  it('throws validation when Anthropic returns non-object structured-output tool input (an array)', async () => {
+    const { client } = makeFakeAnthropicToolClient('Candidate', ['not', 'an', 'object']);
+    const adapted = fromAnthropic(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'claude-legacy-model',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      type: 'validation',
+      message: expect.stringContaining('Expected an object'),
+    });
   });
 
   it('supports a predicate function instead of a static list for nativeStructuredOutputModels', async () => {

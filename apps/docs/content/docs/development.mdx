@@ -23,7 +23,7 @@ pnpm run changeset           # record a change for the next release
 
 ## Test layout
 
-Tests live under `tests/unit/` and `tests/integration/`. No real API calls are made anywhere in the suite; everything runs against fakes and mocks.
+Tests live under `tests/unit/` and `tests/integration/`. No live provider API is called anywhere in the suite; most tests run against fakes and mocks, and the `*.real.int.test.ts` suites talk over real HTTP to a local loopback server standing in for the provider.
 
 ### `tests/unit/`
 
@@ -71,4 +71,5 @@ See [Contributing](/docs/contributing) for the pre-PR checklist with local-equiv
 
 ## Contributing
 
-See [Contributing](/docs/contributing) for the full guide: forking, branch setup, test expectations, and the pre-PR checklist.
+The full contribution guide, forking, branch setup, coding standard, test expectations, and the
+pre-PR checklist, lives at [Contributing](/docs/contributing).

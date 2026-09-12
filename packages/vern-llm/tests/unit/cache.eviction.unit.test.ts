@@ -91,4 +91,15 @@ describe('InMemoryCacheAdapter, ttl expiry', () => {
     expect((await cache.get('stale')).hit).toBe(false);
     expect((await cache.get('fresh')).hit).toBe(true);
   });
+
+  it('stops evicting once the store is empty, for a negative maxSize that keeps demanding further shrinkage', async () => {
+    // With maxSize < 0, `store.size > maxSize` stays true even once the
+    // store is completely empty (0 > -1), so enforceSizeLimit's eviction
+    // loop only terminates because getEvictee returns undefined on an
+    // empty store, not because the size condition itself became false.
+    const cache = new InMemoryCacheAdapter<string>(-1);
+
+    await expect(cache.set('a', 'A', 60)).resolves.toBeUndefined();
+    expect((await cache.get('a')).hit).toBe(false);
+  });
 });

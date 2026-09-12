@@ -12,6 +12,59 @@ import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 
 describe('CircuitBreaker (unit)', () => {
+  it('recordSuccess is a no-op when no bucket exists yet for the model (isolateByModel)', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, isolateByModel: true });
+
+    // isolateByModel allocates a bucket per model lazily via
+    // ensureBucketFor; recordSuccess only *looks up* a bucket, so a model
+    // that's never been through assertClosed/recordFailure has none yet.
+    expect(() => cb.recordSuccess('never-seen-model')).not.toThrow();
+    expect(cb.getState('never-seen-model')).toBe('closed');
+  });
+
+  it('claiming a second half-open trial slot with a context registers a trial permit for it too', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000, halfOpenProbes: 2 });
+
+    cb.recordFailure();
+    vi.advanceTimersByTime(1001);
+
+    const firstContext = { requestId: 'first', state: createMiddlewareStateBag() };
+    const secondContext = { requestId: 'second', state: createMiddlewareStateBag() };
+
+    // First call transitions open -> half-open, claiming slot 1.
+    cb.assertClosed(undefined, firstContext);
+    expect(cb.getState()).toBe('half-open');
+
+    // Second call claims the remaining slot while already half-open,
+    // exercising the trial-permit registration on that branch too.
+    cb.assertClosed(undefined, secondContext);
+
+    // Both callers' own contexts settle the same trial they each claimed.
+    cb.recordSuccess(undefined, firstContext);
+    expect(cb.getState()).toBe('half-open'); // still waiting on the second
+    cb.recordSuccess(undefined, secondContext);
+    expect(cb.getState()).toBe('closed');
+
+    vi.useRealTimers();
+  });
+
+  it('treats a NaN cooldownBackoff result as a zero-length cooldown', () => {
+    vi.useFakeTimers();
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: () => Number.NaN,
+    });
+
+    cb.recordFailure();
+    // A NaN backoff result is clamped to 0, so the circuit should already
+    // be eligible to move to half-open with no time advanced at all.
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    vi.useRealTimers();
+  });
+
   it('starts closed', () => {
     const cb = new CircuitBreaker();
     expect(cb.getState()).toBe('closed');
@@ -1810,6 +1863,25 @@ describe('CircuitBreaker, tripping policy (unit)', () => {
     expect(cb.getState()).toBe('closed');
     cb.recordFailure(); // 3/4, minCalls met, ratio 0.75 >= 0.5
     expect(cb.getState()).toBe('open');
+  });
+
+  it('lets a RollingTripping policy release a discarded model bucket (isolateByModel)', () => {
+    const cb = new CircuitBreaker({
+      cooldownMs: 1000,
+      isolateByModel: true,
+      tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 1, failureRatio: 0.5 },
+    });
+
+    // assertClosed allocates the bucket (recordSuccess alone is a no-op
+    // for a model with no bucket yet). Then a success on that fresh,
+    // still-closed, zero-consecutive-failures bucket discards it,
+    // calling RollingTripping's own forget() to release its per-key
+    // state too.
+    cb.assertClosed('gpt');
+    cb.recordSuccess('gpt');
+
+    expect(cb.getState('gpt')).toBe('closed');
+    expect(cb.getFailureBreakdown('gpt')).toEqual({});
   });
 
   it('minCalls gates tripping even at 100% failure ratio within the window', () => {

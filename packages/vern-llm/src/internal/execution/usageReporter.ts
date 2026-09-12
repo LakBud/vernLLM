@@ -1,9 +1,9 @@
-import { logHookError } from '../utils/logger.utils.js';
 import { toTokenUsage } from './utils/response/usage.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { LLMError } from '../../types/errors.js';
-import type { LLMClient, TokenUsage } from '../../types/index.js';
+import type { VernLLMEvent } from '../../types/events.js';
+import type { AttemptContext, LLMClient, TokenUsage } from '../../types/index.js';
 
 /** Everything one target's `UsageReporter` needs beyond the response/error being reported on. */
 export interface UsageReporterOptions {
@@ -11,8 +11,15 @@ export interface UsageReporterOptions {
   /** True for every target after the primary. Stamped onto every reported `TokenUsage`. */
   isFallback: boolean;
   maxRetries: number;
-  onUsage?: (usage: TokenUsage) => void;
-  onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
+  /**
+   * Reports a `'usage'`/`'usage_failure'` event through the same
+   * instance-level reporter and middleware fan-out every other event
+   * uses (see `emitEvent`). `VernLLMOptions.onUsage`/`onUsageFailure`
+   * are driven from this same event by `makeEventReporter`, not called
+   * directly here: `UsageReporter` has exactly one way to report
+   * usage, not two.
+   */
+  emitEvent: (event: VernLLMEvent, ctx: AttemptContext) => void;
   logger: Logger;
 }
 
@@ -35,20 +42,25 @@ export interface UsageReporter {
    * hand-rolled client that reports the parts but omits the total.
    */
   actualTokensFor(usage: TokenUsage | undefined): number | undefined;
-  /** Reports token usage for a successful call, swallowing and logging any error `onUsage` throws. */
-  reportSuccess(usage: TokenUsage | undefined): void;
+  /** Reports token usage for a successful call as a `'usage'` event. `ctx` is this attempt's `AttemptContext`, used to fan the event out to middleware and to `onEvent`/`onUsage`. */
+  reportSuccess(usage: TokenUsage | undefined, ctx: AttemptContext): void;
   /**
-   * Reports token usage spent on an attempt that then failed, so it isn't
-   * dropped alongside the error. Covers any error thrown after usage
-   * extraction, since all of them happen only after a response (real
-   * spend) already arrived. Swallows and logs any error `onUsageFailure`
-   * itself throws.
+   * Reports token usage spent on an attempt that then failed, as a
+   * `'usage_failure'` event, so it isn't dropped alongside the error.
+   * Covers any error thrown after usage extraction, since all of them
+   * happen only after a response (real spend) already arrived.
    */
-  reportFailure(usage: TokenUsage, error: LLMError, attempt: number, terminal?: boolean): void;
+  reportFailure(
+    usage: TokenUsage,
+    error: LLMError,
+    attempt: number,
+    ctx: AttemptContext,
+    terminal?: boolean,
+  ): void;
 }
 
 export function createUsageReporter(options: UsageReporterOptions): UsageReporter {
-  const { providerName, isFallback, maxRetries, onUsage, onUsageFailure, logger } = options;
+  const { providerName, isFallback, maxRetries, emitEvent, logger } = options;
 
   function extract(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
@@ -65,20 +77,17 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
     return usage.totalTokens || usage.promptTokens + usage.completionTokens;
   }
 
-  function reportSuccess(usage: TokenUsage | undefined): void {
-    if (!usage || !onUsage) return;
+  function reportSuccess(usage: TokenUsage | undefined, ctx: AttemptContext): void {
+    if (!usage) return;
 
-    try {
-      onUsage(usage);
-    } catch (error) {
-      logHookError(logger, 'onUsage', error);
-    }
+    emitEvent({ kind: 'usage', requestId: usage.requestId, usage }, ctx);
   }
 
   function reportFailure(
     usage: TokenUsage,
     error: LLMError,
     attempt: number,
+    ctx: AttemptContext,
     terminal = false,
   ): void {
     // Falls back to promptTokens + completionTokens if totalTokens is 0
@@ -99,13 +108,7 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
         `type=${error.type} tokens=${displayTokens}`,
     );
 
-    if (!onUsageFailure) return;
-
-    try {
-      onUsageFailure(usage, error);
-    } catch (hookError) {
-      logHookError(logger, 'onUsageFailure', hookError);
-    }
+    emitEvent({ kind: 'usage_failure', requestId: usage.requestId, usage, error }, ctx);
   }
 
   return { extract, actualTokensFor, reportSuccess, reportFailure };

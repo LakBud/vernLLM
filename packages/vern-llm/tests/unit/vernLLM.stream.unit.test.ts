@@ -263,6 +263,32 @@ describe('VernLLM.call, stream: true', () => {
     expect(refundUsage).toHaveBeenCalledTimes(1);
   });
 
+  it('logs, instead of throwing, when refundUsage itself throws after a streaming call fails to open', async () => {
+    const reserveUsage = vi.fn().mockResolvedValue(undefined);
+    const refundError = new Error('refund boom');
+    const refundUsage = vi.fn(async () => {
+      throw refundError;
+    });
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { client } = createMockStreamingClient([new Error('connect failed')]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0, logger });
+
+    await expect(
+      llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+        reserveUsage,
+        refundUsage,
+      }),
+    ).rejects.toBeInstanceOf(LLMError); // the original connect failure still propagates
+
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VernLLM] refundUsage failed after stream-open failure',
+      { message: 'refund boom', stack: refundError.stack },
+    );
+  });
+
   it('reserves usage up front but defers refund until finalResult settles for a mid-stream failure', async () => {
     const reserveUsage = vi.fn().mockResolvedValue(undefined);
     const refundUsage = vi.fn().mockResolvedValue(undefined);

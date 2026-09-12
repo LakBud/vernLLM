@@ -178,19 +178,20 @@ function toGeminiToolConfig(
 ): NonNullable<
   NonNullable<Parameters<NonNullable<GeminiClient['generateContent']>>[0]['config']>['toolConfig']
 > {
-  if (!toolChoice || toolChoice === 'auto') {
-    return { functionCallingConfig: { mode: 'AUTO' } };
-  }
-  if (toolChoice === 'none') {
-    return { functionCallingConfig: { mode: 'NONE' } };
-  }
-  if (toolChoice === 'required') {
-    return { functionCallingConfig: { mode: 'ANY' } };
-  }
+  const normalized = !toolChoice ? 'auto' : toolChoice;
 
-  return {
-    functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [toolChoice.function.name] },
-  };
+  switch (normalized) {
+    case 'auto':
+      return { functionCallingConfig: { mode: 'AUTO' } };
+    case 'none':
+      return { functionCallingConfig: { mode: 'NONE' } };
+    case 'required':
+      return { functionCallingConfig: { mode: 'ANY' } };
+    default:
+      return {
+        functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [normalized.function.name] },
+      };
+  }
 }
 
 /**

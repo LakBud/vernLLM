@@ -62,6 +62,13 @@ describe('parseOpenAIRateLimitHeaders', () => {
     expect(hint.resetAfterMs).toBeUndefined();
   });
 
+  it('returns undefined resetAfterMs when the duration parses to a non-finite value', () => {
+    const hint = parseOpenAIRateLimitHeaders(
+      headers({ 'x-ratelimit-reset-requests': `${'9'.repeat(400)}h` }),
+    );
+    expect(hint.resetAfterMs).toBeUndefined();
+  });
+
   it('returns undefined resetAfterMs for an empty-string duration', () => {
     const hint = parseOpenAIRateLimitHeaders(headers({ 'x-ratelimit-reset-requests': '' }));
     expect(hint.resetAfterMs).toBeUndefined();

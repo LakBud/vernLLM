@@ -11,7 +11,7 @@ import { createUsageReporter, type UsageReporter } from './usageReporter.js';
 import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
 import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
 import { extractStatus } from './utils/errors.utils.js';
-import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './utils/middleware/middleware.utils.js';
+import { DEFAULT_MIDDLEWARE_TIMEOUT_MS, emitEvent } from './utils/middleware/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
 import { withTimeout } from './utils/retry/retry.utils.js';
 
@@ -105,7 +105,12 @@ export class CallExecutor {
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
     this.redact = options.redact;
-    this.reportEvent = makeEventReporter(options.onEvent, this.logger);
+
+    this.reportEvent = makeEventReporter(options.onEvent, this.logger, {
+      onUsage: options.onUsage,
+      onUsageFailure: options.onUsageFailure,
+    });
+
     this.breaker = options.breaker;
     this.budget = options.budget;
     this.limiter = options.limiter;
@@ -114,14 +119,23 @@ export class CallExecutor {
     this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
     this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
     this.detectSoftFailure = options.detectSoftFailure;
+
     this.usageReporter = createUsageReporter({
       providerName: this.providerName,
       isFallback: this.isFallback,
       maxRetries: this.maxRetries,
-      onUsage: options.onUsage,
-      onUsageFailure: options.onUsageFailure,
+      emitEvent: (event, ctx) =>
+        emitEvent(
+          event,
+          ctx,
+          this.reportEvent,
+          this.middleware,
+          this.middlewareTimeoutMs,
+          this.logger,
+        ),
       logger: this.logger,
     });
+
     this.requestBuilder = new RequestBuilder({
       model,
       defaultMaxTokens: options.defaultMaxTokens,
@@ -565,7 +579,13 @@ export class CallExecutor {
           }
 
           if (usage && normalized.type !== 'aborted') {
-            this.usageReporter.reportFailure(usage, normalized, attempt, true);
+            this.usageReporter.reportFailure(
+              usage,
+              normalized,
+              attempt,
+              gateway.buildAttemptContext(attempt, params.signal, state),
+              true,
+            );
           }
 
           releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));

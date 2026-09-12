@@ -1,5 +1,6 @@
 import type { CircuitState } from '../circuitBreaker.js';
 import type { LLMError } from './errors.js';
+import type { TokenUsage } from './usage.js';
 
 /**
  * Reports what happened during a call. Fire and forget, mirroring
@@ -71,6 +72,28 @@ export type VernLLMEvent =
       hook: 'transform' | 'wrap_short_circuit' | 'enabled_skip';
       /** For `hook: 'transform'` only: which top-level fields the merged patch touched. */
       patchedFields?: string[];
+    }
+  | {
+      /**
+       * Reported once a call fully succeeds. Same data `VernLLMOptions.onUsage`
+       * receives; that option is sugar over this event, not a second
+       * reporting path, see `makeEventReporter`.
+       */
+      kind: 'usage';
+      requestId: string;
+      usage: TokenUsage;
+    }
+  | {
+      /**
+       * A provider response arrived, carrying real usage, and VernLLM's own
+       * post-processing then failed. Fires once per failed attempt with
+       * extractable usage, matching `VernLLMOptions.onUsageFailure`'s own
+       * granularity, which this event is sugar over, not a second path.
+       */
+      kind: 'usage_failure';
+      requestId: string;
+      usage: TokenUsage;
+      error: LLMError;
     };
 
 export type OnEvent = (event: VernLLMEvent) => void;

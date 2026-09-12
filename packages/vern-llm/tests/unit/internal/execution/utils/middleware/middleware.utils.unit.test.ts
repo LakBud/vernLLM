@@ -72,6 +72,18 @@ describe('mergePatch', () => {
     expect(patchedFields.sort()).toEqual(['max_tokens', 'temperature']);
   });
 
+  it('overwrites reasoning_effort, budget_tokens, and tool_choice', () => {
+    const { request, patchedFields } = mergePatch(baseRequest, {
+      reasoning_effort: 'high',
+      budget_tokens: 2048,
+      tool_choice: 'auto',
+    });
+    expect(request.reasoning_effort).toBe('high');
+    expect(request.budget_tokens).toBe(2048);
+    expect(request.tool_choice).toBe('auto');
+    expect(patchedFields.sort()).toEqual(['budget_tokens', 'reasoning_effort', 'tool_choice']);
+  });
+
   it('appends addMessages without clobbering the original list', () => {
     const { request } = mergePatch(baseRequest, {
       addMessages: [{ role: 'user', content: 'appended' }],
@@ -333,6 +345,11 @@ describe('reclassifyMiddlewareThrow', () => {
 });
 
 describe('runTransform', () => {
+  it('returns an empty patch when the middleware has no transform', async () => {
+    const result = await runTransform({}, baseRequest, baseCtx(), 'no-transform', 5000);
+    expect(result).toEqual({});
+  });
+
   it('classifies a timed-out transform as a non-retryable middleware_timeout', async () => {
     await expect(
       runTransform(
@@ -375,6 +392,15 @@ describe('applyMiddlewareTransforms', () => {
 
   it('returns the request unchanged when there is no middleware', async () => {
     const result = await applyMiddlewareTransforms(baseParams({ middleware: [] }));
+    expect(result).toBe(baseRequest);
+  });
+
+  it('skips a middleware that has no transform, leaving the request unchanged', async () => {
+    const onEvent = vi.fn();
+    const middleware: VernLLMMiddleware[] = [{ name: 'observer-only', onEvent }];
+
+    const result = await applyMiddlewareTransforms(baseParams({ middleware }));
+
     expect(result).toBe(baseRequest);
   });
 
@@ -488,6 +514,29 @@ describe('applyMiddlewareTransforms', () => {
     expect(reportEvent).not.toHaveBeenCalled();
   });
 
+  it('does not emit enabled_skip when `enabled` reads as undefined by the time it is re-checked, even though resolveEnabled saw it defined', async () => {
+    // `enabled` is read twice: once inside resolveEnabled to decide
+    // whether the middleware runs, and again afterward to decide whether
+    // to report the enabled_skip event. A getter that changes what it
+    // returns between those two reads exercises the branch where the
+    // second read no longer sees a defined `enabled`.
+    const reportEvent = vi.fn();
+    let reads = 0;
+    const middlewareEntry: VernLLMMiddleware = {
+      name: 'shifting-enabled',
+      transform: vi.fn(() => ({})),
+      get enabled() {
+        reads += 1;
+        return reads === 1 ? false : undefined;
+      },
+    };
+
+    await applyMiddlewareTransforms(baseParams({ middleware: [middlewareEntry], reportEvent }));
+
+    expect(middlewareEntry.transform).not.toHaveBeenCalled();
+    expect(reportEvent).not.toHaveBeenCalled();
+  });
+
   it('emits a transform event listing patchedFields when a transform actually changes something', async () => {
     const reportEvent = vi.fn();
     const middleware: VernLLMMiddleware[] = [
@@ -548,6 +597,38 @@ describe('applyMiddlewareTransforms', () => {
 });
 
 describe('emitEvent', () => {
+  it('reports the event and returns without dispatching when there is no middleware', () => {
+    const reportEvent = vi.fn();
+    const event: VernLLMEvent = {
+      kind: 'middleware',
+      requestId: 'req-1',
+      middleware: 'some-middleware',
+      hook: 'enabled_skip',
+    };
+
+    emitEvent(event, baseCtx(), reportEvent, [], 1000, logger);
+
+    expect(reportEvent).toHaveBeenCalledWith(event);
+  });
+
+  it('skips onEvent for a middleware whose enabled resolves false', async () => {
+    const onEvent = vi.fn();
+    const event: VernLLMEvent = {
+      kind: 'middleware',
+      requestId: 'req-1',
+      middleware: 'some-middleware',
+      hook: 'enabled_skip',
+    };
+    const middleware: VernLLMMiddleware[] = [{ name: 'disabled-mw', enabled: false, onEvent }];
+
+    emitEvent(event, baseCtx(), () => {}, middleware, 1000, logger);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
   it('logs and swallows an onEvent handler that throws synchronously, not just one that rejects', async () => {
     const errorLogger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const event: VernLLMEvent = {

@@ -156,6 +156,22 @@ describe('startRealSdkServer', () => {
 
     expect(server.requests).toHaveLength(1);
   });
+  it('records an undefined body for a request with no body at all (e.g. a bare POST with nothing written)', async () => {
+    server = await startRealSdkServer([{ body: { ok: true } }]);
+
+    const res = await post(`${server.url}/chat`, '');
+
+    expect(res.status).toBe(200);
+    expect(server.requests[0]?.body).toBeUndefined();
+  });
+
+  it('rejects the returned close() promise when closing an already-closed server', async () => {
+    server = await startRealSdkServer([]);
+
+    await server.close();
+    await expect(server.close()).rejects.toThrow();
+    server = undefined;
+  });
 });
 
 describe('sseRaw', () => {

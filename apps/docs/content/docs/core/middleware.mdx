@@ -161,17 +161,22 @@ A throwing, rejecting, or timed out `enabled` is logged and treated as `false`.
 ### `onEvent` and the `'middleware'` event
 
 Routed off the same event stream as the top-level `onEvent` option, filtered by that middleware's
-own `enabled`. Covers `'retry'`, `'rate_limited'`, `'fallback'`, `'circuit_state'`, and the
-`'middleware'` event described below:
+own `enabled`. Covers `'retry'`, `'rate_limited'`, `'fallback'`, `'circuit_state'`, `'usage'`,
+`'usage_failure'`, and the `'middleware'` event described below:
 
 ```ts title="middleware-onevent.ts"
 {
   name: 'per-middleware-metrics',
   onEvent: (event, ctx) => {
     if (event.kind === 'retry') metrics.increment('llm.retry.seen_by_mw');
+    if (event.kind === 'usage') metrics.observe('llm.usage.total_tokens', event.usage.totalTokens);
   },
 }
 ```
+
+A middleware reading `'usage'`/`'usage_failure'` this way doesn't need the app to also wire a
+top-level `onUsage`/`onUsageFailure` option: both fire from the same underlying event
+independently. See [Usage and usage_failure](/docs/core/observability#usage-and-usage_failure).
 
 VernLLM also reports its own `'middleware'` event, so a call touched by several middleware is
 debuggable without adding logging to each one by hand:

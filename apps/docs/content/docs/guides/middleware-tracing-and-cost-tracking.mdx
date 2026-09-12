@@ -102,8 +102,49 @@ const llm = new VernLLM({
 
 ## 5. Read real token usage instead of a placeholder
 
-`result.meta` doesn't carry token counts, `onUsage` does. Pair `wrap` with `onUsage` for cost that
-needs real spend, not just wall clock time:
+`result.meta` doesn't carry token counts. There are two ways to get real usage into
+`cost-tracking`, and which one fits depends on whether usage tracking should live inside the
+middleware itself or stay a separate app-level concern.
+
+**Inside the middleware, via its own `onEvent`.** `'usage'` is part of the same event union as
+`'retry'`/`'fallback'`/etc, so `cost-tracking` can read real spend without the app wiring
+anything extra:
+
+```ts title="cost-tracking-middleware.ts"
+import type { VernLLMMiddleware } from 'vern-llm';
+import { spanIdKey } from './span-id-key';
+
+export const costTracking: VernLLMMiddleware = {
+  name: 'cost-tracking',
+  priority: 0,
+  wrap: async (request, next, ctx) => {
+    const start = Date.now();
+    const result = await next();
+
+    recordCost({
+      spanId: ctx.state.get(spanIdKey),
+      elapsedMs: Date.now() - start,
+    });
+
+    return result;
+  },
+  onEvent: (event) => {
+    if (event.kind === 'usage') {
+      recordTokenCost(
+        event.requestId,
+        event.usage.totalTokens || event.usage.promptTokens + event.usage.completionTokens,
+      );
+    }
+  },
+};
+```
+
+This keeps `cost-tracking` self contained: registering it is enough, nothing else in
+`VernLLMOptions` needs to change for token cost to start flowing. See [Usage and
+usage_failure](/docs/core/observability#usage-and-usage_failure).
+
+**At the app level, via the top-level `onUsage` option**, when usage tracking is a concern the app
+owns rather than something bundled into the middleware itself:
 
 ```ts title="cost-tracking-with-usage.ts"
 import { VernLLM } from 'vern-llm';
@@ -116,14 +157,20 @@ const llm = new VernLLM({
   model: 'gpt-4o',
   middleware: [tracing, costTracking],
   onUsage: (usage) => {
-    recordTokenCost(usage.requestId, usage.totalTokens);
+    recordTokenCost(
+      usage.requestId,
+      usage.totalTokens || usage.promptTokens + usage.completionTokens,
+    );
   },
 });
 ```
 
-`onUsage` fires per real provider response; `wrap`'s `next()` resolves once per logical call.
-Correlate the two by `requestId` for per-attempt token cost instead of just the logical call's
-total elapsed time.
+Both fire from the same underlying event, independently, so using one doesn't preclude the other:
+an app can keep its own `onUsage` for billing while a separately authored middleware reads the
+identical `'usage'` event for its own tracing, neither aware the other exists. `onUsage`/`'usage'`
+fires per real provider response; `wrap`'s `next()` resolves once per logical call. Correlate the
+two by `requestId` for per-attempt token cost instead of just the logical call's total elapsed
+time.
 
 ## Why `cost-tracking` is `priority: 0`
 
