@@ -132,16 +132,22 @@ describe('fromBedrock, given a raw AWS SDK client directly (.send() only)', () =
       const createStream = adapted.chat.completions.createStream;
       if (!createStream) throw new Error('fromBedrock should always define createStream');
 
-      await expect(
-        (async () => {
+      const rejection = await (async () => {
+        try {
           for await (const _ of createStream(
             { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
             { signal: new AbortController().signal },
           )) {
             // draining the stream
           }
-        })(),
-      ).rejects.toMatchObject(expected);
+          return undefined;
+        } catch (error) {
+          return error;
+        }
+      })();
+
+      expect(rejection).toBeInstanceOf(LLMError);
+      expect(rejection).toMatchObject(expected);
     },
   );
 
