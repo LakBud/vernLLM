@@ -44,10 +44,20 @@
     },
 
     {
-      "description": "Keep OpenAI SDK updates visible",
-      "groupName": "openai sdk",
-      "matchPackageNames": ["openai"],
-      "rangeStrategy": "replace"
+      "description": "Group Bedrock provider (SDK + smithy internals) into its own PR",
+      "groupName": "aws bedrock provider",
+      "matchPackageNames": [
+        "@aws-sdk/client-bedrock-runtime",
+        "@smithy/eventstream-serde-node",
+        "@smithy/node-http-handler",
+        "@smithy/util-utf8"
+      ]
+    },
+
+    {
+      "description": "Keep provider SDKs ungrouped so each gets its own PR",
+      "matchPackageNames": ["@anthropic-ai/sdk", "@google/genai", "groq-sdk", "openai"],
+      "groupName": null
     },
 
     {
