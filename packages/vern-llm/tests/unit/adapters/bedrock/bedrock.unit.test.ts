@@ -274,24 +274,96 @@ describe('fromBedrock', () => {
     expect(result.choices?.[0]?.message?.content).toBe(JSON.stringify({ name: 'Ada' }));
   });
 
-  it('yields empty content when json_schema mode is forced but Bedrock never returns the matching toolUse block', async () => {
+  it('throws a validation LLMError when json_schema mode is forced but Bedrock never returns the matching toolUse block', async () => {
     const { client } = makeFakeBedrockClient('plain text instead of a tool call');
     const adapted = fromBedrock(client);
 
-    const result = await adapted.chat.completions.create(
-      {
-        model: 'anthropic.claude-test',
-        max_tokens: 10,
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'Candidate', schema: { type: 'object' } },
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
         },
-        messages: [{ role: 'user', content: 'hi' }],
-      },
-      { signal: new AbortController().signal },
-    );
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
 
-    expect(result.choices?.[0]?.message?.content).toBe('');
+  it("throws validation when the forced tool's input is null", async () => {
+    const { client } = makeFakeBedrockToolClient('Candidate', null);
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('Expected an object'),
+    });
+  });
+
+  it("throws validation when the forced tool's input is a bare string", async () => {
+    const { client } = makeFakeBedrockToolClient('Candidate', 'not an object');
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('Expected an object'),
+    });
+  });
+
+  it("throws validation when the forced tool's input is an array", async () => {
+    const { client } = makeFakeBedrockToolClient('Candidate', ['not', 'an', 'object']);
+    const adapted = fromBedrock(client);
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'anthropic.claude-test',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'Candidate', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('Expected an object'),
+    });
   });
 
   it('forwards json_schema name and description into Bedrock toolSpec', async () => {
@@ -459,7 +531,7 @@ describe('fromBedrock', () => {
     });
 
     it('proceeds normally when the model is in the allowlist', async () => {
-      const { client, converse } = makeFakeBedrockClient('ok');
+      const { client, converse } = makeFakeBedrockToolClient('Candidate', { ok: true });
       const adapted = fromBedrock(client, { toolUseSupportedModels: ['supported-model'] });
 
       await adapted.chat.completions.create(
@@ -505,7 +577,7 @@ describe('fromBedrock', () => {
     });
 
     it('proceeds normally and passes the model ID to a predicate that returns true', async () => {
-      const { client, converse } = makeFakeBedrockClient('ok');
+      const { client, converse } = makeFakeBedrockToolClient('Candidate', { ok: true });
       const predicate = vi.fn((modelId: string) => modelId.startsWith('anthropic.'));
       const adapted = fromBedrock(client, { toolUseSupportedModels: predicate });
 
@@ -546,7 +618,7 @@ describe('fromBedrock', () => {
     });
 
     it('skips the preflight check entirely when no toolUseSupportedModels is configured', async () => {
-      const { client, converse } = makeFakeBedrockClient('ok');
+      const { client, converse } = makeFakeBedrockToolClient('Candidate', { ok: true });
       const adapted = fromBedrock(client);
 
       await adapted.chat.completions.create(
@@ -675,6 +747,32 @@ describe('fromBedrock, tools', () => {
     });
   });
 
+  it('throws a validation LLMError when a toolUse block is returned without a name', async () => {
+    const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
+      output: {
+        message: { content: [{ toolUse: { toolUseId: 'call_1', input: {} } }] },
+      },
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+    }));
+    const adapted = fromBedrock({ converse });
+
+    await expect(
+      adapted.chat.completions.create(
+        {
+          model: 'm',
+          max_tokens: 10,
+          tools: [weatherTool],
+          messages: [{ role: 'user', content: 'weather?' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'validation',
+      message: expect.stringContaining('toolUse block without a name'),
+    });
+  });
+
   it('defaults text content to an empty string when Bedrock omits message.content entirely', async () => {
     const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
       output: { message: {} },
@@ -743,6 +841,56 @@ describe('fromBedrock, tools', () => {
       },
       { role: 'user', content: [{ text: 'thanks, what about tomorrow?' }] },
     ]);
+  });
+
+  it('maps a tool-result turn with is_error true to a Converse toolResult with status error', async () => {
+    const { client, converse } = makeFakeBedrockClient('sunny');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [{ role: 'tool', tool_call_id: 'call_1', content: 'boom', is_error: true }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(converse.mock.calls[0]![0].messages[0]!.content[0]).toMatchObject({
+      toolResult: { status: 'error' },
+    });
+  });
+
+  it('includes leading assistant text alongside tool_calls as a text block', async () => {
+    const { client, converse } = makeFakeBedrockClient('sunny');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Sure, let me check that.',
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'NYC' }) },
+              },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(converse.mock.calls[0]![0].messages[0]!.content[0]).toEqual({
+      text: 'Sure, let me check that.',
+    });
   });
 
   it('defaults an assistant tool_call with empty/whitespace-only arguments to an empty input object', async () => {

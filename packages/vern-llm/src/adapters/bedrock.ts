@@ -5,6 +5,10 @@ import {
   type WireStreamChunk,
   type WireToolCall,
 } from '../types/index.js';
+import {
+  assertForcedJsonSchemaToolInputIsObject,
+  throwMissingForcedJsonSchemaTool,
+} from './internal/forcedJsonSchemaTool.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 import {
   supportsNativeStructuredOutput,
@@ -895,7 +899,13 @@ export function fromBedrock(
               (block) => block.toolUse?.name === toolName,
             );
 
-            text = toolUseBlock?.toolUse ? JSON.stringify(toolUseBlock.toolUse.input) : '';
+            if (!toolUseBlock?.toolUse) throwMissingForcedJsonSchemaTool('Bedrock', toolName);
+
+            const { input } = toolUseBlock.toolUse;
+
+            assertForcedJsonSchemaToolInputIsObject('Bedrock', toolName, input);
+
+            text = JSON.stringify(input);
           } else {
             const blocks = response.output?.message?.content ?? [];
 
@@ -965,6 +975,7 @@ export function fromBedrock(
           const { stream } = await client.converseStream(request, requestOptions);
 
           const blockKinds = new Map<number, 'text' | 'tool_use' | 'json-tool'>();
+          let sawJsonTool = false;
 
           for await (const event of stream) {
             if ('contentBlockStart' in event) {
@@ -975,7 +986,9 @@ export function fromBedrock(
 
                 blockKinds.set(contentBlockIndex, kind);
 
-                if (kind === 'tool_use' && !toolName) {
+                if (kind === 'json-tool') {
+                  sawJsonTool = true;
+                } else if (kind === 'tool_use' && !toolName) {
                   yield {
                     type: 'tool_call_delta',
                     index: contentBlockIndex,
@@ -1056,6 +1069,8 @@ export function fromBedrock(
               });
             }
           }
+
+          if (toolName && !sawJsonTool) throwMissingForcedJsonSchemaTool('Bedrock', toolName);
         },
       },
     },

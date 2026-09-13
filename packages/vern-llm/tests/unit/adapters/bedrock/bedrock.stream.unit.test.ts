@@ -255,6 +255,33 @@ describe('fromBedrock().chat.completions.createStream', () => {
     ]);
   });
 
+  it('throws a validation LLMError when json_schema mode is forced but the stream never emits the matching toolUse block', async () => {
+    const { client } = makeFakeStreamingBedrockClient([
+      { contentBlockStart: { contentBlockIndex: 0, start: {} } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'no tool call here' } } },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      { metadata: { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } } },
+    ]);
+    const adapted = fromBedrock(client);
+
+    await expect(
+      collect(
+        adapted.chat.completions.createStream!(
+          {
+            model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: 'question' }],
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'extract', schema: { type: 'object' } },
+            },
+          },
+          { signal: new AbortController().signal },
+        ),
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'validation' });
+  });
+
   it('throws LLMError(validation) when the client has no converseStream', async () => {
     const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({}));
     const adapted = fromBedrock({ converse });
