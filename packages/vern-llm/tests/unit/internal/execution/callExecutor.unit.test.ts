@@ -188,6 +188,114 @@ describe('CallExecutor.openCircuit / closeCircuit', () => {
   });
 });
 
+describe('CallExecutor.getFailureBreakdown', () => {
+  it('returns undefined when no breaker is configured', () => {
+    const { client } = createMockClient([]);
+    const executor = new CallExecutor('openai', client, 'm', baseOptions());
+
+    expect(executor.getFailureBreakdown()).toBeUndefined();
+  });
+
+  it("delegates to the configured breaker's getFailureBreakdown", () => {
+    const { client } = createMockClient([]);
+    const breaker = new CircuitBreaker({ threshold: 5 });
+    const executor = new CallExecutor('openai', client, 'm', baseOptions({ breaker }));
+
+    breaker.recordFailure('m', undefined, 'server_error');
+
+    expect(executor.getFailureBreakdown('m')).toEqual({ server_error: 1 });
+  });
+});
+
+// A custom CircuitBreakerAdapter is only required to implement
+// assertClosed/recordSuccess/recordFailure/onStateChange.
+// getState/getFailureBreakdown/isolateByModel/open/close are all
+// optional, this exercises a minimal adapter that implements none of
+// them, confirming CallExecutor treats a real (if bare) adapter the
+// same way it treats "no breaker configured" for every optional member,
+// rather than only ever having been tested against a full CircuitBreaker
+// or no breaker at all.
+describe('CallExecutor against a minimal CircuitBreakerAdapter (no optional members)', () => {
+  function minimalAdapter() {
+    return {
+      assertClosed: vi.fn(),
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn(),
+      onStateChange: vi.fn(),
+    };
+  }
+
+  it('getCircuitState returns undefined, getState was never implemented', () => {
+    const { client } = createMockClient([]);
+    const executor = new CallExecutor(
+      'openai',
+      client,
+      'm',
+      baseOptions({ breaker: minimalAdapter() as never }),
+    );
+
+    expect(executor.getCircuitState()).toBeUndefined();
+  });
+
+  it('getFailureBreakdown returns undefined, getFailureBreakdown was never implemented', () => {
+    const { client } = createMockClient([]);
+    const executor = new CallExecutor(
+      'openai',
+      client,
+      'm',
+      baseOptions({ breaker: minimalAdapter() as never }),
+    );
+
+    expect(executor.getFailureBreakdown()).toBeUndefined();
+  });
+
+  it('isolateByModel is false, isolateByModel was never implemented', () => {
+    const { client } = createMockClient([]);
+    const executor = new CallExecutor(
+      'openai',
+      client,
+      'm',
+      baseOptions({ breaker: minimalAdapter() as never }),
+    );
+
+    expect(executor.isolateByModel).toBe(false);
+  });
+
+  it('openCircuit/closeCircuit are no-ops, open/close were never implemented', () => {
+    const { client } = createMockClient([]);
+    const adapter = minimalAdapter();
+    const executor = new CallExecutor(
+      'openai',
+      client,
+      'm',
+      baseOptions({ breaker: adapter as never }),
+    );
+
+    expect(() => executor.openCircuit()).not.toThrow();
+    expect(() => executor.closeCircuit()).not.toThrow();
+    // Confirms these are genuine no-ops, not silently calling something
+    // else on the adapter that happens not to throw.
+    expect(adapter.assertClosed).not.toHaveBeenCalled();
+    expect(adapter.recordSuccess).not.toHaveBeenCalled();
+    expect(adapter.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('assertBreakerClosed and recordSuccess/recordFailure still reach the required members', () => {
+    const { client } = createMockClient([]);
+    const adapter = minimalAdapter();
+    const executor = new CallExecutor(
+      'openai',
+      client,
+      'm',
+      baseOptions({ breaker: adapter as never }),
+    );
+
+    executor.assertBreakerClosed('m');
+
+    expect(adapter.assertClosed).toHaveBeenCalledWith('m', undefined);
+  });
+});
+
 describe('CallExecutor.countsTowardBreaker (via run/breaker state transitions)', () => {
   it('a validation-type failure (non-retryable) does not push the breaker toward opening', async () => {
     const { client } = createMockClient([new LLMError('bad request', 'validation')]);

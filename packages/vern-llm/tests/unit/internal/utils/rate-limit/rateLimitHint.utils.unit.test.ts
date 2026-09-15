@@ -7,7 +7,7 @@ import {
   parseOpenAIRateLimitHeaders,
   readRateLimitHint,
   type HeaderReader,
-} from '../../../../src/internal/utils/rateLimitHint.utils.js';
+} from '../../../../../src/internal/utils/rate-limit/rateLimitHint.utils.js';
 
 function headers(values: Record<string, string>): HeaderReader {
   return { get: (name: string) => values[name] ?? null };

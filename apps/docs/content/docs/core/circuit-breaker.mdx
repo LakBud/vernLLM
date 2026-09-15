@@ -18,6 +18,12 @@ Once `threshold` consecutive failures occur, further calls fail immediately with
 trial in the `half-open` state. A successful trial closes the circuit and resets the failure count.
 A failed trial reopens the circuit and restarts the cooldown.
 
+<Callout type="info">
+  `circuitBreaker` also accepts a full `CircuitBreakerAdapter` instead of `CircuitBreakerOptions`,
+  for a breaker shared across processes rather than the in process default. See [Circuit Breaker →
+  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker).
+</Callout>
+
 ## What counts as a failure
 
 <Callout type="warn">
@@ -323,6 +329,14 @@ closes, or transitions to half open.
 Every transition also reports a `'circuit_state'` event, both on the top-level `onEvent` option and
 on each applicable middleware's own `onEvent`. See [Middleware](/docs/core/middleware#onevent-and-the-middleware-event).
 
+<Callout type="info">
+  A custom `CircuitBreakerAdapter` must implement `onStateChange` too, it's required rather than
+  optional, specifically so `'circuit_state'` events can't silently go missing for a target using a
+  custom adapter. VernLLM wraps it the exact same way it wraps the built in class's: reports the
+  `'circuit_state'` event first, then calls your handler. See [Circuit Breaker →
+  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker).
+</Callout>
+
 ## Checking and controlling state manually
 
 ```ts title="circuit-breaker-state.ts"
@@ -350,6 +364,16 @@ llm.openCircuit({ index: 1 }); // same, for the first fallback target
 consecutive real failures had just happened. `closeCircuit` sets it to `closed` and resets the
 failure count to zero, without requiring an actual successful call first. Neither call requires a
 configured `circuitBreaker`; both are a no-op on a target that doesn't have one.
+
+<Callout type="warn">
+  `openCircuit` and `closeCircuit` are no-ops for a target whose `circuitBreaker` is a custom
+  `CircuitBreakerAdapter` that doesn't implement `open`/`close`. Both are optional on the interface,
+  since handing VernLLM the ability to force a transition from outside is an opt-in an adapter
+  author may deliberately not want to grant, a distributed breaker where one caller shouldn't be
+  able to unilaterally force every replica open, for example. See [Circuit Breaker →
+  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker) for implementing
+  them.
+</Callout>
 
 A manual `openCircuit`/`closeCircuit` still reports its `'circuit_state'` event to every applicable
 middleware's own `onEvent`, the same as a transition triggered by a real call. There's no logical
@@ -411,6 +435,13 @@ llm.getFailureBreakdown({ model: 'gpt-4o' }); // for a target with isolateByMode
 
 It takes the same `target: { index?, model? }` shape as `getCircuitState`, and returns `undefined`
 for a target with no breaker configured, or `{}` for a bucket that hasn't failed yet.
+
+<Callout type="info">
+  `getFailureBreakdown` is optional on `CircuitBreakerAdapter`, same as `getState`. A target using a
+  custom adapter that doesn't implement it returns `undefined` here, same as a target with no
+  breaker configured at all. See [Circuit Breaker →
+  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker).
+</Callout>
 
 The breakdown is attribution only. It never decides whether the circuit trips, and clears whenever
 the bucket does, on a successful call, a successful half-open trial, or a manual `closeCircuit()`.

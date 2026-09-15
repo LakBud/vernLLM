@@ -1,7 +1,7 @@
 import { TokenBucket } from './internal/tokenBucket.js';
 import { LLMError } from './types/errors.js';
 
-import type { ProviderRateLimitHint } from './internal/utils/rateLimitHint.utils.js';
+import type { ProviderRateLimitHint } from './internal/utils/rate-limit/rateLimitHint.utils.js';
 import type { LLMClient } from './types/client.js';
 
 /** The request shape sent to `LLMClient['chat']['completions']['create']`, used for token estimation. */

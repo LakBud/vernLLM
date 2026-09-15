@@ -1,4 +1,4 @@
-import type { ProviderRateLimitHint } from '../internal/utils/rateLimitHint.utils.js';
+import type { ProviderRateLimitHint } from '../internal/utils/rate-limit/rateLimitHint.utils.js';
 import type {
   CachedCallInput,
   CallParams,

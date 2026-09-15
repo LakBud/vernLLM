@@ -7,6 +7,7 @@
     "caching-methods",
     "provider-fallback-patterns",
     "tuning-rate-limits",
+    "sizing-circuit-breakers",
     "multi-turn-conversations",
     "tool-execution-loop",
     "streaming-responses",

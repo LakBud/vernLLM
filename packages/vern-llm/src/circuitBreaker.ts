@@ -14,23 +14,28 @@ export interface CircuitBreakerCallContext {
   attempt?: number;
 }
 
+/**
+ * Fires after every real state change, never a no-op transition. `model`
+ * is the resolved model of whichever call triggered it. With
+ * `isolateByModel` off, failures are still counted across every model.
+ * Shared by `CircuitBreakerOptions` and `CircuitBreakerAdapter`, so a
+ * custom adapter reports state changes the same way the built in
+ * `CircuitBreaker` does.
+ */
+export type CircuitBreakerStateChangeHandler = (
+  from: CircuitState,
+  to: CircuitState,
+  consecutiveFailures: number,
+  model?: string,
+  context?: CircuitBreakerCallContext,
+) => void;
+
 export interface CircuitBreakerOptions {
   /** Consecutive failures before the circuit opens, default 5 */
   threshold?: number;
   /** How long the circuit stays open before allowing a trial request, in ms. Default 30000 */
   cooldownMs?: number;
-  /**
-   * Fires after every real state change, never a no-op transition. `model`
-   * is the resolved model of whichever call triggered it. With
-   * `isolateByModel` off, failures are still counted across every model.
-   */
-  onStateChange?: (
-    from: CircuitState,
-    to: CircuitState,
-    consecutiveFailures: number,
-    model?: string,
-    context?: CircuitBreakerCallContext,
-  ) => void;
+  onStateChange?: CircuitBreakerStateChangeHandler;
   /**
    * Track a separate circuit per resolved model instead of one shared
    * circuit. Default false. A call that omits `model` falls into one
@@ -191,6 +196,47 @@ function buildTripping(option: TrippingOption): TrippingPolicy {
 
 export type CircuitState = 'closed' | 'open' | 'half-open';
 
+/**
+ * What VernLLM's dispatch layer needs from a breaker. `CircuitBreaker`
+ * implements this; a caller wanting cross process coordination can hand
+ * over their own instance instead.
+ *
+ * `assertClosed`, `recordSuccess`, `recordFailure`, and `onStateChange`
+ * are required, mirroring `RateLimiterAdapter`'s four required methods.
+ * `onStateChange` is required so `circuit_state` events can't go
+ * silently missing; a no-op `() => {}` is fine if you don't care.
+ *
+ * `getState`, `getFailureBreakdown`, `isolateByModel`, `open`, and
+ * `close` are optional. Omitting one makes the matching call a no-op
+ * or return `undefined`/`false`, same as no breaker configured.
+ * `open`/`close` are optional since they let VernLLM force a
+ * transition, control a distributed adapter may not want to grant.
+ */
+export interface CircuitBreakerAdapter {
+  /** Throws when the circuit is open (or half open with no trial slot free) for `model`. */
+  assertClosed(model?: string, context?: CircuitBreakerCallContext): void;
+  recordSuccess(model?: string, context?: CircuitBreakerCallContext): void;
+  /** `code`, when present, is the failing call's `LLMErrorCode`. */
+  recordFailure(model?: string, context?: CircuitBreakerCallContext, code?: LLMErrorCode): void;
+  getState?(model?: string): CircuitState;
+  /** Failure counts by `LLMErrorCode` for `model`'s bucket, `'unknown'` for one that carried no code. */
+  getFailureBreakdown?(model?: string): Partial<Record<LLMErrorCode | 'unknown', number>>;
+  /** Whether this adapter tracks failures per model, mirroring `CircuitBreakerOptions.isolateByModel`. Read by `warnIfModelUnsupported`'s diagnostic warning and by `VernLLM.getCircuitStates()`'s public output; omit if the notion doesn't apply to your adapter, `false` is assumed. */
+  isolateByModel?: boolean;
+  /** Manually opens the circuit, as if enough consecutive failures had just happened. Optional: an adapter that doesn't want external callers forcing a transition can omit it. */
+  open?(model?: string, context?: CircuitBreakerCallContext): void;
+  /** Manually closes the circuit, without requiring a real success first. Same opt-in reasoning as `open`. */
+  close?(model?: string, context?: CircuitBreakerCallContext): void;
+  /**
+   * Called after every real state change, never a no-op transition. VernLLM
+   * wraps it the same way it wraps the built in `CircuitBreaker`'s
+   * `onStateChange`: every call still reports a `circuit_state` event
+   * first, then this hook is chained after that, wrapped so a throw here
+   * can't break the call that triggered it.
+   */
+  onStateChange: CircuitBreakerStateChangeHandler;
+}
+
 /** Mutable state for one circuit, either the single shared one or one model's bucket under `isolateByModel`. */
 interface CircuitBucket {
   state: CircuitState;
@@ -250,9 +296,10 @@ function attributeFailure(bucket: CircuitBucket, code: LLMErrorCode | undefined)
  * across calls. Once the threshold is hit, short-circuits new calls with
  * LLMError('circuit_open') until the cooldown elapses and a trial succeeds.
  */
-export class CircuitBreaker {
+export class CircuitBreaker implements CircuitBreakerAdapter {
   private readonly cooldownMs: number;
-  private readonly onStateChange?: CircuitBreakerOptions['onStateChange'];
+  /** Satisfies `CircuitBreakerAdapter.onStateChange`, required there. Defaults to a no-op when `options.onStateChange` is omitted. */
+  readonly onStateChange: CircuitBreakerStateChangeHandler;
   /** Whether this breaker tracks failures per model instead of one shared circuit. */
   readonly isolateByModel: boolean;
   private readonly halfOpenProbes: number;
@@ -268,7 +315,7 @@ export class CircuitBreaker {
   constructor(options: CircuitBreakerOptions = {}) {
     const threshold = options.threshold ?? 5;
     this.cooldownMs = options.cooldownMs ?? 30_000;
-    this.onStateChange = options.onStateChange;
+    this.onStateChange = options.onStateChange ?? (() => {});
     this.isolateByModel = options.isolateByModel ?? false;
     // Clamped rather than thrown, same as `TokenBucket.give`.
     const rawProbes = options.halfOpenProbes;
@@ -482,7 +529,7 @@ export class CircuitBreaker {
 
     const from = bucket.state;
     bucket.state = to;
-    this.onStateChange?.(from, to, bucket.consecutiveFailures, model, context);
+    this.onStateChange(from, to, bucket.consecutiveFailures, model, context);
   }
 
   /** Once every admitted trial has reported in, closes or reopens based on `halfOpenSuccessRatio`. */

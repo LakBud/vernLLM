@@ -6,7 +6,7 @@ import { describeError, extractStatus, normalizeError } from '../errors.utils.js
 import { emitEvent } from '../middleware/middleware.utils.js';
 import { recoverDelay, retryWithBackoff, shouldRetry } from '../retry/retry.utils.js';
 
-import type { CircuitBreaker } from '../../../../circuitBreaker.js';
+import type { CircuitBreakerAdapter } from '../../../../circuitBreaker.js';
 import type { Logger } from '../../../../logger.js';
 import type {
   MiddlewareStateBag,
@@ -33,7 +33,7 @@ export interface RunAttemptLoopParams<T> {
   providerName: string;
   isFallback: boolean;
   supportsJsonObjectMode: boolean;
-  breaker?: CircuitBreaker;
+  breaker?: CircuitBreakerAdapter;
   /**
    * Caps how much of this target's recent traffic is allowed to be
    * retries, independent of `breaker`. See `RetryBudget`. Undefined

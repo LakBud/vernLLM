@@ -17,12 +17,12 @@ import {
   buildMiddlewarePipeline,
   type MiddlewarePipeline,
 } from './internal/resolveMiddlewareOrder.js';
-import { buildCache } from './internal/utils/cacheAdapter.utils.js';
+import { buildCache } from './internal/utils/cache/cacheAdapter.utils.js';
 import {
   makeEventReporter,
   resolveExecutor,
   warnIfModelUnsupported,
-} from './internal/utils/circuitBreaker.utils.js';
+} from './internal/utils/circuit-breaker/circuitBreaker.utils.js';
 import { createSafeLogger } from './internal/utils/logger.utils.js';
 import { ConsoleLogger, NoopLogger, type Logger } from './logger.js';
 import {

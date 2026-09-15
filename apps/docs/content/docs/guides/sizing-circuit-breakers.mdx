@@ -1,0 +1,178 @@
+---
+title: Sizing Circuit Breakers
+description: Sizing threshold and cooldownMs for a real provider, choosing a tripping policy, and wiring up alerting
+---
+
+[Circuit Breaker](/docs/core/circuit-breaker) covers the `circuitBreaker` option itself: failure
+conditions, half open behavior, scope, and state inspection. This guide walks through putting it
+to use: sizing it against how a real provider actually fails, choosing between the two tripping
+policies, and deciding when a custom `CircuitBreakerAdapter` is worth the extra work.
+
+## Start from how the provider actually fails, not a guess
+
+A provider having a bad minute looks different from a provider having a bad day. `threshold`
+(consecutive failures) suits the first case, a burst of failures in a row is a strong signal
+something is actually down. It reacts fast but can be fooled by an unlucky short streak mixed in
+with otherwise healthy traffic.
+
+```ts title="circuit-breaker-threshold-start.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000 },
+});
+```
+
+If your real traffic has occasional failures mixed with successes even when the provider is
+healthy, network blips, an occasional timeout under load, `threshold` alone trips too eagerly.
+Switch to `{ kind: 'rolling', windowMs, minCalls, failureRatio }` instead, covered next.
+
+## Rolling tripping for noisy but survivable traffic
+
+Rolling tripping opens once at least `minCalls` calls have landed in the trailing `windowMs` and
+the failure ratio among them reaches `failureRatio`, instead of demanding an unbroken streak:
+
+```ts title="circuit-breaker-rolling-real-traffic.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    cooldownMs: 30_000,
+    tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 20, failureRatio: 0.5 },
+  },
+});
+```
+
+Size `windowMs` against your real concurrent volume, not a demo number. At 5 requests per second,
+a 60 second window comfortably collects `minCalls: 20` even during a partial outage where some
+calls still succeed. At 1 request every 3 seconds, the same window only reaches `minCalls: 20`
+right at the end of the window, so a brief unlucky streak looks identical to a real outage. If the
+circuit flaps between `open` and `closed` repeatedly, widen `windowMs` before touching
+`failureRatio`, see the warning in
+[Tripping policy](/docs/core/circuit-breaker#tripping-policy).
+
+`failureRatio` itself is the tolerance knob. `0.5` tolerates a genuinely unreliable but still
+partially working provider. Lower it toward `0.2` to `0.3` for a provider you expect to be either
+fully healthy or fully down, so a smaller fraction of real failures is treated as decisive.
+
+## Choosing cooldownMs and halfOpenProbes together
+
+`cooldownMs` and `halfOpenProbes` trade off recovery speed against how much traffic a still
+unhealthy provider gets during that recovery attempt:
+
+```ts title="circuit-breaker-cooldown-and-probes.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+    halfOpenProbes: 3,
+    halfOpenSuccessRatio: 2 / 3,
+  },
+});
+```
+
+A short `cooldownMs` with `halfOpenProbes: 1` recovers fast but risks sending real user traffic
+into a probe that immediately fails again, repeatedly, every `cooldownMs`. A longer `cooldownMs`
+with several `halfOpenProbes` and a `halfOpenSuccessRatio` below 1 gives a more confident signal
+before fully reopening, at the cost of staying closed to traffic longer while healthy.
+
+For a provider with a known typical outage duration, for example a documented incident pattern
+that tends to resolve within a couple of minutes, `cooldownBackoff` with `{ multiplier, maxMs }`
+avoids retrying every 30 seconds through a 10 minute outage:
+
+```ts title="circuit-breaker-backoff-for-known-pattern.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 15_000,
+    cooldownBackoff: { multiplier: 2, maxMs: 5 * 60_000 },
+  },
+});
+```
+
+Start `cooldownMs` shorter than you would with a fixed cooldown, since backoff grows it from there
+on each repeat open. `maxMs` caps how long a sustained outage waits between trials, worth setting
+below the point where a human would already be paged and investigating.
+
+## Wiring onStateChange into alerting
+
+`onStateChange` fires after every real transition, the natural hook for paging or a dashboard:
+
+```ts title="circuit-breaker-alerting.ts"
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: {
+    threshold: 5,
+    cooldownMs: 30_000,
+    onStateChange: (from, to, consecutiveFailures, model) => {
+      if (to === 'open') {
+        alerting.page(`circuit opened for ${model} after ${consecutiveFailures} failures`);
+      }
+      if (from === 'open' && to === 'half-open') {
+        metrics.increment('llm.circuit.recovery_attempt', { model });
+      }
+      if (to === 'closed' && from !== 'closed') {
+        alerting.resolve(`circuit recovered for ${model}`);
+      }
+    },
+  },
+});
+```
+
+Page on `to === 'open'`, not on every failure. A single failure is normal and already handled by
+retry, a state transition to `open` is the actual signal something needs attention. Resolve the
+same alert on a transition back to `closed`, rather than leaving it open indefinitely after the
+provider recovers on its own.
+
+## Isolating by model only when it reflects a real dependency
+
+`isolateByModel` gives each model its own circuit, but it also means a provider wide outage takes
+longer to detect, since every model has to independently reach `threshold` or trip its own rolling
+window:
+
+```ts title="circuit-breaker-isolate-decision.ts"
+// Genuinely different dependencies behind one instance: isolate them.
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000, isolateByModel: true },
+});
+```
+
+Reach for `isolateByModel` when the models really do fail independently, for example one model
+served from a separate deployment or region than another. If every model behind one instance shares
+the same underlying provider infrastructure, leave it off, the default shared circuit detects a
+provider wide outage faster because failures from any model count toward the same threshold.
+
+## When a custom CircuitBreakerAdapter is worth it
+
+The built in `CircuitBreaker` is in process, state resets when the process restarts and isn't
+shared across replicas. That's fine for most single instance or low replica deployments. Reach for
+a custom `CircuitBreakerAdapter` when several replicas hammering the same provider need to agree on
+circuit state, so one replica's failures actually protect the others, not just itself:
+
+```ts title="circuit-breaker-when-to-go-distributed.ts"
+// Single replica, or replicas that can tolerate independent circuits: built in CircuitBreaker.
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000 },
+});
+
+// Many replicas that should share one circuit for the same provider: a custom adapter.
+const distributedLlm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  circuitBreaker: new RedisCircuitBreaker(),
+});
+```
+
+See [Circuit Breaker → Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker)
+for the full `CircuitBreakerAdapter` interface and a worked Redis backed example, including reusing
+the built in `ConsecutiveTripping`/`RollingTripping` trip math inside your own adapter instead of
+reimplementing it.

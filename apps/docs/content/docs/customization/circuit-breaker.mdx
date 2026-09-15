@@ -1,16 +1,194 @@
 ---
 title: Circuit Breaker
-description: Plug in your own tripping policy or cooldown curve
+description: Bring your own CircuitBreakerAdapter, TrippingPolicy, or cooldown curve
 ---
 
 <Callout type="info">
-  This page covers writing a custom `TrippingPolicy` or `CooldownBackoff`. See [Circuit
-  Breaker](/docs/core/circuit-breaker) in Core for the full behavior: failure conditions, half-open
-  behavior, scope, and state inspection.
+  This page covers writing a custom `TrippingPolicy`, `CooldownBackoff`, or a full
+  `CircuitBreakerAdapter`. See [Circuit Breaker](/docs/core/circuit-breaker) in Core for the full
+  behavior: failure conditions, half-open behavior, scope, and state inspection.
 </Callout>
 
 `CircuitBreakerOptions` has two seams built the same way: a shorthand covering the common case, and
-a raw interface or function type a caller can hand in directly for anything else.
+a raw interface or function type a caller can hand in directly for anything else. `circuitBreaker`
+itself has a third, larger seam: pass a full `CircuitBreakerAdapter` instead of
+`CircuitBreakerOptions` to replace the breaker entirely, see [Bringing your own
+breaker](#bringing-your-own-breaker) below.
+
+## Bringing your own breaker
+
+VernLLM ships `CircuitBreaker`, an in process breaker built from `circuitBreaker`'s config object,
+plus a `CircuitBreakerAdapter` interface for bringing your own, a breaker shared across processes,
+or one backed by a store like Redis:
+
+```ts
+interface CircuitBreakerAdapter {
+  assertClosed(model?: string, context?: CircuitBreakerCallContext): void;
+  recordSuccess(model?: string, context?: CircuitBreakerCallContext): void;
+  recordFailure(model?: string, context?: CircuitBreakerCallContext, code?: LLMErrorCode): void;
+  getState?(model?: string): CircuitState;
+  getFailureBreakdown?(model?: string): Partial<Record<LLMErrorCode | 'unknown', number>>;
+  isolateByModel?: boolean;
+  open?(model?: string, context?: CircuitBreakerCallContext): void;
+  close?(model?: string, context?: CircuitBreakerCallContext): void;
+  onStateChange: CircuitBreakerStateChangeHandler;
+}
+```
+
+```ts title="redis-circuit-breaker.ts"
+// Illustrative: the read-then-write below isn't atomic under concurrent
+// access. A production version would use a Lua script (EVAL) to read and
+// write the state in one round trip, same reasoning as any check-then-set.
+import { VernLLM } from 'vern-llm';
+import type { CircuitBreakerAdapter } from 'vern-llm';
+import { LLMError } from 'vern-llm';
+
+class RedisCircuitBreaker implements CircuitBreakerAdapter {
+  private threshold = 5;
+  private cooldownMs = 30_000;
+
+  onStateChange: CircuitBreakerAdapter['onStateChange'] = (
+    from,
+    to,
+    consecutiveFailures,
+    model,
+  ) => {
+    if (to === 'open') alerting.page(`circuit opened for ${model}`);
+  };
+
+  async assertClosed(model = 'default') {
+    const state = await redis.get(`breaker:${model}:state`);
+    if (state === 'open') {
+      throw new LLMError('Circuit open', 'circuit_open', { code: 'circuit_cooling_down' });
+    }
+  }
+
+  async recordSuccess(model = 'default') {
+    const previousState =
+      (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
+    await redis.set(`breaker:${model}:failures`, 0);
+    await redis.set(`breaker:${model}:state`, 'closed');
+    // Only a real transition, matching onStateChange's "never a no-op" contract.
+    if (previousState !== 'closed') this.onStateChange(previousState, 'closed', 0, model);
+  }
+
+  async recordFailure(model = 'default') {
+    const failures = await redis.incr(`breaker:${model}:failures`);
+    if (failures >= this.threshold) {
+      const previousState =
+        (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
+      await redis.set(`breaker:${model}:state`, 'open', 'PX', this.cooldownMs);
+      if (previousState !== 'open') this.onStateChange(previousState, 'open', failures, model);
+    }
+  }
+
+  async getState(model = 'default') {
+    return (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
+  }
+}
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: new RedisCircuitBreaker(),
+});
+```
+
+<Callout>
+  `assertClosed`, `recordSuccess`, `recordFailure`, and `onStateChange` are all required, four
+  methods for four things, the same shape as `RateLimiterAdapter`'s four required methods.
+  `getState`, `getFailureBreakdown`, `isolateByModel`, `open`, and `close` are all optional, plain
+  data or opt-in control your adapter can simply skip. Omitting any of them makes the corresponding
+  `VernLLM` call return `undefined`/`false` or become a no-op, the same as a target with no breaker
+  configured at all.
+</Callout>
+
+<Callout type="info">
+  `onStateChange` is required, not optional, specifically because it's easy to forget and hard to
+  notice the omission: your adapter keeps working, trips and recovers correctly, and the only
+  symptom is that `'circuit_state'` events silently never fire, so anything built on top, a
+  middleware's own `onEvent`, an alerting integration, a dashboard, quietly stops seeing state
+  changes for this target. `onStateChange: () => {}` is a perfectly valid implementation if you
+  genuinely don't want the notification, that choice is now explicit at the call site instead of an
+  easy to miss omission.
+</Callout>
+
+VernLLM wraps whatever `onStateChange` you provide the exact same way it wraps the built in class's:
+every real state change still reports a `'circuit_state'` event first, then your handler runs,
+chained after, with the same try/catch safety as every other user supplied callback. This applies
+even to a no-op handler, it still gets called, VernLLM's own event reporting doesn't depend on your
+handler doing anything.
+
+<Callout type="warn">
+  `onStateChange` should only fire after a real transition, never for a call that leaves the state
+  unchanged, `assertClosed`/`recordSuccess`/`recordFailure` running while already closed or already
+  open. The built in `CircuitBreaker` guarantees this itself. A custom adapter has to guarantee it
+  too: VernLLM relays whatever your adapter calls `onStateChange` with, it can't tell a real
+  transition from a repeat call on your behalf. The Redis examples below check the previous state
+  before calling `onStateChange` for exactly this reason.
+</Callout>
+
+<Callout type="info">
+  Sharing one adapter instance across several targets or `VernLLM` clients is supported: every
+  target sharing it gets its own correctly tagged `circuit_state` event, and your original
+  `onStateChange` still fires exactly once per real transition, not once per sharing target. VernLLM
+  logs a `[VernLLM] circuitBreaker: this adapter instance is already wired...` warning the first
+  time it notices sharing, so accidental sharing (for example constructing `VernLLM` repeatedly with
+  what was meant to be a fresh adapter) is visible rather than silent.
+</Callout>
+
+`getFailureBreakdown`, `open`, and `close` are all optional on `CircuitBreakerAdapter`. Implement
+`getFailureBreakdown` (mirroring `getState`) if your adapter tracks per-code failure counts and
+wants `llm.getFailureBreakdown()` to read them. Implement `open`/`close` only if you want to grant
+VernLLM the ability to force a transition from outside, a distributed breaker may deliberately keep
+that decision local instead, see the callouts in [Checking and controlling state
+manually](/docs/core/circuit-breaker#checking-and-controlling-state-manually) and [Failure
+attribution](/docs/core/circuit-breaker#failure-attribution) in Core. Omitting any of the three
+makes VernLLM's corresponding call a no-op (`openCircuit`/`closeCircuit`) or return `undefined`
+(`getFailureBreakdown`), the same as a target with no breaker configured at all.
+
+Nothing stops your adapter from reusing `RollingTripping` or `ConsecutiveTripping` internally for
+its own trip decision, rather than reimplementing that math. Both are exported from the package
+root:
+
+```ts title="redis-circuit-breaker-reusing-tripping.ts"
+import { ConsecutiveTripping, type CircuitBreakerAdapter } from 'vern-llm';
+
+class RedisCircuitBreakerWithTripping implements CircuitBreakerAdapter {
+  private tripping = new ConsecutiveTripping(5);
+
+  onStateChange: CircuitBreakerAdapter['onStateChange'] = () => {};
+
+  async recordFailure(model = 'default') {
+    const shouldOpen = this.tripping.onFailure(model);
+    if (shouldOpen) {
+      const previousState =
+        (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
+      await redis.set(`breaker:${model}:state`, 'open', 'PX', 30_000);
+      if (previousState !== 'open') this.onStateChange(previousState, 'open', 0, model);
+    }
+  }
+
+  async recordSuccess(model = 'default') {
+    this.tripping.onSuccess(model);
+    const previousState =
+      (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
+    await redis.set(`breaker:${model}:state`, 'closed');
+    if (previousState !== 'closed') this.onStateChange(previousState, 'closed', 0, model);
+  }
+
+  async assertClosed(model = 'default') {
+    /* ... */
+  }
+}
+```
+
+<Callout>
+  VernLLM ships no distributed breaker itself, only this interface. Coordinating across processes is
+  entirely up to your implementation, the same tradeoff as `RateLimiterAdapter`. See [Rate Limiting
+  → Customization](/docs/customization/rate-limiting) for the equivalent pattern on the rate limiter
+  side.
+</Callout>
 
 ## Tripping policy
 

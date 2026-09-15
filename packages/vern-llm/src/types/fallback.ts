@@ -2,7 +2,7 @@ import { LLMError, type RetryAttempt } from './errors.js';
 
 import type { CircuitBreakerOptions, CircuitState } from '../circuitBreaker.js';
 import type { RetryBudgetOptions } from '../internal/retryBudget.js';
-import type { RateLimitOption } from '../internal/utils/rateLimitAdapter.utils.js';
+import type { RateLimitOption } from '../internal/utils/rate-limit/rateLimitAdapter.utils.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
 
