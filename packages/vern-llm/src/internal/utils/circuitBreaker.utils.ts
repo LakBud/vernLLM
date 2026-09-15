@@ -1,12 +1,88 @@
-import { CircuitBreaker, type CircuitBreakerOptions } from '../../circuitBreaker.js';
+import {
+  CircuitBreaker,
+  type CircuitBreakerAdapter,
+  type CircuitBreakerOptions,
+  type CircuitBreakerStateChangeHandler,
+} from '../../circuitBreaker.js';
+import { LLMError } from '../../types/errors.js';
 import { emitEvent } from '../execution/utils/middleware/middleware.utils.js';
 import { idFor } from '../resolveMiddlewareOrder.js';
 import { callHookSafely } from './logger.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type { VernLLMEvent } from '../../types/events.js';
-import type { AttemptContext, LLMError, TokenUsage, VernLLMMiddleware } from '../../types/index.js';
+import type { AttemptContext, TokenUsage, VernLLMMiddleware } from '../../types/index.js';
 import type { CallExecutor } from '../execution/callExecutor.js';
+
+/** Not exported. Internal shorthand only, so this union isn't duplicated between the public option field and `buildCircuitBreaker`'s own signature. */
+export type CircuitBreakerOption = boolean | CircuitBreakerOptions | CircuitBreakerAdapter;
+
+const REQUIRED_ADAPTER_METHOD_NAMES = [
+  'assertClosed',
+  'recordSuccess',
+  'recordFailure',
+  'onStateChange',
+] as const;
+
+/**
+ * Method names that exist only on `CircuitBreakerAdapter`, never on plain
+ * `CircuitBreakerOptions`. `onStateChange` is deliberately excluded here,
+ * it's a legitimate `CircuitBreakerOptions` field too (`circuitBreaker: {
+ * threshold: 5, onStateChange: fn }`), so its presence alone must not be
+ * read as "this is an attempted adapter". These three are the only
+ * unambiguous signal.
+ */
+const ADAPTER_ONLY_METHOD_NAMES = ['assertClosed', 'recordSuccess', 'recordFailure'] as const;
+
+/**
+ * Optional `CircuitBreakerAdapter` members that only make sense as
+ * functions, and never appear on plain `CircuitBreakerOptions`, so any
+ * non function value assigned to one is unambiguously a mistake.
+ * `isolateByModel` is deliberately excluded: it's a legitimate
+ * `CircuitBreakerOptions` field too (a real boolean, not a function), so
+ * validating its type here isn't this check's job.
+ */
+const OPTIONAL_FUNCTION_MEMBER_NAMES = [
+  'getState',
+  'getFailureBreakdown',
+  'open',
+  'close',
+] as const;
+
+/** Any of `OPTIONAL_FUNCTION_MEMBER_NAMES` present but not callable, the same mistake `rateLimitAdapter.utils.ts` guards against for `getState`. */
+function invalidOptionalMembers(
+  option: CircuitBreakerOptions | CircuitBreakerAdapter,
+): (typeof OPTIONAL_FUNCTION_MEMBER_NAMES)[number][] {
+  const candidate = option as Partial<CircuitBreakerAdapter>;
+  return OPTIONAL_FUNCTION_MEMBER_NAMES.filter(
+    (name) => candidate[name] !== undefined && typeof candidate[name] !== 'function',
+  );
+}
+
+/**
+ * Computes, in one pass, everything `buildCircuitBreaker` needs to decide
+ * between plain options, a complete adapter, an incomplete adapter, and
+ * an otherwise-plain object with an invalid optional member. Replaces
+ * what used to be three separate functions each re-deriving overlapping
+ * facts about the same candidate object.
+ */
+function classifyCircuitBreakerOption(option: CircuitBreakerOptions | CircuitBreakerAdapter): {
+  /** At least one of the three adapter-only methods is present, so this is clearly an attempted adapter, not plain options. */
+  attemptsAdapter: boolean;
+  /** Required members not present as functions. Only meaningful when `attemptsAdapter` is true. */
+  missing: (typeof REQUIRED_ADAPTER_METHOD_NAMES)[number][];
+  /** Present-but-non-function optional members, checked regardless of `attemptsAdapter`, see `OPTIONAL_FUNCTION_MEMBER_NAMES`. */
+  invalid: (typeof OPTIONAL_FUNCTION_MEMBER_NAMES)[number][];
+} {
+  const candidate = option as Partial<CircuitBreakerAdapter>;
+  return {
+    attemptsAdapter: ADAPTER_ONLY_METHOD_NAMES.some(
+      (name) => typeof candidate[name] === 'function',
+    ),
+    missing: REQUIRED_ADAPTER_METHOD_NAMES.filter((name) => typeof candidate[name] !== 'function'),
+    invalid: invalidOptionalMembers(option),
+  };
+}
 
 /** `onUsage`/`onUsageFailure` from `VernLLMOptions`, plumbed alongside `onEvent` so `makeEventReporter` can drive both off the one dispatch point. */
 export interface UsageReporterHooks {
@@ -82,10 +158,77 @@ export function warnIfModelUnsupported(
 }
 
 /**
- * Builds the optional circuit breaker for one provider target, wiring its
- * `onStateChange` to emit a `circuit_state` event and chain any
- * caller-supplied `onStateChange`. Returns `undefined` when
- * `circuitBreakerOption` is falsy, matching the option's own semantics.
+ * Wraps a caller supplied `onStateChange` (from `CircuitBreakerOptions` or
+ * from a `CircuitBreakerAdapter`) so every real state change also reports
+ * a `circuit_state` event, then chains into the original handler, safely.
+ * One shared implementation so the built in `CircuitBreaker` and a custom
+ * `CircuitBreakerAdapter` report events the exact same way.
+ */
+function wrapOnStateChange(
+  userOnStateChange: CircuitBreakerStateChangeHandler | undefined,
+  providerName: string,
+  defaultModel: string,
+  reportEvent: (event: VernLLMEvent) => void,
+  logger: Logger,
+  middleware: VernLLMMiddleware[],
+  middlewareTimeoutMs: number,
+  isFallback: boolean,
+  supportsJsonObjectMode: boolean,
+): CircuitBreakerStateChangeHandler {
+  return (from, to, consecutiveFailures, model, context) => {
+    const event: VernLLMEvent = {
+      kind: 'circuit_state',
+      provider: providerName,
+      model: model ?? defaultModel,
+      from,
+      to,
+      consecutiveFailures,
+    };
+
+    // `context` is absent only when someone calls the breaker or adapter
+    // directly, bypassing `VernLLM`.
+    if (context) {
+      const ctx: AttemptContext = {
+        stage: 'attempt',
+        requestId: context.requestId,
+        requestedProvider: providerName,
+        requestedModel: model ?? defaultModel,
+        isFallbackAttempt: isFallback,
+        // Most call sites (recordSuccess/recordFailure after a real
+        // dispatch) now thread a real 1 based attempt number through
+        // `context.attempt`. Falls back to `1` only for the sites
+        // that genuinely have none, like `assertClosed`'s
+        // pre-dispatch check, which runs before any attempt exists.
+        attempt: context.attempt ?? 1,
+        capabilities: { supportsJsonObjectMode },
+        signal: context.signal,
+        state: context.state,
+        own: {},
+        registeredMiddlewareNames: middleware.map(idFor),
+      };
+
+      emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, logger);
+    } else {
+      reportEvent(event);
+    }
+
+    // A caller supplied onStateChange would otherwise be silently
+    // discarded, since this wrapper replaces it. Chain it instead, same
+    // try/catch treatment as every other user supplied callback so it
+    // can't break breaker bookkeeping or the call that triggered it.
+    if (!userOnStateChange) return;
+
+    callHookSafely(logger, 'circuitBreaker.onStateChange', () =>
+      userOnStateChange(from, to, consecutiveFailures, model, context),
+    );
+  };
+}
+
+/**
+ * Builds the optional circuit breaker for one provider target, resolving
+ * `circuitBreakerOption` into a real `CircuitBreaker`, a caller supplied
+ * `CircuitBreakerAdapter`, or `undefined` when it's falsy, matching the
+ * option's own semantics.
  *
  * Lives outside `CallExecutor` (and outside `VernLLM`, once this were
  * inlined) because the breaker has to exist *before* the executor it's
@@ -99,7 +242,7 @@ export function warnIfModelUnsupported(
  * shared `onEvent`/`middleware`.
  */
 export function buildCircuitBreaker(
-  circuitBreakerOption: boolean | CircuitBreakerOptions | undefined,
+  circuitBreakerOption: CircuitBreakerOption | undefined,
   providerName: string,
   defaultModel: string,
   onEvent: ((event: VernLLMEvent) => void) | undefined,
@@ -108,64 +251,67 @@ export function buildCircuitBreaker(
   middlewareTimeoutMs: number,
   isFallback: boolean,
   supportsJsonObjectMode: boolean,
-): CircuitBreaker | undefined {
+): CircuitBreakerAdapter | undefined {
   if (!circuitBreakerOption) return undefined;
-
-  const breakerOptions =
-    typeof circuitBreakerOption === 'object' ? circuitBreakerOption : undefined;
-  const userOnStateChange = breakerOptions?.onStateChange;
 
   const reportEvent = makeEventReporter(onEvent, logger);
 
+  const wrap = (userOnStateChange: CircuitBreakerStateChangeHandler | undefined) =>
+    wrapOnStateChange(
+      userOnStateChange,
+      providerName,
+      defaultModel,
+      reportEvent,
+      logger,
+      middleware,
+      middlewareTimeoutMs,
+      isFallback,
+      supportsJsonObjectMode,
+    );
+
+  if (typeof circuitBreakerOption === 'object') {
+    const { attemptsAdapter, missing, invalid } =
+      classifyCircuitBreakerOption(circuitBreakerOption);
+
+    if (attemptsAdapter && missing.length > 0) {
+      throw new LLMError(
+        `circuitBreaker looks like a CircuitBreakerAdapter but is missing: ${missing.join(', ')}. All four members (${REQUIRED_ADAPTER_METHOD_NAMES.join(', ')}) are required.`,
+        'invalid_params',
+      );
+    }
+
+    if (invalid.length > 0) {
+      const candidate = circuitBreakerOption as Partial<CircuitBreakerAdapter>;
+      const described = invalid.map((name) => `${name} (${typeof candidate[name]})`).join(', ');
+
+      throw new LLMError(
+        `circuitBreaker's ${described} must be a function when present. ${invalid.length === 1 ? 'It is' : 'They are'} optional, omit entirely rather than assigning a non function value.`,
+        'invalid_params',
+      );
+    }
+
+    // A full adapter keeps its own state and dispatch logic. VernLLM only
+    // takes over its required `onStateChange`, wrapped the same way the
+    // built in class's is below, so events are reported the same way
+    // either way. The adapter's own `onStateChange` is chained after,
+    // never lost, even a no-op one still gets called.
+    //
+    // Reaching here means `attemptsAdapter` is true (or the function
+    // would already have returned/thrown above) and both `missing` and
+    // `invalid` are empty, so `circuitBreakerOption` is a complete,
+    // valid `CircuitBreakerAdapter`.
+    if (attemptsAdapter) {
+      const adapter = circuitBreakerOption as CircuitBreakerAdapter;
+      adapter.onStateChange = wrap(adapter.onStateChange);
+      return adapter;
+    }
+  }
+
+  const breakerOptions =
+    typeof circuitBreakerOption === 'object' ? circuitBreakerOption : undefined;
+
   return new CircuitBreaker({
     ...breakerOptions,
-    onStateChange: (from, to, consecutiveFailures, model, context) => {
-      const event: VernLLMEvent = {
-        kind: 'circuit_state',
-        provider: providerName,
-        model: model ?? defaultModel,
-        from,
-        to,
-        consecutiveFailures,
-      };
-
-      // `context` is absent only when someone calls `CircuitBreaker`
-      // directly, bypassing `VernLLM`.
-      if (context) {
-        const ctx: AttemptContext = {
-          stage: 'attempt',
-          requestId: context.requestId,
-          requestedProvider: providerName,
-          requestedModel: model ?? defaultModel,
-          isFallbackAttempt: isFallback,
-          // Most call sites (recordSuccess/recordFailure after a real
-          // dispatch) now thread a real 1-based attempt number through
-          // `context.attempt`. Falls back to `1` only for the sites
-          // that genuinely have none, like `assertClosed`'s
-          // pre-dispatch check, which runs before any attempt exists.
-          attempt: context.attempt ?? 1,
-          capabilities: { supportsJsonObjectMode },
-          signal: context.signal,
-          state: context.state,
-          own: {},
-          registeredMiddlewareNames: middleware.map(idFor),
-        };
-
-        emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, logger);
-      } else {
-        reportEvent(event);
-      }
-
-      // A caller-supplied onStateChange would otherwise be silently
-      // discarded, since the spread above is overwritten by this
-      // property. Chain it instead, same try/catch treatment as every
-      // other user-supplied callback so it can't break breaker
-      // bookkeeping or the call that triggered it.
-      if (!userOnStateChange) return;
-
-      callHookSafely(logger, 'circuitBreaker.onStateChange', () =>
-        userOnStateChange(from, to, consecutiveFailures, model, context),
-      );
-    },
+    onStateChange: wrap(breakerOptions?.onStateChange),
   });
 }

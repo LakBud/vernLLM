@@ -1,9 +1,9 @@
-import type { CircuitBreaker, CircuitBreakerCallContext } from '../../circuitBreaker.js';
+import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import type { AttemptContext, LLMErrorCode, MiddlewareStateBag } from '../../types/index.js';
 
 /** Everything one logical call needs to build attempt context and talk to its breaker. */
 export interface BreakerGatewayOptions {
-  breaker?: CircuitBreaker;
+  breaker?: CircuitBreakerAdapter;
   requestId: string;
   model: string;
   providerName: string;

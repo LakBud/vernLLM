@@ -1,4 +1,3 @@
-import { CircuitBreaker, type CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import { LLMError } from '../../types/errors.js';
 import { type RetryBudget } from '../retryBudget.js';
 import { makeEventReporter } from '../utils/circuitBreaker.utils.js';
@@ -15,6 +14,7 @@ import { DEFAULT_MIDDLEWARE_TIMEOUT_MS, emitEvent } from './utils/middleware/mid
 import { defaultParseJson } from './utils/parse.utils.js';
 import { withTimeout } from './utils/retry/retry.utils.js';
 
+import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import type { Logger } from '../../logger.js';
 import type { RateLimiterAdapter } from '../../rateLimit.js';
 import type {
@@ -50,7 +50,7 @@ export interface CallExecutorOptions {
   onUsage?: (usage: TokenUsage) => void;
   onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
   onEvent?: (event: VernLLMEvent) => void;
-  breaker?: CircuitBreaker;
+  breaker?: CircuitBreakerAdapter;
   /** Caps retries against this target independent of `breaker`. See `VernLLMOptions.retryBudget`. */
   budget?: RetryBudget;
   limiter?: RateLimiterAdapter;
@@ -81,7 +81,7 @@ export class CallExecutor {
   private readonly redact?: (text: string) => string;
   private readonly usageReporter: UsageReporter;
   private readonly reportEvent: (event: VernLLMEvent) => void;
-  private readonly breaker?: CircuitBreaker;
+  private readonly breaker?: CircuitBreakerAdapter;
   private readonly budget?: RetryBudget;
   private readonly limiter?: RateLimiterAdapter;
   private readonly isFallback: boolean;
@@ -163,12 +163,12 @@ export class CallExecutor {
   }
 
   getCircuitState(model?: string) {
-    return this.breaker?.getState(model);
+    return this.breaker?.getState?.(model);
   }
 
-  /** Failure counts by `LLMErrorCode` for this target's breaker, if configured. Undefined otherwise. */
+  /** Failure counts by `LLMErrorCode` for this target's breaker, if configured and it reports them. Undefined otherwise. */
   getFailureBreakdown(model?: string) {
-    return this.breaker?.getFailureBreakdown(model);
+    return this.breaker?.getFailureBreakdown?.(model);
   }
 
   /** This target's current retry budget traffic/ratio, if a budget is configured. Undefined otherwise. */
@@ -181,19 +181,19 @@ export class CallExecutor {
     return this.limiter?.getState?.();
   }
 
-  /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured. */
+  /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured, or if the breaker doesn't report this. */
   get isolateByModel(): boolean {
     return this.breaker?.isolateByModel ?? false;
   }
 
-  /** Manually opens this target's circuit breaker, if one is configured. No-op otherwise. */
+  /** Manually opens this target's circuit breaker, if one is configured and supports it. No-op otherwise. */
   openCircuit(model?: string, context?: CircuitBreakerCallContext): void {
-    this.breaker?.open(model, context);
+    this.breaker?.open?.(model, context);
   }
 
-  /** Manually closes this target's circuit breaker, if one is configured. No-op otherwise. */
+  /** Manually closes this target's circuit breaker, if one is configured and supports it. No-op otherwise. */
   closeCircuit(model?: string, context?: CircuitBreakerCallContext): void {
-    this.breaker?.close(model, context);
+    this.breaker?.close?.(model, context);
   }
 
   /**
