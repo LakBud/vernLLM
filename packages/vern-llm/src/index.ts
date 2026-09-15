@@ -3,7 +3,10 @@ export { defineCallParams, defineCachedCallParams } from './paramsHelpers.js';
 export { createMiddleware, type CreateMiddlewareOptions } from './types/createMiddleware.js';
 export {
   CircuitBreaker,
+  type CircuitBreakerAdapter,
+  type CircuitBreakerCallContext,
   type CircuitBreakerOptions,
+  type CircuitBreakerStateChangeHandler,
   type CircuitState,
   type CooldownBackoff,
   type ExponentialBackoffOptions,

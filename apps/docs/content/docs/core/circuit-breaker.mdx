@@ -333,8 +333,7 @@ on each applicable middleware's own `onEvent`. See [Middleware](/docs/core/middl
   A custom `CircuitBreakerAdapter` must implement `onStateChange` too, it's required rather than
   optional, specifically so `'circuit_state'` events can't silently go missing for a target using a
   custom adapter. VernLLM wraps it the exact same way it wraps the built in class's: reports the
-  `'circuit_state'` event first, then calls your handler. Unlike `openCircuit`, `closeCircuit`, and
-  `getFailureBreakdown`, this one is not class only. See [Circuit Breaker →
+  `'circuit_state'` event first, then calls your handler. See [Circuit Breaker →
   Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker).
 </Callout>
 
@@ -367,12 +366,13 @@ failure count to zero, without requiring an actual successful call first. Neithe
 configured `circuitBreaker`; both are a no-op on a target that doesn't have one.
 
 <Callout type="warn">
-  `openCircuit` and `closeCircuit` only work against the built in `CircuitBreaker`. A target
-  configured with a custom `CircuitBreakerAdapter` (see [Circuit Breaker →
-  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker)) ignores both calls,
-  since a custom adapter manages its own open and closed state and VernLLM has no generic way to
-  force it. `getCircuitState()` still works for a custom adapter, reading through its optional
-  `getState`.
+  `openCircuit` and `closeCircuit` are no-ops for a target whose `circuitBreaker` is a custom
+  `CircuitBreakerAdapter` that doesn't implement `open`/`close`. Both are optional on the interface,
+  since handing VernLLM the ability to force a transition from outside is an opt-in an adapter
+  author may deliberately not want to grant, a distributed breaker where one caller shouldn't be
+  able to unilaterally force every replica open, for example. See [Circuit Breaker →
+  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker) for implementing
+  them.
 </Callout>
 
 A manual `openCircuit`/`closeCircuit` still reports its `'circuit_state'` event to every applicable
@@ -436,10 +436,11 @@ llm.getFailureBreakdown({ model: 'gpt-4o' }); // for a target with isolateByMode
 It takes the same `target: { index?, model? }` shape as `getCircuitState`, and returns `undefined`
 for a target with no breaker configured, or `{}` for a bucket that hasn't failed yet.
 
-<Callout type="warn">
-  `getFailureBreakdown` also only works against the built in `CircuitBreaker`, same reasoning as
-  `openCircuit`/`closeCircuit` above. A target using a custom `CircuitBreakerAdapter` always returns
-  `undefined` here, whether or not that adapter tracks its own failure breakdown internally.
+<Callout type="info">
+  `getFailureBreakdown` is optional on `CircuitBreakerAdapter`, same as `getState`. A target using a
+  custom adapter that doesn't implement it returns `undefined` here, same as a target with no
+  breaker configured at all. See [Circuit Breaker →
+  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker).
 </Callout>
 
 The breakdown is attribution only. It never decides whether the circuit trips, and clears whenever

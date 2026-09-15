@@ -723,6 +723,27 @@ describe('buildCircuitBreaker', () => {
         );
       });
 
+      it('warns only once ever per adapter, not once per additional build against it, so a hot loop reusing one adapter does not spam the log', () => {
+        const logger = fakeLogger();
+        const adapter = sharedAdapter(vi.fn());
+
+        for (let i = 0; i < 5; i++) {
+          buildCircuitBreaker(
+            adapter as never,
+            `provider${i}`,
+            `model${i}`,
+            undefined,
+            logger,
+            [],
+            5000,
+            false,
+            true,
+          );
+        }
+
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+      });
+
       it('does not warn when two different adapter instances are built, even with identical shapes', () => {
         const logger = fakeLogger();
 

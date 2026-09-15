@@ -225,6 +225,58 @@ function wrapOnStateChange(
 }
 
 /**
+ * One dispatcher `Set` per `CircuitBreakerAdapter` instance, keyed by
+ * object identity so it never leaks a strong reference of its own.
+ * `wireAdapterOnStateChange` reads/writes this instead of letting
+ * `buildCircuitBreaker` reassign `adapter.onStateChange` directly on
+ * every call, see that function's doc comment for why.
+ */
+const adapterSubscribers = new WeakMap<
+  CircuitBreakerAdapter,
+  Set<CircuitBreakerStateChangeHandler>
+>();
+
+/** Adapters that have already triggered the sharing warning below, so it fires once ever per adapter, not once per every additional build against it. */
+const warnedAboutSharing = new WeakSet<CircuitBreakerAdapter>();
+
+/**
+ * Registers `subscriber` against `adapter`, installing one dispatcher onto
+ * `adapter.onStateChange` the first time this adapter is seen instead of
+ * wrapping it again on every call, which would silently chain deeper for
+ * every target that ever shared this adapter. The dispatcher calls every
+ * subscribed target's own tagged handler plus the adapter's original
+ * `onStateChange` exactly once per real transition, no matter how many
+ * targets share it.
+ */
+function wireAdapterOnStateChange(
+  adapter: CircuitBreakerAdapter,
+  subscriber: CircuitBreakerStateChangeHandler,
+  logger: Logger,
+): void {
+  let subscribers = adapterSubscribers.get(adapter);
+
+  if (!subscribers) {
+    subscribers = new Set();
+    adapterSubscribers.set(adapter, subscribers);
+
+    const originalOnStateChange = adapter.onStateChange;
+    const currentSubscribers = subscribers;
+
+    adapter.onStateChange = (from, to, consecutiveFailures, model, context) => {
+      for (const sub of currentSubscribers) sub(from, to, consecutiveFailures, model, context);
+      originalOnStateChange(from, to, consecutiveFailures, model, context);
+    };
+  } else if (!warnedAboutSharing.has(adapter)) {
+    warnedAboutSharing.add(adapter);
+    logger.warn(
+      "[VernLLM] circuitBreaker: this adapter instance is already wired to another target. circuit_state events for it will now be reported to both, each tagged with its own provider/model. If that's intentional (a breaker genuinely shared across targets or clients), no action needed. If not, e.g. constructing VernLLM repeatedly with the same adapter instance, each wiring is kept for the life of the process, review whether the adapter should be constructed fresh per target instead.",
+    );
+  }
+
+  subscribers.add(subscriber);
+}
+
+/**
  * Builds the optional circuit breaker for one provider target, resolving
  * `circuitBreakerOption` into a real `CircuitBreaker`, a caller supplied
  * `CircuitBreakerAdapter`, or `undefined` when it's falsy, matching the
@@ -291,10 +343,15 @@ export function buildCircuitBreaker(
     }
 
     // A full adapter keeps its own state and dispatch logic. VernLLM only
-    // takes over its required `onStateChange`, wrapped the same way the
-    // built in class's is below, so events are reported the same way
-    // either way. The adapter's own `onStateChange` is chained after,
-    // never lost, even a no-op one still gets called.
+    // subscribes to its `onStateChange` through `wireAdapterOnStateChange`,
+    // which installs one shared dispatcher the first time this adapter is
+    // seen, so sharing one adapter across targets is explicit and bounded
+    // rather than an invisible, ever-growing call chain. See that
+    // function's doc comment. This subscriber only reports the event,
+    // `wireAdapterOnStateChange` itself calls the adapter's real original
+    // `onStateChange` exactly once per transition, so passing `undefined`
+    // here avoids calling it once per subscribing target instead of once
+    // total.
     //
     // Reaching here means `attemptsAdapter` is true (or the function
     // would already have returned/thrown above) and both `missing` and
@@ -302,7 +359,7 @@ export function buildCircuitBreaker(
     // valid `CircuitBreakerAdapter`.
     if (attemptsAdapter) {
       const adapter = circuitBreakerOption as CircuitBreakerAdapter;
-      adapter.onStateChange = wrap(adapter.onStateChange);
+      wireAdapterOnStateChange(adapter, wrap(undefined), logger);
       return adapter;
     }
   }

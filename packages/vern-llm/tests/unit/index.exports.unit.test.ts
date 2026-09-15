@@ -30,6 +30,8 @@ import {
   type WireCallRequestPatch,
   type CallResult,
   type CreateMiddlewareOptions,
+  type CircuitBreakerAdapter,
+  type CircuitBreakerCallContext,
 } from '../../src/index.js';
 
 describe('package entrypoint exports', () => {
@@ -126,6 +128,8 @@ describe('package entrypoint exports', () => {
     const assertPatch = (_p: WireCallRequestPatch) => _p;
     const assertResult = (_r: CallResult) => _r;
     const assertCreateOptions = (_o: CreateMiddlewareOptions) => _o;
+    const assertBreakerAdapter = (_a: CircuitBreakerAdapter) => _a;
+    const assertBreakerContext = (_c: CircuitBreakerCallContext) => _c;
 
     expect(assertMiddleware).toBeDefined();
     expect(assertContext).toBeDefined();
@@ -135,5 +139,7 @@ describe('package entrypoint exports', () => {
     expect(assertPatch).toBeDefined();
     expect(assertResult).toBeDefined();
     expect(assertCreateOptions).toBeDefined();
+    expect(assertBreakerAdapter).toBeDefined();
+    expect(assertBreakerContext).toBeDefined();
   });
 });
