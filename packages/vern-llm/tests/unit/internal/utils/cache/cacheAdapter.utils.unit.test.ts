@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCache } from '../../../../src/internal/utils/cacheAdapter.utils.js';
-import { InMemoryCacheAdapter, TieredCacheAdapter } from '../../../../src/types/cache.js';
+import { buildCache } from '../../../../../src/internal/utils/cache/cacheAdapter.utils.js';
+import { InMemoryCacheAdapter, TieredCacheAdapter } from '../../../../../src/types/cache.js';
 
 describe('buildCache', () => {
   it('defaults to a fresh InMemoryCacheAdapter when option is omitted', async () => {

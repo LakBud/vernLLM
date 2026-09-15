@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildRateLimit } from '../../../../src/internal/utils/rateLimitAdapter.utils.js';
-import { RateLimiter, type RateLimiterAdapter } from '../../../../src/rateLimit.js';
-import { LLMError } from '../../../../src/types/errors.js';
+import { buildRateLimit } from '../../../../../src/internal/utils/rate-limit/rateLimitAdapter.utils.js';
+import { RateLimiter, type RateLimiterAdapter } from '../../../../../src/rateLimit.js';
+import { LLMError } from '../../../../../src/types/errors.js';
 
 describe('buildRateLimit', () => {
   it('returns undefined when option is omitted, no default limiter created', () => {

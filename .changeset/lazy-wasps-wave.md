@@ -7,7 +7,7 @@ Add `CircuitBreakerAdapter`, a pluggable interface for `circuitBreaker`, the sam
 `CircuitBreaker` now implements `CircuitBreakerAdapter`, so existing code using `circuitBreaker: { ... }` or `circuitBreaker: true` is unchanged.
 
 ```ts
-import type { CircuitBreakerAdapter } from 'vern-llm';
+import { VernLLM, fromOpenAI, type CircuitBreakerAdapter } from 'vern-llm';
 
 const myBreaker: CircuitBreakerAdapter = {
   assertClosed(model, context) {
@@ -51,7 +51,7 @@ const client = new VernLLM({
 
 Passing an object that implements some but not all four required members throws `LLMError('invalid_params')` at construction, naming what's missing, rather than surfacing later as a confusing runtime error. `onStateChange` alone, with none of `assertClosed`/`recordSuccess`/`recordFailure`, is never treated as an incomplete adapter, since it's a legitimate `CircuitBreakerOptions` field too (`circuitBreaker: { threshold: 5, onStateChange: fn }` keeps working exactly as before). A present but non function `getState`/`getFailureBreakdown`/`open`/`close` also throws at construction, the same treatment `RateLimiterAdapter`'s `getState` already gets.
 
-One thing to note: VernLLM sets `onStateChange` directly on the adapter instance you pass in, wrapped, chaining in whatever was there. Reusing the same adapter instance across two different `VernLLM` clients means the second client's wiring replaces the first's.
+One thing to note: sharing one adapter instance across more than one target is supported. Every sharing target still gets its own correctly tagged `circuit_state` event, and your original `onStateChange` fires exactly once per real transition, not once per sharing target. VernLLM logs a `[VernLLM] circuitBreaker: this adapter instance is already wired...` warning the first time it notices sharing, once per adapter, not once per additional target, so accidental sharing is visible without being noisy.
 
 Minor, not breaking. Every existing `circuitBreaker` option keeps working exactly as before.
 

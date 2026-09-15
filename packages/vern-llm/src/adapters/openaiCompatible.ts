@@ -1,7 +1,7 @@
 import {
   attachRateLimitHint,
   parseOpenAIRateLimitHeaders,
-} from '../internal/utils/rateLimitHint.utils.js';
+} from '../internal/utils/rate-limit/rateLimitHint.utils.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 import {
   budgetTokensToEffort,

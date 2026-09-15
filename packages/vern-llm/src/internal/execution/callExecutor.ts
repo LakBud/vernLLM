@@ -1,7 +1,7 @@
 import { LLMError } from '../../types/errors.js';
 import { type RetryBudget } from '../retryBudget.js';
-import { makeEventReporter } from '../utils/circuitBreaker.utils.js';
-import { readRateLimitHint } from '../utils/rateLimitHint.utils.js';
+import { makeEventReporter } from '../utils/circuit-breaker/circuitBreaker.utils.js';
+import { readRateLimitHint } from '../utils/rate-limit/rateLimitHint.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
 import { finalizeResponse } from './responseFinalizer.js';

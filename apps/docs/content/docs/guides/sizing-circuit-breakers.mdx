@@ -45,9 +45,10 @@ const llm = new VernLLM({
 
 Size `windowMs` against your real concurrent volume, not a demo number. At 5 requests per second,
 a 60 second window comfortably collects `minCalls: 20` even during a partial outage where some
-calls still succeed. At 1 request per second, the same window and `minCalls` combination barely
-fills, so a brief unlucky streak looks identical to a real outage. If the circuit flaps between
-`open` and `closed` repeatedly, widen `windowMs` before touching `failureRatio`, see the warning in
+calls still succeed. At 1 request every 3 seconds, the same window only reaches `minCalls: 20`
+right at the end of the window, so a brief unlucky streak looks identical to a real outage. If the
+circuit flaps between `open` and `closed` repeatedly, widen `windowMs` before touching
+`failureRatio`, see the warning in
 [Tripping policy](/docs/core/circuit-breaker#tripping-policy).
 
 `failureRatio` itself is the tolerance knob. `0.5` tolerates a genuinely unreliable but still

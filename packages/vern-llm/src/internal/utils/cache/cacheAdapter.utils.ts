@@ -1,4 +1,8 @@
-import { InMemoryCacheAdapter, type CacheAdapter, type EvictionOption } from '../../types/cache.js';
+import {
+  InMemoryCacheAdapter,
+  type CacheAdapter,
+  type EvictionOption,
+} from '../../../types/cache.js';
 
 /**
  * Not exported. Internal shorthand for `VernLLMOptions.cache`, so the

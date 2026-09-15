@@ -1,85 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { CircuitBreaker, type CircuitBreakerAdapter } from '../../../../src/circuitBreaker.js';
-import {
-  buildCircuitBreaker,
-  makeEventReporter,
-  resolveExecutor,
-  warnIfModelUnsupported,
-} from '../../../../src/internal/utils/circuitBreaker.utils.js';
-import { LLMError } from '../../../../src/types/errors.js';
+import { CircuitBreaker, type CircuitBreakerAdapter } from '../../../../../src/circuitBreaker.js';
+import { buildCircuitBreaker } from '../../../../../src/internal/utils/circuit-breaker/circuitBreakerAdapter.utils.js';
+import { LLMError } from '../../../../../src/types/errors.js';
 
-import type { CallExecutor } from '../../../../src/internal/execution/callExecutor.js';
-import type { Logger } from '../../../../src/logger.js';
-import type { TokenUsage, VernLLMEvent } from '../../../../src/types/index.js';
-
-function fakeExecutor(providerName: string): CallExecutor {
-  return { providerName } as unknown as CallExecutor;
-}
+import type { Logger } from '../../../../../src/logger.js';
 
 function fakeLogger(): Logger {
   return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
-
-describe('resolveExecutor', () => {
-  it('returns the executor at the given index', () => {
-    const primary = fakeExecutor('primary');
-    const fallback = fakeExecutor('fallback');
-
-    expect(resolveExecutor([primary, fallback], 0, 'caller')).toBe(primary);
-    expect(resolveExecutor([primary, fallback], 1, 'caller')).toBe(fallback);
-  });
-
-  it('throws a RangeError naming the caller when the index has no target', () => {
-    const primary = fakeExecutor('primary');
-
-    expect(() => resolveExecutor([primary], 5, 'getCircuitState')).toThrow(RangeError);
-    expect(() => resolveExecutor([primary], 5, 'getCircuitState')).toThrow(/getCircuitState/);
-  });
-
-  it('pluralizes the target count correctly in the error message', () => {
-    const primary = fakeExecutor('primary');
-
-    expect(() => resolveExecutor([primary], 5, 'caller')).toThrow(/1 target\)/);
-    expect(() => resolveExecutor([primary, fakeExecutor('b')], 5, 'caller')).toThrow(/2 targets\)/);
-  });
-
-  it('throws for a negative index too', () => {
-    const primary = fakeExecutor('primary');
-
-    expect(() => resolveExecutor([primary], -1, 'caller')).toThrow(RangeError);
-  });
-});
-
-describe('warnIfModelUnsupported', () => {
-  it('does nothing when model is undefined', () => {
-    const logger = fakeLogger();
-
-    warnIfModelUnsupported(false, undefined, 'caller', logger);
-
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
-
-  it('does nothing when the target isolates by model', () => {
-    const logger = fakeLogger();
-
-    warnIfModelUnsupported(true, 'gpt-4o', 'caller', logger);
-
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
-
-  it('warns, naming the caller and the model, when a model is given but the target does not isolate by model', () => {
-    const logger = fakeLogger();
-
-    warnIfModelUnsupported(false, 'gpt-4o', 'openCircuit', logger);
-
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    const [message] = (logger.warn as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(message).toContain('openCircuit');
-    expect(message).toContain('gpt-4o');
-    expect(message).toContain('isolateByModel');
-  });
-});
 
 describe('buildCircuitBreaker', () => {
   it('returns undefined when circuitBreakerOption is falsy', () => {
@@ -744,6 +673,75 @@ describe('buildCircuitBreaker', () => {
         expect(logger.warn).toHaveBeenCalledTimes(1);
       });
 
+      it("swallows and logs an error thrown by the adapter's own original onStateChange, without stopping a sharing target's own subscriber from running", () => {
+        const logger = fakeLogger();
+        const onEventA = vi.fn();
+        const throwingOriginal = vi.fn(() => {
+          throw new Error('original onStateChange boom');
+        });
+        const adapter = sharedAdapter(throwingOriginal);
+
+        buildCircuitBreaker(
+          adapter as never,
+          'providerA',
+          'modelA',
+          onEventA,
+          logger,
+          [],
+          5000,
+          false,
+          true,
+        );
+
+        expect(() => adapter.onStateChange('closed', 'open', 1, 'm')).not.toThrow();
+        expect(onEventA).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ kind: 'circuit_state', to: 'open' }),
+        );
+        expect(logger.error).toHaveBeenCalledWith('[VernLLM] circuitBreaker.onStateChange failed', {
+          message: 'original onStateChange boom',
+          stack: expect.any(String),
+        });
+      });
+
+      it('a throwing subscriber for one sharing target does not stop another sharing target from being notified', () => {
+        const loggerA = fakeLogger();
+        const loggerB = fakeLogger();
+        const onEventA = vi.fn(() => {
+          throw new Error('onEventA boom');
+        });
+        const onEventB = vi.fn();
+        const adapter = sharedAdapter(vi.fn());
+
+        buildCircuitBreaker(
+          adapter as never,
+          'providerA',
+          'modelA',
+          onEventA,
+          loggerA,
+          [],
+          5000,
+          false,
+          true,
+        );
+        buildCircuitBreaker(
+          adapter as never,
+          'providerB',
+          'modelB',
+          onEventB,
+          loggerB,
+          [],
+          5000,
+          false,
+          true,
+        );
+
+        expect(() => adapter.onStateChange('closed', 'open', 1, 'm')).not.toThrow();
+        expect(onEventA).toHaveBeenCalledOnce();
+        expect(onEventB).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ kind: 'circuit_state', provider: 'providerB' }),
+        );
+      });
+
       it('does not warn when two different adapter instances are built, even with identical shapes', () => {
         const logger = fakeLogger();
 
@@ -772,175 +770,6 @@ describe('buildCircuitBreaker', () => {
 
         expect(logger.warn).not.toHaveBeenCalled();
       });
-    });
-  });
-});
-
-function baseUsage(overrides: Partial<TokenUsage> = {}): TokenUsage {
-  return {
-    promptTokens: 10,
-    completionTokens: 5,
-    totalTokens: 15,
-    requestId: 'req-1',
-    model: 'gpt-test',
-    ...overrides,
-  };
-}
-
-// `makeEventReporter` is the one dispatch point every event, including
-// `'usage'`/`'usage_failure'`, goes through: it calls `onEvent` (if set),
-// then separately calls the matching plain `onUsage`/`onUsageFailure`
-// hook (if set) for those two kinds. Neither call knows the other ran,
-// and a throwing hook in one never stops the other. See
-// `VernLLMOptions.onUsage`'s doc comment and the design note in
-// `types/events.ts`: the plain hooks are sugar over this event, not a
-// second reporting path.
-describe('makeEventReporter, usage/usage_failure dispatch', () => {
-  it('is a no-op when neither onEvent nor onUsage/onUsageFailure are set', () => {
-    const logger = fakeLogger();
-    const report = makeEventReporter(undefined, logger);
-
-    expect(() => report({ kind: 'usage', requestId: 'req-1', usage: baseUsage() })).not.toThrow();
-    expect(logger.error).not.toHaveBeenCalled();
-  });
-
-  it('calls onEvent for a usage event like any other event kind', () => {
-    const logger = fakeLogger();
-    const onEvent = vi.fn();
-    const report = makeEventReporter(onEvent, logger);
-    const event: VernLLMEvent = { kind: 'usage', requestId: 'req-1', usage: baseUsage() };
-
-    report(event);
-
-    expect(onEvent).toHaveBeenCalledExactlyOnceWith(event);
-  });
-
-  it('calls onUsage with just the usage, separately from onEvent', () => {
-    const logger = fakeLogger();
-    const onEvent = vi.fn();
-    const onUsage = vi.fn();
-    const report = makeEventReporter(onEvent, logger, { onUsage });
-    const usage = baseUsage();
-
-    report({ kind: 'usage', requestId: usage.requestId, usage });
-
-    expect(onUsage).toHaveBeenCalledExactlyOnceWith(usage);
-    expect(onEvent).toHaveBeenCalledOnce();
-  });
-
-  it('calls onUsageFailure with the usage and error, separately from onEvent', () => {
-    const logger = fakeLogger();
-    const onEvent = vi.fn();
-    const onUsageFailure = vi.fn();
-    const report = makeEventReporter(onEvent, logger, { onUsageFailure });
-    const usage = baseUsage();
-    const error = new LLMError('boom', 'api');
-
-    report({ kind: 'usage_failure', requestId: usage.requestId, usage, error });
-
-    expect(onUsageFailure).toHaveBeenCalledExactlyOnceWith(usage, error);
-    expect(onEvent).toHaveBeenCalledOnce();
-  });
-
-  it('never calls onUsage for a usage_failure event, or onUsageFailure for a usage event', () => {
-    const logger = fakeLogger();
-    const usage = baseUsage();
-
-    const onUsageForFailureCase = vi.fn();
-    const reportFailureCase = makeEventReporter(undefined, logger, {
-      onUsage: onUsageForFailureCase,
-    });
-    reportFailureCase({
-      kind: 'usage_failure',
-      requestId: usage.requestId,
-      usage,
-      error: new LLMError('x', 'api'),
-    });
-    expect(onUsageForFailureCase).not.toHaveBeenCalled();
-
-    const onUsageFailureForSuccessCase = vi.fn();
-    const reportSuccessCase = makeEventReporter(undefined, logger, {
-      onUsageFailure: onUsageFailureForSuccessCase,
-    });
-    reportSuccessCase({ kind: 'usage', requestId: usage.requestId, usage });
-    expect(onUsageFailureForSuccessCase).not.toHaveBeenCalled();
-  });
-
-  it('ignores onUsage/onUsageFailure entirely for every other event kind', () => {
-    const logger = fakeLogger();
-    const onUsage = vi.fn();
-    const onUsageFailure = vi.fn();
-    const report = makeEventReporter(undefined, logger, { onUsage, onUsageFailure });
-
-    report({
-      kind: 'retry',
-      requestId: 'req-1',
-      provider: 'openai',
-      model: 'gpt-test',
-      attempt: 1,
-      maxRetries: 3,
-      delayMs: 100,
-      retryAfterHonored: false,
-      error: new LLMError('boom', 'api'),
-    });
-
-    expect(onUsage).not.toHaveBeenCalled();
-    expect(onUsageFailure).not.toHaveBeenCalled();
-  });
-
-  it('swallows and logs an error thrown by onUsage, without stopping onEvent from running', () => {
-    const logger = fakeLogger();
-    const onEvent = vi.fn();
-    const onUsage = vi.fn(() => {
-      throw new Error('onUsage boom');
-    });
-    const report = makeEventReporter(onEvent, logger, { onUsage });
-    const usage = baseUsage();
-
-    expect(() => report({ kind: 'usage', requestId: usage.requestId, usage })).not.toThrow();
-
-    expect(onEvent).toHaveBeenCalledOnce();
-    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsage failed', {
-      message: 'onUsage boom',
-      stack: expect.any(String),
-    });
-  });
-
-  it('swallows and logs an error thrown by onUsageFailure, without stopping onEvent from running', () => {
-    const logger = fakeLogger();
-    const onEvent = vi.fn();
-    const onUsageFailure = vi.fn(() => {
-      throw 'not an Error instance';
-    });
-    const report = makeEventReporter(onEvent, logger, { onUsageFailure });
-    const usage = baseUsage();
-    const error = new LLMError('boom', 'api');
-
-    expect(() =>
-      report({ kind: 'usage_failure', requestId: usage.requestId, usage, error }),
-    ).not.toThrow();
-
-    expect(onEvent).toHaveBeenCalledOnce();
-    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onUsageFailure failed', {
-      message: 'unknown',
-    });
-  });
-
-  it('still calls onUsage even when onEvent itself throws', () => {
-    const logger = fakeLogger();
-    const onEvent = vi.fn(() => {
-      throw new Error('onEvent boom');
-    });
-    const onUsage = vi.fn();
-    const report = makeEventReporter(onEvent, logger, { onUsage });
-    const usage = baseUsage();
-
-    expect(() => report({ kind: 'usage', requestId: usage.requestId, usage })).not.toThrow();
-
-    expect(onUsage).toHaveBeenCalledExactlyOnceWith(usage);
-    expect(logger.error).toHaveBeenCalledWith('[VernLLM] onEvent failed', {
-      message: 'onEvent boom',
-      stack: expect.any(String),
     });
   });
 });

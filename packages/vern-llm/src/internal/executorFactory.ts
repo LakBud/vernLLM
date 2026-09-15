@@ -1,7 +1,7 @@
 import { CallExecutor } from './execution/callExecutor.js';
 import { RetryBudget } from './retryBudget.js';
-import { buildCircuitBreaker } from './utils/circuitBreaker.utils.js';
-import { buildRateLimit } from './utils/rateLimitAdapter.utils.js';
+import { buildCircuitBreaker } from './utils/circuit-breaker/circuitBreakerAdapter.utils.js';
+import { buildRateLimit } from './utils/rate-limit/rateLimitAdapter.utils.js';
 
 import type { Logger } from '../logger.js';
 import type { DetectSoftFailure } from '../types/call.js';

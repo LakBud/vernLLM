@@ -1,7 +1,7 @@
 import type { CircuitBreakerOptions } from '../circuitBreaker.js';
 import type { RetryBudgetOptions } from '../internal/retryBudget.js';
-import type { CacheOption } from '../internal/utils/cacheAdapter.utils.js';
-import type { RateLimitOption } from '../internal/utils/rateLimitAdapter.utils.js';
+import type { CacheOption } from '../internal/utils/cache/cacheAdapter.utils.js';
+import type { RateLimitOption } from '../internal/utils/rate-limit/rateLimitAdapter.utils.js';
 import type { Logger } from '../logger.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';

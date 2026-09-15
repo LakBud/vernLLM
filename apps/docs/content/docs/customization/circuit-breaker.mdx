@@ -36,7 +36,11 @@ interface CircuitBreakerAdapter {
 ```
 
 ```ts title="redis-circuit-breaker.ts"
-import type { CircuitBreakerAdapter, VernLLM } from 'vern-llm';
+// Illustrative: the read-then-write below isn't atomic under concurrent
+// access. A production version would use a Lua script (EVAL) to read and
+// write the state in one round trip, same reasoning as any check-then-set.
+import { VernLLM } from 'vern-llm';
+import type { CircuitBreakerAdapter } from 'vern-llm';
 import { LLMError } from 'vern-llm';
 
 class RedisCircuitBreaker implements CircuitBreakerAdapter {
@@ -60,14 +64,21 @@ class RedisCircuitBreaker implements CircuitBreakerAdapter {
   }
 
   async recordSuccess(model = 'default') {
+    const previousState =
+      (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
     await redis.set(`breaker:${model}:failures`, 0);
     await redis.set(`breaker:${model}:state`, 'closed');
+    // Only a real transition, matching onStateChange's "never a no-op" contract.
+    if (previousState !== 'closed') this.onStateChange(previousState, 'closed', 0, model);
   }
 
   async recordFailure(model = 'default') {
     const failures = await redis.incr(`breaker:${model}:failures`);
     if (failures >= this.threshold) {
+      const previousState =
+        (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
       await redis.set(`breaker:${model}:state`, 'open', 'PX', this.cooldownMs);
+      if (previousState !== 'open') this.onStateChange(previousState, 'open', failures, model);
     }
   }
 

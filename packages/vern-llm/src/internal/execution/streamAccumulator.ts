@@ -13,7 +13,7 @@ import type {
   WireStreamChunk,
   WireToolCall,
 } from '../../types/index.js';
-import type { ProviderRateLimitHint } from '../utils/rateLimitHint.utils.js';
+import type { ProviderRateLimitHint } from '../utils/rate-limit/rateLimitHint.utils.js';
 
 /** Everything `buildStreamResult` needs beyond the raw iterator and first chunk. */
 export interface StreamAccumulatorOptions<T> {

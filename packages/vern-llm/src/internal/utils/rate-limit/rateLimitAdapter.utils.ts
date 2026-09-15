@@ -1,5 +1,5 @@
-import { RateLimiter, type RateLimiterAdapter, type RateLimitOptions } from '../../rateLimit.js';
-import { LLMError } from '../../types/errors.js';
+import { RateLimiter, type RateLimiterAdapter, type RateLimitOptions } from '../../../rateLimit.js';
+import { LLMError } from '../../../types/errors.js';
 
 /** Not exported. Internal shorthand only, so this union isn't duplicated between the public option fields and `buildRateLimit`'s own signature. */
 export type RateLimitOption = RateLimitOptions | RateLimiterAdapter;

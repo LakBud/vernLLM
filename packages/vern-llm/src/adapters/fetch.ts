@@ -2,7 +2,7 @@ import {
   attachRateLimitHint,
   parseOpenAIRateLimitHeaders,
   type ProviderRateLimitHint,
-} from '../internal/utils/rateLimitHint.utils.js';
+} from '../internal/utils/rate-limit/rateLimitHint.utils.js';
 import {
   LLMError,
   type LLMClient,

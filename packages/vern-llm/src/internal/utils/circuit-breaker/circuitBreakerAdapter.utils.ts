@@ -3,16 +3,16 @@ import {
   type CircuitBreakerAdapter,
   type CircuitBreakerOptions,
   type CircuitBreakerStateChangeHandler,
-} from '../../circuitBreaker.js';
-import { LLMError } from '../../types/errors.js';
-import { emitEvent } from '../execution/utils/middleware/middleware.utils.js';
-import { idFor } from '../resolveMiddlewareOrder.js';
-import { callHookSafely } from './logger.utils.js';
+} from '../../../circuitBreaker.js';
+import { LLMError } from '../../../types/errors.js';
+import { emitEvent } from '../../execution/utils/middleware/middleware.utils.js';
+import { idFor } from '../../resolveMiddlewareOrder.js';
+import { callHookSafely } from './../logger.utils.js';
+import { makeEventReporter } from './circuitBreaker.utils.js';
 
-import type { Logger } from '../../logger.js';
-import type { VernLLMEvent } from '../../types/events.js';
-import type { AttemptContext, TokenUsage, VernLLMMiddleware } from '../../types/index.js';
-import type { CallExecutor } from '../execution/callExecutor.js';
+import type { Logger } from '../../../logger.js';
+import type { VernLLMEvent } from '../../../types/events.js';
+import type { AttemptContext, VernLLMMiddleware } from '../../../types/index.js';
 
 /** Not exported. Internal shorthand only, so this union isn't duplicated between the public option field and `buildCircuitBreaker`'s own signature. */
 export type CircuitBreakerOption = boolean | CircuitBreakerOptions | CircuitBreakerAdapter;
@@ -82,79 +82,6 @@ function classifyCircuitBreakerOption(option: CircuitBreakerOptions | CircuitBre
     missing: REQUIRED_ADAPTER_METHOD_NAMES.filter((name) => typeof candidate[name] !== 'function'),
     invalid: invalidOptionalMembers(option),
   };
-}
-
-/** `onUsage`/`onUsageFailure` from `VernLLMOptions`, plumbed alongside `onEvent` so `makeEventReporter` can drive both off the one dispatch point. */
-export interface UsageReporterHooks {
-  onUsage?: (usage: TokenUsage) => void;
-  onUsageFailure?: (usage: TokenUsage, error: LLMError) => void;
-}
-
-/**
- * Builds a `(event) => void` reporter that no-ops when `onEvent` is unset,
- * and otherwise calls it, swallowing and logging any error the handler
- * throws so a broken `onEvent` can't break the call that triggered it.
- * Shared by `buildCircuitBreaker` (which needs to report before any
- * executor exists) and `CallExecutor.reportEvent`, kept independent of the
- * executor for that reason.
- *
- * Also the single place `onUsage`/`onUsageFailure` are driven from: a
- * `'usage'`/`'usage_failure'` event always reaches `onEvent` like any
- * other event, and additionally, separately, reaches the matching plain
- * callback here. Neither call knows the other happened; a throwing
- * `onUsage` can't stop `onEvent` from running or vice versa. This makes
- * the plain options sugar over the event stream, not a second reporting
- * path UsageReporter has to call directly.
- */
-export function makeEventReporter(
-  onEvent: ((event: VernLLMEvent) => void) | undefined,
-  logger: Logger,
-  usageHooks: UsageReporterHooks = {},
-): (event: VernLLMEvent) => void {
-  return (event) => {
-    if (onEvent) callHookSafely(logger, 'onEvent', () => onEvent(event));
-
-    if (event.kind === 'usage' && usageHooks.onUsage) {
-      callHookSafely(logger, 'onUsage', () => usageHooks.onUsage!(event.usage));
-    }
-
-    if (event.kind === 'usage_failure' && usageHooks.onUsageFailure) {
-      callHookSafely(logger, 'onUsageFailure', () =>
-        usageHooks.onUsageFailure!(event.usage, event.error),
-      );
-    }
-  };
-}
-
-/** Resolves a target index so every circuit-breaker method agrees on what counts as valid. */
-export function resolveExecutor(
-  executors: CallExecutor[],
-  index: number,
-  caller: string,
-): CallExecutor {
-  const executor = executors[index];
-
-  if (!executor) {
-    throw new RangeError(
-      `${caller}: no target at index ${index} (chain has ${executors.length} target${executors.length === 1 ? '' : 's'})`,
-    );
-  }
-
-  return executor;
-}
-
-/** Warns when `model` can't do anything on this target, so it's never silently ignored. */
-export function warnIfModelUnsupported(
-  isolateByModel: boolean,
-  model: string | undefined,
-  caller: string,
-  logger: Logger,
-): void {
-  if (model !== undefined && !isolateByModel) {
-    logger.warn(
-      `[VernLLM] ${caller}: \`model: '${model}'\` has no effect here. This target's circuitBreaker doesn't have isolateByModel on, so it only tracks one shared circuit regardless of \`model\`. Omit \`model\`, or set \`circuitBreaker.isolateByModel: true\` on this target if per-model tracking is what you want.`,
-    );
-  }
 }
 
 /**
@@ -263,8 +190,15 @@ function wireAdapterOnStateChange(
     const currentSubscribers = subscribers;
 
     adapter.onStateChange = (from, to, consecutiveFailures, model, context) => {
-      for (const sub of currentSubscribers) sub(from, to, consecutiveFailures, model, context);
-      originalOnStateChange(from, to, consecutiveFailures, model, context);
+      for (const sub of currentSubscribers) {
+        callHookSafely(logger, 'circuitBreaker.onStateChange', () =>
+          sub(from, to, consecutiveFailures, model, context),
+        );
+      }
+
+      callHookSafely(logger, 'circuitBreaker.onStateChange', () =>
+        originalOnStateChange(from, to, consecutiveFailures, model, context),
+      );
     };
   } else if (!warnedAboutSharing.has(adapter)) {
     warnedAboutSharing.add(adapter);
