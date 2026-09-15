@@ -116,8 +116,17 @@ const llm = new VernLLM({
 VernLLM wraps whatever `onStateChange` you provide the exact same way it wraps the built in class's:
 every real state change still reports a `'circuit_state'` event first, then your handler runs,
 chained after, with the same try/catch safety as every other user supplied callback. This applies
-even to a no-op, it still gets called, VernLLM's own event reporting doesn't depend on your handler
-doing anything.
+even to a no-op handler, it still gets called, VernLLM's own event reporting doesn't depend on your
+handler doing anything.
+
+<Callout type="warn">
+  `onStateChange` should only fire after a real transition, never for a call that leaves the state
+  unchanged, `assertClosed`/`recordSuccess`/`recordFailure` running while already closed or already
+  open. The built in `CircuitBreaker` guarantees this itself. A custom adapter has to guarantee it
+  too: VernLLM relays whatever your adapter calls `onStateChange` with, it can't tell a real
+  transition from a repeat call on your behalf. The Redis examples below check the previous state
+  before calling `onStateChange` for exactly this reason.
+</Callout>
 
 <Callout type="info">
   Sharing one adapter instance across several targets or `VernLLM` clients is supported: every
@@ -152,12 +161,20 @@ class RedisCircuitBreakerWithTripping implements CircuitBreakerAdapter {
 
   async recordFailure(model = 'default') {
     const shouldOpen = this.tripping.onFailure(model);
-    if (shouldOpen) await redis.set(`breaker:${model}:state`, 'open', 'PX', 30_000);
+    if (shouldOpen) {
+      const previousState =
+        (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
+      await redis.set(`breaker:${model}:state`, 'open', 'PX', 30_000);
+      if (previousState !== 'open') this.onStateChange(previousState, 'open', 0, model);
+    }
   }
 
   async recordSuccess(model = 'default') {
     this.tripping.onSuccess(model);
+    const previousState =
+      (await redis.get(`breaker:${model}:state`)) === 'open' ? 'open' : 'closed';
     await redis.set(`breaker:${model}:state`, 'closed');
+    if (previousState !== 'closed') this.onStateChange(previousState, 'closed', 0, model);
   }
 
   async assertClosed(model = 'default') {
