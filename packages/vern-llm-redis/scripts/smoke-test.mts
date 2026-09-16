@@ -18,18 +18,22 @@ const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const scratchDir = mkdtempSync(path.join(tmpdir(), 'vern-llm-redis-smoke-'));
 
 try {
-  // Pack the package as it would actually be published. Uses `npm pack`
-  // rather than `pnpm pack` since npm ships with Node everywhere this
-  // script runs, so no extra assumption about the package manager on PATH.
-  const packOutput = execFileSync('npm', ['pack', '--pack-destination', scratchDir], {
+  // Pack the package as it would actually be published. Uses `pnpm pack`
+  // rather than `npm pack`: pnpm rewrites `workspace:` protocol ranges
+  // (like the `vern-llm` peer dependency below) into real semver ranges
+  // when packing, matching what actually ships to the registry. `npm pack`
+  // leaves `workspace:` untouched, which breaks `npm install` on the
+  // tarball with EUNSUPPORTEDPROTOCOL.
+  const packOutput = execFileSync('pnpm', ['pack', '--pack-destination', scratchDir], {
     cwd: packageRoot,
     encoding: 'utf8',
   }).trim();
-  const tarballName: string | undefined = packOutput.split('\n').pop()?.trim();
-  if (!tarballName) {
-    throw new Error(`Could not determine tarball filename from npm pack output:\n${packOutput}`);
+  // Unlike `npm pack`, `pnpm pack` prints the full absolute tarball path
+  // as the last line, not a bare filename, so it's used as-is.
+  const tarballPath: string | undefined = packOutput.split('\n').pop()?.trim();
+  if (!tarballPath) {
+    throw new Error(`Could not determine tarball path from pnpm pack output:\n${packOutput}`);
   }
-  const tarballPath = path.join(scratchDir, tarballName);
 
   const consumerDir = path.join(scratchDir, 'consumer');
   mkdirSync(consumerDir, { recursive: true });

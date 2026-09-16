@@ -24,7 +24,7 @@ html > body[data-scroll-locked] {
   --shiki-background: var(--color-fd-card);
   --shiki-foreground: var(--color-fd-card-foreground);
 
-  /* Vern expanded orange spectrum */
+  /* VernLLM expanded orange spectrum */
   --shiki-ember: hsl(12, 82%, 42%);
   --shiki-flame: hsl(18, 88%, 46%);
   --shiki-fire: hsl(24, 92%, 50%);

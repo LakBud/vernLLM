@@ -11,7 +11,7 @@ import { redisCircuitBreaker, redisRateLimit, redisCache, fromIoredis } from 've
 
 const client = fromIoredis(new Redis());
 
-const vern = new VernLLM({
+const llm = new VernLLM({
   circuitBreaker: redisCircuitBreaker(client, { threshold: 5, cooldownMs: 30000 }),
   rateLimit: redisRateLimit(client, { requestsPerMinute: 100 }),
   cache: redisCache(client),
