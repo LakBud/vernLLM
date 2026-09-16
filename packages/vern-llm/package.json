@@ -55,7 +55,6 @@
     "test:coverage": "vitest run --coverage",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm run build && changeset publish",
     "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
     "size": "size-limit"
   },
@@ -80,7 +79,7 @@
     "vitest": "^4.1.11",
     "zod": "^4.5.4"
   },
-  "packageManager": "pnpm@11.24.0",
+  "packageManager": "pnpm@11.25.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LakBud/vernLLM.git",

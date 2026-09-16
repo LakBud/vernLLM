@@ -14,13 +14,16 @@ permissions:
   pull-requests: write
 
 jobs:
-  version:
+  detect:
     # Only run when the Version Packages PR was actually merged.
     if: >
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.ref == 'changeset-release/main'
 
     runs-on: ubuntu-latest
+
+    outputs:
+      tags: ${{ steps.detect.outputs.tags }}
 
     steps:
       - name: Checkout merged main
@@ -39,29 +42,68 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Read package version
-        id: pkg
-        run: |
-          VERSION="$(node -p "require('./packages/vern-llm/package.json').version")"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=vern-llm@$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Verify there are no pending changesets
-        run: |
-          pnpm changeset status
+        run: pnpm changeset status
 
+      # A Version Packages PR can bump more than one package's version in
+      # the same merge (independent versioning means each package that
+      # had a changeset gets its own bump, in one PR). This finds every
+      # package.json whose version actually changed in that merge, one
+      # release per package, not one release for the whole merge.
+      - name: Detect released packages
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          TAGS_JSON="[]"
+
+          for FILE in $(git diff --name-only "$BASE_SHA" HEAD -- '**/package.json'); do
+            [ -f "$FILE" ] || continue
+
+            IS_PRIVATE="$(jq -r '.private // false' "$FILE")"
+            [ "$IS_PRIVATE" = "true" ] && continue
+
+            NAME="$(jq -r '.name // empty' "$FILE")"
+            NEW_VERSION="$(jq -r '.version // empty' "$FILE")"
+            [ -z "$NAME" ] && continue
+            [ -z "$NEW_VERSION" ] && continue
+
+            OLD_VERSION="$(git show "$BASE_SHA:$FILE" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo '')"
+
+            if [ "$NEW_VERSION" != "$OLD_VERSION" ]; then
+              TAG="$NAME@$NEW_VERSION"
+              TAGS_JSON="$(echo "$TAGS_JSON" | jq --arg t "$TAG" '. + [$t]')"
+            fi
+          done
+
+          echo "Detected releases: $TAGS_JSON"
+          echo "tags=$TAGS_JSON" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: detect
+    if: needs.detect.outputs.tags != '[]'
+    runs-on: ubuntu-latest
+
+    strategy:
+      # One release per package, run independently: one package's tag,
+      # release, and publish dispatch never blocks or depends on another's.
+      matrix:
+        tag: ${{ fromJson(needs.detect.outputs.tags) }}
+      fail-fast: false
+
+    steps:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.pkg.outputs.tag }}
-          name: ${{ steps.pkg.outputs.tag }}
+          tag_name: ${{ matrix.tag }}
+          name: ${{ matrix.tag }}
           target_commitish: main
           generate_release_notes: true
 
       - name: Trigger production publish
         env:
           GH_TOKEN: ${{ secrets.WORKFLOW_DISPATCH_TOKEN }}
-          TAG: ${{ steps.pkg.outputs.tag }}
+          TAG: ${{ matrix.tag }}
         run: |
           gh workflow run publish.yml \
             --repo "$GITHUB_REPOSITORY" \

@@ -1,6 +1,6 @@
-import type { CircuitBreakerOptions } from '../circuitBreaker.js';
 import type { RetryBudgetOptions } from '../internal/retryBudget.js';
 import type { CacheOption } from '../internal/utils/cache/cacheAdapter.utils.js';
+import type { CircuitBreakerOption } from '../internal/utils/circuit-breaker/circuitBreakerAdapter.utils.js';
 import type { RateLimitOption } from '../internal/utils/rate-limit/rateLimitAdapter.utils.js';
 import type { Logger } from '../logger.js';
 import type { DetectSoftFailure } from './call.js';
@@ -122,9 +122,11 @@ export interface VernLLMOptions {
   /**
    * Enables a circuit breaker that short-circuits calls after repeated
    * consecutive failures, instead of continuing to hammer a down provider
-   * Pass `true` for defaults, or an options object to tune threshold/cooldown
+   * Pass `true` for defaults, or an options object to tune threshold/cooldown.
+   * Pass a `CircuitBreakerAdapter` instead for cross-process coordination,
+   * the same pattern `cache` and `rateLimit` already support.
    */
-  circuitBreaker?: boolean | CircuitBreakerOptions;
+  circuitBreaker?: CircuitBreakerOption;
   /**
    * Reports retries and circuit-breaker state transitions as they happen.
    * Fire and forget: a throwing handler is caught and logged, and its

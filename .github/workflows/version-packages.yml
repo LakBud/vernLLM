@@ -28,6 +28,7 @@ jobs:
           filters: |
             code:
               - 'packages/vern-llm/**'
+              - 'packages/vern-llm-redis/**'
               - '.changeset/**'
               - 'package.json'
               - 'pnpm-lock.yaml'

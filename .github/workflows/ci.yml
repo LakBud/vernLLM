@@ -1,0 +1,273 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: tree:0
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Restores Nx's task cache (see nx.json's cacheDirectory) from the
+      # most recent matching run, so a task Nx already computed and
+      # cached last time is read back instead of re-run. Keyed per job,
+      # not shared across jobs: two jobs in the same run finishing and
+      # trying to save an identical key both fail one of the saves with
+      # noisy but harmless warnings, since a GitHub Actions cache key
+      # can only be written once. restore-keys falls back to the most
+      # recent cache under this job's prefix even without an exact
+      # lockfile-hash match, still useful, just a partial hit.
+      - name: Restore Nx cache
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            nx-${{ runner.os }}-${{ github.job }}-
+
+      # Sets NX_BASE / NX_HEAD for this job, so `nx affected` below
+      # compares against the PR's real base (or the last successful push
+      # to main), not just the immediately preceding commit.
+      - uses: nrwl/nx-set-shas@v5
+
+      - name: Lint affected projects
+        run: pnpm exec nx affected -t lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: tree:0
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore Nx cache
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            nx-${{ runner.os }}-${{ github.job }}-
+
+      - uses: nrwl/nx-set-shas@v5
+
+      # vern-llm-redis type-checks against vern-llm's real built .d.ts
+      # output via the workspace link, so its typecheck target depends
+      # on vern-llm's build target (see nx.json). Nx runs that
+      # automatically as part of the graph, no manual "build vern-llm
+      # first" step needed here the way the old per-package workflows
+      # required.
+      - name: Typecheck affected projects
+        run: pnpm exec nx affected -t typecheck typecheck:test types:check
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check peer dependencies
+        run: pnpm peers check
+
+      - name: Restore Nx cache
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            nx-${{ runner.os }}-${{ github.job }}-
+
+      - uses: nrwl/nx-set-shas@v5
+
+      - name: Build, bundle-size check, and smoke test affected projects
+        run: pnpm exec nx affected -t build size smoke-test
+
+  test-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: tree:0
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore Nx cache
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            nx-${{ runner.os }}-${{ github.job }}-
+
+      - uses: nrwl/nx-set-shas@v5
+
+      - name: Test unit, affected projects
+        run: pnpm exec nx affected -t test:unit:coverage
+
+      # Each of these is a no-op (hashFiles empty, step skipped) unless
+      # that specific project's test:unit:coverage actually ran above.
+      - name: Upload vern-llm coverage to Codecov
+        if: hashFiles('packages/vern-llm/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm/coverage/lcov.info
+          flags: unit
+          fail_ci_if_error: true
+
+      - name: Upload vern-llm-redis coverage to Codecov
+        if: hashFiles('packages/vern-llm-redis/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm-redis/coverage/lcov.info
+          flags: vern-llm-redis-unit
+          fail_ci_if_error: true
+
+  # No Nx cache here, deliberately: this job runs against a real Redis
+  # service container. A cached "pass" from a previous run could hide a
+  # real regression in how an adapter behaves against actual Redis state
+  # (timing, pub/sub delivery, real eval() semantics), the one place a
+  # stale-but-green result would be actively misleading rather than a
+  # harmless skip.
+  test-integration:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: nrwl/nx-set-shas@v5
+
+      - name: Test integration, affected projects
+        run: pnpm exec nx affected -t test:int:coverage
+
+      - name: Upload vern-llm coverage to Codecov
+        if: hashFiles('packages/vern-llm/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm/coverage/lcov.info
+          flags: integration
+          fail_ci_if_error: true
+
+      - name: Upload vern-llm-redis coverage to Codecov
+        if: hashFiles('packages/vern-llm-redis/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm-redis/coverage/lcov.info
+          flags: vern-llm-redis-integration
+          fail_ci_if_error: true
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore Nx cache
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ github.job }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            nx-${{ runner.os }}-${{ github.job }}-
+
+      - uses: nrwl/nx-set-shas@v5
+
+      # Explicit exclude, not a project filter Nx offers a cleaner flag
+      # for: lint and build exist on every project, so an unscoped
+      # `nx affected -t lint build` here would redundantly re-run them
+      # for vern-llm and vern-llm-redis too (already covered by the lint
+      # and build jobs above), not just for vern-llm-docs. Revisit with
+      # Nx project tags (e.g. exclude '*,!tag:docs') if a fourth project
+      # ever needs this same kind of scoping.
+      - name: Lint, typecheck, and build affected docs
+        run: pnpm exec nx affected -t lint types:check build --exclude=vern-llm,vern-llm-redis

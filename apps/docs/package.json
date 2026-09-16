@@ -1,6 +1,5 @@
 {
   "name": "vern-llm-docs",
-  "version": "0.0.6",
   "private": true,
   "scripts": {
     "build": "next build",

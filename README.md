@@ -11,11 +11,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/vern-llm"><img src="https://img.shields.io/npm/v/vern-llm.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/vern-llm"><img src="https://img.shields.io/npm/dm/vern-llm.svg" alt="npm downloads" /></a>
-  <a href="https://github.com/LakBud/vernLLM/actions/workflows/build-checks.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/build-checks.yml/badge.svg" alt="build checks status" /></a>
-  <a href="https://github.com/LakBud/vernLLM/actions/workflows/lint.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/lint.yml/badge.svg" alt="lint status" /></a>
-  <a href="https://github.com/LakBud/vernLLM/actions/workflows/typecheck.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/typecheck.yml/badge.svg" alt="typecheck status" /></a>
-  <a href="https://github.com/LakBud/vernLLM/actions/workflows/test-unit.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/test-unit.yml/badge.svg" alt="unit test status" /></a>
-  <a href="https://github.com/LakBud/vernLLM/actions/workflows/test-integration.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/test-integration.yml/badge.svg" alt="integration test status" /></a>
+  <a href="https://github.com/LakBud/vernLLM/actions/workflows/ci.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://codecov.io/gh/LakBud/vernLLM" ><img src="https://codecov.io/gh/LakBud/vernLLM/graph/badge.svg?token=NKKW54MODY"/></a>
   <a href="https://github.com/LakBud/vernLLM/actions/workflows/codeql.yml"><img src="https://github.com/LakBud/vernLLM/actions/workflows/codeql.yml/badge.svg" alt="codeql status" /></a>
   <a href="https://www.bestpractices.dev/projects/14212"><img src="https://www.bestpractices.dev/projects/14212/badge"></a>
@@ -54,12 +50,13 @@ Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI,
 
 ## Repository layout
 
-This is a pnpm monorepo with two workspaces:
+This is a pnpm monorepo with three workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
 
-| Path                                       | Description                                                                                |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| [`packages/vern-llm`](./packages/vern-llm) | The `vern-llm` npm package: source, tests, and its own README with the full API reference. |
-| [`apps/docs`](./apps/docs)                 | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                           |
+| Path                                                   | Description                                                                                                      |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| [`packages/vern-llm`](./packages/vern-llm)             | The `vern-llm` npm package: source, tests, and its own README with the full API reference.                       |
+| [`packages/vern-llm-redis`](./packages/vern-llm-redis) | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`. |
+| [`apps/docs`](./apps/docs)                             | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                 |
 
 ## License
 

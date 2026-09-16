@@ -9,12 +9,11 @@
 ## Checklist
 
 - [ ] `pnpm run lint`
-- [ ] `pnpm run typecheck`
-- [ ] `pnpm run typecheck:test`
-- [ ] `pnpm run test` (or `pnpm run test:unit` / `pnpm run test:int` if scoping to one project)
+- [ ] `pnpm run typecheck` (also runs `typecheck:test` for every package that has it)
+- [ ] `pnpm run test` (or `pnpm run test:unit` / `pnpm run test:int` if scoping to one target)
 - [ ] Added or updated tests for the change
 - [ ] Added or updated docs for the change
-- [ ] Added a changeset (`pnpm run changeset`), if this affects `vern-llm` consumers
+- [ ] Added a changeset (`pnpm run changeset`), if this affects `vern-llm` or other related package consumers
 
 ## Notes
 
