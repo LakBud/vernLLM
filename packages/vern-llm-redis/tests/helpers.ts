@@ -5,18 +5,20 @@ import { vi } from 'vitest';
 import type { RedisClient, RedisSubscriber } from '../src/types.js';
 import type { LLMClient } from 'vern-llm';
 
-/** A RedisClient stand-in whose eval/get/set/del are individually stubbable per test, no real Redis involved. */
+/** A RedisClient stand-in whose eval/get/set/del/scan are individually stubbable per test, no real Redis involved. scan defaults to an empty result (no keys, cursor '0'), so redisCircuitBreaker's startup snapshot is a no-op unless a test explicitly configures otherwise, and never touches eval's own mock queue. */
 export function fakeRedisClient(): RedisClient & {
   get: ReturnType<typeof vi.fn>;
   set: ReturnType<typeof vi.fn>;
   del: ReturnType<typeof vi.fn>;
   eval: ReturnType<typeof vi.fn>;
+  scan: ReturnType<typeof vi.fn>;
 } {
   return {
     get: vi.fn<RedisClient['get']>(),
     set: vi.fn<RedisClient['set']>(),
     del: vi.fn<RedisClient['del']>(),
     eval: vi.fn<RedisClient['eval']>(),
+    scan: vi.fn(async () => ['0', []] as [string, string[]]),
   };
 }
 

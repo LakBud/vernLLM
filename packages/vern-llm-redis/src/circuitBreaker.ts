@@ -12,6 +12,10 @@ import {
   type LocalCircuitBucket,
 } from './internal/circuit-breaker/localCache.utils.js';
 import {
+  READ_BUCKETS_SCRIPT,
+  parseSnapshotResult,
+} from './internal/circuit-breaker/snapshotScript.js';
+import {
   TRANSITION_SCRIPT,
   parseTransitionMessage,
   parseTransitionResult,
@@ -162,6 +166,36 @@ export function redisCircuitBreaker(
   ): void {
     if (from === to) return;
     adapter.onStateChange(from, to, failures, model, context);
+  }
+
+  // One-time startup scan: seeds the local cache with any circuit
+  // already open elsewhere in Redis, so a fresh process doesn't default
+  // an unseen key to closed. Skipped if the client has no scan.
+  if (redis.scan) {
+    void (async () => {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await redis.scan!(
+          cursor,
+          'MATCH',
+          `${keyPrefix}*`,
+          'COUNT',
+          1000,
+        );
+        cursor = nextCursor;
+        if (keys.length === 0) continue;
+
+        const raw = await redis.eval(READ_BUCKETS_SCRIPT, 0, ...keys);
+        for (const entry of parseSnapshotResult(raw)) {
+          local.set(entry.key, {
+            state: entry.state,
+            failures: entry.failures,
+            openedAt: entry.openedAt,
+            trialAvailable: false,
+          });
+        }
+      } while (cursor !== '0');
+    })().catch((error: unknown) => reportRejection('snapshot', keyPrefix, error));
   }
 
   if (options.subscriber) {

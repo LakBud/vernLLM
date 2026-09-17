@@ -14,6 +14,16 @@ function transitionResult(
   return [from, to, String(failures), wonProbe ? '1' : '0', String(openedAt)];
 }
 
+/** Matches READ_BUCKETS_SCRIPT's flat return shape: [key, state, failures, openedAt, ...] repeated per non-closed bucket found. */
+function readBucketsResult(...buckets: Array<[string, string, number, number]>): string[] {
+  return buckets.flatMap(([key, state, failures, openedAt]) => [
+    key,
+    state,
+    String(failures),
+    String(openedAt),
+  ]);
+}
+
 describe('redisCircuitBreaker', () => {
   it('assertClosed does not throw while the local cache is closed', () => {
     const redis = fakeRedisClient();
@@ -226,6 +236,105 @@ describe('redisCircuitBreaker', () => {
     const breaker = redisCircuitBreaker(redis);
 
     expect(breaker.getState?.('gpt-4o')).toBe('closed');
+  });
+
+  describe('startup snapshot', () => {
+    it('picks up a circuit another process already opened in Redis, before this process makes any call', async () => {
+      const redis = fakeRedisClient();
+      redis.scan.mockResolvedValueOnce(['0', ['vernllm:cb']]);
+      redis.eval.mockResolvedValueOnce(readBucketsResult(['vernllm:cb', 'open', 5, 1000]));
+
+      const breaker = redisCircuitBreaker(redis);
+      // Let the fire-and-forget snapshot resolve before asserting.
+      await vi.waitFor(() => expect(breaker.getState?.()).toBe('open'));
+
+      expect(() => breaker.assertClosed()).toThrow();
+    });
+
+    it('confirms every isolateByModel key the snapshot finds, leaving keys Redis never mentioned at their optimistic default', async () => {
+      const redis = fakeRedisClient();
+      redis.scan.mockResolvedValueOnce(['0', ['cb:gpt-4o']]);
+      redis.eval.mockResolvedValueOnce(readBucketsResult(['cb:gpt-4o', 'open', 5, 1000]));
+
+      const breaker = redisCircuitBreaker(redis, { isolateByModel: true, keyPrefix: 'cb' });
+      await vi.waitFor(() => expect(breaker.getState?.('gpt-4o')).toBe('open'));
+
+      expect(() => breaker.assertClosed('gpt-4o')).toThrow();
+      // 'claude' was never returned by the snapshot (Redis has no key
+      // for it, meaning it's genuinely closed), so it keeps the same
+      // optimistic default an adapter with no snapshot at all would use.
+      expect(() => breaker.assertClosed('claude')).not.toThrow();
+    });
+
+    it('follows a paginated scan across more than one cursor page', async () => {
+      const redis = fakeRedisClient();
+      redis.scan.mockResolvedValueOnce(['17', ['cb:a']]).mockResolvedValueOnce(['0', ['cb:b']]);
+      redis.eval
+        .mockResolvedValueOnce(readBucketsResult(['cb:a', 'open', 1, 1000]))
+        .mockResolvedValueOnce(readBucketsResult(['cb:b', 'open', 1, 1000]));
+
+      const breaker = redisCircuitBreaker(redis, { isolateByModel: true, keyPrefix: 'cb' });
+      await vi.waitFor(() => expect(breaker.getState?.('a')).toBe('open'));
+      await vi.waitFor(() => expect(breaker.getState?.('b')).toBe('open'));
+
+      expect(redis.scan).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips a page with no matched keys without an extra eval call', async () => {
+      const redis = fakeRedisClient();
+      redis.scan.mockResolvedValueOnce(['0', []]);
+
+      redisCircuitBreaker(redis);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(redis.eval).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when the given RedisClient has no scan method', async () => {
+      const redis = fakeRedisClient();
+      // @ts-expect-error exercising a client that omits the optional method
+      redis.scan = undefined;
+
+      redisCircuitBreaker(redis);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(redis.eval).not.toHaveBeenCalled();
+    });
+
+    it('reports, instead of leaving unhandled, a scan that rejects', async () => {
+      const redis = fakeRedisClient();
+      redis.scan.mockRejectedValueOnce(new Error('redis down'));
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      redisCircuitBreaker(redis);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('snapshot'),
+        expect.any(Error),
+      );
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('reports, instead of leaving unhandled, a bucket-read eval that rejects', async () => {
+      const redis = fakeRedisClient();
+      redis.scan.mockResolvedValueOnce(['0', ['vernllm:cb']]);
+      redis.eval.mockRejectedValueOnce(new Error('redis down'));
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      redisCircuitBreaker(redis);
+      await vi.waitFor(() =>
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('snapshot'),
+          expect.any(Error),
+        ),
+      );
+
+      consoleErrorSpy.mockRestore();
+    });
   });
 
   it('getState reads the same local cache assertClosed gates against, not a fresh Redis call', async () => {

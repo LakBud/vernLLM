@@ -9,6 +9,22 @@ export interface RedisClient {
   set(key: string, value: string, mode: 'PX', durationMs: number): Promise<unknown>;
   del(...keys: string[]): Promise<unknown>;
   eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+  /**
+   * Cursor-paginated key scan, ioredis's own `scan(cursor, 'MATCH',
+   * pattern, 'COUNT', count)` shape (tokens included, matching how
+   * `set`'s `'PX'` mode is already kept above). Optional: only used to
+   * seed a fresh circuit-breaker adapter's local cache with any circuit
+   * already open elsewhere in Redis before this process's own calls
+   * would otherwise discover it. A client that omits it just skips that
+   * startup seeding, same as no client having it at all.
+   */
+  scan?(
+    cursor: string,
+    matchToken: 'MATCH',
+    pattern: string,
+    countToken: 'COUNT',
+    count: number,
+  ): Promise<[string, string[]]>;
 }
 
 /**

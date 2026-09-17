@@ -6,22 +6,39 @@ export interface NodeRedisLike {
   set(key: string, value: string, options: { PX: number }): Promise<unknown>;
   del(keys: string[]): Promise<unknown>;
   eval(script: string, options: { keys?: string[]; arguments?: string[] }): Promise<unknown>;
+  /** node-redis's own scan shape. Optional, same reasoning as RedisClient.scan. */
+  scan?(
+    cursor: number,
+    options: { MATCH: string; COUNT: number },
+  ): Promise<{ cursor: number; keys: string[] }>;
 }
 
 /**
  * Translates node-redis's option-object call shapes (set's { PX }, eval's
- * { keys, arguments }) onto RedisClient's ioredis-shaped, positional one.
- * Pass an already-connected node-redis client.
+ * { keys, arguments }, scan's numeric cursor and { MATCH, COUNT }) onto
+ * RedisClient's ioredis-shaped, positional one. Pass an already-connected
+ * node-redis client.
  */
 export function fromNodeRedis(client: NodeRedisLike): RedisClient {
-  return {
-    get: (key) => client.get(key),
-    set: (key, value, _mode, durationMs) => client.set(key, value, { PX: durationMs }),
-    del: (...keys) => client.del(keys),
-    eval: (script, numKeys, ...args) => {
+  const base = {
+    get: (key: string) => client.get(key),
+    set: (key: string, value: string, _mode: 'PX', durationMs: number) =>
+      client.set(key, value, { PX: durationMs }),
+    del: (...keys: string[]) => client.del(keys),
+    eval: (script: string, numKeys: number, ...args: (string | number)[]) => {
       const keys = args.slice(0, numKeys).map(String);
       const argv = args.slice(numKeys).map(String);
       return client.eval(script, { keys, arguments: argv });
+    },
+  };
+
+  if (!client.scan) return base;
+
+  return {
+    ...base,
+    scan: async (cursor: string, _match: 'MATCH', pattern: string, _count: 'COUNT', count) => {
+      const result = await client.scan!(Number(cursor), { MATCH: pattern, COUNT: count });
+      return [String(result.cursor), result.keys];
     },
   };
 }

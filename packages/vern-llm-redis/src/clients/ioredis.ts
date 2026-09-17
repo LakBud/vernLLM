@@ -10,6 +10,13 @@ export interface IoredisLike {
   set(key: string, value: string, mode: 'PX', durationMs: number): Promise<unknown>;
   del(...keys: string[]): Promise<unknown>;
   eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+  scan?(
+    cursor: string,
+    matchToken: 'MATCH',
+    pattern: string,
+    countToken: 'COUNT',
+    count: number,
+  ): Promise<[string, string[]]>;
 }
 
 /** ioredis already matches RedisClient's shape exactly. This exists for symmetry with fromNodeRedis, so an ioredis API change has one place to absorb it. */

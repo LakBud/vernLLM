@@ -72,6 +72,30 @@ describe('fromNodeRedis', () => {
       arguments: ['onlyArg'],
     });
   });
+
+  it('omits scan when the underlying client does not implement it', () => {
+    const client = { get: vi.fn(), set: vi.fn(), del: vi.fn(), eval: vi.fn() };
+    const wrapped = fromNodeRedis(client);
+
+    expect(wrapped.scan).toBeUndefined();
+  });
+
+  it("translates scan(cursor, 'MATCH', pattern, 'COUNT', count) into scan(cursor, { MATCH, COUNT })", async () => {
+    const client = {
+      get: vi.fn(),
+      set: vi.fn(),
+      del: vi.fn(),
+      eval: vi.fn(),
+      scan: vi.fn().mockResolvedValue({ cursor: 17, keys: ['a', 'b'] }),
+    };
+    const wrapped = fromNodeRedis(client);
+
+    await expect(wrapped.scan?.('0', 'MATCH', 'prefix*', 'COUNT', 1000)).resolves.toEqual([
+      '17',
+      ['a', 'b'],
+    ]);
+    expect(client.scan).toHaveBeenCalledWith(0, { MATCH: 'prefix*', COUNT: 1000 });
+  });
 });
 
 describe('fromNodeRedisSubscriber', () => {
