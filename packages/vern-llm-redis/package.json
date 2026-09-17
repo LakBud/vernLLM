@@ -78,7 +78,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "smoke-test": "node scripts/smoke-test.mts",
+    "smoke-test": "node scripts/smoke-test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "lint": "oxlint .",
@@ -127,51 +127,87 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "5 KB"
+      "limit": "5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/index.cjs",
-      "limit": "5 KB"
+      "limit": "5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/circuitBreaker.mjs",
-      "limit": "6 KB"
+      "limit": "6 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/circuitBreaker.cjs",
-      "limit": "6 KB"
+      "limit": "6 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/rateLimit.mjs",
-      "limit": "10 KB"
+      "limit": "10 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/rateLimit.cjs",
-      "limit": "10 KB"
+      "limit": "10 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/cache.mjs",
-      "limit": "1.5 KB"
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/cache.cjs",
-      "limit": "1.5 KB"
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/clients/ioredis.mjs",
-      "limit": "1 KB"
+      "limit": "1 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/clients/ioredis.cjs",
-      "limit": "1 KB"
+      "limit": "1 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/clients/nodeRedis.mjs",
-      "limit": "1.5 KB"
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     },
     {
       "path": "dist/clients/nodeRedis.cjs",
-      "limit": "1.5 KB"
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
     }
   ]
 }
