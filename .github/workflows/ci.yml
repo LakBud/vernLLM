@@ -272,5 +272,18 @@ jobs:
       # and build jobs above), not just for vern-llm-docs. Revisit with
       # Nx project tags (e.g. exclude '*,!tag:docs') if a fourth project
       # ever needs this same kind of scoping.
-      - name: Lint, typecheck, and build affected docs
-        run: pnpm exec nx affected -t lint types:check build --exclude=vern-llm,vern-llm-redis
+      #
+      # Run as three separate commands, not one combined target list:
+      # types:check runs `next typegen`, which writes
+      # apps/docs/.next/types/routes.d.ts, and build's `next build` can
+      # clean or recreate .next. Combined in one Nx invocation these two
+      # targets have no ordering guarantee within the same project and
+      # can run concurrently, racing on that file.
+      - name: Lint affected docs
+        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis
+
+      - name: Typecheck affected docs
+        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis
+
+      - name: Build affected docs
+        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis
