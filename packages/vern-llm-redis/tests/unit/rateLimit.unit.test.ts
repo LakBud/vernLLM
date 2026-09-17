@@ -252,6 +252,19 @@ describe('redisRateLimit', () => {
     );
   });
 
+  it('release does not touch the tokens bucket when actualTokens exactly matches the estimate', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(takeResult(1, 50, 100, -1));
+
+    const limiter = redisRateLimit(redis, { tokensPerMinute: 100 });
+    const { release } = await limiter.acquire(50);
+
+    redis.eval.mockClear();
+    release(50); // used exactly what was estimated, no reconciliation needed
+
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+
   it('release grows the AIMD ceiling only when success is true', async () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 9, 10, -1));
@@ -641,5 +654,71 @@ describe('redisRateLimit', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('throws at construction when requestsPerMinute, tokensPerMinute, or maxConcurrent is negative or not finite', () => {
+    const redis = fakeRedisClient();
+
+    expect(() => redisRateLimit(redis, { requestsPerMinute: -1 })).toThrow(/requestsPerMinute/);
+    expect(() => redisRateLimit(redis, { tokensPerMinute: NaN })).toThrow(/tokensPerMinute/);
+    expect(() => redisRateLimit(redis, { maxConcurrent: Infinity })).toThrow(/maxConcurrent/);
+  });
+
+  it('accepts 0 for requestsPerMinute, tokensPerMinute, or maxConcurrent, meaning unlimited/disabled', () => {
+    const redis = fakeRedisClient();
+
+    expect(() => redisRateLimit(redis, { requestsPerMinute: 0 })).not.toThrow();
+    expect(() => redisRateLimit(redis, { tokensPerMinute: 0 })).not.toThrow();
+    expect(() => redisRateLimit(redis, { maxConcurrent: 0 })).not.toThrow();
+  });
+
+  it('throws at construction when maxQueueMs is negative or not finite', () => {
+    const redis = fakeRedisClient();
+
+    expect(() => redisRateLimit(redis, { maxQueueMs: -1 })).toThrow(/maxQueueMs/);
+    expect(() => redisRateLimit(redis, { maxQueueMs: NaN })).toThrow(/maxQueueMs/);
+  });
+
+  it('accepts 0 for maxQueueMs, meaning no timeout', () => {
+    const redis = fakeRedisClient();
+
+    expect(() => redisRateLimit(redis, { maxQueueMs: 0 })).not.toThrow();
+  });
+
+  it('throws at construction when pollIntervalMs is 0, negative, or not finite', () => {
+    const redis = fakeRedisClient();
+
+    expect(() => redisRateLimit(redis, { pollIntervalMs: 0 })).toThrow(/pollIntervalMs/);
+    expect(() => redisRateLimit(redis, { pollIntervalMs: -1 })).toThrow(/pollIntervalMs/);
+    expect(() => redisRateLimit(redis, { pollIntervalMs: Infinity })).toThrow(/pollIntervalMs/);
+  });
+
+  it('acquire throws for a negative or non-finite estimatedTokens, without touching Redis', async () => {
+    const redis = fakeRedisClient();
+    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+
+    await expect(limiter.acquire(-1)).rejects.toMatchObject({ type: 'invalid_params' });
+    await expect(limiter.acquire(NaN)).rejects.toMatchObject({ type: 'invalid_params' });
+    await expect(limiter.acquire(Infinity)).rejects.toMatchObject({ type: 'invalid_params' });
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+
+  it('acquire fails fast when estimatedTokens exceeds the fixed tokensPerMinute capacity', async () => {
+    const redis = fakeRedisClient();
+    const limiter = redisRateLimit(redis, { tokensPerMinute: 100 });
+
+    await expect(limiter.acquire(150)).rejects.toMatchObject({
+      type: 'rate_limited',
+      code: 'rate_limit_capacity_exceeded',
+    });
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+
+  it('acquire does not fail fast on estimatedTokens when tokensPerMinute is not set', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(takeResult(1, 0, 10, -1));
+
+    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    await expect(limiter.acquire(1_000_000)).resolves.toBeDefined();
   });
 });

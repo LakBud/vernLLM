@@ -3,14 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fakeRedisClient, fakeSubscriber } from '../helpers.js';
 
-/** Matches TRANSITION_SCRIPT's return shape: [from, to, failuresAsString, wonProbeAsString]. */
+/** Matches TRANSITION_SCRIPT's return shape: [from, to, failuresAsString, wonProbeAsString, openedAtAsString]. */
 function transitionResult(
   from: string,
   to: string,
   failures: number,
   wonProbe = false,
-): [string, string, string, string] {
-  return [from, to, String(failures), wonProbe ? '1' : '0'];
+  openedAt = 0,
+): [string, string, string, string, string] {
+  return [from, to, String(failures), wonProbe ? '1' : '0', String(openedAt)];
 }
 
 describe('redisCircuitBreaker', () => {
@@ -52,6 +53,27 @@ describe('redisCircuitBreaker', () => {
     await vi.waitFor(() => expect(onStateChange).toHaveBeenCalled());
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 5, 'gpt-4o', undefined);
+  });
+
+  it('recordSuccess closes the circuit locally once Redis reports the transition, and fires onStateChange', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
+
+    const onStateChange = vi.fn();
+    const breaker = redisCircuitBreaker(redis, { onStateChange });
+
+    // Open it first, so this process's local cache is genuinely 'open'
+    // (not the fresh-cache default 'closed') before recordSuccess.
+    breaker.recordFailure('gpt-4o');
+    await vi.waitFor(() =>
+      expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 5, 'gpt-4o', undefined),
+    );
+
+    redis.eval.mockResolvedValueOnce(transitionResult('open', 'closed', 0));
+    breaker.recordSuccess('gpt-4o');
+    await vi.waitFor(() =>
+      expect(onStateChange).toHaveBeenCalledWith('open', 'closed', 0, 'gpt-4o', undefined),
+    );
   });
 
   it('does not fire onStateChange when Redis reports no real transition', async () => {
@@ -125,6 +147,36 @@ describe('redisCircuitBreaker', () => {
     }
   });
 
+  it('a repeat check call that cannot win the lease again preserves an already-held, unconsumed trial', async () => {
+    vi.useFakeTimers();
+    try {
+      const redis = fakeRedisClient();
+      redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
+      // This process wins the trial on the first confirming check.
+      redis.eval.mockResolvedValueOnce(transitionResult('open', 'half-open', 5, true));
+
+      const breaker = redisCircuitBreaker(redis, { cooldownMs: 1000, pollIntervalMs: 500 });
+
+      breaker.recordFailure('gpt-4o');
+      await vi.advanceTimersByTimeAsync(0);
+
+      vi.advanceTimersByTime(1000);
+      expect(() => breaker.assertClosed('gpt-4o')).toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // A later repeat 'check' (from the background poll here) can't win
+      // the lease a second time, wonProbe is false, but the bucket is
+      // still half-open: the trial this process already won must not be
+      // wiped out by that repeat confirmation.
+      redis.eval.mockResolvedValue(transitionResult('half-open', 'half-open', 5, false));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(() => breaker.assertClosed('gpt-4o')).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('isolateByModel uses a per-model key and recovers the model from a pub/sub message', async () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValue(transitionResult('closed', 'closed', 0));
@@ -147,6 +199,26 @@ describe('redisCircuitBreaker', () => {
     );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, 'gpt-4o', undefined);
+  });
+
+  it("a pub/sub half-open message does not grant a trial by itself, only this process's own wonProbe result can", () => {
+    const redis = fakeRedisClient();
+    const subscriber = fakeSubscriber();
+
+    const breaker = redisCircuitBreaker(redis, {
+      isolateByModel: true,
+      keyPrefix: 'cb',
+      subscriber,
+    });
+
+    subscriber.emit(
+      'cb:events',
+      JSON.stringify({ key: 'cb:gpt-4o', state: 'half-open', failures: 5, openedAt: 123456 }),
+    );
+
+    // Observed via pub/sub only, never through this process's own
+    // wonProbe confirmation: no trial is available here.
+    expect(() => breaker.assertClosed('gpt-4o')).toThrow();
   });
 
   it('getState defaults to "closed" for a key it has never seen', () => {
@@ -288,6 +360,69 @@ describe('redisCircuitBreaker', () => {
       expect((error as Error).message).toBe('Circuit open for default');
     }
   });
+
+  it('assertClosed uses the half-open specific message when the circuit is half-open but no trial is available', async () => {
+    vi.useFakeTimers();
+    try {
+      const redis = fakeRedisClient();
+      redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
+      redis.eval.mockResolvedValueOnce(transitionResult('open', 'half-open', 5, true));
+
+      const breaker = redisCircuitBreaker(redis, { cooldownMs: 1000 });
+
+      breaker.recordFailure('gpt-4o');
+      await vi.advanceTimersByTimeAsync(0);
+
+      vi.advanceTimersByTime(1000);
+      // Nothing confirmed yet: throws, and kicks off the confirming
+      // check that wins the trial in the background.
+      expect(() => breaker.assertClosed('gpt-4o')).toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Trial won and available: this call consumes it.
+      expect(() => breaker.assertClosed('gpt-4o')).not.toThrow();
+
+      // The trial is now consumed: this next call is genuinely
+      // half-open with no trial available, not merely open.
+      try {
+        breaker.assertClosed('gpt-4o');
+        throw new Error('expected assertClosed to throw');
+      } catch (error) {
+        expect((error as Error).message).toBe('Circuit half-open, no trial available for gpt-4o');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('assertClosed names "default" in the half-open message too, when the circuit is half-open with no trial for an undefined model', async () => {
+    vi.useFakeTimers();
+    try {
+      const redis = fakeRedisClient();
+      redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
+      redis.eval.mockResolvedValueOnce(transitionResult('open', 'half-open', 5, true));
+
+      const breaker = redisCircuitBreaker(redis, { cooldownMs: 1000 });
+
+      breaker.recordFailure(undefined);
+      await vi.advanceTimersByTimeAsync(0);
+
+      vi.advanceTimersByTime(1000);
+      expect(() => breaker.assertClosed(undefined)).toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(() => breaker.assertClosed(undefined)).not.toThrow();
+
+      try {
+        breaker.assertClosed(undefined);
+        throw new Error('expected assertClosed to throw');
+      } catch (error) {
+        expect((error as Error).message).toBe('Circuit half-open, no trial available for default');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('redisCircuitBreaker background poll (no subscriber)', () => {
@@ -343,5 +478,79 @@ describe('redisCircuitBreaker background poll (no subscriber)', () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(redis.eval).not.toHaveBeenCalled();
+  });
+
+  it('reports, instead of leaving unhandled, a poll transition that rejects', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(transitionResult('closed', 'closed', 0));
+
+    const breaker = redisCircuitBreaker(redis, { pollIntervalMs: 1000 });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    breaker.assertClosed('gpt-4o');
+    await vi.advanceTimersByTimeAsync(0);
+
+    redis.eval.mockRejectedValueOnce(new Error('redis down'));
+    await vi.advanceTimersByTimeAsync(1000);
+    // Flush the rejected promise's microtask before asserting.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('poll transition'),
+      expect.any(Error),
+    );
+    consoleErrorSpy.mockRestore();
+  });
+});
+
+describe('redisCircuitBreaker rejection reporting', () => {
+  it('reports, instead of leaving unhandled, a subscriber.subscribe() that rejects', async () => {
+    const redis = fakeRedisClient();
+    const subscriber = fakeSubscriber();
+    subscriber.subscribe.mockRejectedValueOnce(new Error('subscribe failed'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    redisCircuitBreaker(redis, { subscriber });
+    // Let the rejected subscribe() promise's .catch() run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('subscribe'),
+      expect.any(Error),
+    );
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('reports, instead of leaving unhandled, a recordSuccess transition that rejects', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockRejectedValueOnce(new Error('redis down'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const breaker = redisCircuitBreaker(redis);
+    breaker.recordSuccess('gpt-4o');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('recordSuccess'),
+      expect.any(Error),
+    );
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('reports, instead of leaving unhandled, a recordFailure transition that rejects', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockRejectedValueOnce(new Error('redis down'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const breaker = redisCircuitBreaker(redis);
+    breaker.recordFailure('gpt-4o');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('recordFailure'),
+      expect.any(Error),
+    );
+    consoleErrorSpy.mockRestore();
   });
 });

@@ -67,7 +67,7 @@ if from ~= state then
   redis.call('PUBLISH', channel, payload)
 end
 
-return { from, state, tostring(failures), wonProbe and '1' or '0' }
+return { from, state, tostring(failures), wonProbe and '1' or '0', tostring(openedAt) }
 `;
 
 export interface TransitionResult {
@@ -76,16 +76,19 @@ export interface TransitionResult {
   failures: number;
   /** True only for the single caller, across every process, whose 'check' call actually won this open->half-open transition. See TRANSITION_SCRIPT's wonProbe. */
   wonProbe: boolean;
+  /** Redis's own committed openedAt for this bucket, not a client-side reconstruction. */
+  openedAt: number;
 }
 
 /** Parses TRANSITION_SCRIPT's raw eval() return value into a typed result. */
 export function parseTransitionResult(raw: unknown): TransitionResult {
-  const [from, to, failures, wonProbe] = raw as [string, string, string, string];
+  const [from, to, failures, wonProbe, openedAt] = raw as [string, string, string, string, string];
   return {
     from: from as CircuitState,
     to: to as CircuitState,
     failures: Number(failures),
     wonProbe: wonProbe === '1',
+    openedAt: Number(openedAt),
   };
 }
 

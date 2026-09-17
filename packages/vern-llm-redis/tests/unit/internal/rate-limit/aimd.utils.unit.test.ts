@@ -65,4 +65,67 @@ describe('assertValidAimd', () => {
       assertValidAimd({ increaseBy: 1, decreaseFactor: 1, minCapacity: 1, maxCapacity: 10 }, 10),
     ).not.toThrow();
   });
+
+  it('throws when increaseBy is 0 or negative', () => {
+    expect(() =>
+      assertValidAimd({ increaseBy: 0, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 }, 10),
+    ).toThrow(/increaseBy/);
+    expect(() =>
+      assertValidAimd({ increaseBy: -1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 }, 10),
+    ).toThrow(/increaseBy/);
+  });
+
+  it('throws when increaseBy is not finite', () => {
+    expect(() =>
+      assertValidAimd(
+        { increaseBy: Infinity, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 },
+        10,
+      ),
+    ).toThrow(/increaseBy/);
+    expect(() =>
+      assertValidAimd(
+        { increaseBy: NaN, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 },
+        10,
+      ),
+    ).toThrow(/increaseBy/);
+  });
+
+  it('accepts a config with no proactiveFloor set', () => {
+    expect(() =>
+      assertValidAimd({ increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 }, 10),
+    ).not.toThrow();
+  });
+
+  it('accepts proactiveFloor of 0, meaning off', () => {
+    expect(() =>
+      assertValidAimd(
+        { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10, proactiveFloor: 0 },
+        10,
+      ),
+    ).not.toThrow();
+  });
+
+  it('throws when proactiveFloor is negative', () => {
+    expect(() =>
+      assertValidAimd(
+        { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10, proactiveFloor: -1 },
+        10,
+      ),
+    ).toThrow(/proactiveFloor/);
+  });
+
+  it('throws when proactiveFloor is not finite', () => {
+    expect(() =>
+      assertValidAimd(
+        {
+          increaseBy: 1,
+          decreaseFactor: 0.5,
+          minCapacity: 1,
+          maxCapacity: 10,
+          proactiveFloor: Infinity,
+        },
+        10,
+      ),
+    ).toThrow(/proactiveFloor/);
+  });
 });

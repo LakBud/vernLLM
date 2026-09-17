@@ -106,7 +106,7 @@ export function redisCircuitBreaker(
     const priorBucket = local.get(key);
     const priorLocalState = priorBucket.state;
 
-    const { to, failures, wonProbe } = parseTransitionResult(
+    const { to, failures, wonProbe, openedAt } = parseTransitionResult(
       await redis.eval(
         TRANSITION_SCRIPT,
         1,
@@ -119,21 +119,18 @@ export function redisCircuitBreaker(
       ),
     );
 
-    // A trial only ever becomes available here, from a confirmed Redis
-    // result, never optimistically. wonProbe true means THIS call is
-    // the one, across every process, that just won the lease: grant it.
-    // If the bucket was already half-open and this process already held
-    // an unconsumed trial from an earlier check, preserve it, a repeat
-    // 'check' call (e.g. from the background poll) naturally can't win
-    // the lease a second time since probeHeld is already '1' by then.
-    // Anything else (closed, open, or half-open held by someone else)
-    // means no trial is available here.
-    const trialAvailable = to === 'half-open' ? wonProbe || priorBucket.trialAvailable : false;
+    // Re-read the live bucket now, right before writing, not the
+    // priorBucket snapshot captured before the await above. local.set()
+    // below replaces the map entry wholesale rather than mutating it in
+    // place, so another call's write could have landed while this one
+    // was in flight; reading fresh here means an in-flight call with a
+    // stale snapshot can never clobber a newer grant with an old false.
+    const trialAvailable = to === 'half-open' ? wonProbe || local.get(key).trialAvailable : false;
 
     local.set(key, {
       state: to,
       failures,
-      openedAt: to === 'open' ? Date.now() : 0,
+      openedAt,
       trialAvailable,
     });
 

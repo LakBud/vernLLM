@@ -70,4 +70,22 @@ describe('redisCache', () => {
 
     expect(redis.del).toHaveBeenCalledWith('vernllm:cache:k');
   });
+
+  it('rejects a value that is not JSON-serializable instead of writing "undefined" to Redis', async () => {
+    const redis = fakeRedisClient();
+
+    const cache = redisCache(redis);
+    await expect(cache.set('k', undefined, 60)).rejects.toThrow(TypeError);
+    await expect(cache.set('k', undefined, 60)).rejects.toThrow(/not JSON-serializable/);
+
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('rejects a function value the same way as undefined', async () => {
+    const redis = fakeRedisClient();
+
+    const cache = redisCache(redis);
+    await expect(cache.set('k', () => {}, 60)).rejects.toThrow(TypeError);
+    expect(redis.set).not.toHaveBeenCalled();
+  });
 });

@@ -63,6 +63,17 @@ describe('waitForWakeOrPoll', () => {
     await expect(promise).resolves.toBeUndefined();
   });
 
+  it('rejects immediately, without registering with the registry, when the signal is already aborted', async () => {
+    const registry = createWaiterRegistry();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(waitForWakeOrPoll(registry, 'k', 500, controller.signal)).rejects.toMatchObject({
+      type: 'aborted',
+    });
+    expect(registry.has('k')).toBe(false);
+  });
+
   it('resolves as soon as the registry wakes the key, well before the poll interval', async () => {
     const registry = createWaiterRegistry();
     const promise = waitForWakeOrPoll(registry, 'k', 60_000, undefined);

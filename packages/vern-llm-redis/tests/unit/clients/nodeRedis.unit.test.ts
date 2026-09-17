@@ -151,4 +151,22 @@ describe('fromNodeRedisSubscriber', () => {
 
     expect(onMessage).not.toHaveBeenCalled();
   });
+
+  it('rejects and does not mark the channel subscribed when client.subscribe fails', async () => {
+    const client = {
+      subscribe: vi.fn<
+        (channel: string, listener: (message: string, channel: string) => void) => Promise<void>
+      >(async () => Promise.reject(new Error('boom'))),
+    };
+    const subscriber = fromNodeRedisSubscriber(client);
+
+    await expect(subscriber.subscribe('ch')).rejects.toThrow('boom');
+
+    // Not marked subscribed: a retry should call client.subscribe again,
+    // not silently treat the channel as already subscribed.
+    client.subscribe.mockResolvedValueOnce(undefined);
+    await subscriber.subscribe('ch');
+
+    expect(client.subscribe).toHaveBeenCalledTimes(2);
+  });
 });

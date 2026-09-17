@@ -1,19 +1,20 @@
 // Verifies the actual published package boundary works: packs the package
 // with `pnpm pack`, installs that tarball into a throwaway consumer project
-// alongside its real vern-llm peer dependency, then imports it by package
-// name through both ESM and CJS, exercising every subpath in package.json's
+// alongside its real vern-llm dependency, then imports it by package name
+// through both ESM and CJS, exercising every subpath in package.json's
 // `exports` map, not just the main entry.
 //
-// vern-llm IS a genuine runtime dependency here, not just a type-only one:
-// every adapter throws real vern-llm `LLMError` instances (never a
-// package-local stand-in), because vern-llm's own call() pipeline checks
-// `error instanceof LLMError` to decide whether to pass an adapter's thrown
-// error through untouched or silently downgrade it to a generic `'unknown'`
-// error. A look-alike class fails that check and breaks error propagation
-// end to end, so this package deliberately imports the real class instead of
-// re-implementing it, and this smoke test installs vern-llm for real to
-// match how every actual consumer uses it (nobody installs vern-llm-redis
-// without also installing vern-llm to plug it into).
+// vern-llm is declared as a regular runtime dependency (not a peer), and
+// this smoke test installs it for real: every adapter throws real vern-llm
+// `LLMError` instances (never a package-local stand-in), because vern-llm's
+// own call() pipeline checks `error instanceof LLMError` to decide whether
+// to pass an adapter's thrown error through untouched or silently downgrade
+// it to a generic `'unknown'` error. A look-alike class fails that check
+// and breaks error propagation end to end, so this package deliberately
+// imports the real class instead of re-implementing it, and declaring
+// vern-llm as a real dependency (rather than peer-only) keeps that
+// requirement explicit rather than relying on the consumer happening to
+// have installed a compatible copy of it themselves.
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -28,8 +29,8 @@ const scratchDir = mkdtempSync(path.join(tmpdir(), 'vern-llm-redis-smoke-'));
 try {
   // Pack the package as it would actually be published. Uses `pnpm pack`
   // rather than `npm pack`: pnpm rewrites `workspace:` protocol ranges
-  // (like the `vern-llm` peer dependency below) into real semver ranges
-  // when packing, matching what actually ships to the registry. `npm pack`
+  // (like the `vern-llm` dependency below) into real semver ranges when
+  // packing, matching what actually ships to the registry. `npm pack`
   // leaves `workspace:` untouched, which breaks `npm install` on the
   // tarball with EUNSUPPORTEDPROTOCOL.
   const packOutput = execFileSync('pnpm', ['pack', '--pack-destination', scratchDir], {
@@ -45,7 +46,10 @@ try {
 
   // vern-llm's own tarball too, packed from the sibling workspace package,
   // so the consumer installs a real vern-llm the same way it would from the
-  // registry, not the monorepo's workspace symlink.
+  // registry, not the monorepo's workspace symlink. Required now that
+  // vern-llm is a regular dependency: without it here, npm would try (and
+  // fail) to fetch vern-llm from the real registry, since this package
+  // only exists in this monorepo's workspace, not published there.
   const vernLlmPackOutput = execFileSync('pnpm', ['pack', '--pack-destination', scratchDir], {
     cwd: path.join(packageRoot, '..', 'vern-llm'),
     encoding: 'utf8',
@@ -70,7 +74,9 @@ try {
   );
 
   // Install both packed tarballs by path, exactly like a real consumer's
-  // package.json pointing at registry tarballs would resolve.
+  // package.json pointing at registry tarballs would resolve. Installing
+  // both together lets npm satisfy vern-llm-redis's dependency on vern-llm
+  // from this local tarball instead of reaching out to the registry.
   execFileSync('npm', ['install', '--no-save', vernLlmTarballPath, tarballPath], {
     cwd: consumerDir,
     stdio: 'inherit',

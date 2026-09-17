@@ -95,7 +95,7 @@
     "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
     "size": "size-limit"
   },
-  "peerDependencies": {
+  "dependencies": {
     "vern-llm": "workspace:^2.8.0"
   },
   "devDependencies": {
