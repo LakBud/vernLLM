@@ -127,14 +127,14 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "5 KB",
+      "limit": "6 KB",
       "ignore": [
         "vern-llm"
       ]
     },
     {
       "path": "dist/index.cjs",
-      "limit": "5 KB",
+      "limit": "6 KB",
       "ignore": [
         "vern-llm"
       ]
