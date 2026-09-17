@@ -78,7 +78,8 @@ reviews:
         - Correctness of the adapter contract, assertClosed stays synchronous, acquire's waiting behavior, cache get/set/delete semantics.
         - Lua script correctness and atomicity.
         - Parity between the ioredis and node-redis client wrappers.
-        - vern-llm imports stay `import type` only, it's a peer dependency, not a runtime one.
+        - vern-llm stays a peer dependency, never bundled as a separate copy. Its runtime `LLMError` export is used directly for every thrown error, never a look-alike class, since vern-llm's normalizeError() does an `instanceof LLMError` check. Purely structural types stay `import type` only.
+        - assertClosed never optimistically guesses cooldown has elapsed; it only allows a call once Redis has confirmed this process holds the half-open trial. Flag anything that skips that confirmation.
         - Timing assertions use the shared helpers instead of a fresh fixed sleep.
 
         For new features:

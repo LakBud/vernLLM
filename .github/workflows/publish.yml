@@ -127,7 +127,7 @@ jobs:
         run: pnpm run typecheck
 
       - name: Test
-        run: pnpm run test
+        run: pnpm run test:unit
 
       - name: Build
         env:
@@ -200,7 +200,7 @@ jobs:
 
       - run: pnpm run typecheck
 
-      - run: pnpm run test
+      - run: pnpm run test:unit
 
       - name: Resolve canary package's directory
         id: pkg

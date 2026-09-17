@@ -10,6 +10,14 @@ export interface LocalCircuitBucket {
   state: CircuitState;
   failures: number;
   openedAt: number;
+  /**
+   * True only while this process holds a Redis-confirmed half-open
+   * trial it hasn't used yet (see TRANSITION_SCRIPT's wonProbe). Never
+   * set optimistically, only after an async transition() result
+   * confirms this process actually won the lease, so assertClosed can
+   * make its synchronous allow/deny decision without ever guessing.
+   */
+  trialAvailable: boolean;
 }
 
 /**
@@ -37,7 +45,7 @@ export function createLocalCircuitCache(): LocalCircuitCache {
     get(key) {
       let bucket = cache.get(key);
       if (!bucket) {
-        bucket = { state: 'closed', failures: 0, openedAt: 0 };
+        bucket = { state: 'closed', failures: 0, openedAt: 0, trialAvailable: false };
         cache.set(key, bucket);
       }
       return bucket;

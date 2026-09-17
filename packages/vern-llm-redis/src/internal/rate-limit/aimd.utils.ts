@@ -18,18 +18,39 @@ export function assertValidAimd(aimd: AimdOptions, requestsPerMinute: number | u
   if (!requestsPerMinute) {
     throw new LLMError('aimd requires requestsPerMinute to be set.', 'invalid_params');
   }
-  if (aimd.minCapacity < 1 || aimd.maxCapacity < 1) {
+  if (
+    !Number.isFinite(aimd.minCapacity) ||
+    !Number.isFinite(aimd.maxCapacity) ||
+    aimd.minCapacity < 1 ||
+    aimd.maxCapacity < 1
+  ) {
     throw new LLMError(
-      'aimd.minCapacity and aimd.maxCapacity must both be at least 1.',
+      'aimd.minCapacity and aimd.maxCapacity must both be finite and at least 1.',
       'invalid_params',
     );
   }
   if (aimd.minCapacity > aimd.maxCapacity) {
     throw new LLMError('aimd.minCapacity must not exceed aimd.maxCapacity.', 'invalid_params');
   }
-  if (aimd.decreaseFactor <= 0 || aimd.decreaseFactor > 1) {
+  if (!Number.isFinite(aimd.increaseBy) || aimd.increaseBy <= 0) {
+    throw new LLMError('aimd.increaseBy must be a finite number greater than 0.', 'invalid_params');
+  }
+  if (
+    !Number.isFinite(aimd.decreaseFactor) ||
+    aimd.decreaseFactor <= 0 ||
+    aimd.decreaseFactor > 1
+  ) {
     throw new LLMError(
-      'aimd.decreaseFactor must be greater than 0 and at most 1.',
+      'aimd.decreaseFactor must be a finite number greater than 0 and at most 1.',
+      'invalid_params',
+    );
+  }
+  if (
+    aimd.proactiveFloor !== undefined &&
+    (!Number.isFinite(aimd.proactiveFloor) || aimd.proactiveFloor < 0)
+  ) {
+    throw new LLMError(
+      'aimd.proactiveFloor must be a finite number that is not negative.',
       'invalid_params',
     );
   }

@@ -80,8 +80,19 @@ describe('redisCircuitBreaker, real Redis, single process', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    // Cooldown elapsed: the trial call is let through, not blocked.
-    expect(() => breaker.assertClosed('m')).not.toThrow();
+    // Cooldown has elapsed, but nothing has confirmed that with Redis
+    // yet: assertClosed never optimistically guesses, so the next call
+    // right after cooldown can still throw while it kicks off the async
+    // confirmation in the background. Only once that confirmation lands
+    // (this process wins the trial) does a call finally get through.
+    await waitUntil(() => {
+      try {
+        breaker.assertClosed('m');
+        return true;
+      } catch {
+        return false;
+      }
+    });
   });
 
   it('isolateByModel keeps a failing model from blocking a different, healthy model', async () => {

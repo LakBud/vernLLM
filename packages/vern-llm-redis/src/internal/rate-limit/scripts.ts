@@ -43,7 +43,20 @@ elseif ratePerMs > 0 then
 end
 
 redis.call('HSET', key, 'cap', cap, 'avail', avail, 'last', last)
-redis.call('PEXPIRE', key, 120000)
+
+-- A concurrency bucket (rateMode '0') has no time-based refill: 'avail'
+-- only ever changes via an explicit take/give. If it's allowed to expire
+-- while slots are actively held (avail < cap), a later take on this key
+-- recreates a fresh, fully-available bucket, silently losing track of
+-- outstanding leases and letting concurrency exceed maxConcurrent. So a
+-- concurrency bucket with outstanding leases is persisted (no expiry)
+-- instead, and only put back on a TTL once every lease has been given
+-- back and it's genuinely idle.
+if rateMode == '0' and avail < cap then
+  redis.call('PERSIST', key)
+else
+  redis.call('PEXPIRE', key, 120000)
+end
 
 return { ok, tostring(avail), tostring(cap), tostring(waitMs) }
 `;
@@ -54,6 +67,7 @@ local key = KEYS[1]
 local initCap = tonumber(ARGV[1])
 local amount = tonumber(ARGV[2])
 local channel = ARGV[3]
+local rateMode = ARGV[4]
 
 local cap = tonumber(redis.call('HGET', key, 'cap'))
 if not cap then cap = initCap end
@@ -63,7 +77,15 @@ if not avail then avail = cap end
 
 avail = math.min(cap, avail + amount)
 redis.call('HSET', key, 'avail', avail)
-redis.call('PEXPIRE', key, 120000)
+
+-- Mirrors TAKE_SCRIPT's reasoning: once every lease on a concurrency
+-- bucket has been returned (avail caught back up to cap), it's safe to
+-- let the key expire again; until then it must be kept alive.
+if rateMode == '0' and avail < cap then
+  redis.call('PERSIST', key)
+else
+  redis.call('PEXPIRE', key, 120000)
+end
 
 redis.call('PUBLISH', channel, key)
 

@@ -227,10 +227,11 @@ describe('redisRateLimit', () => {
       100,
       30,
       'vernllm:rl:wake',
+      'permin',
     );
   });
 
-  it('release does not reconcile tokens when actualTokens exceeds the estimate', async () => {
+  it('release charges the tokens bucket the negative difference when actualTokens exceeds the estimate', async () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 50, 100, -1));
 
@@ -238,9 +239,17 @@ describe('redisRateLimit', () => {
     const { release } = await limiter.acquire(50);
 
     redis.eval.mockClear();
-    release(80); // used more than estimated, no give back
+    release(80); // used more than the 50 estimated, charges the extra 30
 
-    expect(redis.eval).not.toHaveBeenCalled();
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining('local key = KEYS[1]'),
+      1,
+      'vernllm:rl:tpm',
+      100,
+      -30,
+      'vernllm:rl:wake',
+      'permin',
+    );
   });
 
   it('release grows the AIMD ceiling only when success is true', async () => {

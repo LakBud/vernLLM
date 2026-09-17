@@ -50,11 +50,19 @@ export function fromNodeRedisSubscriber(client: NodeRedisSubscriberLike): RedisS
   return {
     async subscribe(channel) {
       if (subscribed.has(channel)) return;
-      subscribed.add(channel);
 
-      await client.subscribe(channel, (message, ch) => {
-        for (const listener of listeners) listener(ch, message);
-      });
+      try {
+        await client.subscribe(channel, (message, ch) => {
+          for (const listener of listeners) listener(ch, message);
+        });
+        // Only marked subscribed once the subscription has actually
+        // succeeded, so a failed attempt can be retried instead of
+        // being silently treated as already subscribed forever.
+        subscribed.add(channel);
+      } catch (error) {
+        subscribed.delete(channel);
+        throw error;
+      }
     },
     on(event, listener) {
       if (event === 'message') listeners.push(listener);

@@ -5,7 +5,12 @@ import { createLocalCircuitCache } from '../../../../src/internal/circuit-breake
 describe('createLocalCircuitCache', () => {
   it('get() on a never-seen key creates and returns a fresh closed bucket', () => {
     const cache = createLocalCircuitCache();
-    expect(cache.get('k')).toEqual({ state: 'closed', failures: 0, openedAt: 0 });
+    expect(cache.get('k')).toEqual({
+      state: 'closed',
+      failures: 0,
+      openedAt: 0,
+      trialAvailable: false,
+    });
   });
 
   it('get() on a key returns the same object identity on repeated calls, not a fresh one each time', () => {
@@ -15,22 +20,32 @@ describe('createLocalCircuitCache', () => {
 
   it('set() overwrites the bucket wholesale for that key', () => {
     const cache = createLocalCircuitCache();
-    cache.set('k', { state: 'open', failures: 5, openedAt: 123 });
+    cache.set('k', { state: 'open', failures: 5, openedAt: 123, trialAvailable: false });
 
-    expect(cache.get('k')).toEqual({ state: 'open', failures: 5, openedAt: 123 });
+    expect(cache.get('k')).toEqual({
+      state: 'open',
+      failures: 5,
+      openedAt: 123,
+      trialAvailable: false,
+    });
   });
 
   it('set() on one key never affects another key\u2019s bucket', () => {
     const cache = createLocalCircuitCache();
-    cache.set('a', { state: 'open', failures: 5, openedAt: 123 });
+    cache.set('a', { state: 'open', failures: 5, openedAt: 123, trialAvailable: false });
 
-    expect(cache.get('b')).toEqual({ state: 'closed', failures: 0, openedAt: 0 });
+    expect(cache.get('b')).toEqual({
+      state: 'closed',
+      failures: 0,
+      openedAt: 0,
+      trialAvailable: false,
+    });
   });
 
   it('keys() lists only keys this cache has actually been asked about', () => {
     const cache = createLocalCircuitCache();
     cache.get('a');
-    cache.set('b', { state: 'open', failures: 1, openedAt: 1 });
+    cache.set('b', { state: 'open', failures: 1, openedAt: 1, trialAvailable: false });
 
     expect([...cache.keys()].sort()).toEqual(['a', 'b']);
   });

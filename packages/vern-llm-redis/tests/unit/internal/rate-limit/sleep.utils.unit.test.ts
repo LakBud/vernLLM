@@ -103,13 +103,16 @@ describe('waitForWakeOrPoll', () => {
   it('does not reject once already woken, even if the signal aborts afterward', async () => {
     const registry = createWaiterRegistry();
     const controller = new AbortController();
+    const removeEventListenerSpy = vi.spyOn(controller.signal, 'removeEventListener');
     const promise = waitForWakeOrPoll(registry, 'k', 60_000, controller.signal);
 
     registry.wake('k');
     await expect(promise).resolves.toBeUndefined();
 
-    // The abort listener was removed as part of resolving, so aborting
-    // after the fact must have no effect on an already-settled promise.
+    // The abort listener is removed as part of resolving on wake, not
+    // merely left to fire harmlessly once, so a later abort has nothing
+    // registered to call.
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
     expect(() => controller.abort()).not.toThrow();
   });
 });

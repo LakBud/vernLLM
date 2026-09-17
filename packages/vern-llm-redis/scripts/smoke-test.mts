@@ -1,11 +1,19 @@
 // Verifies the actual published package boundary works: packs the package
-// with `pnpm pack`, installs that tarball into a throwaway consumer project,
-// then imports it by package name through both ESM and CJS, exercising
-// every subpath in package.json's `exports` map, not just the main entry.
-// This is also the real proof that vern-llm is genuinely zero runtime
-// dependency here: the consumer below never installs vern-llm at all, and
-// every import still succeeds, since every reference to vern-llm's types
-// in this package is `import type`, fully erased at build time.
+// with `pnpm pack`, installs that tarball into a throwaway consumer project
+// alongside its real vern-llm peer dependency, then imports it by package
+// name through both ESM and CJS, exercising every subpath in package.json's
+// `exports` map, not just the main entry.
+//
+// vern-llm IS a genuine runtime dependency here, not just a type-only one:
+// every adapter throws real vern-llm `LLMError` instances (never a
+// package-local stand-in), because vern-llm's own call() pipeline checks
+// `error instanceof LLMError` to decide whether to pass an adapter's thrown
+// error through untouched or silently downgrade it to a generic `'unknown'`
+// error. A look-alike class fails that check and breaks error propagation
+// end to end, so this package deliberately imports the real class instead of
+// re-implementing it, and this smoke test installs vern-llm for real to
+// match how every actual consumer uses it (nobody installs vern-llm-redis
+// without also installing vern-llm to plug it into).
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -35,6 +43,20 @@ try {
     throw new Error(`Could not determine tarball path from pnpm pack output:\n${packOutput}`);
   }
 
+  // vern-llm's own tarball too, packed from the sibling workspace package,
+  // so the consumer installs a real vern-llm the same way it would from the
+  // registry, not the monorepo's workspace symlink.
+  const vernLlmPackOutput = execFileSync('pnpm', ['pack', '--pack-destination', scratchDir], {
+    cwd: path.join(packageRoot, '..', 'vern-llm'),
+    encoding: 'utf8',
+  }).trim();
+  const vernLlmTarballPath: string | undefined = vernLlmPackOutput.split('\n').pop()?.trim();
+  if (!vernLlmTarballPath) {
+    throw new Error(
+      `Could not determine vern-llm tarball path from pnpm pack output:\n${vernLlmPackOutput}`,
+    );
+  }
+
   const consumerDir = path.join(scratchDir, 'consumer');
   mkdirSync(consumerDir, { recursive: true });
 
@@ -47,10 +69,9 @@ try {
     ),
   );
 
-  // Install the packed tarball by path, exactly like a real consumer's
-  // package.json pointing at a registry tarball would resolve. No vern-llm
-  // install here, deliberately, see the header comment above.
-  execFileSync('npm', ['install', '--no-save', tarballPath], {
+  // Install both packed tarballs by path, exactly like a real consumer's
+  // package.json pointing at registry tarballs would resolve.
+  execFileSync('npm', ['install', '--no-save', vernLlmTarballPath, tarballPath], {
     cwd: consumerDir,
     stdio: 'inherit',
   });

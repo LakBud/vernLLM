@@ -10,12 +10,19 @@ export function sleepOrAbort(ms: number, signal: AbortSignal | undefined): Promi
       return;
     }
 
-    const timer = setTimeout(resolve, ms);
-
     const onAbort = () => {
       clearTimeout(timer);
       reject(new LLMError('Rate limit wait aborted', 'aborted'));
     };
+
+    const timer = setTimeout(() => {
+      // Normal completion: {once: true} only detaches the listener once
+      // it actually fires, so without this explicit removal a signal
+      // reused across many sleeps (a shared controller) would accumulate
+      // one dead listener per completed sleep.
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
 
     signal?.addEventListener('abort', onAbort, { once: true });
   });
@@ -33,6 +40,11 @@ export function waitForWakeOrPoll(
   signal: AbortSignal | undefined,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new LLMError('Rate limit wait aborted', 'aborted'));
+      return;
+    }
+
     let unregister: (() => void) | undefined;
     let onAbort: (() => void) | undefined;
 

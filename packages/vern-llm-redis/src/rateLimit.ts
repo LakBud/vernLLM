@@ -92,6 +92,34 @@ export function redisRateLimit(
   const estimateTokensFn = options.estimateTokens ?? defaultEstimateTokens;
   const wakeChannel = `${keyPrefix}:wake`;
 
+  // 0 is meaningful (unlimited capacity for the three bucket options,
+  // "wait forever" for maxQueueMs) and must be preserved, not rejected.
+  // Only negative or non-finite values are actual config mistakes.
+  for (const [name, value] of [
+    ['requestsPerMinute', options.requestsPerMinute],
+    ['tokensPerMinute', options.tokensPerMinute],
+    ['maxConcurrent', options.maxConcurrent],
+  ] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+      throw new LLMError(
+        `${name} must be a finite number that is not negative (got ${value}).`,
+        'invalid_params',
+      );
+    }
+  }
+  if (!Number.isFinite(maxQueueMs) || maxQueueMs < 0) {
+    throw new LLMError(
+      `maxQueueMs must be a finite number that is not negative (got ${maxQueueMs}).`,
+      'invalid_params',
+    );
+  }
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
+    throw new LLMError(
+      `pollIntervalMs must be a finite number greater than 0 (got ${pollIntervalMs}).`,
+      'invalid_params',
+    );
+  }
+
   if (options.aimd) assertValidAimd(options.aimd, options.requestsPerMinute);
   const aimd = options.aimd;
 
@@ -115,7 +143,15 @@ export function redisRateLimit(
   }
 
   async function give(bucket: Bucket, amount: number): Promise<void> {
-    await redis.eval(GIVE_SCRIPT, 1, bucket.key, bucket.initialCapacity, amount, wakeChannel);
+    await redis.eval(
+      GIVE_SCRIPT,
+      1,
+      bucket.key,
+      bucket.initialCapacity,
+      amount,
+      wakeChannel,
+      bucket.rateMode,
+    );
   }
 
   async function tryTakeAll(
@@ -179,9 +215,21 @@ export function redisRateLimit(
       if (concurrency) void give(concurrency, 1);
 
       const tokens = buckets.find((b) => b.reason === 'tpm');
-      if (tokens && actualTokens !== undefined && Number.isFinite(actualTokens)) {
+      if (
+        tokens &&
+        actualTokens !== undefined &&
+        Number.isFinite(actualTokens) &&
+        actualTokens >= 0
+      ) {
+        // diff > 0: less was actually used than reserved, refund the
+        // unused portion. diff < 0: more was actually used than
+        // reserved, charge the bucket the excess now so a caller that
+        // under-estimated doesn't silently leave the tpm budget
+        // over-available for whoever takes from it next. GIVE_SCRIPT's
+        // avail = min(cap, avail + amount) handles a negative amount
+        // (a charge) the same way it handles a positive one (a refund).
         const diff = estimatedTokens - actualTokens;
-        if (diff > 0) void give(tokens, diff);
+        if (diff !== 0) void give(tokens, diff);
       }
 
       if (success) void resize('grow');
@@ -194,6 +242,25 @@ export function redisRateLimit(
     },
 
     async acquire(estimatedTokens, signal): Promise<RateLimitAcquireResult> {
+      if (!Number.isFinite(estimatedTokens) || estimatedTokens < 0) {
+        throw new LLMError(
+          `Rate limit acquire called with an invalid estimatedTokens value: ${estimatedTokens}`,
+          'invalid_params',
+        );
+      }
+
+      // tokensPerMinute is a fixed cap, never grown by AIMD (only rpm
+      // is), so a request estimated above it can never succeed no
+      // matter how long it waits. Fail fast instead of retrying it
+      // silently until maxQueueMs times out.
+      if (options.tokensPerMinute !== undefined && estimatedTokens > options.tokensPerMinute) {
+        throw new LLMError(
+          `Estimated tokens (${estimatedTokens}) exceed the fixed tokensPerMinute capacity (${options.tokensPerMinute}); this request can never be satisfied`,
+          'rate_limited',
+          { code: 'rate_limit_capacity_exceeded' },
+        );
+      }
+
       const startedAt = Date.now();
       let lastReason: Bucket['reason'] | undefined;
 

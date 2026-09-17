@@ -3,9 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fakeRedisClient, fakeSubscriber } from '../helpers.js';
 
-/** Matches TRANSITION_SCRIPT's return shape: [from, to, failuresAsString]. */
-function transitionResult(from: string, to: string, failures: number): [string, string, string] {
-  return [from, to, String(failures)];
+/** Matches TRANSITION_SCRIPT's return shape: [from, to, failuresAsString, wonProbeAsString]. */
+function transitionResult(
+  from: string,
+  to: string,
+  failures: number,
+  wonProbe = false,
+): [string, string, string, string] {
+  return [from, to, String(failures), wonProbe ? '1' : '0'];
 }
 
 describe('redisCircuitBreaker', () => {
@@ -85,12 +90,16 @@ describe('redisCircuitBreaker', () => {
     }
   });
 
-  it('locally transitions open to half-open once the cooldown has elapsed, without throwing', async () => {
+  it('the first assertClosed after cooldown still throws (nothing confirmed yet), but wins the trial for the next one', async () => {
     vi.useFakeTimers();
     try {
       const redis = fakeRedisClient();
       redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
-      redis.eval.mockResolvedValue(transitionResult('half-open', 'half-open', 5));
+      // The 'check' call assertClosed kicks off in the background: this
+      // is what actually confirms the open->half-open transition and
+      // wins the trial, but it resolves asynchronously, after that
+      // first call has already synchronously thrown.
+      redis.eval.mockResolvedValue(transitionResult('open', 'half-open', 5, true));
 
       const onStateChange = vi.fn();
       const breaker = redisCircuitBreaker(redis, { cooldownMs: 1000, onStateChange });
@@ -100,8 +109,17 @@ describe('redisCircuitBreaker', () => {
 
       vi.advanceTimersByTime(1000);
 
-      expect(() => breaker.assertClosed('gpt-4o')).not.toThrow();
+      // Cooldown looks elapsed by the local clock, but nothing has
+      // confirmed that with Redis yet: this call still throws, and only
+      // schedules the confirming check in the background.
+      expect(() => breaker.assertClosed('gpt-4o')).toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+
       expect(onStateChange).toHaveBeenCalledWith('open', 'half-open', 5, 'gpt-4o', undefined);
+
+      // Now that Redis has confirmed this process won the trial, the
+      // next call is finally let through.
+      expect(() => breaker.assertClosed('gpt-4o')).not.toThrow();
     } finally {
       vi.useRealTimers();
     }
@@ -123,7 +141,10 @@ describe('redisCircuitBreaker', () => {
 
     expect(subscriber.subscribe).toHaveBeenCalledWith('cb:events');
 
-    subscriber.emit('cb:events', 'cb:gpt-4o|open|3|123456');
+    subscriber.emit(
+      'cb:events',
+      JSON.stringify({ key: 'cb:gpt-4o', state: 'open', failures: 3, openedAt: 123456 }),
+    );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, 'gpt-4o', undefined);
   });
@@ -163,7 +184,10 @@ describe('redisCircuitBreaker', () => {
 
     redisCircuitBreaker(redis, { keyPrefix: 'cb', subscriber, onStateChange });
 
-    subscriber.emit('cb:events', 'cb|open|3|123456');
+    subscriber.emit(
+      'cb:events',
+      JSON.stringify({ key: 'cb', state: 'open', failures: 3, openedAt: 123456 }),
+    );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, undefined, undefined);
   });
@@ -175,7 +199,10 @@ describe('redisCircuitBreaker', () => {
 
     redisCircuitBreaker(redis, { keyPrefix: 'cb', subscriber, onStateChange });
 
-    subscriber.emit('some:other:channel', 'cb|open|3|123456');
+    subscriber.emit(
+      'some:other:channel',
+      JSON.stringify({ key: 'cb', state: 'open', failures: 3, openedAt: 123456 }),
+    );
 
     expect(onStateChange).not.toHaveBeenCalled();
   });
@@ -232,7 +259,10 @@ describe('redisCircuitBreaker', () => {
       onStateChange,
     });
 
-    subscriber.emit('cb:events', 'cb:default|open|3|123456');
+    subscriber.emit(
+      'cb:events',
+      JSON.stringify({ key: 'cb:default', state: 'open', failures: 3, openedAt: 123456 }),
+    );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, undefined, undefined);
   });

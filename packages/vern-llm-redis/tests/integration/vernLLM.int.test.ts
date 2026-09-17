@@ -5,7 +5,7 @@ import { redisCache } from '../../src/cache.js';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fromIoredis } from '../../src/clients/ioredis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
-import { connect, createMockClient, uniquePrefix } from '../helpers.js';
+import { connect, createMockClient, uniquePrefix, waitUntil } from '../helpers.js';
 
 import type { Redis } from 'ioredis';
 /**
@@ -69,10 +69,9 @@ describe('VernLLM, wired with real Redis-backed adapters', () => {
 
     await llm.call({ userContent: 'hi' }).catch(() => {});
 
-    // Give the circuit breaker adapter's background confirmation against
-    // Redis (see redisCircuitBreaker's own docs) a moment to land, same
-    // reasoning as the adapter's own integration tests.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for the circuit breaker adapter's background confirmation
+    // against Redis (see redisCircuitBreaker's own docs) to land.
+    await waitUntil(() => llm.getCircuitState() === 'open');
 
     await expect(llm.call({ userContent: 'hi' })).rejects.toMatchObject({ type: 'circuit_open' });
     // The client was never asked to make that second call, the circuit
@@ -98,7 +97,7 @@ describe('VernLLM, wired with real Redis-backed adapters', () => {
     expect(llm.getCircuitState()).toBe('closed');
 
     await llm.call({ userContent: 'hi' }).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await waitUntil(() => llm.getCircuitState() === 'open');
 
     expect(llm.getCircuitState()).toBe('open');
   });

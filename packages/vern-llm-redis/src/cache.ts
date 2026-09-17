@@ -37,7 +37,13 @@ export function redisCache<T = unknown>(
     },
 
     async set(key, value, ttl) {
-      await redis.set(fullKey(key), JSON.stringify(value), 'PX', ttl * 1000);
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) {
+        throw new TypeError(
+          `redisCache: value for key "${key}" is not JSON-serializable (got undefined, a function, or a symbol)`,
+        );
+      }
+      await redis.set(fullKey(key), serialized, 'PX', ttl * 1000);
     },
 
     async delete(key) {

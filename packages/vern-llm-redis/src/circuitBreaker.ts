@@ -54,15 +54,23 @@ export interface RedisCircuitBreakerOptions {
  * across every process talking to the same key.
  *
  * assertClosed must throw synchronously (that is its signature in
- * vern-llm), but Redis is async. This adapter resolves that with a
- * local cache per key: assertClosed gates against the local cache
- * immediately. That cache is kept fresh two ways, in order of
- * preference. With a `subscriber` connection supplied, every real
- * transition anywhere is pushed to every process via pub/sub, typically
- * landing within a few ms. Without one, a background poll (see
- * `pollIntervalMs`) re-checks every key this process has touched on a
- * fixed interval, bounding staleness instead of leaving it purely
- * reactive to this process's own calls.
+ * vern-llm), but Redis is async. This adapter resolves that by never
+ * guessing: assertClosed only ever allows a call through when the local
+ * cache already holds a Redis-confirmed answer (closed, or a half-open
+ * trial this exact process won). It never optimistically assumes
+ * cooldown has elapsed just because the local clock says so, that's
+ * what would let more than one process's call through as "the" trial.
+ * One practical consequence: the very first assertClosed call after a
+ * circuit's cooldown elapses will still throw, since nothing has
+ * confirmed the transition with Redis yet, it also kicks off that
+ * confirmation in the background, and the next call (or a later one, if
+ * this process doesn't win the trial) is what actually gets to try. That
+ * cache is kept fresh two ways, in order of preference. With a
+ * `subscriber` connection supplied, every real transition anywhere is
+ * pushed to every process via pub/sub, typically landing within a few
+ * ms. Without one, a background poll (see `pollIntervalMs`) re-checks
+ * every key this process has touched on a fixed interval, which is also
+ * what discovers a cooldown elapsing on an otherwise idle key.
  */
 export function redisCircuitBreaker(
   redis: RedisClient,
@@ -77,13 +85,28 @@ export function redisCircuitBreaker(
 
   const local = createLocalCircuitCache();
 
+  // Every fire-and-forget Redis call below (transition, subscribe) is
+  // reported here instead of becoming an unhandled rejection if it fails.
+  function reportRejection(operation: string, key: string, error: unknown): void {
+    console.error(`[redisCircuitBreaker] ${operation} failed for key "${key}":`, error);
+  }
+
   async function transition(
     model: string | undefined,
     outcome: 'check' | 'success' | 'failure',
   ): Promise<{ key: string; from: CircuitState; to: CircuitState; failures: number }> {
     const key = bucketKey(keyPrefix, isolateByModel, model);
 
-    const { from, to, failures } = parseTransitionResult(
+    // Captured before local.set below overwrites it. This process's own
+    // prior local state, not Redis's `from`, is what maybeFire compares
+    // `to` against: if a pub/sub message (or an earlier call) already
+    // brought this process's local cache to `to`, that's a no-op from
+    // this process's perspective and must not fire a duplicate callback,
+    // even though Redis's own bucket genuinely moved through `from`.
+    const priorBucket = local.get(key);
+    const priorLocalState = priorBucket.state;
+
+    const { to, failures, wonProbe } = parseTransitionResult(
       await redis.eval(
         TRANSITION_SCRIPT,
         1,
@@ -96,9 +119,25 @@ export function redisCircuitBreaker(
       ),
     );
 
-    local.set(key, { state: to, failures, openedAt: to === 'open' ? Date.now() : 0 });
+    // A trial only ever becomes available here, from a confirmed Redis
+    // result, never optimistically. wonProbe true means THIS call is
+    // the one, across every process, that just won the lease: grant it.
+    // If the bucket was already half-open and this process already held
+    // an unconsumed trial from an earlier check, preserve it, a repeat
+    // 'check' call (e.g. from the background poll) naturally can't win
+    // the lease a second time since probeHeld is already '1' by then.
+    // Anything else (closed, open, or half-open held by someone else)
+    // means no trial is available here.
+    const trialAvailable = to === 'half-open' ? wonProbe || priorBucket.trialAvailable : false;
 
-    return { key, from, to, failures };
+    local.set(key, {
+      state: to,
+      failures,
+      openedAt: to === 'open' ? Date.now() : 0,
+      trialAvailable,
+    });
+
+    return { key, from: priorLocalState, to, failures };
   }
 
   function maybeFire(
@@ -113,18 +152,30 @@ export function redisCircuitBreaker(
   }
 
   if (options.subscriber) {
-    void options.subscriber.subscribe(channel);
+    void options.subscriber
+      .subscribe(channel)
+      .catch((error: unknown) => reportRejection('subscribe', channel, error));
     options.subscriber.on('message', (receivedChannel, message) => {
       if (receivedChannel !== channel) return;
 
       const parsed = parseTransitionMessage(message);
       if (!parsed) return;
 
-      const from = local.get(parsed.key).state;
+      const priorBucket = local.get(parsed.key);
+      const from = priorBucket.state;
+
+      // Mirrors transition()'s own reasoning: pub/sub only ever confirms
+      // committed Redis state, it never grants a trial by itself (only
+      // this process's own wonProbe result can). If this process is
+      // mid-way between winning a trial (its own async transition()
+      // hasn't resolved yet) and this message arriving for the same
+      // event, preserve whatever's already recorded rather than racing
+      // it back to false.
       const bucket: LocalCircuitBucket = {
         state: parsed.state,
         failures: parsed.failures,
         openedAt: parsed.openedAt,
+        trialAvailable: parsed.state === 'half-open' ? priorBucket.trialAvailable : false,
       };
       local.set(parsed.key, bucket);
 
@@ -145,14 +196,18 @@ export function redisCircuitBreaker(
   // No subscriber: bound staleness with a periodic re-check instead of
   // leaving convergence purely reactive to this process's own calls.
   // Only re-checks keys this process has actually touched (local.keys()),
-  // there's nothing to bound for a key this process has never seen.
+  // there's nothing to bound for a key this process has never seen. This
+  // is also what actually discovers a cooldown expiring and (possibly)
+  // wins the half-open trial when no application call happens to land
+  // right after cooldown, since assertClosed itself never guesses that
+  // anymore, only ever consumes a trial Redis has already confirmed.
   if (!options.subscriber && pollIntervalMs > 0) {
     const timer = setInterval(() => {
       for (const key of [...local.keys()]) {
         const model = modelFromKey(key, keyPrefix, isolateByModel);
-        void transition(model, 'check').then(({ from, to, failures }) =>
-          maybeFire(from, to, failures, model, undefined),
-        );
+        void transition(model, 'check')
+          .then(({ from, to, failures }) => maybeFire(from, to, failures, model, undefined))
+          .catch((error: unknown) => reportRejection('poll transition', key, error));
       }
     }, pollIntervalMs) as unknown as { unref?: () => void };
 
@@ -178,37 +233,63 @@ export function redisCircuitBreaker(
     assertClosed(model, context) {
       const key = bucketKey(keyPrefix, isolateByModel, model);
       const bucket = local.get(key);
+      const priorState = bucket.state;
 
-      // Locally known open past its cooldown: allow one trial through
-      // and reflect the transition locally now, matching what the next
-      // recorded outcome (or the next pub/sub message) will confirm.
-      if (bucket.state === 'open' && Date.now() - bucket.openedAt >= cooldownMs) {
-        maybeFire('open', 'half-open', bucket.failures, model, context);
-        bucket.state = 'half-open';
+      // The only two ways a call is let through: the circuit is closed,
+      // or it's half-open AND this process holds a trial Redis has
+      // already confirmed it won (never a locally-guessed cooldown
+      // check). Consuming the trial here, synchronously, is what stops
+      // a second concurrent call on this same process from also being
+      // treated as the trial while this one's outcome is still pending.
+      let allowed = false;
+      if (priorState === 'closed') {
+        allowed = true;
+      } else if (priorState === 'half-open' && bucket.trialAvailable) {
+        bucket.trialAvailable = false;
+        allowed = true;
       }
 
-      if (bucket.state === 'open') {
-        throw new LLMError(`Circuit open for ${model ?? 'default'}`, 'circuit_open');
-      }
+      // Fired regardless of whether this call is allowed through: a
+      // call that's about to throw because the circuit still looks open
+      // locally is exactly what needs to keep proactively asking Redis
+      // whether cooldown has actually elapsed elsewhere, or this key
+      // would only ever be confirmed by the background poll/subscriber.
+      void transition(model, 'check')
+        .then(({ from, to, failures }) => maybeFire(from, to, failures, model, context))
+        .catch((error: unknown) => reportRejection('assertClosed transition', key, error));
 
-      // Without a subscriber, this is the only way a transition caused
-      // by another process is ever picked up. With one, this is a cheap
-      // extra confirmation, pub/sub already keeps the cache current.
-      void transition(model, 'check').then(({ from, to, failures }) =>
-        maybeFire(from, to, failures, model, context),
-      );
+      if (!allowed) {
+        throw new LLMError(
+          priorState === 'half-open'
+            ? `Circuit half-open, no trial available for ${model ?? 'default'}`
+            : `Circuit open for ${model ?? 'default'}`,
+          'circuit_open',
+        );
+      }
     },
 
     recordSuccess(model, context) {
-      void transition(model, 'success').then(({ from, to, failures }) =>
-        maybeFire(from, to, failures, model, context),
-      );
+      void transition(model, 'success')
+        .then(({ from, to, failures }) => maybeFire(from, to, failures, model, context))
+        .catch((error: unknown) =>
+          reportRejection(
+            'recordSuccess transition',
+            bucketKey(keyPrefix, isolateByModel, model),
+            error,
+          ),
+        );
     },
 
     recordFailure(model, context) {
-      void transition(model, 'failure').then(({ from, to, failures }) =>
-        maybeFire(from, to, failures, model, context),
-      );
+      void transition(model, 'failure')
+        .then(({ from, to, failures }) => maybeFire(from, to, failures, model, context))
+        .catch((error: unknown) =>
+          reportRejection(
+            'recordFailure transition',
+            bucketKey(keyPrefix, isolateByModel, model),
+            error,
+          ),
+        );
     },
 
     onStateChange: options.onStateChange ?? (() => {}),

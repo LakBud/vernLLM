@@ -4,7 +4,7 @@ import { redisCache } from '../../src/cache.js';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fromNodeRedis, fromNodeRedisSubscriber } from '../../src/clients/nodeRedis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
-import { connectNodeRedis, expectNearInstant, uniquePrefix } from '../helpers.js';
+import { connectNodeRedis, expectNearInstant, uniquePrefix, waitUntil } from '../helpers.js';
 
 import type { RedisClientType } from 'redis';
 
@@ -53,7 +53,14 @@ describe('fromNodeRedis, real Redis', () => {
     breaker.recordFailure('m');
     breaker.recordFailure('m');
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await waitUntil(() => {
+      try {
+        breaker.assertClosed('m');
+        return false;
+      } catch {
+        return true;
+      }
+    });
 
     expect(() => breaker.assertClosed('m')).toThrow();
   });
@@ -130,7 +137,7 @@ describe('fromNodeRedisSubscriber, real Redis', () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       breakerA.recordFailure('m');
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await waitUntil(() => events.length > 0);
 
       expect(() => breakerB.assertClosed('m')).toThrow();
       expect(events).toContainEqual({ from: 'closed', to: 'open' });
