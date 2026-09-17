@@ -43,7 +43,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "smoke-test": "node scripts/smoke-test.mts",
+    "smoke-test": "node scripts/smoke-test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
