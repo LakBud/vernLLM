@@ -721,4 +721,32 @@ describe('redisRateLimit', () => {
     const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
     await expect(limiter.acquire(1_000_000)).resolves.toBeDefined();
   });
+
+  it('acquire does not fail fast on estimatedTokens when tokensPerMinute is 0 (unlimited)', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(takeResult(1, 0, 10, -1));
+
+    const limiter = redisRateLimit(redis, { requestsPerMinute: 10, tokensPerMinute: 0 });
+    await expect(limiter.acquire(1_000_000)).resolves.toBeDefined();
+  });
+});
+
+describe('redisRateLimit rejection reporting', () => {
+  it('reports, instead of leaving unhandled, a subscriber.subscribe() that rejects', async () => {
+    const redis = fakeRedisClient();
+    const subscriber = fakeSubscriber();
+    subscriber.subscribe.mockRejectedValueOnce(new Error('subscribe failed'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    redisRateLimit(redis, { subscriber });
+    // Let the rejected subscribe() promise's .catch() run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('subscribe'),
+      expect.any(Error),
+    );
+    consoleErrorSpy.mockRestore();
+  });
 });

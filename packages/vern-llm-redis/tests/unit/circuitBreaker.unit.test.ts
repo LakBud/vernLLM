@@ -522,6 +522,34 @@ describe('redisCircuitBreaker rejection reporting', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it('falls back to polling when the subscriber fails to subscribe, instead of leaving an idle key unconverged', async () => {
+    vi.useFakeTimers();
+    try {
+      const redis = fakeRedisClient();
+      const subscriber = fakeSubscriber();
+      subscriber.subscribe.mockRejectedValueOnce(new Error('subscribe failed'));
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // First eval is assertClosed's own background 'check' call, which
+      // also seeds local.keys() with this key so the poll timer has
+      // something to re-check.
+      redis.eval.mockResolvedValueOnce(transitionResult('closed', 'closed', 0));
+      const breaker = redisCircuitBreaker(redis, { subscriber, pollIntervalMs: 1000 });
+      breaker.assertClosed('gpt-4o');
+
+      // Let the rejected subscribe() promise's .catch() run and start polling.
+      await vi.advanceTimersByTimeAsync(0);
+
+      redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(redis.eval).toHaveBeenCalledTimes(2);
+      consoleErrorSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports, instead of leaving unhandled, a recordSuccess transition that rejects', async () => {
     const redis = fakeRedisClient();
     redis.eval.mockRejectedValueOnce(new Error('redis down'));

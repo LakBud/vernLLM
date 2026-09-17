@@ -70,17 +70,14 @@ export interface RedisRateLimitOptions {
 const MAX_WAKE_DELAY_MS = 5_000;
 
 /**
- * A RateLimiterAdapter backed by Redis, so request, token, concurrency
- * budgets, and the AIMD ceiling are shared across every process using
- * the same keys.
+ * A RateLimiterAdapter backed by Redis, so request, token, concurrency,
+ * and AIMD state are shared across every process using the same keys.
  *
- * Waiting is precise, not polled: a requests/min or tokens/min wait
- * computes exactly how long until the bucket refills enough and sleeps
- * that long, capped at MAX_WAKE_DELAY_MS so a meanwhile AIMD grow is
- * still noticed promptly. A concurrency wait, which only ever clears via
- * an external release, wakes on that release's pub/sub notification when
- * `subscriber` is supplied, falling back to `pollIntervalMs` polling only
- * when it isn't.
+ * Requests/min and tokens/min waits are precise: each computes exactly
+ * how long until its bucket refills and sleeps that long, capped at
+ * MAX_WAKE_DELAY_MS. A concurrency wait only clears via an external
+ * release, so it wakes on that release's pub/sub notice (`subscriber`)
+ * or falls back to polling (`pollIntervalMs`).
  */
 export function redisRateLimit(
   redis: RedisClient,
@@ -135,7 +132,11 @@ export function redisRateLimit(
   const waiterRegistry = createWaiterRegistry();
 
   if (options.subscriber) {
-    void options.subscriber.subscribe(wakeChannel);
+    void options.subscriber
+      .subscribe(wakeChannel)
+      .catch((error: unknown) =>
+        console.error(`[redisRateLimit] subscribe failed for channel "${wakeChannel}":`, error),
+      );
     options.subscriber.on('message', (channel, message) => {
       if (channel !== wakeChannel) return;
       waiterRegistry.wake(message);
@@ -253,7 +254,11 @@ export function redisRateLimit(
       // is), so a request estimated above it can never succeed no
       // matter how long it waits. Fail fast instead of retrying it
       // silently until maxQueueMs times out.
-      if (options.tokensPerMinute !== undefined && estimatedTokens > options.tokensPerMinute) {
+      if (
+        options.tokensPerMinute !== undefined &&
+        options.tokensPerMinute > 0 &&
+        estimatedTokens > options.tokensPerMinute
+      ) {
         throw new LLMError(
           `Estimated tokens (${estimatedTokens}) exceed the fixed tokensPerMinute capacity (${options.tokensPerMinute}); this request can never be satisfied`,
           'rate_limited',

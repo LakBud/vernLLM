@@ -38,13 +38,12 @@ export interface RedisCircuitBreakerOptions {
    */
   subscriber?: RedisSubscriber;
   /**
-   * Without a subscriber, a transition caused by another process is
-   * otherwise only picked up by this process's own next recorded
-   * outcome for that same key, which can be arbitrarily far away for an
-   * idle key. This background poll bounds that: every pollIntervalMs,
-   * every key this process has touched is re-checked against Redis.
-   * Default 5000. Set 0 to disable. Ignored entirely once a subscriber
-   * is supplied, pub/sub already keeps the cache current without polling.
+   * Without a subscriber, a transition from another process is only
+   * picked up on this process's own next call for that key, which can
+   * lag arbitrarily on an idle key. This poll bounds that: every
+   * pollIntervalMs, every touched key is re-checked against Redis.
+   * Default 5000, set 0 to disable. Skipped while a subscriber is
+   * connected; used as a fallback if it fails to connect.
    */
   pollIntervalMs?: number;
 }
@@ -53,24 +52,16 @@ export interface RedisCircuitBreakerOptions {
  * A CircuitBreakerAdapter backed by Redis, so circuit state is shared
  * across every process talking to the same key.
  *
- * assertClosed must throw synchronously (that is its signature in
- * vern-llm), but Redis is async. This adapter resolves that by never
- * guessing: assertClosed only ever allows a call through when the local
- * cache already holds a Redis-confirmed answer (closed, or a half-open
- * trial this exact process won). It never optimistically assumes
- * cooldown has elapsed just because the local clock says so, that's
- * what would let more than one process's call through as "the" trial.
- * One practical consequence: the very first assertClosed call after a
- * circuit's cooldown elapses will still throw, since nothing has
- * confirmed the transition with Redis yet, it also kicks off that
- * confirmation in the background, and the next call (or a later one, if
- * this process doesn't win the trial) is what actually gets to try. That
- * cache is kept fresh two ways, in order of preference. With a
- * `subscriber` connection supplied, every real transition anywhere is
- * pushed to every process via pub/sub, typically landing within a few
- * ms. Without one, a background poll (see `pollIntervalMs`) re-checks
- * every key this process has touched on a fixed interval, which is also
- * what discovers a cooldown elapsing on an otherwise idle key.
+ * assertClosed must throw synchronously, but Redis is async, so it only
+ * allows a call through when the local cache already holds a
+ * Redis-confirmed answer (closed, or a won half-open trial). It never
+ * guesses cooldown has elapsed locally, that could let two processes
+ * both win the same trial. So the first call after cooldown still
+ * throws, but triggers a background confirmation that a later call can
+ * use.
+ *
+ * The cache stays fresh via pub/sub (`subscriber`) if supplied,
+ * otherwise via polling (`pollIntervalMs`).
  */
 export function redisCircuitBreaker(
   redis: RedisClient,
@@ -81,7 +72,7 @@ export function redisCircuitBreaker(
   const isolateByModel = options.isolateByModel ?? false;
   const keyPrefix = options.keyPrefix ?? 'vernllm:cb';
   const channel = `${keyPrefix}:events`;
-  const pollIntervalMs = options.subscriber ? 0 : (options.pollIntervalMs ?? 5_000);
+  const pollIntervalMs = options.pollIntervalMs ?? 5_000;
 
   const local = createLocalCircuitCache();
 
@@ -89,6 +80,31 @@ export function redisCircuitBreaker(
   // reported here instead of becoming an unhandled rejection if it fails.
   function reportRejection(operation: string, key: string, error: unknown): void {
     console.error(`[redisCircuitBreaker] ${operation} failed for key "${key}":`, error);
+  }
+
+  // Bounds staleness for a key this process has touched but received no
+  // further calls or pub/sub messages for. Started immediately when
+  // there's no subscriber, and also as a fallback if a configured
+  // subscriber's initial subscribe() never succeeds, since pub/sub can
+  // then never take over convergence duty the way it normally would.
+  let pollingStarted = false;
+  function startPolling(): void {
+    if (pollingStarted || pollIntervalMs <= 0) return;
+    pollingStarted = true;
+
+    const timer = setInterval(() => {
+      for (const key of [...local.keys()]) {
+        const model = modelFromKey(key, keyPrefix, isolateByModel);
+        void transition(model, 'check')
+          .then(({ from, to, failures }) => maybeFire(from, to, failures, model, undefined))
+          .catch((error: unknown) => reportRejection('poll transition', key, error));
+      }
+    }, pollIntervalMs) as unknown as { unref?: () => void };
+
+    // Prevents this background poll from keeping a short-lived process
+    // (a script, a test, a serverless invocation) alive on its own.
+    // Not available in every environment (e.g. browsers), guarded.
+    timer.unref?.();
   }
 
   async function transition(
@@ -149,9 +165,15 @@ export function redisCircuitBreaker(
   }
 
   if (options.subscriber) {
-    void options.subscriber
-      .subscribe(channel)
-      .catch((error: unknown) => reportRejection('subscribe', channel, error));
+    void options.subscriber.subscribe(channel).catch((error: unknown) => {
+      reportRejection('subscribe', channel, error);
+      // Without a working subscription, pub/sub will never deliver
+      // another process's transitions to this one: fall back to the
+      // same polling every idle key would get without a subscriber at
+      // all, rather than leaving convergence entirely reactive to this
+      // process's own calls.
+      startPolling();
+    });
     options.subscriber.on('message', (receivedChannel, message) => {
       if (receivedChannel !== channel) return;
 
@@ -198,21 +220,7 @@ export function redisCircuitBreaker(
   // wins the half-open trial when no application call happens to land
   // right after cooldown, since assertClosed itself never guesses that
   // anymore, only ever consumes a trial Redis has already confirmed.
-  if (!options.subscriber && pollIntervalMs > 0) {
-    const timer = setInterval(() => {
-      for (const key of [...local.keys()]) {
-        const model = modelFromKey(key, keyPrefix, isolateByModel);
-        void transition(model, 'check')
-          .then(({ from, to, failures }) => maybeFire(from, to, failures, model, undefined))
-          .catch((error: unknown) => reportRejection('poll transition', key, error));
-      }
-    }, pollIntervalMs) as unknown as { unref?: () => void };
-
-    // Prevents this background poll from keeping a short-lived process
-    // (a script, a test, a serverless invocation) alive on its own.
-    // Not available in every environment (e.g. browsers), guarded.
-    timer.unref?.();
-  }
+  if (!options.subscriber) startPolling();
 
   const adapter: CircuitBreakerAdapter = {
     isolateByModel,

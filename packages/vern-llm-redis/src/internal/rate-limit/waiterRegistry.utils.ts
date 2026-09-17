@@ -1,18 +1,12 @@
 /**
  * Tracks callers waiting for a specific Redis key's capacity to free up.
- * Used for the concurrency bucket, which only ever clears via an
- * external release, there's no deterministic refill time to compute the
- * way there is for requests/min or tokens/min.
+ * Used for the concurrency bucket, which only clears via an external
+ * release, unlike requests/min or tokens/min which have a deterministic
+ * refill time.
  *
- * Centralizing register/wake here, rather than inlining a Map<string,
- * Set> directly into the adapter's closures, is what makes wake()
- * cleanup unforgettable rather than merely remembered: a waiter used to
- * only get removed from its set on a timeout or an abort, a message
- * driven wake resolved the waiter's promise but left its entry sitting
- * in the set forever, an unbounded per-key leak over the life of a
- * process. wake() now removes each waiter as part of firing it, in the
- * one place that decision is made, instead of depending on every call
- * site that can resolve a waiter to also remember to clean it up.
+ * Centralized here so wake() always removes a waiter as it fires it,
+ * instead of relying on every call site to remember cleanup, which
+ * previously leaked a waiter's entry whenever a message resolved it.
  */
 export interface WaiterRegistry {
   /**

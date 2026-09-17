@@ -140,7 +140,7 @@ jobs:
       # (see version.yml's matrix), and each run must only ever touch
       # its own package, never attempt the other's publish too.
       # pnpm publish, not npm publish: pnpm rewrites any workspace:
-      # protocol dependency range (e.g. vern-llm-redis's peerDependency
+      # protocol dependency range (e.g. vern-llm-redis's dependency
       # on vern-llm) to a real semver range before publishing. npm
       # publish has no idea what "workspace:" means and would ship that
       # literal string, breaking install for every real consumer.
