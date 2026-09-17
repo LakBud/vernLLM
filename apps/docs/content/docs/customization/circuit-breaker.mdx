@@ -9,6 +9,11 @@ description: Bring your own CircuitBreakerAdapter, TrippingPolicy, or cooldown c
   behavior: failure conditions, half-open behavior, scope, and state inspection.
 </Callout>
 
+<Callout type="info">
+  The `RedisCircuitBreaker` example below is illustrative, showing the adapter shape.
+  [vern-llm-redis](/docs/integrations/redis) is the production Redis backed breaker.
+</Callout>
+
 `CircuitBreakerOptions` has two seams built the same way: a shorthand covering the common case, and
 a raw interface or function type a caller can hand in directly for anything else. `circuitBreaker`
 itself has a third, larger seam: pass a full `CircuitBreakerAdapter` instead of

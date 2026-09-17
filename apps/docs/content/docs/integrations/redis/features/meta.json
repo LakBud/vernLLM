@@ -1,0 +1,5 @@
+{
+  "title": "Features",
+  "icon": "Blocks",
+  "pages": ["index", "circuit-breaker", "rate-limit", "cache"]
+}

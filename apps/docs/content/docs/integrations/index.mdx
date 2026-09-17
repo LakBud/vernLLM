@@ -1,0 +1,54 @@
+---
+title: What are Integrations
+description: Take your LLM calls further with infrastructure
+icon: CircleQuestionMark
+---
+
+Most of what VernLLM tracks, a breaker's trip count, a rate limit's window, a cache entry, starts
+out living in memory, scoped to one process. That's the simplest thing to do, and it's correct
+right up until a second process enters the picture. Once an app runs as more than one process,
+memory stops being a source of truth. Each process only knows its own half of the story.
+
+## What an integration is
+
+An integration is a separate package that plugs a piece of shared infrastructure, a database, a
+store, a message bus, into the same interfaces VernLLM already exposes for customization. Nothing
+about how you use VernLLM has to change, only where its state actually lives: from one process's
+memory to something every process can read and write.
+
+## Why it helps
+
+<Cards>
+  <Card title="Stay consistent">
+    Whatever VernLLM already protects against inside one process keeps working the same way once
+    that logic spans many.
+  </Card>
+  <Card title="Stay focused">
+    Core `vern-llm` never has to decide which store, protocol, or vendor to depend on just to run.
+  </Card>
+  <Card title="Stay optional">
+    Cross process coordination is something you reach for when you need it, not a cost every install
+    pays by default.
+  </Card>
+  <Card title="Stay independent">
+    Each integration versions and releases on its own schedule, adding one never touches
+    `vern-llm`'s.
+  </Card>
+</Cards>
+
+## Available integrations
+
+<Cards>
+  <Card title="Redis" href="/docs/integrations/redis">
+    Coordinate state across every process running VernLLM.
+  </Card>
+</Cards>
+
+## Community
+
+Each integration ships as its own package with its own Contributing guide and Changelog, since its
+scripts, test setup, and release schedule are its own, see
+[Redis → Contributing](/docs/integrations/redis/contributing) for an example. Code of
+Conduct and Security are not duplicated per integration: every integration is governed by the same
+project-wide [Code of Conduct](/docs/code-of-conduct) and [Security](/docs/security) policy as
+`vern-llm` itself.

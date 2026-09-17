@@ -1,0 +1,5 @@
+{
+  "title": "Redis",
+  "icon": "Redis",
+  "pages": ["index", "features", "custom-clients", "contributing", "changelog"]
+}

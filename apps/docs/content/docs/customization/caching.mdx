@@ -3,6 +3,11 @@ title: Caching
 description: Plug in your own cache adapter
 ---
 
+<Callout type="info">
+  The Redis example below is illustrative, showing the adapter shape.
+  [vern-llm-redis](/docs/integrations/redis) is the production Redis backed cache.
+</Callout>
+
 VernLLM ships `InMemoryCacheAdapter`, `NormalizedCacheAdapter`, and `TieredCacheAdapter` out of the
 box, plus a `CacheAdapter` interface for bringing your own (Redis, Upstash, or anything else):
 

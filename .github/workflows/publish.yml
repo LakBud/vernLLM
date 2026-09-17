@@ -167,7 +167,7 @@ jobs:
           git fetch origin main
           git checkout main
 
-          git add apps/docs/content/docs/changelog.mdx
+          git add apps/docs/content/docs/changelog.mdx apps/docs/content/docs/integrations/redis/changelog.mdx
 
           git commit -m "docs: update changelog" || exit 0
           git push origin main

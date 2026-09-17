@@ -56,13 +56,11 @@ export interface RedisCircuitBreakerOptions {
  * A CircuitBreakerAdapter backed by Redis, so circuit state is shared
  * across every process talking to the same key.
  *
- * assertClosed must throw synchronously, but Redis is async, so it only
- * allows a call through when the local cache already holds a
- * Redis-confirmed answer (closed, or a won half-open trial). It never
- * guesses cooldown has elapsed locally, that could let two processes
- * both win the same trial. So the first call after cooldown still
- * throws, but triggers a background confirmation that a later call can
- * use.
+ * assertClosed is synchronous, so it only trusts a Redis-confirmed
+ * answer already in the local cache, never a local guess. See the
+ * "assertClosed is synchronous, Redis isn't" callout in the docs
+ * (/docs/integrations/redis/features/circuit-breaker) for the trade-offs
+ * this implies for cooldown races and unseen keys.
  *
  * The cache stays fresh via pub/sub (`subscriber`) if supplied,
  * otherwise via polling (`pollIntervalMs`).

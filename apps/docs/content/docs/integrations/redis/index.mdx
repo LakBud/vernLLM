@@ -1,0 +1,115 @@
+---
+title: Redis Overview
+description: Share circuit breaker, rate limit, and cache state across processes with Redis
+---
+
+`vern-llm-redis` is the production version of the illustrative Redis adapters shown throughout
+[Customization](/docs/customization): a `CircuitBreakerAdapter`, `RateLimiterAdapter`, and
+`CacheAdapter`, each backed by Redis instead of process memory. Reach for it once VernLLM runs on
+more than one instance and those instances need a shared view of failures, limits, or cached
+responses.
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-redis # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-redis # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-redis # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-redis # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` is installed automatically as a dependency of `vern-llm-redis`.
+
+<Cards>
+  <Card title="Features" href="/docs/integrations/redis/features">
+    Circuit breaker, rate limit, and cache adapters, each backed by Redis.
+  </Card>
+  <Card title="Custom Clients" href="/docs/integrations/redis/custom-clients">
+    Wrap a Redis client other than ioredis or node-redis.
+  </Card>
+</Cards>
+
+## Basic usage
+
+Every adapter takes a Redis client as its first argument, wrapped through `fromIoredis` or
+`fromNodeRedis` so both clients present the same shape internally, and an options object as its
+second:
+
+<Tabs items={['ioredis', 'node-redis']}>
+  <Tab value="ioredis">
+
+```ts title="redis-basic-usage-ioredis.ts"
+import Redis from 'ioredis';
+import { VernLLM } from 'vern-llm';
+import { redisCircuitBreaker, redisRateLimit, redisCache, fromIoredis } from 'vern-llm-redis';
+
+const client = fromIoredis(new Redis());
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: redisCircuitBreaker(client),
+  rateLimit: redisRateLimit(client, { requestsPerMinute: 500 }),
+  cache: redisCache(client),
+});
+```
+
+  </Tab>
+  <Tab value="node-redis">
+
+```ts title="redis-basic-usage-node-redis.ts"
+import { createClient } from 'redis';
+import { VernLLM } from 'vern-llm';
+import { redisCircuitBreaker, redisRateLimit, redisCache, fromNodeRedis } from 'vern-llm-redis';
+
+const raw = createClient();
+await raw.connect();
+const client = fromNodeRedis(raw);
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: redisCircuitBreaker(client),
+  rateLimit: redisRateLimit(client, { requestsPerMinute: 500 }),
+  cache: redisCache(client),
+});
+```
+
+  </Tab>
+</Tabs>
+
+<Callout type="warn">
+  `fromIoredis` is close to a no-op, ioredis already matches the shape this package needs, it exists
+  for type safety and symmetry with `fromNodeRedis`. `fromNodeRedis` does real work: node-redis's
+  option-object call shapes (`set`'s `{ PX }`, `eval`'s `{ keys, arguments }`) get translated onto
+  the positional, ioredis-shaped interface every adapter is written against. Neither client works if
+  passed to an adapter unwrapped.
+</Callout>
+
+Every VernLLM instance sharing the same `keyPrefix` and Redis database coordinates together. Give
+unrelated services their own prefix, otherwise their circuit breaker, rate limit, or cache state
+collides with each other's.

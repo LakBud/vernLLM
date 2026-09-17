@@ -3,6 +3,11 @@ title: Rate Limiting
 description: Plug in your own rate limiter
 ---
 
+<Callout type="info">
+  The `RedisRateLimiter` example below is illustrative, showing the adapter shape.
+  [vern-llm-redis](/docs/integrations/redis) is the production Redis backed limiter.
+</Callout>
+
 VernLLM ships `RateLimiter`, an in-process limiter built from `rateLimit`'s config object, plus a
 `RateLimiterAdapter` interface for bringing your own (Redis, or anything else that coordinates across
 processes):

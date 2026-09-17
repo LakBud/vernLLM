@@ -10,6 +10,7 @@
     "build": "nx run-many -t build",
     "build:affected": "nx affected -t build",
     "dev": "nx run-many -t dev --parallel",
+    "dev:docs": "nx dev vern-llm-docs",
     "typecheck": "nx run-many -t typecheck typecheck:test types:check",
     "typecheck:affected": "nx affected -t typecheck typecheck:test types:check",
     "test": "nx run-many -t test",
@@ -21,7 +22,7 @@
     "test:affected": "nx affected -t test:unit:coverage test:int:coverage",
     "changeset": "changeset",
     "changeset:version": "changeset version",
-    "update-changelog": "node scripts/update-changelog.mts",
+    "update-changelog": "node scripts/update-changelog.ts",
     "prepare": "husky"
   },
   "lint-staged": {
