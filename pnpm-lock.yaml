@@ -233,7 +233,7 @@ importers:
   packages/vern-llm-redis:
     dependencies:
       vern-llm:
-        specifier: workspace:^2.8.0
+        specifier: workspace:^2.9.0
         version: link:../vern-llm
     devDependencies:
       '@size-limit/esbuild':
