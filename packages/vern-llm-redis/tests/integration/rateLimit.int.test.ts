@@ -165,30 +165,54 @@ describe('redisRateLimit, real Redis, AIMD shared across two processes', () => {
 describe('redisRateLimit, real Redis, concurrency wake via subscriber', () => {
   let redisA: Redis;
   let redisB: Redis;
+  let subA: Redis | undefined;
+  let subB: Redis | undefined;
 
   beforeEach(() => {
     redisA = connect();
     redisB = connect();
+    subA = undefined;
+    subB = undefined;
   });
 
   afterEach(async () => {
-    await redisA.quit();
-    await redisB.quit();
+    await Promise.all([subA?.quit(), subB?.quit(), redisA.quit(), redisB.quit()]);
   });
 
   it('a release from one process wakes a waiter blocked on another process, faster than the fallback poll interval', async () => {
     const keyPrefix = uniquePrefix('rl');
 
+    subA = redisA.duplicate();
+    subB = redisB.duplicate();
+
+    // Real signals instead of a guessed delay. ioredis doesn't emit a
+    // 'subscribe' event on the client in this setup, but subscribe()'s
+    // own promise resolves reliably once the channel is confirmed live,
+    // so wrap it to expose that as a readiness signal from outside —
+    // redisRateLimit still drives the real subscribe() call underneath.
+    function trackSubscribe(client: Redis): Promise<void> {
+      return new Promise((resolve) => {
+        const original = client.subscribe.bind(client);
+        client.subscribe = ((...args: Parameters<typeof original>) => {
+          const result = original(...args);
+          void result.then(() => resolve());
+          return result;
+        }) as typeof client.subscribe;
+      });
+    }
+    const subscriberAReady = trackSubscribe(subA);
+    const subscriberBReady = trackSubscribe(subB);
+
     const limiterA = redisRateLimit(fromIoredis(redisA), {
       maxConcurrent: 1,
       keyPrefix,
-      subscriber: fromIoredisSubscriber(redisA.duplicate()),
+      subscriber: fromIoredisSubscriber(subA),
     });
     const limiterB = redisRateLimit(fromIoredis(redisB), {
       maxConcurrent: 1,
       pollIntervalMs: 5000, // deliberately slow fallback, to prove the wake beat it
       keyPrefix,
-      subscriber: fromIoredisSubscriber(redisB.duplicate()),
+      subscriber: fromIoredisSubscriber(subB),
     });
 
     const { release } = await limiterA.acquire(1);
@@ -196,7 +220,14 @@ describe('redisRateLimit, real Redis, concurrency wake via subscriber', () => {
     const startedAt = Date.now();
     const waiter = limiterB.acquire(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // limiterB.acquire's failed take attempt is the first command it sends
+    // on redisB; waiter registration is synchronous local state set right
+    // in that attempt's continuation, so a follow-up command on that same
+    // connection only resolves once that continuation has already run,
+    // since ioredis delivers responses on one connection strictly in order.
+    await redisB.ping();
+    await Promise.all([subscriberAReady, subscriberBReady]);
+
     release();
 
     await waiter;
