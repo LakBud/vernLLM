@@ -1,6 +1,12 @@
-# vern-llm-redis
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/integrations/redis.png" alt="VernLLM + redis banner"/>
+</p>
 
-Redis backed circuit breaker, rate limiter, and cache adapters for [vern-llm](https://github.com/LakBud/vernLLM). Use these when you run more than one process and need shared state instead of each process tracking its own.
+<h1 align="center">vern-llm-redis</h1>
+
+<p align="center">Redis backed circuit breaker, rate limiter, and cache adapters for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>. Use these when you run more than one process and need shared state instead of each process tracking its own. Docs: <a href="https://vernllm.dev/docs/integrations/redis">vernllm.dev</a></p>
+
+<p align="center"><sub>Redis® is a registered trademark of Redis Ltd. This is an unofficial community integration, not affiliated with or endorsed by Redis Ltd.</sub></p>
 
 ## Install
 
@@ -8,7 +14,7 @@ Redis backed circuit breaker, rate limiter, and cache adapters for [vern-llm](ht
 npm i vern-llm-redis
 ```
 
-`vern-llm` is a peer dependency. Bring your own Redis client, ioredis and node-redis (the official "redis" package) are both supported directly.
+`vern-llm` is a runtime dependency. Bring your own Redis client, ioredis and node-redis (the official "redis" package) are both supported directly.
 
 ## Usage with ioredis
 
