@@ -5,6 +5,12 @@ flags:
   integration:
     paths:
       - 'packages/vern-llm/**'
+  vern-llm-redis-unit:
+    paths:
+      - 'packages/vern-llm-redis/**'
+  vern-llm-redis-integration:
+    paths:
+      - 'packages/vern-llm-redis/**'
 
 coverage:
   status:
@@ -14,11 +20,20 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/vern-llm/**'
+      vern-llm-redis:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/vern-llm-redis/**'
     patch:
       default:
         target: 80%
         paths:
           - 'packages/vern-llm/**'
+      vern-llm-redis:
+        target: 80%
+        paths:
+          - 'packages/vern-llm-redis/**'
 
 ignore:
   - '**/index.ts'

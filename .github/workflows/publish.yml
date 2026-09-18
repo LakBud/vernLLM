@@ -12,12 +12,18 @@ on:
           - canary
 
       tag:
-        description: 'Production release tag, e.g. vern-llm@1.2.3'
+        description: 'Production release tag, e.g. vern-llm@1.2.3 or vern-llm-redis@0.2.0'
         required: false
         type: string
 
+      package:
+        description: 'Canary only: which workspace package to publish (package.json name)'
+        required: false
+        type: string
+        default: vern-llm
+
 concurrency:
-  group: publish-${{ inputs.mode }}-${{ inputs.tag || github.sha }}
+  group: publish-${{ inputs.mode }}-${{ inputs.tag || inputs.package || github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -30,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Require release tag
+      - name: Require a release tag in "<package-name>@<version>" form
         env:
           TAG: ${{ inputs.tag }}
         run: |
@@ -39,7 +45,7 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "$TAG" =~ ^vern-llm@[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$TAG" =~ ^.+@[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "ERROR: invalid release tag: $TAG"
             exit 1
           fi
@@ -63,21 +69,57 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Read package version
-        id: pkg
-        run: |
-          VERSION="$(node -p "require('./packages/vern-llm/package.json').version")"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Verify tag matches package version
+      # Tags are "<package.json name>@<version>", split on the last "@"
+      # so scoped names like "@org/name@1.2.3" still split correctly.
+      - name: Resolve package name and version from the tag
+        id: tag
         env:
           TAG: ${{ inputs.tag }}
-          VERSION: ${{ steps.pkg.outputs.version }}
         run: |
-          EXPECTED="vern-llm@$VERSION"
+          NAME="${TAG%@*}"
+          VERSION="${TAG##*@}"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          if [[ "$TAG" != "$EXPECTED" ]]; then
-            echo "ERROR: tag '$TAG' does not match package.json version '$VERSION'"
+      - name: Find that package's directory in the workspace
+        id: pkg
+        env:
+          NAME: ${{ steps.tag.outputs.name }}
+        run: |
+          DIR="$(node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const name = process.env.NAME;
+            for (const root of ["packages", "apps"]) {
+              if (!fs.existsSync(root)) continue;
+              for (const entry of fs.readdirSync(root)) {
+                const pkgPath = path.join(root, entry, "package.json");
+                if (!fs.existsSync(pkgPath)) continue;
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+                if (pkg.name === name) {
+                  process.stdout.write(path.join(root, entry));
+                  process.exit(0);
+                }
+              }
+            }
+          ')"
+
+          if [ -z "$DIR" ]; then
+            echo "ERROR: no workspace package named '$NAME' was found under packages/ or apps/"
+            exit 1
+          fi
+
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the tag's version matches the package's own version
+        env:
+          DIR: ${{ steps.pkg.outputs.dir }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          ACTUAL="$(node -p "require('./$DIR/package.json').version")"
+
+          if [[ "$ACTUAL" != "$VERSION" ]]; then
+            echo "ERROR: tag version '$VERSION' does not match $DIR/package.json version '$ACTUAL'"
             exit 1
           fi
 
@@ -85,18 +127,39 @@ jobs:
         run: pnpm run typecheck
 
       - name: Test
-        run: pnpm run test
+        run: pnpm run test:unit
 
       - name: Build
-        run: pnpm run build
+        env:
+          NAME: ${{ steps.tag.outputs.name }}
+        run: pnpm --filter "$NAME" run build
 
+      # Published from that package's own directory, scoped to only it,
+      # not `changeset publish` at the repo root: two packages releasing
+      # from the same Version Packages PR merge run this job in parallel
+      # (see version.yml's matrix), and each run must only ever touch
+      # its own package, never attempt the other's publish too.
+      # pnpm publish, not npm publish: pnpm rewrites any workspace:
+      # protocol dependency range (e.g. vern-llm-redis's dependency
+      # on vern-llm) to a real semver range before publishing. npm
+      # publish has no idea what "workspace:" means and would ship that
+      # literal string, breaking install for every real consumer.
+      # --no-git-checks since this runs against a detached tag checkout,
+      # not a branch with a clean working tree pnpm would otherwise expect.
       - name: Publish to npm
-        run: pnpm changeset publish
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: pnpm publish --no-git-checks
 
+      # Runs for either package's release, not just vern-llm's: the
+      # changelog script itself now reads both packages' CHANGELOG.md
+      # files into one combined docs page, so a vern-llm-redis release
+      # needs this refresh (and redeploy) just as much as vern-llm's does.
       - name: Update docs changelog
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis'
         run: pnpm update-changelog
 
       - name: Commit changelog docs update
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -104,12 +167,13 @@ jobs:
           git fetch origin main
           git checkout main
 
-          git add apps/docs/content/docs/changelog.mdx
+          git add apps/docs/content/docs/changelog.mdx apps/docs/content/docs/integrations/redis/changelog.mdx
 
           git commit -m "docs: update changelog" || exit 0
           git push origin main
 
       - name: Deploy to Vercel
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis'
         run: |
           curl -X POST "${{ secrets.VERNLLM_RELEASE }}"
 
@@ -136,19 +200,52 @@ jobs:
 
       - run: pnpm run typecheck
 
-      - run: pnpm run test
+      - run: pnpm run test:unit
 
-      - run: pnpm --filter vern-llm run build
+      - name: Resolve canary package's directory
+        id: pkg
+        env:
+          NAME: ${{ inputs.package || 'vern-llm' }}
+        run: |
+          DIR="$(node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const name = process.env.NAME;
+            for (const root of ["packages", "apps"]) {
+              if (!fs.existsSync(root)) continue;
+              for (const entry of fs.readdirSync(root)) {
+                const pkgPath = path.join(root, entry, "package.json");
+                if (!fs.existsSync(pkgPath)) continue;
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+                if (pkg.name === name) {
+                  process.stdout.write(path.join(root, entry));
+                  process.exit(0);
+                }
+              }
+            }
+          ')"
+
+          if [ -z "$DIR" ]; then
+            echo "ERROR: no workspace package named '$NAME' was found under packages/ or apps/"
+            exit 1
+          fi
+
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm --filter "${{ steps.pkg.outputs.name }}" run build
 
       - name: Set canary version
-        working-directory: packages/vern-llm
+        working-directory: ${{ steps.pkg.outputs.dir }}
         run: npm pkg set version="0.0.0-canary-${GITHUB_SHA::7}"
 
+      # pnpm publish, not npm publish: see the production job's comment
+      # on the same substitution, same reasoning applies here too.
       - name: Publish canary to npm
-        working-directory: packages/vern-llm
-        run: npm publish --tag next
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: pnpm publish --tag next --no-git-checks
 
       - name: Summary
         run: |
-          echo "Published 0.0.0-canary-${GITHUB_SHA::7} to the next tag on npm" \
+          echo "Published ${{ steps.pkg.outputs.name }}@0.0.0-canary-${GITHUB_SHA::7} to the next tag on npm" \
             >> "$GITHUB_STEP_SUMMARY"

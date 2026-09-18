@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'packages/vern-llm/**'
+      - 'packages/vern-llm-redis/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

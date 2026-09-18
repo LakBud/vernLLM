@@ -1,0 +1,101 @@
+---
+title: Rate Limit
+description: redisRateLimit reference and behavior
+---
+
+`redisRateLimit` is a `RateLimiterAdapter` backed by Redis, so request, token, concurrency, and
+AIMD state are shared across every process using the same keys. See [Rate
+Limiting](/docs/core/rate-limiting) for the full wait and AIMD behavior this adapter shares with
+the built-in in-process limiter.
+
+```ts title="redis-rate-limit-full.ts"
+import Redis from 'ioredis';
+import { redisRateLimit, fromIoredis } from 'vern-llm-redis';
+
+const client = fromIoredis(new Redis());
+
+const limiter = redisRateLimit(client, {
+  requestsPerMinute: 500,
+  tokensPerMinute: 200_000,
+  maxConcurrent: 20,
+});
+```
+
+## Options
+
+| Option              | Default                 | Notes                                                                                                   |
+| ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `requestsPerMinute` | unlimited               | Also the AIMD ceiling's starting value when `aimd` is set.                                              |
+| `tokensPerMinute`   | unlimited               | Checked against a pre-flight estimate from `estimateTokens`.                                            |
+| `maxConcurrent`     | unlimited               | Max requests in flight at once, shared across every process using this key.                             |
+| `maxQueueMs`        | `30000`                 | Max time a call may wait for capacity before throwing.                                                  |
+| `pollIntervalMs`    | `250`                   | Fallback poll interval used only while waiting on the concurrency bucket without a subscriber.          |
+| `estimateTokens`    | `defaultEstimateTokens` | Same tokenizer seam described in [Customization → Tokenizer](/docs/customization/tokenizer).            |
+| `keyPrefix`         | `'vernllm:rl'`          | Prefix for every Redis key this adapter writes.                                                         |
+| `aimd`              | none                    | AIMD against the requests-per-minute bucket, shared across every process. Requires `requestsPerMinute`. |
+| `subscriber`        | none                    | A dedicated pub or sub connection. Enables push based wake-ups for concurrency waits.                   |
+
+`requestsPerMinute`, `tokensPerMinute`, and `maxConcurrent` are independent limits, set any
+combination of them, a call waits on whichever bucket it hits first.
+
+## Precise waits vs polled waits
+
+<Callout type="info">
+  Requests/min and tokens/min waits are precise: each computes exactly how long until its bucket
+  refills and sleeps that long, capped at 5 seconds so a very low rate never schedules a
+  multi-minute timer that can't react to a meanwhile AIMD grow. They never poll. A concurrency wait
+  only clears via an external release though, so without `subscriber` it falls back to polling every
+  `pollIntervalMs`; with one, it wakes within a few ms of the release that freed a slot.
+</Callout>
+
+<Callout type="warn">
+  As with the circuit breaker, `subscriber` must be a separate connection from `client`, wrapped
+  with `fromIoredisSubscriber` or `fromNodeRedisSubscriber`.
+</Callout>
+
+## AIMD
+
+```ts title="redis-rate-limit-aimd.ts"
+const limiter = redisRateLimit(client, {
+  requestsPerMinute: 500,
+  aimd: {
+    increaseBy: 10,
+    decreaseFactor: 0.5,
+    minCapacity: 50,
+    maxCapacity: 500,
+  },
+});
+```
+
+`aimd` requires `requestsPerMinute` to be set, it's the ceiling AIMD adjusts. `increaseBy` is added
+on every recorded successful release; `decreaseFactor` (greater than 0, at most 1) is multiplied
+against the ceiling on a rate-limit signal; `minCapacity`/`maxCapacity` bound how far it can shrink
+or grow. Set `proactiveFloor` to shrink ahead of a hard limit once a provider hint reports
+`remainingRequests` at or below that number.
+
+AIMD state lives in Redis alongside the fixed ceiling, so a shrink or growth triggered by one
+process is respected by every other process on their next take, not just the one that saw the
+signal. See [Rate Limiting → AIMD](/docs/core/rate-limiting#aimd) for how the increase or decrease
+curve itself works, that math is identical to the in-process limiter.
+
+## Errors
+
+`acquire` throws `LLMError` in three cases, none of them tied to Redis connectivity:
+
+| type           | code                           | When                                                                                                                                                                                                    |
+| -------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rate_limited` | `rate_limit_capacity_exceeded` | The estimated tokens exceed a fixed `tokensPerMinute`, which AIMD never grows, so the request could never succeed no matter how long it waited. Thrown immediately instead of waiting out `maxQueueMs`. |
+| `rate_limited` | `rate_limit_queue_timeout`     | The call waited `maxQueueMs` without capacity becoming available.                                                                                                                                       |
+| `aborted`      | none                           | The `AbortSignal` passed to `acquire` fired while it was waiting.                                                                                                                                       |
+
+Construction time misconfiguration (a negative `requestsPerMinute`, an invalid `aimd` config missing
+`requestsPerMinute`, `minCapacity` above `maxCapacity`, and similar) throws `LLMError('invalid_params')`
+synchronously from `redisRateLimit(...)` itself, before any Redis call is made.
+
+## Redis unavailable
+
+Neither `redisRateLimit` nor `vern-llm` core catches a Redis connection failure here: a rejected
+`eval` call (the primitive every take, give, and resize operation is built on) propagates straight
+out of `acquire()`, and `vern-llm`'s own `acquireRateLimit` dispatch has no try/catch around that
+call either. A Redis outage genuinely fails the LLM call, there is no fail-open path anywhere in the
+stack for rate limiting, unlike caching, where `vern-llm` core catches adapter failures universally.

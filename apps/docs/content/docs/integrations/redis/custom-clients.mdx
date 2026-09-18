@@ -1,0 +1,61 @@
+---
+title: Custom Clients
+description: Wrapping a Redis client other than ioredis or node-redis
+icon: Cable
+---
+
+`ioredis` and `node-redis` already have first-party wrappers, `fromIoredis`/`fromIoredisSubscriber`
+and `fromNodeRedis`/`fromNodeRedisSubscriber`. For anything else, Upstash, a custom proxy, wrap it
+yourself to match `RedisClient` and, optionally, `RedisSubscriber`.
+
+```ts title="redis-client-interface.ts"
+interface RedisClient {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, mode: 'PX', durationMs: number): Promise<unknown>;
+  del(...keys: string[]): Promise<unknown>;
+  eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+  // Optional. Only used to seed a fresh circuit breaker's local cache
+  // with any circuit already open elsewhere in Redis before this
+  // process's own calls would otherwise discover it.
+  scan?(
+    cursor: string,
+    matchToken: 'MATCH',
+    pattern: string,
+    countToken: 'COUNT',
+    count: number,
+  ): Promise<[string, string[]]>;
+}
+
+interface RedisSubscriber {
+  subscribe(channel: string): Promise<unknown>;
+  on(event: 'message', listener: (channel: string, message: string) => void): unknown;
+}
+```
+
+<Callout type="warn">
+  This matches `ioredis`'s own method shapes directly (`set`'s `'PX'` mode token, `eval`'s numeric
+  `numKeys` followed by variadic keys then args), not a generic key/value interface. `fromNodeRedis`
+  exists specifically to translate node-redis's option-object shapes (`set`'s `{ PX }`, `eval`'s
+  `{ keys, arguments }`) onto this one, look at its source for a working translation to copy from.
+</Callout>
+
+`eval` must support Lua scripting (`EVAL` in Redis terms). Managed Redis-compatible stores that
+don't support scripting, some serverless or proxy-based ones, cannot back these adapters even with a
+correct wrapper.
+
+Pass your wrapped client as the first argument to any adapter, the same way you'd pass
+`fromIoredis(...)` or `fromNodeRedis(...)`:
+
+```ts title="redis-custom-client-usage.ts"
+import { redisCircuitBreaker } from 'vern-llm-redis';
+
+const breaker = redisCircuitBreaker(myWrappedClient);
+```
+
+Only `RedisClient` is required. `RedisSubscriber` is optional and only used by the circuit breaker
+and rate limit adapters for push based updates, `redisCache` never needs it. Note that
+`RedisSubscriber` has no `publish` method of its own, every publish this package needs happens
+inside its Lua scripts via Redis's own `PUBLISH` command, not at the JS level. See [Circuit
+Breaker](/docs/integrations/redis/features/circuit-breaker#behavior-with-and-without-a-subscriber)
+and [Rate Limit](/docs/integrations/redis/features/rate-limit#precise-waits-vs-polled-waits) for
+what changes with a subscriber present.

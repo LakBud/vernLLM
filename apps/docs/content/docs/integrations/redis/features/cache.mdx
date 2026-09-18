@@ -1,0 +1,44 @@
+---
+title: Cache
+description: redisCache reference
+---
+
+`redisCache` matches `vern-llm`'s own `CacheAdapter` interface directly, drop it in wherever
+`InMemoryCacheAdapter` is used today for a cache shared across every process. See
+[Caching](/docs/core/caching) for `cachedCall` itself and how a `CacheAdapter` fits into it.
+
+```ts title="redis-cache-full.ts"
+import Redis from 'ioredis';
+import { redisCache, fromIoredis } from 'vern-llm-redis';
+
+const client = fromIoredis(new Redis());
+
+const cache = redisCache(client);
+```
+
+## Options
+
+| Option      | Default           | Notes                                           |
+| ----------- | ----------------- | ----------------------------------------------- |
+| `keyPrefix` | `'vernllm:cache'` | Prefix for every Redis key this adapter writes. |
+
+```ts title="redis-cache-per-call-ttl.ts"
+const result = await llm.cachedCall({
+  cacheKey: `weather:${city}`,
+  ttl: 60, // seconds, forwarded to Redis as PX 60000
+  call: { userContent: `What's the weather in ${city}?` },
+});
+```
+
+A value that fails `JSON.parse` on read, corrupted or written by something else under the same key,
+is treated as a cache miss inside `redisCache` itself, rather than thrown, so a bad entry never
+breaks the call it was meant to speed up.
+
+<Callout type="info">
+  A Redis connection failure on `get`, `set`, or `delete` isn't handled inside `redisCache` at all,
+  it propagates as a thrown error the same way it would from any other Redis command. It's
+  `vern-llm` core's `CacheOrchestrator` that catches this for every `CacheAdapter`, Redis backed or
+  not: a failed read is logged and treated as a miss, falling through to a real provider call; a
+  failed write or delete is logged and swallowed. This is universal `cachedCall` behavior, not
+  something specific to this adapter.
+</Callout>

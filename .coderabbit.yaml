@@ -69,6 +69,36 @@ reviews:
         - Correct mocking of provider behavior.
         - Regression coverage for bug fixes.
 
+    - path: 'packages/vern-llm-redis/**'
+      instructions: |
+        This is vern-llm-redis: Redis backed CircuitBreakerAdapter,
+        RateLimiterAdapter, and CacheAdapter implementations for vern-llm.
+
+        Review TypeScript changes with focus on:
+        - Correctness of the adapter contract, assertClosed stays synchronous, acquire's waiting behavior, cache get/set/delete semantics.
+        - Lua script correctness and atomicity.
+        - Parity between the ioredis and node-redis client wrappers.
+        - vern-llm is a regular runtime dependency (not peer-only), matching that its `LLMError` export is used directly at runtime for every thrown error, never a look-alike class, since vern-llm's normalizeError() does an `instanceof LLMError` check. Purely structural types stay `import type` only.
+        - assertClosed never optimistically guesses cooldown has elapsed; it only allows a call once Redis has confirmed this process holds the half-open trial. Flag anything that skips that confirmation.
+        - Timing assertions use the shared helpers instead of a fresh fixed sleep.
+
+        For new features:
+        - Require unit tests (mocked Redis) and integration tests (real Redis).
+        - Ensure changes are documented when public APIs change.
+
+        Pay special attention to:
+        - RedisClient/RedisSubscriber interface changes.
+        - Adapter option changes.
+        - Breaking changes to exported types.
+
+    - path: 'packages/vern-llm-redis/tests/**'
+      instructions: |
+        Review tests for:
+        - Meaningful assertions instead of implementation-only checks.
+        - Unit tests never open a real Redis connection.
+        - Integration tests use the shared helpers (waitUntil, expectNearInstant) instead of ad hoc sleeps.
+        - Cross-process behavior (circuit breaker/rate limiter state propagation) uses two separate client connections, not one reused.
+
     - path: 'apps/docs/**'
       instructions: |
         This is the VernLLM documentation site using Fumadocs.

@@ -14,7 +14,13 @@ import type { Logger } from '../../../logger.js';
 import type { VernLLMEvent } from '../../../types/events.js';
 import type { AttemptContext, VernLLMMiddleware } from '../../../types/index.js';
 
-/** Not exported. Internal shorthand only, so this union isn't duplicated between the public option field and `buildCircuitBreaker`'s own signature. */
+/**
+ * Not re-exported from the package root, imported directly from this
+ * internal module by `VernLLMOptions.circuitBreaker`'s own type (see
+ * options.ts) so that union isn't duplicated between the public option
+ * field and `buildCircuitBreaker`'s own signature below, same pattern
+ * `CacheOption` and `RateLimitOption` already use for their own options.
+ */
 export type CircuitBreakerOption = boolean | CircuitBreakerOptions | CircuitBreakerAdapter;
 
 const REQUIRED_ADAPTER_METHOD_NAMES = [

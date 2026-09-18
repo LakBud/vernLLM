@@ -1,0 +1,213 @@
+{
+  "name": "vern-llm-redis",
+  "version": "0.1.0",
+  "description": "Redis-backed circuit breaker, rate limiter, and cache adapters for vern-llm",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./circuitBreaker": {
+      "import": {
+        "types": "./dist/circuitBreaker.d.mts",
+        "default": "./dist/circuitBreaker.mjs"
+      },
+      "require": {
+        "types": "./dist/circuitBreaker.d.cts",
+        "default": "./dist/circuitBreaker.cjs"
+      }
+    },
+    "./rateLimit": {
+      "import": {
+        "types": "./dist/rateLimit.d.mts",
+        "default": "./dist/rateLimit.mjs"
+      },
+      "require": {
+        "types": "./dist/rateLimit.d.cts",
+        "default": "./dist/rateLimit.cjs"
+      }
+    },
+    "./cache": {
+      "import": {
+        "types": "./dist/cache.d.mts",
+        "default": "./dist/cache.mjs"
+      },
+      "require": {
+        "types": "./dist/cache.d.cts",
+        "default": "./dist/cache.cjs"
+      }
+    },
+    "./clients/ioredis": {
+      "import": {
+        "types": "./dist/clients/ioredis.d.mts",
+        "default": "./dist/clients/ioredis.mjs"
+      },
+      "require": {
+        "types": "./dist/clients/ioredis.d.cts",
+        "default": "./dist/clients/ioredis.cjs"
+      }
+    },
+    "./clients/nodeRedis": {
+      "import": {
+        "types": "./dist/clients/nodeRedis.d.mts",
+        "default": "./dist/clients/nodeRedis.mjs"
+      },
+      "require": {
+        "types": "./dist/clients/nodeRedis.d.cts",
+        "default": "./dist/clients/nodeRedis.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "smoke-test": "node scripts/smoke-test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:unit:coverage": "vitest run --project unit --coverage",
+    "test:int": "vitest run --project integration",
+    "test:int:coverage": "vitest run --project integration --coverage",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+    "size": "size-limit"
+  },
+  "dependencies": {
+    "vern-llm": "workspace:^2.8.0"
+  },
+  "devDependencies": {
+    "vern-llm": "workspace:^2.8.0",
+    "@types/node": "^26.4.1",
+    "ioredis": "^5.4.1",
+    "redis": "^4.7.0",
+    "typescript": "^5.5.0",
+    "tsdown": "^0.23.0",
+    "publint": "^0.3.24",
+    "unplugin-unused": "^0.5.7",
+    "@size-limit/esbuild": "13.1.1",
+    "@size-limit/file": "13.1.1",
+    "size-limit": "13.1.1",
+    "vitest": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.11"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@11.25.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LakBud/vernLLM.git",
+    "directory": "packages/vern-llm-redis"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "size-limit": [
+    {
+      "path": "dist/index.mjs",
+      "limit": "6 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/index.cjs",
+      "limit": "6 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/circuitBreaker.mjs",
+      "limit": "6 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/circuitBreaker.cjs",
+      "limit": "6 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/rateLimit.mjs",
+      "limit": "10 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/rateLimit.cjs",
+      "limit": "10 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/cache.mjs",
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/cache.cjs",
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/clients/ioredis.mjs",
+      "limit": "1 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/clients/ioredis.cjs",
+      "limit": "1 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/clients/nodeRedis.mjs",
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/clients/nodeRedis.cjs",
+      "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    }
+  ]
+}

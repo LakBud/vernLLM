@@ -1,0 +1,85 @@
+---
+title: Circuit Breaker
+description: redisCircuitBreaker reference and behavior
+---
+
+`redisCircuitBreaker` is a `CircuitBreakerAdapter` backed by Redis, so circuit state is shared
+across every process talking to the same key. See [Bringing your own
+breaker](/docs/customization/circuit-breaker) for the interface it implements, and [Circuit
+Breaker](/docs/core/circuit-breaker) for the full failure-condition and half-open behavior that
+applies to this adapter the same as the built-in one.
+
+```ts title="redis-circuit-breaker-full.ts"
+import Redis from 'ioredis';
+import { redisCircuitBreaker, fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis';
+
+const connection = new Redis();
+const client = fromIoredis(connection);
+const subscriber = fromIoredisSubscriber(connection.duplicate());
+
+const breaker = redisCircuitBreaker(client, {
+  subscriber,
+  threshold: 10,
+  cooldownMs: 60000,
+});
+```
+
+## Options
+
+| Option           | Default        | Notes                                                                                                                                               |
+| ---------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `threshold`      | `5`            | Consecutive failures before the circuit opens.                                                                                                      |
+| `cooldownMs`     | `30000`        | How long the circuit stays open before a trial request is allowed.                                                                                  |
+| `isolateByModel` | `false`        | Track a separate circuit per model instead of one shared bucket.                                                                                    |
+| `keyPrefix`      | `'vernllm:cb'` | Prefix for every Redis key this adapter writes.                                                                                                     |
+| `onStateChange`  | none           | Called on every real state transition, the same handler shape as the built-in in-process breaker.                                                   |
+| `subscriber`     | none           | A dedicated pub or sub connection (`fromIoredisSubscriber`/`fromNodeRedisSubscriber`). Enables push based state updates.                            |
+| `pollIntervalMs` | `5000`         | Poll bound for a transition on an idle key. Skipped while `subscriber` is connected, used as a fallback if it fails to connect. Set `0` to disable. |
+
+## Behavior with and without a subscriber
+
+Without a subscriber, a transition made by another process is only picked up on this process's own
+next call for that key, which can lag arbitrarily on an idle key. `pollIntervalMs` bounds that: every
+touched key is re-checked against Redis on that interval. With `subscriber` set, every real state
+change is published and every process holding this adapter updates its local cache the moment the
+message arrives, typically within a few ms, so `subscriber` is strongly recommended.
+
+<Callout type="warn">
+  `subscriber` must be a separate connection from `client`. Both `ioredis` and `node-redis` put a
+  client that has issued `SUBSCRIBE` into a restricted mode where ordinary commands are rejected, so
+  reusing one connection for both roles fails as soon as the breaker needs to read or write state.
+  Use `client.duplicate()` (ioredis) or a second, connected client (node-redis) before wrapping it
+  with `fromIoredisSubscriber`/`fromNodeRedisSubscriber`.
+</Callout>
+
+## Errors
+
+`assertClosed` throws `LLMError` with `type: 'circuit_open'` when a call isn't let through, whether
+the circuit is fully open or half-open with no trial available. This is the same error type the
+built-in in-process breaker throws, so error handling written against
+[Circuit Breaker](/docs/core/circuit-breaker) works unchanged against this adapter.
+
+## Redis unavailable
+
+Writes fail closed: a failed `recordFailure`, `recordSuccess`, or background transition attempt is
+caught, logged, and swallowed rather than thrown, so a Redis outage does not itself take down every
+call through VernLLM.
+
+<Callout type="warn">
+  `assertClosed` never makes a live call to Redis at all, synchronous or otherwise. A cache hit
+  resolves synchronously from local state; a cache miss (a key this process hasn't seen) uses the
+  local closed bucket for the immediate decision and starts `transition(model, 'check')` in the
+  background, where `redis.eval` performs the non-blocking Redis check. This means Redis being down
+  changes nothing about how a read resolves. What Redis being down actually changes is how stale
+  that local cache can get, since the background writes that normally keep it fresh start failing
+  silently instead.
+</Callout>
+
+<Callout type="warn">
+  `assertClosed` must throw synchronously, but Redis is async. Once a key has been observed, a call
+  is only let through when the local cache holds a Redis-confirmed answer, closed, or a won
+  half-open trial, never a local guess that cooldown has elapsed, since that could let two processes
+  both win the same trial. A key this process has never seen defaults to closed and is allowed
+  through, even if it's already open elsewhere in Redis, since confirming an unseen key
+  synchronously isn't possible without a bigger change to the interface.
+</Callout>

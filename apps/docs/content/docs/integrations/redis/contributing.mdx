@@ -1,0 +1,91 @@
+---
+title: Contributing
+description: How to set up, test, and open a PR for vern-llm-redis
+icon: GitPullRequest
+---
+
+This page covers `packages/vern-llm-redis` specifically. For the coding standard and PR checklist
+that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+Integration tests need a local `redis-server` running, this is a real setup difference from
+`vern-llm`'s suite, which runs entirely on fakes and mocks.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
+explain non obvious decisions with a short comment, and keep `any` as a last resort. Redis specific
+commands (`eval`, pub or sub) stay inside `packages/vern-llm-redis`, nothing in `vern-llm` itself
+should know Redis exists.
+
+## Scripts
+
+These are `packages/vern-llm-redis`'s own scripts, exactly as they appear in its `package.json`.
+Run them with `pnpm run <script>` from inside `packages/vern-llm-redis`, or `pnpm nx run
+vern-llm-redis:<script>` from the repo root:
+
+```json title="packages/vern-llm-redis/package.json"
+"scripts": {
+  "build": "tsdown",
+  "dev": "tsdown --watch",
+  "smoke-test": "node scripts/smoke-test.ts",
+  "typecheck": "tsc -p tsconfig.json --noEmit",
+  "typecheck:test": "tsc -p tsconfig.test.json",
+  "lint": "oxlint .",
+  "lint:fix": "oxlint . --fix",
+  "test": "vitest run",
+  "test:unit": "vitest run --project unit",
+  "test:unit:coverage": "vitest run --project unit --coverage",
+  "test:int": "vitest run --project integration",
+  "test:int:coverage": "vitest run --project integration --coverage",
+  "test:watch": "vitest",
+  "test:coverage": "vitest run --coverage",
+  "changeset": "changeset",
+  "version-packages": "changeset version",
+  "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+  "size": "size-limit"
+}
+```
+
+`test:int` and `test:int:coverage` need a local `redis-server` running, this is a real setup
+difference from `vern-llm`'s suite, which runs entirely on fakes and mocks. `prepublishOnly` runs
+automatically before publish and isn't something you need to run by hand, it's listed here since it
+shows the exact sequence a release goes through: typecheck, build, size, smoke test.
+
+## Before opening a PR
+
+Every PR touching `packages/vern-llm-redis` runs through the same CI workflows described in
+[Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                          | Local command                                                                                                  |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Lint                           | `pnpm nx run vern-llm-redis:lint`                                                                              |
+| Typecheck source               | `pnpm nx run vern-llm-redis:typecheck`                                                                         |
+| Typecheck tests                | `pnpm nx run vern-llm-redis:typecheck:test`                                                                    |
+| Unit tests + coverage          | `pnpm nx run vern-llm-redis:test:unit:coverage`                                                                |
+| Integration tests              | `pnpm nx run vern-llm-redis:test:int:coverage`, needs a local `redis-server`                                   |
+| Build, bundle size, smoke test | `pnpm nx run vern-llm-redis:build && pnpm nx run vern-llm-redis:size && pnpm nx run vern-llm-redis:smoke-test` |
+| Changeset present              | `pnpm changeset status --since=origin/main`                                                                    |
+
+## Changesets
+
+Record your change with:
+
+```bash
+pnpm nx run vern-llm-redis:changeset
+```
+
+`vern-llm-redis` versions and releases independently of `vern-llm`, on its own changelog. See
+[Development](/docs/development#ci) for what drives the release itself.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.
