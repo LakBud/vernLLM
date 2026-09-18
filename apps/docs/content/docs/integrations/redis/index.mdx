@@ -64,10 +64,12 @@ second:
 
 ```ts title="redis-basic-usage-ioredis.ts"
 import Redis from 'ioredis';
+import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
 import { redisCircuitBreaker, redisRateLimit, redisCache, fromIoredis } from 'vern-llm-redis';
 
 const client = fromIoredis(new Redis());
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const llm = new VernLLM({
   client: openai,
@@ -83,12 +85,14 @@ const llm = new VernLLM({
 
 ```ts title="redis-basic-usage-node-redis.ts"
 import { createClient } from 'redis';
+import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
 import { redisCircuitBreaker, redisRateLimit, redisCache, fromNodeRedis } from 'vern-llm-redis';
 
 const raw = createClient();
 await raw.connect();
 const client = fromNodeRedis(raw);
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const llm = new VernLLM({
   client: openai,

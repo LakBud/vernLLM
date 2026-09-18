@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fromIoredis, fromIoredisSubscriber } from '../../src/clients/ioredis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
-import { connect, expectNearInstant, uniquePrefix } from '../helpers.js';
+import { connect, expectNearInstant, uniquePrefix, waitUntil } from '../helpers.js';
 
 import type { Redis } from 'ioredis';
 
@@ -136,13 +136,14 @@ describe('redisRateLimit, real Redis, AIMD shared across two processes', () => {
     redisRateLimit(fromIoredis(redisB), { requestsPerMinute: 10, aimd, keyPrefix });
 
     limiterA.signalRateLimit(); // 10 -> 5
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Read the shared ceiling directly from process B's own connection,
     // proving the write landed in the one key both processes read,
     // rather than relying on real-time refill to observe the effect.
-    const cap = await redisB.hget(`${keyPrefix}:rpm`, 'cap');
-    expect(Number(cap)).toBe(5);
+    await waitUntil(async () => {
+      const cap = await redisB.hget(`${keyPrefix}:rpm`, 'cap');
+      return Number(cap) === 5;
+    });
   });
 
   it('a successful release grows the ceiling for every process', async () => {
@@ -153,10 +154,11 @@ describe('redisRateLimit, real Redis, AIMD shared across two processes', () => {
 
     const first = await limiterA.acquire(1);
     first.release(undefined, true); // grows 1 -> 6
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const cap = await redisB.hget(`${keyPrefix}:rpm`, 'cap');
-    expect(Number(cap)).toBe(6);
+    await waitUntil(async () => {
+      const cap = await redisB.hget(`${keyPrefix}:rpm`, 'cap');
+      return Number(cap) === 6;
+    });
   });
 });
 

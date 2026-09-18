@@ -56,11 +56,12 @@ export interface RedisCircuitBreakerOptions {
  * A CircuitBreakerAdapter backed by Redis, so circuit state is shared
  * across every process talking to the same key.
  *
- * assertClosed is synchronous, so it only trusts a Redis-confirmed
- * answer already in the local cache, never a local guess. See the
- * "assertClosed is synchronous, Redis isn't" callout in the docs
- * (/docs/integrations/redis/features/circuit-breaker) for the trade-offs
- * this implies for cooldown races and unseen keys.
+ * assertClosed is synchronous, so it reads the local cache: an unseen key
+ * defaults to closed and may be allowed through before Redis has confirmed
+ * it, while half-open access requires a Redis-confirmed trial, never a
+ * local guess. See the "assertClosed is synchronous, Redis isn't" callout
+ * in the docs (/docs/integrations/redis/features/circuit-breaker) for the
+ * trade-offs this implies for cooldown races and unseen keys.
  *
  * The cache stays fresh via pub/sub (`subscriber`) if supplied,
  * otherwise via polling (`pollIntervalMs`).
@@ -183,8 +184,10 @@ export function redisCircuitBreaker(
         cursor = nextCursor;
         if (keys.length === 0) continue;
 
-        const raw = await redis.eval(READ_BUCKETS_SCRIPT, 0, ...keys);
-        for (const entry of parseSnapshotResult(raw)) {
+        for (const key of keys) {
+          const raw = await redis.eval(READ_BUCKETS_SCRIPT, 1, key);
+          const entry = parseSnapshotResult(raw);
+          if (!entry) continue;
           local.set(entry.key, {
             state: entry.state,
             failures: entry.failures,

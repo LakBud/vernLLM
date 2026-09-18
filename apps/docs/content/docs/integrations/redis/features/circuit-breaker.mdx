@@ -13,8 +13,9 @@ applies to this adapter the same as the built-in one.
 import Redis from 'ioredis';
 import { redisCircuitBreaker, fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis';
 
-const client = fromIoredis(new Redis());
-const subscriber = fromIoredisSubscriber(new Redis().duplicate());
+const connection = new Redis();
+const client = fromIoredis(connection);
+const subscriber = fromIoredisSubscriber(connection.duplicate());
 
 const breaker = redisCircuitBreaker(client, {
   subscriber,
@@ -65,9 +66,11 @@ caught, logged, and swallowed rather than thrown, so a Redis outage does not its
 call through VernLLM.
 
 <Callout type="warn">
-  `assertClosed` never makes a live call to Redis at all, synchronous or otherwise, it only reads
-  the local cache described below. This means Redis being down changes nothing about how a read
-  resolves: it was already local-cache-only. What Redis being down actually changes is how stale
+  `assertClosed` never makes a live call to Redis at all, synchronous or otherwise. A cache hit
+  resolves synchronously from local state; a cache miss (a key this process hasn't seen) uses the
+  local closed bucket for the immediate decision and starts `transition(model, 'check')` in the
+  background, where `redis.eval` performs the non-blocking Redis check. This means Redis being down
+  changes nothing about how a read resolves. What Redis being down actually changes is how stale
   that local cache can get, since the background writes that normally keep it fresh start failing
   silently instead.
 </Callout>

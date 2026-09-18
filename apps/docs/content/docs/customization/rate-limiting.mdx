@@ -23,7 +23,8 @@ interface RateLimiterAdapter {
 ```
 
 ```ts title="redis-rate-limiter.ts"
-import type { RateLimiterAdapter, VernLLM } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import type { RateLimiterAdapter } from 'vern-llm';
 
 class RedisRateLimiter implements RateLimiterAdapter {
   private cachedRemaining = 0;

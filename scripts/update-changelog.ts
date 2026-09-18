@@ -11,9 +11,12 @@ for (const [pkg, docPath] of Object.entries(packages)) {
   let changelog: string;
   try {
     changelog = await readFile(changelogPath, 'utf8');
-  } catch {
-    // No release yet for this package, nothing to write.
-    continue;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      // No release yet for this package, nothing to write.
+      continue;
+    }
+    throw error;
   }
 
   const output = `---
