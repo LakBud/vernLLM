@@ -49,7 +49,7 @@ jobs:
         name: Open or update the Version Packages PR
         uses: changesets/action@v2.1.1
         with:
-          version-script: pnpm changeset version
+          version-script: pnpm changeset version && pnpm install --lockfile-only
           commit-message: 'chore: version packages'
           pr-title: 'chore: version packages'
         env:
