@@ -66,9 +66,16 @@ class RedisCircuitBreaker implements CircuitBreakerAdapter {
     if (to === 'open') alerting.page(`circuit opened for ${model}`);
   };
 
-  async assertClosed(model = 'default') {
-    const state = await redis.get(`breaker:${model}:state`);
-    if (state === 'open') {
+  private state = new Map<string, string | null>();
+
+  // Refreshes the local copy from Redis, awaited right before assertClosed.
+  async prepare(model = 'default') {
+    this.state.set(model, await redis.get(`breaker:${model}:state`));
+  }
+
+  // Synchronous: decides from the copy `prepare` just refreshed.
+  assertClosed(model = 'default') {
+    if (this.state.get(model) === 'open') {
       throw new LLMError('Circuit open', 'circuit_open', { code: 'circuit_cooling_down' });
     }
   }
@@ -176,7 +183,8 @@ key it has never seen, or to claim a half-open trial. `VernLLM` awaits it right 
 `assertClosed`, in `call()` and for every target in a fallback chain:
 
 ```ts title="breaker-prepare.ts"
-class RemoteBreaker implements CircuitBreakerAdapter {
+// Partial example: also implement the remaining CircuitBreakerAdapter members.
+class RemoteBreaker {
   prepareTimeoutMs = 250;
   private local = new Map<string, { state: CircuitState; checkedAt: number }>();
 
@@ -214,6 +222,10 @@ real state, which `llm.readCircuitStates()` uses. An adapter without it is answe
 Implement `setLogger` if your adapter logs. `VernLLM` calls it once with its own `Logger`, so the
 adapter follows the same `logger` and `'silent'` settings as everything else. The logger is already
 safe to call: one that throws cannot break your adapter.
+
+If several clients share one adapter, each wiring calls `setLogger` again, so the adapter uses the
+logger of the client created last. Give those clients the same `logger` setting to keep its output
+consistent.
 
 ### Background calls
 

@@ -150,6 +150,24 @@ describe('VernLLM awaits the breaker prepare hook before assertClosed', () => {
     expect(fallbackBreaker.breaker.prepare).toHaveBeenCalledTimes(1);
   });
 
+  it('an abort raised synchronously inside a pending prepare ends the call with aborted', async () => {
+    const { client, create } = createMockClient([jsonResponse({ ok: true })]);
+    const controller = new AbortController();
+    const { breaker } = adapter({
+      prepare: () => {
+        controller.abort();
+        return new Promise<void>(() => {});
+      },
+    });
+
+    const llm = new VernLLM({ client, model: 'm', circuitBreaker: breaker });
+
+    await expect(llm.call({ userContent: 'x', signal: controller.signal })).rejects.toMatchObject({
+      type: 'aborted',
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('an abort while a fallback target is preparing ends the chain with aborted', async () => {
     const primary = createMockClient([new Error('primary down')]);
     const secondary = createMockClient([jsonResponse({ from: 'fallback' })]);

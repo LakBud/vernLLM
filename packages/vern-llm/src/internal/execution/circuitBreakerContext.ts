@@ -1,3 +1,5 @@
+import { reportRejection } from '../utils/circuit-breaker/circuitBreaker.utils.js';
+
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import type { Logger } from '../../logger.js';
 import type { AttemptContext, LLMErrorCode, MiddlewareStateBag } from '../../types/index.js';
@@ -86,22 +88,8 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
     return { requestId, state, signal, attempt: attempt + 1 };
   }
 
-  /**
-   * These three adapter methods are declared `void`, but an adapter whose
-   * state is remote (Redis) naturally does its work asynchronously and
-   * may hand back a promise anyway. Nobody awaits it, so a rejection would
-   * otherwise be an unhandled one, which in Node ends the process after
-   * the call it belonged to already succeeded. Catch it here and report
-   * it, so no adapter has to get this right for itself.
-   */
   function settleQuietly(operation: string, result: unknown): void {
-    if (typeof (result as PromiseLike<unknown> | undefined)?.then !== 'function') return;
-
-    (result as PromiseLike<unknown>).then(undefined, (error: unknown) => {
-      logger.error(`[VernLLM:${requestId}] circuitBreaker.${operation} rejected`, {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
+    reportRejection(logger, `[VernLLM:${requestId}] circuitBreaker.${operation} rejected`, result);
   }
 
   return {

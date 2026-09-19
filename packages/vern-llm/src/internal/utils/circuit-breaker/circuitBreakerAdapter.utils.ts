@@ -8,7 +8,7 @@ import { LLMError } from '../../../types/errors.js';
 import { emitEvent } from '../../execution/utils/middleware/middleware.utils.js';
 import { idFor } from '../../resolveMiddlewareOrder.js';
 import { callHookSafely } from './../logger.utils.js';
-import { makeEventReporter } from './circuitBreaker.utils.js';
+import { makeEventReporter, reportRejection } from './circuitBreaker.utils.js';
 
 import type { Logger } from '../../../logger.js';
 import type { VernLLMEvent } from '../../../types/events.js';
@@ -319,7 +319,13 @@ export function buildCircuitBreaker(
     if (attemptsAdapter) {
       const adapter = circuitBreakerOption as CircuitBreakerAdapter;
       wireAdapterOnStateChange(adapter, wrap(undefined), logger);
-      adapter.setLogger?.(logger);
+      // Declared `void`, but an async adapter may return a promise anyway.
+      reportRejection(
+        logger,
+        '[VernLLM] circuitBreaker.setLogger rejected',
+        adapter.setLogger?.(logger),
+      );
+
       return adapter;
     }
   }

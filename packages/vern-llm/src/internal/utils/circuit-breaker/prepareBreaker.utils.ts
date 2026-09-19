@@ -63,6 +63,8 @@ export async function runPrepare(
       if (!signal) return;
       onAbort = () => resolve('aborted');
       signal.addEventListener('abort', onAbort, { once: true });
+      // `prepare` may have aborted the signal synchronously, before the listener existed.
+      if (signal.aborted) onAbort();
     }),
   ]).finally(() => {
     clearTimeout(timer);

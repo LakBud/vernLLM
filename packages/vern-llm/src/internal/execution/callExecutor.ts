@@ -1,6 +1,9 @@
 import { LLMError } from '../../types/errors.js';
 import { type RetryBudget } from '../retryBudget.js';
-import { makeEventReporter } from '../utils/circuit-breaker/circuitBreaker.utils.js';
+import {
+  makeEventReporter,
+  reportRejection,
+} from '../utils/circuit-breaker/circuitBreaker.utils.js';
 import {
   runPrepare,
   type PreparableBreaker,
@@ -246,7 +249,12 @@ export class CallExecutor {
    * call on any failure path: idempotent, and a no-op if none was claimed.
    */
   releaseBreakerTrial(model?: string, context?: CircuitBreakerCallContext): void {
-    this.breaker?.releaseTrial?.(model ?? this.model, context);
+    // Declared `void`, but a remote adapter may return a promise anyway.
+    reportRejection(
+      this.logger,
+      '[VernLLM] circuitBreaker.releaseTrial rejected',
+      this.breaker?.releaseTrial?.(model ?? this.model, context),
+    );
   }
 
   /**

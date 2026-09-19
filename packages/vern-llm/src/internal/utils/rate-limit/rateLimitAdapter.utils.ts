@@ -14,7 +14,7 @@ const ADAPTER_METHOD_NAMES = [
 ] as const;
 
 /** Optional `RateLimiterAdapter` members that must be functions when present. */
-const OPTIONAL_FUNCTION_MEMBER_NAMES = ['getState', 'readState'] as const;
+const OPTIONAL_FUNCTION_MEMBER_NAMES = ['getState', 'readState', 'setLogger'] as const;
 
 /**
  * The optional members that are present but not callable, e.g. someone
