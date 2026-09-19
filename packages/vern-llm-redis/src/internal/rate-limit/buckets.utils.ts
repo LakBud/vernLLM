@@ -2,7 +2,8 @@ export interface Bucket {
   reason: 'concurrency' | 'rpm' | 'tpm';
   key: string;
   initialCapacity: number;
-  rateMode: 'permin' | '0';
+  /** 'permin' refills on a clock (requests/min, tokens/min). 'lease' is the concurrency bucket, held as expiring leases that only an explicit release (or a lapsed lease) frees. */
+  rateMode: 'permin' | 'lease';
 }
 
 export interface BuildBucketsOptions {
@@ -28,7 +29,7 @@ export function buildBuckets(options: BuildBucketsOptions): BuiltBuckets {
       reason: 'concurrency',
       key: `${options.keyPrefix}:concurrency`,
       initialCapacity: options.maxConcurrent,
-      rateMode: '0',
+      rateMode: 'lease',
     });
   }
 

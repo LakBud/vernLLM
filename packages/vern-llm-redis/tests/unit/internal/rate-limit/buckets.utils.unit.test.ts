@@ -52,9 +52,9 @@ describe('buildBuckets', () => {
     expect(buckets.map((b) => b.initialCapacity)).toEqual([5, 10, 1000]);
   });
 
-  it('gives the concurrency bucket rateMode "0", no time based refill', () => {
+  it('gives the concurrency bucket rateMode "lease", held as expiring leases with no time based refill', () => {
     const { buckets } = buildBuckets({ keyPrefix: 'p', maxConcurrent: 1 });
-    expect(buckets[0]?.rateMode).toBe('0');
+    expect(buckets[0]?.rateMode).toBe('lease');
   });
 
   it('gives requests/min and tokens/min buckets rateMode "permin"', () => {
@@ -108,7 +108,7 @@ describe('amountFor', () => {
       reason: 'concurrency' as const,
       key: 'k',
       initialCapacity: 1,
-      rateMode: '0' as const,
+      rateMode: 'lease' as const,
     };
     expect(amountFor(bucket, 999)).toBe(1);
   });

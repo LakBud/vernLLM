@@ -26,6 +26,7 @@ export function fromIoredis(client: IoredisLike): RedisClient {
 
 export interface IoredisSubscriberLike {
   subscribe(channel: string): Promise<unknown>;
+  unsubscribe?(channel: string): Promise<unknown>;
   on(event: 'message', listener: (channel: string, message: string) => void): unknown;
 }
 

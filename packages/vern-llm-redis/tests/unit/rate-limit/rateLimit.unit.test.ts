@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { redisRateLimit } from '../../src/rateLimit.js';
-import { fakeRedisClient, fakeSubscriber } from '../helpers.js';
+import { redisRateLimit } from '../../../src/rateLimit.js';
+import { fakeRedisClient, fakeSubscriber } from '../../helpers.js';
 
 /** Matches TAKE_SCRIPT's return shape: [ok, avail, cap, waitMs]. */
 function takeResult(
@@ -16,7 +16,7 @@ function takeResult(
 describe('redisRateLimit', () => {
   it('estimate delegates to the default token heuristic when none is supplied', () => {
     const redis = fakeRedisClient();
-    const limiter = redisRateLimit(redis);
+    const limiter = redisRateLimit(redis, { fairQueue: false });
 
     const request = { model: 'm', messages: [{ role: 'user', content: 'hello' }] } as never;
     expect(limiter.estimate(request)).toBeGreaterThan(0);
@@ -25,7 +25,7 @@ describe('redisRateLimit', () => {
   it('estimate uses a custom estimateTokens function when supplied', () => {
     const redis = fakeRedisClient();
     const estimateTokens = vi.fn(() => 42);
-    const limiter = redisRateLimit(redis, { estimateTokens });
+    const limiter = redisRateLimit(redis, { fairQueue: false, estimateTokens });
 
     const request = { model: 'm', messages: [] } as never;
     expect(limiter.estimate(request)).toBe(42);
@@ -36,7 +36,7 @@ describe('redisRateLimit', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 9, 10, -1));
 
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
     const result = await limiter.acquire(1);
 
     expect(result.waitedMs).toBeGreaterThanOrEqual(0);
@@ -52,8 +52,20 @@ describe('redisRateLimit', () => {
       .mockResolvedValueOnce(takeResult(1, 9, 10, -1)) // rpm take succeeds again
       .mockResolvedValueOnce(takeResult(1, 100, 100, -1)); // tpm take succeeds
 
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10, tokensPerMinute: 100 });
-    await limiter.acquire(50);
+    const limiter = redisRateLimit(redis, {
+      fairQueue: false,
+      requestsPerMinute: 10,
+      tokensPerMinute: 100,
+    });
+    // The failed take reports a 500ms wait: sleep through it on fake timers.
+    vi.useFakeTimers();
+    try {
+      const acquiring = limiter.acquire(50);
+      await vi.advanceTimersByTimeAsync(500);
+      await acquiring;
+    } finally {
+      vi.useRealTimers();
+    }
 
     // 5 eval calls total: take, take(fail), give(rollback), take, take.
     expect(redis.eval).toHaveBeenCalledTimes(5);
@@ -67,7 +79,11 @@ describe('redisRateLimit', () => {
         .mockResolvedValueOnce(takeResult(0, 0, 10, 2000))
         .mockResolvedValueOnce(takeResult(1, 9, 10, -1));
 
-      const limiter = redisRateLimit(redis, { requestsPerMinute: 10, pollIntervalMs: 99_999 });
+      const limiter = redisRateLimit(redis, {
+        fairQueue: false,
+        requestsPerMinute: 10,
+        pollIntervalMs: 99_999,
+      });
       const promise = limiter.acquire(1);
 
       await vi.advanceTimersByTimeAsync(2000);
@@ -88,7 +104,7 @@ describe('redisRateLimit', () => {
         .mockResolvedValueOnce(takeResult(0, 0, 10, 60_000))
         .mockResolvedValueOnce(takeResult(1, 9, 10, -1));
 
-      const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+      const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
       const promise = limiter.acquire(1);
 
       // Should not resolve after only 5s, the cap, since a real 60s wait
@@ -108,7 +124,11 @@ describe('redisRateLimit', () => {
       const redis = fakeRedisClient();
       redis.eval.mockResolvedValue(takeResult(0, 0, 10, 100_000));
 
-      const limiter = redisRateLimit(redis, { requestsPerMinute: 10, maxQueueMs: 1000 });
+      const limiter = redisRateLimit(redis, {
+        fairQueue: false,
+        requestsPerMinute: 10,
+        maxQueueMs: 1000,
+      });
       const promise = limiter.acquire(1);
       const assertion = expect(promise).rejects.toMatchObject({ type: 'rate_limited' });
 
@@ -121,7 +141,7 @@ describe('redisRateLimit', () => {
 
   it('acquire rejects immediately when the signal is already aborted', async () => {
     const redis = fakeRedisClient();
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
 
     const controller = new AbortController();
     controller.abort();
@@ -135,7 +155,7 @@ describe('redisRateLimit', () => {
       const redis = fakeRedisClient();
       redis.eval.mockResolvedValue(takeResult(0, 0, 10, 10_000));
 
-      const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+      const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
       const controller = new AbortController();
 
       const promise = limiter.acquire(1, controller.signal);
@@ -157,7 +177,11 @@ describe('redisRateLimit', () => {
         .mockResolvedValueOnce(takeResult(0, 0, 1, -1))
         .mockResolvedValueOnce(takeResult(1, 0, 1, -1));
 
-      const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 500 });
+      const limiter = redisRateLimit(redis, {
+        fairQueue: false,
+        maxConcurrent: 1,
+        pollIntervalMs: 500,
+      });
       const promise = limiter.acquire(1);
 
       await vi.advanceTimersByTimeAsync(500);
@@ -177,6 +201,7 @@ describe('redisRateLimit', () => {
 
     const subscriber = fakeSubscriber();
     const limiter = redisRateLimit(redis, {
+      fairQueue: false,
       maxConcurrent: 1,
       pollIntervalMs: 60_000,
       subscriber,
@@ -200,7 +225,7 @@ describe('redisRateLimit', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 0, 1, -1));
 
-    const limiter = redisRateLimit(redis, { maxConcurrent: 1 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, maxConcurrent: 1 });
     const { release } = await limiter.acquire(1);
 
     redis.eval.mockClear();
@@ -214,7 +239,7 @@ describe('redisRateLimit', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 50, 100, -1));
 
-    const limiter = redisRateLimit(redis, { tokensPerMinute: 100 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, tokensPerMinute: 100 });
     const { release } = await limiter.acquire(50);
 
     redis.eval.mockClear();
@@ -226,8 +251,6 @@ describe('redisRateLimit', () => {
       'vernllm:rl:tpm',
       100,
       30,
-      'vernllm:rl:wake',
-      'permin',
     );
   });
 
@@ -235,7 +258,7 @@ describe('redisRateLimit', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 50, 100, -1));
 
-    const limiter = redisRateLimit(redis, { tokensPerMinute: 100 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, tokensPerMinute: 100 });
     const { release } = await limiter.acquire(50);
 
     redis.eval.mockClear();
@@ -247,8 +270,6 @@ describe('redisRateLimit', () => {
       'vernllm:rl:tpm',
       100,
       -30,
-      'vernllm:rl:wake',
-      'permin',
     );
   });
 
@@ -256,7 +277,7 @@ describe('redisRateLimit', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 50, 100, -1));
 
-    const limiter = redisRateLimit(redis, { tokensPerMinute: 100 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, tokensPerMinute: 100 });
     const { release } = await limiter.acquire(50);
 
     redis.eval.mockClear();
@@ -270,6 +291,7 @@ describe('redisRateLimit', () => {
     redis.eval.mockResolvedValueOnce(takeResult(1, 9, 10, -1));
 
     const limiter = redisRateLimit(redis, {
+      fairQueue: false,
       requestsPerMinute: 10,
       aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 20 },
     });
@@ -295,6 +317,7 @@ describe('redisRateLimit', () => {
     redis.eval.mockResolvedValueOnce(takeResult(1, 9, 10, -1));
 
     const limiter = redisRateLimit(redis, {
+      fairQueue: false,
       requestsPerMinute: 10,
       aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 20 },
     });
@@ -309,6 +332,7 @@ describe('redisRateLimit', () => {
   it('signalRateLimit shrinks the AIMD ceiling', () => {
     const redis = fakeRedisClient();
     const limiter = redisRateLimit(redis, {
+      fairQueue: false,
       requestsPerMinute: 10,
       aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 20 },
     });
@@ -329,7 +353,7 @@ describe('redisRateLimit', () => {
 
   it('signalRateLimit is a no-op without aimd configured', () => {
     const redis = fakeRedisClient();
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
 
     limiter.signalRateLimit();
 
@@ -339,6 +363,7 @@ describe('redisRateLimit', () => {
   it('reactToRateLimitHint shrinks once remainingRequests reaches the proactive floor', () => {
     const redis = fakeRedisClient();
     const limiter = redisRateLimit(redis, {
+      fairQueue: false,
       requestsPerMinute: 10,
       aimd: {
         increaseBy: 1,
@@ -366,6 +391,7 @@ describe('redisRateLimit', () => {
   it('reactToRateLimitHint does nothing above the proactive floor', () => {
     const redis = fakeRedisClient();
     const limiter = redisRateLimit(redis, {
+      fairQueue: false,
       requestsPerMinute: 10,
       aimd: {
         increaseBy: 1,
@@ -383,7 +409,7 @@ describe('redisRateLimit', () => {
 
   it('reactToRateLimitHint does nothing without aimd, without a hint, or without proactiveFloor set', () => {
     const redis = fakeRedisClient();
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
 
     limiter.reactToRateLimitHint({ remainingRequests: 0 });
     limiter.reactToRateLimitHint(undefined);
@@ -391,18 +417,12 @@ describe('redisRateLimit', () => {
     expect(redis.eval).not.toHaveBeenCalled();
   });
 
-  it('getState is intentionally not implemented', () => {
-    const redis = fakeRedisClient();
-    const limiter = redisRateLimit(redis);
-
-    expect(limiter.getState).toBeUndefined();
-  });
-
   it('throws at construction when aimd is set without requestsPerMinute', () => {
     const redis = fakeRedisClient();
 
     expect(() =>
       redisRateLimit(redis, {
+        fairQueue: false,
         aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 },
       }),
     ).toThrow(/requestsPerMinute/);
@@ -413,6 +433,7 @@ describe('redisRateLimit', () => {
 
     expect(() =>
       redisRateLimit(redis, {
+        fairQueue: false,
         requestsPerMinute: 10,
         aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 10, maxCapacity: 5 },
       }),
@@ -424,6 +445,7 @@ describe('redisRateLimit', () => {
 
     expect(() =>
       redisRateLimit(redis, {
+        fairQueue: false,
         requestsPerMinute: 10,
         aimd: { increaseBy: 1, decreaseFactor: 1.5, minCapacity: 1, maxCapacity: 10 },
       }),
@@ -435,6 +457,7 @@ describe('redisRateLimit', () => {
 
     expect(() =>
       redisRateLimit(redis, {
+        fairQueue: false,
         requestsPerMinute: 10,
         aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 0, maxCapacity: 10 },
       }),
@@ -451,7 +474,7 @@ describe('redisRateLimit', () => {
         }),
     );
 
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
     const controller = new AbortController();
 
     const promise = limiter.acquire(1, controller.signal);
@@ -474,7 +497,12 @@ describe('redisRateLimit', () => {
       .mockResolvedValueOnce(takeResult(1, 0, 1, -1));
 
     const subscriber = fakeSubscriber();
-    const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 60_000, subscriber });
+    const limiter = redisRateLimit(redis, {
+      fairQueue: false,
+      maxConcurrent: 1,
+      pollIntervalMs: 60_000,
+      subscriber,
+    });
 
     const promise = limiter.acquire(1);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -501,7 +529,12 @@ describe('redisRateLimit', () => {
       .mockResolvedValueOnce(takeResult(1, 0, 1, -1));
 
     const subscriber = fakeSubscriber();
-    const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 60_000, subscriber });
+    const limiter = redisRateLimit(redis, {
+      fairQueue: false,
+      maxConcurrent: 1,
+      pollIntervalMs: 60_000,
+      subscriber,
+    });
 
     const first = limiter.acquire(1);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -522,7 +555,12 @@ describe('redisRateLimit', () => {
         .mockResolvedValueOnce(takeResult(1, 0, 1, -1));
 
       const subscriber = fakeSubscriber();
-      const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 500, subscriber });
+      const limiter = redisRateLimit(redis, {
+        fairQueue: false,
+        maxConcurrent: 1,
+        pollIntervalMs: 500,
+        subscriber,
+      });
 
       const promise = limiter.acquire(1);
       await vi.advanceTimersByTimeAsync(500);
@@ -547,7 +585,12 @@ describe('redisRateLimit', () => {
       });
 
       const subscriber = fakeSubscriber();
-      const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 500, subscriber });
+      const limiter = redisRateLimit(redis, {
+        fairQueue: false,
+        maxConcurrent: 1,
+        pollIntervalMs: 500,
+        subscriber,
+      });
 
       const first = limiter.acquire(1);
       await vi.advanceTimersByTimeAsync(0);
@@ -573,7 +616,12 @@ describe('redisRateLimit', () => {
     redis.eval.mockResolvedValue(takeResult(0, 0, 1, -1));
 
     const subscriber = fakeSubscriber();
-    const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 60_000, subscriber });
+    const limiter = redisRateLimit(redis, {
+      fairQueue: false,
+      maxConcurrent: 1,
+      pollIntervalMs: 60_000,
+      subscriber,
+    });
     const controller = new AbortController();
 
     const promise = limiter.acquire(1, controller.signal);
@@ -592,7 +640,12 @@ describe('redisRateLimit', () => {
       .mockResolvedValueOnce(takeResult(1, 0, 1, -1));
 
     const subscriber = fakeSubscriber();
-    const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 60_000, subscriber });
+    const limiter = redisRateLimit(redis, {
+      fairQueue: false,
+      maxConcurrent: 1,
+      pollIntervalMs: 60_000,
+      subscriber,
+    });
     const controller = new AbortController();
 
     const promise = limiter.acquire(1, controller.signal);
@@ -610,7 +663,11 @@ describe('redisRateLimit', () => {
         .mockResolvedValueOnce(takeResult(0, 0, 10, 5000))
         .mockResolvedValueOnce(takeResult(1, 9, 10, -1));
 
-      const limiter = redisRateLimit(redis, { requestsPerMinute: 10, maxQueueMs: 0 });
+      const limiter = redisRateLimit(redis, {
+        fairQueue: false,
+        requestsPerMinute: 10,
+        maxQueueMs: 0,
+      });
       const promise = limiter.acquire(1);
 
       await vi.advanceTimersByTimeAsync(5000);
@@ -623,6 +680,7 @@ describe('redisRateLimit', () => {
   it('reactToRateLimitHint defaults proactiveFloor to 0 when aimd omits it, never shrinking', () => {
     const redis = fakeRedisClient();
     const limiter = redisRateLimit(redis, {
+      fairQueue: false,
       requestsPerMinute: 10,
       aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 20 },
     });
@@ -641,7 +699,12 @@ describe('redisRateLimit', () => {
         .mockResolvedValueOnce(takeResult(1, 0, 1, -1));
 
       const subscriber = fakeSubscriber();
-      const limiter = redisRateLimit(redis, { maxConcurrent: 1, pollIntervalMs: 500, subscriber });
+      const limiter = redisRateLimit(redis, {
+        fairQueue: false,
+        maxConcurrent: 1,
+        pollIntervalMs: 500,
+        subscriber,
+      });
       const controller = new AbortController();
 
       const promise = limiter.acquire(1, controller.signal);
@@ -659,43 +722,57 @@ describe('redisRateLimit', () => {
   it('throws at construction when requestsPerMinute, tokensPerMinute, or maxConcurrent is negative or not finite', () => {
     const redis = fakeRedisClient();
 
-    expect(() => redisRateLimit(redis, { requestsPerMinute: -1 })).toThrow(/requestsPerMinute/);
-    expect(() => redisRateLimit(redis, { tokensPerMinute: NaN })).toThrow(/tokensPerMinute/);
-    expect(() => redisRateLimit(redis, { maxConcurrent: Infinity })).toThrow(/maxConcurrent/);
+    expect(() => redisRateLimit(redis, { fairQueue: false, requestsPerMinute: -1 })).toThrow(
+      /requestsPerMinute/,
+    );
+    expect(() => redisRateLimit(redis, { fairQueue: false, tokensPerMinute: NaN })).toThrow(
+      /tokensPerMinute/,
+    );
+    expect(() => redisRateLimit(redis, { fairQueue: false, maxConcurrent: Infinity })).toThrow(
+      /maxConcurrent/,
+    );
   });
 
   it('accepts 0 for requestsPerMinute, tokensPerMinute, or maxConcurrent, meaning unlimited/disabled', () => {
     const redis = fakeRedisClient();
 
-    expect(() => redisRateLimit(redis, { requestsPerMinute: 0 })).not.toThrow();
-    expect(() => redisRateLimit(redis, { tokensPerMinute: 0 })).not.toThrow();
-    expect(() => redisRateLimit(redis, { maxConcurrent: 0 })).not.toThrow();
+    expect(() => redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 0 })).not.toThrow();
+    expect(() => redisRateLimit(redis, { fairQueue: false, tokensPerMinute: 0 })).not.toThrow();
+    expect(() => redisRateLimit(redis, { fairQueue: false, maxConcurrent: 0 })).not.toThrow();
   });
 
   it('throws at construction when maxQueueMs is negative or not finite', () => {
     const redis = fakeRedisClient();
 
-    expect(() => redisRateLimit(redis, { maxQueueMs: -1 })).toThrow(/maxQueueMs/);
-    expect(() => redisRateLimit(redis, { maxQueueMs: NaN })).toThrow(/maxQueueMs/);
+    expect(() => redisRateLimit(redis, { fairQueue: false, maxQueueMs: -1 })).toThrow(/maxQueueMs/);
+    expect(() => redisRateLimit(redis, { fairQueue: false, maxQueueMs: NaN })).toThrow(
+      /maxQueueMs/,
+    );
   });
 
   it('accepts 0 for maxQueueMs, meaning no timeout', () => {
     const redis = fakeRedisClient();
 
-    expect(() => redisRateLimit(redis, { maxQueueMs: 0 })).not.toThrow();
+    expect(() => redisRateLimit(redis, { fairQueue: false, maxQueueMs: 0 })).not.toThrow();
   });
 
   it('throws at construction when pollIntervalMs is 0, negative, or not finite', () => {
     const redis = fakeRedisClient();
 
-    expect(() => redisRateLimit(redis, { pollIntervalMs: 0 })).toThrow(/pollIntervalMs/);
-    expect(() => redisRateLimit(redis, { pollIntervalMs: -1 })).toThrow(/pollIntervalMs/);
-    expect(() => redisRateLimit(redis, { pollIntervalMs: Infinity })).toThrow(/pollIntervalMs/);
+    expect(() => redisRateLimit(redis, { fairQueue: false, pollIntervalMs: 0 })).toThrow(
+      /pollIntervalMs/,
+    );
+    expect(() => redisRateLimit(redis, { fairQueue: false, pollIntervalMs: -1 })).toThrow(
+      /pollIntervalMs/,
+    );
+    expect(() => redisRateLimit(redis, { fairQueue: false, pollIntervalMs: Infinity })).toThrow(
+      /pollIntervalMs/,
+    );
   });
 
   it('acquire throws for a negative or non-finite estimatedTokens, without touching Redis', async () => {
     const redis = fakeRedisClient();
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
 
     await expect(limiter.acquire(-1)).rejects.toMatchObject({ type: 'invalid_params' });
     await expect(limiter.acquire(NaN)).rejects.toMatchObject({ type: 'invalid_params' });
@@ -705,7 +782,7 @@ describe('redisRateLimit', () => {
 
   it('acquire fails fast when estimatedTokens exceeds the fixed tokensPerMinute capacity', async () => {
     const redis = fakeRedisClient();
-    const limiter = redisRateLimit(redis, { tokensPerMinute: 100 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, tokensPerMinute: 100 });
 
     await expect(limiter.acquire(150)).rejects.toMatchObject({
       type: 'rate_limited',
@@ -718,7 +795,7 @@ describe('redisRateLimit', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 0, 10, -1));
 
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10 });
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 10 });
     await expect(limiter.acquire(1_000_000)).resolves.toBeDefined();
   });
 
@@ -726,7 +803,11 @@ describe('redisRateLimit', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValueOnce(takeResult(1, 0, 10, -1));
 
-    const limiter = redisRateLimit(redis, { requestsPerMinute: 10, tokensPerMinute: 0 });
+    const limiter = redisRateLimit(redis, {
+      fairQueue: false,
+      requestsPerMinute: 10,
+      tokensPerMinute: 0,
+    });
     await expect(limiter.acquire(1_000_000)).resolves.toBeDefined();
   });
 });
@@ -738,14 +819,14 @@ describe('redisRateLimit rejection reporting', () => {
     subscriber.subscribe.mockRejectedValueOnce(new Error('subscribe failed'));
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    redisRateLimit(redis, { subscriber });
+    redisRateLimit(redis, { fairQueue: false, subscriber });
     // Let the rejected subscribe() promise's .catch() run.
     await Promise.resolve();
     await Promise.resolve();
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('subscribe'),
-      expect.any(Error),
+      expect.objectContaining({ message: expect.any(String) }),
     );
     consoleErrorSpy.mockRestore();
   });

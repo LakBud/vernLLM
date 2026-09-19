@@ -16,7 +16,8 @@ pnpm install
 ```
 
 Integration tests need a local `redis-server` running, this is a real setup difference from
-`vern-llm`'s suite, which runs entirely on fakes and mocks.
+`vern-llm`'s suite, which needs no external service: its tests use fakes and mocks, or a local
+loopback HTTP server standing in for a provider.
 
 ## Coding standard
 
@@ -55,7 +56,10 @@ vern-llm-redis:<script>` from the repo root:
 ```
 
 `test:int` and `test:int:coverage` need a local `redis-server` running, this is a real setup
-difference from `vern-llm`'s suite, which runs entirely on fakes and mocks. `prepublishOnly` runs
+difference from `vern-llm`'s suite, which needs no external service. Set `REDIS_PORT` to run
+the same suite against another server, for example an older Redis build on a different port. To
+include the cluster tests, set `REDIS_CLUSTER_NODES` to a comma separated `host:port` list of a real
+Redis Cluster, otherwise they are skipped. `prepublishOnly` runs
 automatically before publish and isn't something you need to run by hand, it's listed here since it
 shows the exact sequence a release goes through: typecheck, build, size, smoke test.
 

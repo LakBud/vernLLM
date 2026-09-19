@@ -32,10 +32,11 @@ describe('redisCache, real Redis', () => {
   it('expires a value after its TTL elapses', async () => {
     const cache = redisCache(fromIoredis(redis), { keyPrefix: uniquePrefix('cache') });
 
-    await cache.set('k', 'v', 1);
+    // A fraction of a second is enough: the TTL is in seconds and rounds up to whole milliseconds.
+    await cache.set('k', 'v', 0.3);
     await expect(cache.get('k')).resolves.toEqual({ hit: true, value: 'v' });
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await new Promise((resolve) => setTimeout(resolve, 450));
     await expect(cache.get('k')).resolves.toEqual({ hit: false, value: null });
   });
 
@@ -55,5 +56,15 @@ describe('redisCache, real Redis', () => {
 
     await cacheA.set('k', 'from-a', 60);
     await expect(cacheB.get('k')).resolves.toEqual({ hit: false, value: null });
+  });
+});
+
+describe('redisCache TTL edge cases, real Redis', () => {
+  it.each([0, -1, 0.0005, Infinity])('ttl %s never makes Redis reject the write', async (ttl) => {
+    const redis = connect();
+    const cache = redisCache<{ a: number }>(fromIoredis(redis), { keyPrefix: uniquePrefix('c') });
+
+    await expect(cache.set('k', { a: 1 }, ttl)).resolves.toBeUndefined();
+    await redis.quit();
   });
 });

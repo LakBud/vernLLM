@@ -194,3 +194,43 @@ describe('fromNodeRedisSubscriber', () => {
     expect(client.subscribe).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('fromNodeRedisSubscriber unsubscribe', () => {
+  it('does nothing for a channel that was never subscribed', async () => {
+    const client = { subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn() };
+
+    await fromNodeRedisSubscriber(client).unsubscribe?.('ch');
+
+    expect(client.unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it('unsubscribes only that channel, and leaves other channels and their listeners working', async () => {
+    const delivered: Record<string, ((message: string, channel: string) => void) | undefined> = {};
+    const client = {
+      subscribe: vi.fn(async (channel: string, listener: (message: string, ch: string) => void) => {
+        delivered[channel] = listener;
+      }),
+      unsubscribe: vi.fn(async () => undefined),
+    };
+    const subscriber = fromNodeRedisSubscriber(client as never);
+    const onMessage = vi.fn();
+    subscriber.on('message', onMessage);
+    await subscriber.subscribe('breaker');
+    await subscriber.subscribe('limiter');
+
+    await subscriber.unsubscribe?.('breaker');
+    delivered.limiter?.('wake', 'limiter');
+
+    expect(client.unsubscribe).toHaveBeenCalledWith('breaker');
+    expect(client.unsubscribe).not.toHaveBeenCalledWith('limiter');
+    expect(onMessage).toHaveBeenCalledWith('limiter', 'wake');
+  });
+
+  it('copes with a client that has no unsubscribe method', async () => {
+    const client = { subscribe: vi.fn(async () => undefined) };
+    const subscriber = fromNodeRedisSubscriber(client);
+    await subscriber.subscribe('ch');
+
+    await expect(subscriber.unsubscribe?.('ch')).resolves.toBeUndefined();
+  });
+});

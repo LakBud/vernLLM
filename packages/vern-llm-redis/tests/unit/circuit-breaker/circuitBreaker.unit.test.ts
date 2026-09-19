@@ -1,17 +1,69 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
-import { fakeRedisClient, fakeSubscriber } from '../helpers.js';
+import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
+import { waitFor } from '../../breakerHelpers.js';
+import { fakeRedisClient, fakeSubscriber, transitionMessage } from '../../helpers.js';
 
-/** Matches TRANSITION_SCRIPT's return shape: [from, to, failuresAsString, wonProbeAsString, openedAtAsString]. */
+/** Redis clock and slot state a reply carries alongside the transition itself. */
+interface ReplyTiming {
+  now?: number;
+  cooldown?: number;
+  grantAt?: number;
+  slots?: number;
+}
+
+/** Matches TRANSITION_SCRIPT's return shape: [from, to, failures, wonProbe, openedAt, wonToken, breakdown, now, cooldown, grantAt, slots], all strings. */
 function transitionResult(
   from: string,
   to: string,
   failures: number,
   wonProbe = false,
   openedAt = 0,
-): [string, string, string, string, string] {
-  return [from, to, String(failures), wonProbe ? '1' : '0', String(openedAt)];
+  wonToken = wonProbe ? '1' : '',
+  breakdown = '',
+  timing: ReplyTiming = {},
+): string[] {
+  return [
+    from,
+    to,
+    String(failures),
+    wonProbe ? '1' : '0',
+    String(openedAt),
+    wonToken,
+    breakdown,
+    String(timing.now ?? 1000),
+    String(timing.cooldown ?? 30_000),
+    String(timing.grantAt ?? 0),
+    String(timing.slots ?? 0),
+  ];
+}
+
+/**
+ * The full ARGV a transition passes, in TRANSITION_SCRIPT's order. Only
+ * what a test cares about needs overriding, the rest are core's defaults.
+ */
+function scriptArgs(
+  outcome: string,
+  overrides: Partial<Record<'channel' | 'token' | 'grant' | 'code', string>> = {},
+) {
+  return [
+    outcome,
+    overrides.channel ?? 'vernllm:cb:events',
+    5, // threshold
+    30_000, // cooldownMs
+    60_000, // probeLeaseMs
+    overrides.token ?? '',
+    overrides.grant ?? '1',
+    1, // halfOpenProbes
+    1, // halfOpenSuccessRatio
+    0, // backoff multiplier, 0 = off
+    0, // backoff maxMs
+    expect.any(Number), // jitter
+    0, // rolling window, 0 = consecutive tripping
+    0,
+    0,
+    overrides.code ?? '',
+  ];
 }
 
 /** Matches READ_BUCKETS_SCRIPT's flat return shape: [key, state, failures, openedAt, ...] repeated per non-closed bucket found. */
@@ -44,11 +96,7 @@ describe('redisCircuitBreaker', () => {
       expect.stringContaining('local key = KEYS[1]'),
       1,
       'cb',
-      expect.any(Number),
-      5,
-      30_000,
-      'check',
-      'cb:events',
+      ...scriptArgs('check', { channel: 'cb:events' }),
     );
   });
 
@@ -60,7 +108,7 @@ describe('redisCircuitBreaker', () => {
     const breaker = redisCircuitBreaker(redis, { onStateChange });
 
     breaker.recordFailure('gpt-4o');
-    await vi.waitFor(() => expect(onStateChange).toHaveBeenCalled());
+    await waitFor(() => expect(onStateChange).toHaveBeenCalled());
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 5, 'gpt-4o', undefined);
   });
@@ -75,13 +123,13 @@ describe('redisCircuitBreaker', () => {
     // Open it first, so this process's local cache is genuinely 'open'
     // (not the fresh-cache default 'closed') before recordSuccess.
     breaker.recordFailure('gpt-4o');
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 5, 'gpt-4o', undefined),
     );
 
     redis.eval.mockResolvedValueOnce(transitionResult('open', 'closed', 0));
     breaker.recordSuccess('gpt-4o');
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(onStateChange).toHaveBeenCalledWith('open', 'closed', 0, 'gpt-4o', undefined),
     );
   });
@@ -105,14 +153,18 @@ describe('redisCircuitBreaker', () => {
     redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
 
     const onStateChange = vi.fn();
-    const breaker = redisCircuitBreaker(redis, { cooldownMs: 30_000, onStateChange });
+    const breaker = redisCircuitBreaker(redis, {
+      logger: 'silent',
+      cooldownMs: 30_000,
+      onStateChange,
+    });
 
     breaker.recordFailure('gpt-4o');
     // Wait on the actual signal that the local cache has updated
     // (onStateChange firing), rather than polling assertClosed itself,
     // which would otherwise also kick off its own background 'check'
     // eval calls against an already-exhausted one-shot mock queue.
-    await vi.waitFor(() => expect(onStateChange).toHaveBeenCalled());
+    await waitFor(() => expect(onStateChange).toHaveBeenCalled());
 
     try {
       breaker.assertClosed('gpt-4o');
@@ -165,7 +217,11 @@ describe('redisCircuitBreaker', () => {
       // This process wins the trial on the first confirming check.
       redis.eval.mockResolvedValueOnce(transitionResult('open', 'half-open', 5, true));
 
-      const breaker = redisCircuitBreaker(redis, { cooldownMs: 1000, pollIntervalMs: 500 });
+      const breaker = redisCircuitBreaker(redis, {
+        logger: 'silent',
+        cooldownMs: 1000,
+        pollIntervalMs: 500,
+      });
 
       breaker.recordFailure('gpt-4o');
       await vi.advanceTimersByTimeAsync(0);
@@ -205,7 +261,7 @@ describe('redisCircuitBreaker', () => {
 
     subscriber.emit(
       'cb:events',
-      JSON.stringify({ key: 'cb:gpt-4o', state: 'open', failures: 3, openedAt: 123456 }),
+      transitionMessage({ key: 'cb:gpt-4o', state: 'open', failures: 3, openedAt: 123456 }),
     );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, 'gpt-4o', undefined);
@@ -216,6 +272,7 @@ describe('redisCircuitBreaker', () => {
     const subscriber = fakeSubscriber();
 
     const breaker = redisCircuitBreaker(redis, {
+      logger: 'silent',
       isolateByModel: true,
       keyPrefix: 'cb',
       subscriber,
@@ -223,7 +280,7 @@ describe('redisCircuitBreaker', () => {
 
     subscriber.emit(
       'cb:events',
-      JSON.stringify({ key: 'cb:gpt-4o', state: 'half-open', failures: 5, openedAt: 123456 }),
+      transitionMessage({ key: 'cb:gpt-4o', state: 'half-open', failures: 5, openedAt: 123456 }),
     );
 
     // Observed via pub/sub only, never through this process's own
@@ -244,9 +301,9 @@ describe('redisCircuitBreaker', () => {
       redis.scan.mockResolvedValueOnce(['0', ['vernllm:cb']]);
       redis.eval.mockResolvedValueOnce(readBucketsResult(['vernllm:cb', 'open', 5, 1000]));
 
-      const breaker = redisCircuitBreaker(redis);
+      const breaker = redisCircuitBreaker(redis, { logger: 'silent' });
       // Let the fire-and-forget snapshot resolve before asserting.
-      await vi.waitFor(() => expect(breaker.getState?.()).toBe('open'));
+      await waitFor(() => expect(breaker.getState?.()).toBe('open'));
 
       expect(() => breaker.assertClosed()).toThrow();
     });
@@ -256,8 +313,12 @@ describe('redisCircuitBreaker', () => {
       redis.scan.mockResolvedValueOnce(['0', ['cb:gpt-4o']]);
       redis.eval.mockResolvedValueOnce(readBucketsResult(['cb:gpt-4o', 'open', 5, 1000]));
 
-      const breaker = redisCircuitBreaker(redis, { isolateByModel: true, keyPrefix: 'cb' });
-      await vi.waitFor(() => expect(breaker.getState?.('gpt-4o')).toBe('open'));
+      const breaker = redisCircuitBreaker(redis, {
+        logger: 'silent',
+        isolateByModel: true,
+        keyPrefix: 'cb',
+      });
+      await waitFor(() => expect(breaker.getState?.('gpt-4o')).toBe('open'));
 
       expect(() => breaker.assertClosed('gpt-4o')).toThrow();
       // 'claude' was never returned by the snapshot (Redis has no key
@@ -274,8 +335,8 @@ describe('redisCircuitBreaker', () => {
         .mockResolvedValueOnce(readBucketsResult(['cb:b', 'open', 1, 1000]));
 
       const breaker = redisCircuitBreaker(redis, { isolateByModel: true, keyPrefix: 'cb' });
-      await vi.waitFor(() => expect(breaker.getState?.('a')).toBe('open'));
-      await vi.waitFor(() => expect(breaker.getState?.('b')).toBe('open'));
+      await waitFor(() => expect(breaker.getState?.('a')).toBe('open'));
+      await waitFor(() => expect(breaker.getState?.('b')).toBe('open'));
 
       expect(redis.scan).toHaveBeenCalledTimes(2);
     });
@@ -314,7 +375,7 @@ describe('redisCircuitBreaker', () => {
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('snapshot'),
-        expect.any(Error),
+        expect.objectContaining({ message: expect.any(String) }),
       );
       consoleErrorSpy.mockRestore();
     });
@@ -326,10 +387,10 @@ describe('redisCircuitBreaker', () => {
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       redisCircuitBreaker(redis);
-      await vi.waitFor(() =>
+      await waitFor(() =>
         expect(consoleErrorSpy).toHaveBeenCalledWith(
           expect.stringContaining('snapshot'),
-          expect.any(Error),
+          expect.objectContaining({ message: expect.any(String) }),
         ),
       );
 
@@ -345,7 +406,7 @@ describe('redisCircuitBreaker', () => {
     const breaker = redisCircuitBreaker(redis, { onStateChange });
 
     breaker.recordFailure('gpt-4o');
-    await vi.waitFor(() => expect(onStateChange).toHaveBeenCalled());
+    await waitFor(() => expect(onStateChange).toHaveBeenCalled());
 
     expect(breaker.getState?.('gpt-4o')).toBe('open');
   });
@@ -367,7 +428,7 @@ describe('redisCircuitBreaker', () => {
 
     subscriber.emit(
       'cb:events',
-      JSON.stringify({ key: 'cb', state: 'open', failures: 3, openedAt: 123456 }),
+      transitionMessage({ key: 'cb', state: 'open', failures: 3, openedAt: 123456 }),
     );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, undefined, undefined);
@@ -382,7 +443,7 @@ describe('redisCircuitBreaker', () => {
 
     subscriber.emit(
       'some:other:channel',
-      JSON.stringify({ key: 'cb', state: 'open', failures: 3, openedAt: 123456 }),
+      transitionMessage({ key: 'cb', state: 'open', failures: 3, openedAt: 123456 }),
     );
 
     expect(onStateChange).not.toHaveBeenCalled();
@@ -406,7 +467,7 @@ describe('redisCircuitBreaker', () => {
 
     const breaker = redisCircuitBreaker(redis);
     expect(() => breaker.recordFailure('gpt-4o')).not.toThrow();
-    await vi.waitFor(() => expect(redis.eval).toHaveBeenCalled());
+    await waitFor(() => expect(redis.eval).toHaveBeenCalled());
   });
 
   it('isolateByModel falls back to "default" in the bucket key when model is undefined', () => {
@@ -420,11 +481,7 @@ describe('redisCircuitBreaker', () => {
       expect.any(String),
       1,
       'cb:default',
-      expect.any(Number),
-      5,
-      30_000,
-      'check',
-      'cb:events',
+      ...scriptArgs('check', { channel: 'cb:events' }),
     );
   });
 
@@ -442,7 +499,7 @@ describe('redisCircuitBreaker', () => {
 
     subscriber.emit(
       'cb:events',
-      JSON.stringify({ key: 'cb:default', state: 'open', failures: 3, openedAt: 123456 }),
+      transitionMessage({ key: 'cb:default', state: 'open', failures: 3, openedAt: 123456 }),
     );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, undefined, undefined);
@@ -453,14 +510,18 @@ describe('redisCircuitBreaker', () => {
     redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
 
     const onStateChange = vi.fn();
-    const breaker = redisCircuitBreaker(redis, { cooldownMs: 30_000, onStateChange });
+    const breaker = redisCircuitBreaker(redis, {
+      logger: 'silent',
+      cooldownMs: 30_000,
+      onStateChange,
+    });
 
     breaker.recordFailure(undefined);
     // Wait on the real signal that the local cache updated, not by
     // polling assertClosed itself, same reasoning as the equivalent
     // "gpt-4o" test above: polling would fire its own background
     // 'check' eval calls against an already-exhausted one-shot mock.
-    await vi.waitFor(() => expect(onStateChange).toHaveBeenCalled());
+    await waitFor(() => expect(onStateChange).toHaveBeenCalled());
 
     try {
       breaker.assertClosed(undefined);
@@ -477,7 +538,7 @@ describe('redisCircuitBreaker', () => {
       redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
       redis.eval.mockResolvedValueOnce(transitionResult('open', 'half-open', 5, true));
 
-      const breaker = redisCircuitBreaker(redis, { cooldownMs: 1000 });
+      const breaker = redisCircuitBreaker(redis, { logger: 'silent', cooldownMs: 1000 });
 
       breaker.recordFailure('gpt-4o');
       await vi.advanceTimersByTimeAsync(0);
@@ -511,7 +572,7 @@ describe('redisCircuitBreaker', () => {
       redis.eval.mockResolvedValueOnce(transitionResult('closed', 'open', 5));
       redis.eval.mockResolvedValueOnce(transitionResult('open', 'half-open', 5, true));
 
-      const breaker = redisCircuitBreaker(redis, { cooldownMs: 1000 });
+      const breaker = redisCircuitBreaker(redis, { logger: 'silent', cooldownMs: 1000 });
 
       breaker.recordFailure(undefined);
       await vi.advanceTimersByTimeAsync(0);
@@ -606,7 +667,7 @@ describe('redisCircuitBreaker background poll (no subscriber)', () => {
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('poll transition'),
-      expect.any(Error),
+      expect.objectContaining({ message: expect.any(String) }),
     );
     consoleErrorSpy.mockRestore();
   });
@@ -626,7 +687,7 @@ describe('redisCircuitBreaker rejection reporting', () => {
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('subscribe'),
-      expect.any(Error),
+      expect.objectContaining({ message: expect.any(String) }),
     );
     consoleErrorSpy.mockRestore();
   });
@@ -670,7 +731,7 @@ describe('redisCircuitBreaker rejection reporting', () => {
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('recordSuccess'),
-      expect.any(Error),
+      expect.objectContaining({ message: expect.any(String) }),
     );
     consoleErrorSpy.mockRestore();
   });
@@ -686,7 +747,7 @@ describe('redisCircuitBreaker rejection reporting', () => {
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('recordFailure'),
-      expect.any(Error),
+      expect.objectContaining({ message: expect.any(String) }),
     );
     consoleErrorSpy.mockRestore();
   });

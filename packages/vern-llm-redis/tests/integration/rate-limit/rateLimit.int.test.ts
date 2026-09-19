@@ -1,24 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 
-import { fromIoredis, fromIoredisSubscriber } from '../../src/clients/ioredis.js';
-import { redisRateLimit } from '../../src/rateLimit.js';
-import { connect, expectNearInstant, uniquePrefix, waitUntil } from '../helpers.js';
+import { fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
+import { it } from '../../fixtures.js';
+import { expectNearInstant, uniquePrefix, waitUntil } from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
 
-describe('redisRateLimit, real Redis, single process', () => {
-  let redis: Redis;
-
-  beforeEach(() => {
-    redis = connect();
-  });
-
-  afterEach(async () => {
-    await redis.quit();
-  });
-
-  it('allows calls up to the requests-per-minute ceiling, then makes a further call wait', async () => {
-    const limiter = redisRateLimit(fromIoredis(redis), {
+describe.concurrent('redisRateLimit, real Redis, single process', () => {
+  it('allows calls up to the requests-per-minute ceiling, then makes a further call wait', async ({
+    makeLimiter,
+  }) => {
+    const limiter = makeLimiter({
       requestsPerMinute: 2,
       keyPrefix: uniquePrefix('rl'),
     });
@@ -46,8 +38,8 @@ describe('redisRateLimit, real Redis, single process', () => {
     await thirdPromise;
   });
 
-  it('enforces max concurrency, blocking until a release frees a slot', async () => {
-    const limiter = redisRateLimit(fromIoredis(redis), {
+  it('enforces max concurrency, blocking until a release frees a slot', async ({ makeLimiter }) => {
+    const limiter = makeLimiter({
       maxConcurrent: 1,
       pollIntervalMs: 50,
       keyPrefix: uniquePrefix('rl'),
@@ -69,8 +61,10 @@ describe('redisRateLimit, real Redis, single process', () => {
     expect(second.reason).toBe('concurrency');
   });
 
-  it('tokens/min blocks a call whose estimate exceeds remaining budget, then admits it once it refills', async () => {
-    const limiter = redisRateLimit(fromIoredis(redis), {
+  it('tokens/min blocks a call whose estimate exceeds remaining budget, then admits it once it refills', async ({
+    makeLimiter,
+  }) => {
+    const limiter = makeLimiter({
       tokensPerMinute: 6000, // 100/sec, drained fully below so the deficit refills in ~500ms
       keyPrefix: uniquePrefix('rl'),
     });
@@ -82,8 +76,10 @@ describe('redisRateLimit, real Redis, single process', () => {
     expect(second.reason).toBe('tpm');
   });
 
-  it('release reconciles the tokens bucket, letting a later call in sooner than the full estimate would allow', async () => {
-    const limiter = redisRateLimit(fromIoredis(redis), {
+  it('release reconciles the tokens bucket, letting a later call in sooner than the full estimate would allow', async ({
+    makeLimiter,
+  }) => {
+    const limiter = makeLimiter({
       tokensPerMinute: 120,
       keyPrefix: uniquePrefix('rl'),
     });
@@ -96,8 +92,10 @@ describe('redisRateLimit, real Redis, single process', () => {
     expectNearInstant(second.waitedMs);
   });
 
-  it('throws once maxQueueMs is exceeded while genuinely out of capacity', async () => {
-    const limiter = redisRateLimit(fromIoredis(redis), {
+  it('throws once maxQueueMs is exceeded while genuinely out of capacity', async ({
+    makeLimiter,
+  }) => {
+    const limiter = makeLimiter({
       requestsPerMinute: 1, // one per minute: the second call has nowhere near enough time
       maxQueueMs: 300,
       keyPrefix: uniquePrefix('rl'),
@@ -108,32 +106,23 @@ describe('redisRateLimit, real Redis, single process', () => {
   });
 });
 
-describe('redisRateLimit, real Redis, AIMD shared across two processes', () => {
-  let redisA: Redis;
-  let redisB: Redis;
-
-  beforeEach(() => {
-    redisA = connect();
-    redisB = connect();
-  });
-
-  afterEach(async () => {
-    await redisA.quit();
-    await redisB.quit();
-  });
-
-  it('a shrink signaled by one process lowers the ceiling every process reads', async () => {
+describe.concurrent('redisRateLimit, real Redis, AIMD shared across two processes', () => {
+  it('a shrink signaled by one process lowers the ceiling every process reads', async ({
+    newConnection,
+    makeLimiter,
+  }) => {
+    const redisB = newConnection();
     const keyPrefix = uniquePrefix('rl');
     const aimd = { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 };
 
-    const limiterA = redisRateLimit(fromIoredis(redisA), {
+    const limiterA = makeLimiter({
       requestsPerMinute: 10,
       aimd,
       keyPrefix,
     });
     // Constructed to prove the key isn't scoped to one adapter instance;
     // its own reads go through the same Redis key regardless.
-    redisRateLimit(fromIoredis(redisB), { requestsPerMinute: 10, aimd, keyPrefix });
+    makeLimiter({ requestsPerMinute: 10, aimd, keyPrefix }, redisB);
 
     limiterA.signalRateLimit(); // 10 -> 5
 
@@ -146,11 +135,15 @@ describe('redisRateLimit, real Redis, AIMD shared across two processes', () => {
     });
   });
 
-  it('a successful release grows the ceiling for every process', async () => {
+  it('a successful release grows the ceiling for every process', async ({
+    newConnection,
+    makeLimiter,
+  }) => {
+    const redisB = newConnection();
     const keyPrefix = uniquePrefix('rl');
     const aimd = { increaseBy: 5, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 };
 
-    const limiterA = redisRateLimit(fromIoredis(redisA), { requestsPerMinute: 1, aimd, keyPrefix });
+    const limiterA = makeLimiter({ requestsPerMinute: 1, aimd, keyPrefix });
 
     const first = await limiterA.acquire(1);
     first.release(undefined, true); // grows 1 -> 6
@@ -162,28 +155,17 @@ describe('redisRateLimit, real Redis, AIMD shared across two processes', () => {
   });
 });
 
-describe('redisRateLimit, real Redis, concurrency wake via subscriber', () => {
-  let redisA: Redis;
-  let redisB: Redis;
-  let subA: Redis | undefined;
-  let subB: Redis | undefined;
-
-  beforeEach(() => {
-    redisA = connect();
-    redisB = connect();
-    subA = undefined;
-    subB = undefined;
-  });
-
-  afterEach(async () => {
-    await Promise.all([subA?.quit(), subB?.quit(), redisA.quit(), redisB.quit()]);
-  });
-
-  it('a release from one process wakes a waiter blocked on another process, faster than the fallback poll interval', async () => {
+describe.concurrent('redisRateLimit, real Redis, concurrency wake via subscriber', () => {
+  it('a release from one process wakes a waiter blocked on another process, faster than the fallback poll interval', async ({
+    redis,
+    newConnection,
+    makeLimiter,
+  }) => {
+    const redisB = newConnection();
     const keyPrefix = uniquePrefix('rl');
 
-    subA = redisA.duplicate();
-    subB = redisB.duplicate();
+    const subA = newConnection();
+    const subB = newConnection();
 
     // Real signals instead of a guessed delay. ioredis doesn't emit a
     // 'subscribe' event on the client in this setup, but subscribe()'s
@@ -203,17 +185,23 @@ describe('redisRateLimit, real Redis, concurrency wake via subscriber', () => {
     const subscriberAReady = trackSubscribe(subA);
     const subscriberBReady = trackSubscribe(subB);
 
-    const limiterA = redisRateLimit(fromIoredis(redisA), {
-      maxConcurrent: 1,
-      keyPrefix,
-      subscriber: fromIoredisSubscriber(subA),
-    });
-    const limiterB = redisRateLimit(fromIoredis(redisB), {
-      maxConcurrent: 1,
-      pollIntervalMs: 5000, // deliberately slow fallback, to prove the wake beat it
-      keyPrefix,
-      subscriber: fromIoredisSubscriber(subB),
-    });
+    const limiterA = makeLimiter(
+      {
+        maxConcurrent: 1,
+        keyPrefix,
+        subscriber: fromIoredisSubscriber(subA),
+      },
+      redis,
+    );
+    const limiterB = makeLimiter(
+      {
+        maxConcurrent: 1,
+        pollIntervalMs: 5000, // deliberately slow fallback, to prove the wake beat it
+        keyPrefix,
+        subscriber: fromIoredisSubscriber(subB),
+      },
+      redisB,
+    );
 
     const { release } = await limiterA.acquire(1);
 

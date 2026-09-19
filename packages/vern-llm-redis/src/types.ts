@@ -35,5 +35,7 @@ export interface RedisClient {
  */
 export interface RedisSubscriber {
   subscribe(channel: string): Promise<unknown>;
+  /** Optional: lets `dispose()` detach cleanly. Adapters skip it if the client has none. */
+  unsubscribe?(channel: string): Promise<unknown> | unknown;
   on(event: 'message', listener: (channel: string, message: string) => void): unknown;
 }

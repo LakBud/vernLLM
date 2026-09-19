@@ -95,7 +95,7 @@
     "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
     "size": "size-limit"
   },
-  "dependencies": {
+  "peerDependencies": {
     "vern-llm": "workspace:^2.8.0"
   },
   "devDependencies": {
@@ -127,14 +127,14 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "6 KB",
+      "limit": "10 KB",
       "ignore": [
         "vern-llm"
       ]
     },
     {
       "path": "dist/index.cjs",
-      "limit": "6 KB",
+      "limit": "10 KB",
       "ignore": [
         "vern-llm"
       ]

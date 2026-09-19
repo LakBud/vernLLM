@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
-import { fromIoredis, fromIoredisSubscriber } from '../../src/clients/ioredis.js';
-import { connect, uniquePrefix, waitUntil } from '../helpers.js';
+import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
+import { fromIoredis, fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
+import { connect, uniquePrefix, waitUntil } from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
 

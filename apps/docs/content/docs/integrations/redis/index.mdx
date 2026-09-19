@@ -47,7 +47,12 @@ bun add vern-llm-redis # [!code word:add]
   </Tab>
 </Tabs>
 
-`vern-llm` is installed automatically as a dependency of `vern-llm-redis`.
+`vern-llm` is a peer dependency, so `vern-llm-redis` shares the copy your app already uses. That
+keeps the `LLMError` these adapters throw the same class your own `instanceof` checks see. Current
+npm, pnpm and yarn install a missing peer for you.
+
+Redis 5 or newer is required. The adapters are tested against Redis 5.0, 6.2, 7.0, 7.2, 7.4 and
+8.0, and against 7.0 and 8.0 Redis Clusters.
 
 <Cards>
   <Card title="Features" href="/docs/integrations/redis/features">
