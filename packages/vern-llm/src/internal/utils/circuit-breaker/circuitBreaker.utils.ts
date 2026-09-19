@@ -88,9 +88,7 @@ export function warnIfModelUnsupported(
  * no adapter has to get this right for itself. A non promise `result` is ignored.
  */
 export function reportRejection(logger: Logger, message: string, result: unknown): void {
-  if (typeof (result as PromiseLike<unknown> | undefined)?.then !== 'function') return;
-
-  (result as PromiseLike<unknown>).then(undefined, (error: unknown) => {
+  void Promise.resolve(result).catch((error: unknown) => {
     logger.error(message, { message: error instanceof Error ? error.message : String(error) });
   });
 }
