@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildTransitionArgs,
   parseTransitionMessage,
   parseTransitionResult,
+  type TransitionCall,
+  type TransitionConfig,
 } from '../../../../src/internal/circuit-breaker/transitionScript.js';
 
 /** The four fields a reply carries after the breakdown: Redis's clock, cooldown, lease time and free slots. */
@@ -198,5 +201,63 @@ describe('parseTransitionResult breakdown parsing', () => {
 
   it.each(['', undefined, 5, null])('yields an empty breakdown for %s', (raw) => {
     expect(parse(raw)).toEqual({});
+  });
+});
+
+describe('buildTransitionArgs', () => {
+  const config: TransitionConfig = {
+    threshold: 5,
+    cooldownMs: 30_000,
+    probeLeaseMs: 60_000,
+    halfOpenProbes: 2,
+    halfOpenSuccessRatio: 0.5,
+    backoff: { multiplier: 2, maxMs: 90_000 },
+    rolling: { windowMs: 10_000, minCalls: 4, failureRatio: 0.25 },
+  };
+  const call: TransitionCall = {
+    outcome: 'failure',
+    channel: 'chan',
+    token: 'tok',
+    grant: true,
+    code: 'api',
+    rand: 0.5,
+  };
+
+  it('lists every ARGV entry in the order TRANSITION_SCRIPT reads them', () => {
+    expect(buildTransitionArgs(config, call)).toEqual([
+      'failure', // outcome
+      'chan', // channel
+      5, // threshold
+      30_000, // cooldownMs
+      60_000, // leaseMs
+      'tok', // token
+      '1', // grant
+      2, // probes
+      0.5, // successRatio
+      2, // backoffMultiplier
+      90_000, // backoffMaxMs
+      0.5, // rand
+      10_000, // rollingWindowMs
+      4, // rollingMinCalls
+      0.25, // rollingFailureRatio
+      'api', // code
+    ]);
+  });
+
+  it('sends grant as the string 0 when a check may not win a trial slot', () => {
+    expect(buildTransitionArgs(config, { ...call, grant: false })[6]).toBe('0');
+  });
+
+  it('zeroes the backoff and rolling entries when neither is configured', () => {
+    const args = buildTransitionArgs({ ...config, backoff: undefined, rolling: undefined }, call);
+
+    expect(args.slice(9, 11)).toEqual([0, 0]);
+    expect(args.slice(12, 15)).toEqual([0, 0, 0]);
+  });
+
+  it('zeroes an unbounded backoff cap', () => {
+    const args = buildTransitionArgs({ ...config, backoff: { multiplier: 3 } }, call);
+
+    expect(args.slice(9, 11)).toEqual([3, 0]);
   });
 });

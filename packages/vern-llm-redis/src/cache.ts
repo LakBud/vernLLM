@@ -1,3 +1,5 @@
+import { ttlToPx } from './internal/ttl.utils.js';
+
 import type { RedisClient } from './types.js';
 import type { CacheAdapter } from 'vern-llm';
 
@@ -44,19 +46,16 @@ export function redisCache<T = unknown>(
         );
       }
 
-      // A TTL that is already spent (0, negative, NaN) means "expired on
-      // arrival", as it does for InMemoryCacheAdapter: nothing is stored
-      // and any older value under the key is dropped. Redis would reject
-      // it with "invalid expire time" instead.
-      if (typeof ttl !== 'number' || Number.isNaN(ttl) || ttl <= 0) {
+      // A spent TTL means "expired on arrival", as it does for
+      // InMemoryCacheAdapter: nothing is stored and any older value under
+      // the key is dropped. Redis would reject it with "invalid expire
+      // time" instead.
+      const px = ttlToPx(ttl);
+      if (px === undefined) {
         await redis.del(fullKey(key));
         return;
       }
 
-      // PX must be a positive integer of milliseconds: round a sub
-      // millisecond TTL up rather than to 0, and cap Infinity (or any
-      // absurd value) at what Redis can add to the current time.
-      const px = Math.min(Math.max(1, Math.ceil(ttl * 1000)), Number.MAX_SAFE_INTEGER);
       await redis.set(fullKey(key), serialized, 'PX', px);
     },
 

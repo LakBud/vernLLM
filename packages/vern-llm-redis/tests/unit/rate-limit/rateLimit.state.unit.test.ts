@@ -102,4 +102,24 @@ describe('redisRateLimit getState (synchronous)', () => {
 
     expect(limiter.getState?.().requestsRemaining).toBe(7);
   });
+
+  it('readState reports how many slots are in flight for a concurrency bucket', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(['1', '3']);
+    const limiter = redisRateLimit(redis, { fairQueue: false, maxConcurrent: 3 });
+
+    const state = await limiter.readState();
+
+    expect(state.concurrentInFlight).toBe(2);
+  });
+
+  it('readState reports tokens remaining for a tokensPerMinute bucket', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(['400', '1000']);
+    const limiter = redisRateLimit(redis, { fairQueue: false, tokensPerMinute: 1000 });
+
+    const state = await limiter.readState();
+
+    expect(state.tokensRemaining).toBe(400);
+  });
 });

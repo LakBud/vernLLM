@@ -423,3 +423,58 @@ export function parseTransitionMessage(message: string): TransitionMessage | und
     grantAt: numbers.grantAt!,
   };
 }
+
+export type TransitionOutcome = 'check' | 'success' | 'failure' | 'release' | 'open' | 'close';
+
+/** The per adapter settings TRANSITION_SCRIPT reads on every call, the same for each transition one adapter makes. */
+export interface TransitionConfig {
+  threshold: number;
+  cooldownMs: number;
+  probeLeaseMs: number;
+  halfOpenProbes: number;
+  halfOpenSuccessRatio: number;
+  backoff: { multiplier: number; maxMs?: number } | undefined;
+  rolling: { windowMs: number; minCalls: number; failureRatio: number } | undefined;
+}
+
+/** What differs between one transition and the next. */
+export interface TransitionCall {
+  outcome: TransitionOutcome;
+  channel: string;
+  /** '' means none, '*' means "no call context, always counts". */
+  token: string;
+  /** Whether a 'check' may win a half-open trial slot. */
+  grant: boolean;
+  code: string;
+  /** A random number in [0, 1) for the cooldown jitter, drawn by the caller so it is testable. */
+  rand: number;
+}
+
+/**
+ * The ARGV list TRANSITION_SCRIPT expects, everything after the key. The
+ * order is fixed by the script's own doc comment above, so it is spelled
+ * out here in one place instead of at each call site.
+ */
+export function buildTransitionArgs(
+  config: TransitionConfig,
+  call: TransitionCall,
+): (string | number)[] {
+  return [
+    call.outcome,
+    call.channel,
+    config.threshold,
+    config.cooldownMs,
+    config.probeLeaseMs,
+    call.token,
+    call.grant ? '1' : '0',
+    config.halfOpenProbes,
+    config.halfOpenSuccessRatio,
+    config.backoff?.multiplier ?? 0,
+    config.backoff?.maxMs ?? 0,
+    call.rand,
+    config.rolling?.windowMs ?? 0,
+    config.rolling?.minCalls ?? 0,
+    config.rolling?.failureRatio ?? 0,
+    call.code,
+  ];
+}

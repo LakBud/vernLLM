@@ -8,17 +8,23 @@ import {
 } from 'vern-llm';
 
 import { bucketKey, modelFromKey } from './internal/circuit-breaker/bucketKey.utils.js';
+import { resolveCircuitBreakerOptions } from './internal/circuit-breaker/circuitBreakerOptions.utils.js';
 import { createLocalCircuitCache } from './internal/circuit-breaker/localCache.utils.js';
+import { seedFromScan } from './internal/circuit-breaker/seed.utils.js';
 import {
   READ_BUCKETS_SCRIPT,
   parseSnapshotResult,
 } from './internal/circuit-breaker/snapshotScript.js';
 import {
   TRANSITION_SCRIPT,
+  buildTransitionArgs,
   parseTransitionMessage,
   parseTransitionResult,
+  type TransitionOutcome,
 } from './internal/circuit-breaker/transitionScript.js';
 import { createAdapterLogger, type AdapterLoggerOption } from './internal/logger.utils.js';
+import { createPoller } from './internal/poller.utils.js';
+import { attachSubscriber } from './internal/subscriber.utils.js';
 
 import type { RedisClient, RedisSubscriber } from './types.js';
 
@@ -112,16 +118,6 @@ export interface RedisCircuitBreakerAdapter extends CircuitBreakerAdapter {
   dispose(): void;
 }
 
-function invalid(message: string): never {
-  throw new LLMError(message, 'invalid_params');
-}
-
-function assertNonNegativeFinite(name: string, value: number | undefined): void {
-  if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
-    invalid(`${name} must be a finite number that is not negative (got ${value}).`);
-  }
-}
-
 /**
  * A CircuitBreakerAdapter backed by Redis, so circuit state is shared
  * across every process talking to the same key.
@@ -140,130 +136,52 @@ export function redisCircuitBreaker(
   redis: RedisClient,
   options: RedisCircuitBreakerOptions = {},
 ): RedisCircuitBreakerAdapter {
-  const cooldownMs = options.cooldownMs ?? 30_000;
-  const isolateByModel = options.isolateByModel ?? false;
-  const keyPrefix = options.keyPrefix ?? 'vernllm:cb';
-  const channel = `${keyPrefix}:events`;
-  const pollIntervalMs = options.pollIntervalMs ?? 5_000;
-  const probeLeaseMs = options.probeLeaseMs ?? 60_000;
-  const prepareTimeoutMs = options.prepareTimeoutMs ?? 250;
-
-  assertNonNegativeFinite('cooldownMs', cooldownMs);
-  assertNonNegativeFinite('pollIntervalMs', pollIntervalMs);
-  if (!Number.isFinite(probeLeaseMs) || probeLeaseMs <= 0) {
-    invalid(`probeLeaseMs must be a finite number greater than 0 (got ${probeLeaseMs}).`);
-  }
-  if (!Number.isFinite(prepareTimeoutMs) || prepareTimeoutMs <= 0) {
-    invalid(`prepareTimeoutMs must be a finite number greater than 0 (got ${prepareTimeoutMs}).`);
-  }
-
-  const rawProbes = options.halfOpenProbes;
-  const halfOpenProbes = Number.isFinite(rawProbes) ? Math.max(1, Math.floor(rawProbes!)) : 1;
-  const rawRatio = options.halfOpenSuccessRatio;
-  const halfOpenSuccessRatio = Number.isFinite(rawRatio) ? Math.min(1, Math.max(0, rawRatio!)) : 1;
-
-  const backoff = options.cooldownBackoff;
-  if (backoff !== undefined) {
-    if (typeof backoff === 'function') {
-      invalid(
-        'cooldownBackoff as a function is not supported by redisCircuitBreaker, use { multiplier, maxMs }. The growth is computed inside Redis.',
-      );
-    }
-    if (!Number.isFinite(backoff.multiplier) || backoff.multiplier <= 0) {
-      invalid(
-        `cooldownBackoff.multiplier must be a finite number greater than 0 (got ${backoff.multiplier}).`,
-      );
-    }
-    if (backoff.maxMs !== undefined && (Number.isNaN(backoff.maxMs) || backoff.maxMs <= 0)) {
-      invalid(`cooldownBackoff.maxMs must be greater than 0 (got ${backoff.maxMs}).`);
-    }
-  }
-
-  const tripping: RedisTrippingOption = options.tripping ?? {
-    kind: 'consecutive',
-    threshold: options.threshold ?? 5,
-  };
-  if (typeof tripping !== 'object' || tripping === null || !('kind' in tripping)) {
-    invalid(
-      'tripping must be { kind: "consecutive", threshold } or { kind: "rolling", ... }. A custom TrippingPolicy cannot run inside Redis.',
-    );
-  }
-  if (tripping.kind === 'rolling') {
-    if (!Number.isFinite(tripping.windowMs) || tripping.windowMs <= 0) {
-      throw new RangeError(
-        `tripping.windowMs must be a finite number > 0, got ${tripping.windowMs}`,
-      );
-    }
-    if (!Number.isInteger(tripping.minCalls) || tripping.minCalls < 0) {
-      throw new RangeError(
-        `tripping.minCalls must be a non-negative integer, got ${tripping.minCalls}`,
-      );
-    }
-    if (
-      !Number.isFinite(tripping.failureRatio) ||
-      tripping.failureRatio < 0 ||
-      tripping.failureRatio > 1
-    ) {
-      throw new RangeError(
-        `tripping.failureRatio must be finite and within [0, 1], got ${tripping.failureRatio}`,
-      );
-    }
-  }
-  const threshold = tripping.kind === 'consecutive' ? tripping.threshold : 0;
-  const rolling = tripping.kind === 'rolling' ? tripping : undefined;
+  const config = resolveCircuitBreakerOptions(options);
+  const { isolateByModel, keyPrefix, channel, pollIntervalMs, probeLeaseMs, prepareTimeoutMs } =
+    config;
 
   const local = createLocalCircuitCache();
   const log = createAdapterLogger('redisCircuitBreaker', options.logger);
-  let disposed = false;
 
-  /**
-   * The trial slot a specific call won, keyed by the call's own middleware
-   * state bag (the same identity core's permits use). Lets a later
-   * success, failure or release present the right token, and lets a call
-   * that never held a slot be told apart from one that did.
-   */
-  const permits = new WeakMap<object, { key: string; token: string }>();
-
-  /** When this process last made a call against each key, so an idle process's poll never asks for a trial slot it has no call to spend. */
-  const lastDemandAt = new Map<string, number>();
-
-  // Every fire-and-forget Redis call below (transition, subscribe) is
-  // reported here instead of becoming an unhandled rejection if it fails.
-  // Silent after dispose(): a closed client failing is expected then.
-  function reportRejection(operation: string, key: string, error: unknown): void {
-    log.failure(operation, error, key);
-  }
+  /** Everything this adapter holds beyond the cache itself, so `dispose()` has one place to reset. */
+  const state = {
+    disposed: false,
+    /**
+     * The trial slot a specific call won, keyed by the call's own middleware
+     * state bag (the same identity core's permits use). Lets a later
+     * success, failure or release present the right token, and lets a call
+     * that never held a slot be told apart from one that did.
+     */
+    permits: new WeakMap<object, { key: string; token: string }>(),
+    /** When this process last made a call against each key, so an idle process's poll never asks for a trial slot it has no call to spend. */
+    lastDemandAt: new Map<string, number>(),
+    /** Refreshes already running per key, so a burst of calls shares one Redis round trip. */
+    refreshing: new Map<string, { promise: Promise<void>; startedAt: number }>(),
+  };
 
   // Bounds staleness for a key this process has touched but received no
   // further calls or pub/sub messages for. Started immediately when
   // there's no subscriber, and also as a fallback if a configured
   // subscriber's initial subscribe() never succeeds, since pub/sub can
   // then never take over convergence duty the way it normally would.
-  let pollTimer: { unref?: () => void } | undefined;
-  function startPolling(): void {
-    if (pollTimer || disposed || pollIntervalMs <= 0) return;
+  const poller = createPoller(pollIntervalMs, pollTick, () => state.disposed);
 
-    const timer = setInterval(() => {
-      const now = Date.now();
+  function pollTick(): void {
+    const now = Date.now();
 
-      for (const key of [...local.keys()]) {
-        const model = modelFromKey(key, keyPrefix, isolateByModel);
-        // Only a process that has recently been calling may win a trial
-        // slot from a poll. An idle one would hold it with nothing to
-        // spend it on, until its lease ran out.
-        const recentDemand = now - (lastDemandAt.get(key) ?? 0) < pollIntervalMs * 2;
+    for (const key of [...local.keys()]) {
+      const model = modelFromKey(key, keyPrefix, isolateByModel);
+      // Only a process that has recently been calling may win a trial
+      // slot from a poll. An idle one would hold it with nothing to
+      // spend it on, until its lease ran out.
+      const recentDemand = now - (state.lastDemandAt.get(key) ?? 0) < pollIntervalMs * 2;
 
-        void transition(model, 'check', { grant: recentDemand })
-          .then(({ from, to, failures }) => maybeFire(from, to, failures, model, undefined))
-          .catch((error: unknown) => reportRejection('poll transition', key, error));
-      }
-    }, pollIntervalMs) as unknown as { unref?: () => void };
-
-    // Prevents this background poll from keeping a short-lived process
-    // (a script, a test, a serverless invocation) alive on its own.
-    // Not available in every environment (e.g. browsers), guarded.
-    timer.unref?.();
-    pollTimer = timer;
+      // Fire and forget: a failure is reported, not left as an unhandled
+      // rejection. Silent after dispose(), a closed client failing is expected then.
+      void transition(model, 'check', { grant: recentDemand })
+        .then(({ from, to, failures }) => maybeFire(from, to, failures, model, undefined))
+        .catch((error: unknown) => log.failure('poll transition', error, key));
+    }
   }
 
   interface TransitionOptions {
@@ -276,7 +194,7 @@ export function redisCircuitBreaker(
 
   async function transition(
     model: string | undefined,
-    outcome: 'check' | 'success' | 'failure' | 'release' | 'open' | 'close',
+    outcome: TransitionOutcome,
     opts: TransitionOptions = {},
   ): Promise<{ key: string; from: CircuitState; to: CircuitState; failures: number }> {
     const key = bucketKey(keyPrefix, isolateByModel, model);
@@ -305,22 +223,14 @@ export function redisCircuitBreaker(
         TRANSITION_SCRIPT,
         1,
         key,
-        outcome,
-        channel,
-        threshold,
-        cooldownMs,
-        probeLeaseMs,
-        opts.token ?? '',
-        opts.grant === false ? '0' : '1',
-        halfOpenProbes,
-        halfOpenSuccessRatio,
-        backoff?.multiplier ?? 0,
-        backoff?.maxMs ?? 0,
-        Math.random(),
-        rolling?.windowMs ?? 0,
-        rolling?.minCalls ?? 0,
-        rolling?.failureRatio ?? 0,
-        opts.code ?? '',
+        ...buildTransitionArgs(config, {
+          outcome,
+          channel,
+          token: opts.token ?? '',
+          grant: opts.grant !== false,
+          code: opts.code ?? '',
+          rand: Math.random(),
+        }),
       ),
     );
 
@@ -410,18 +320,18 @@ export function redisCircuitBreaker(
     adapter.onStateChange(from, to, failures, model, context);
   }
 
-  /** Runs `transition` fire-and-forget, firing onStateChange and reporting any rejection. */
+  /** Runs `transition` fire-and-forget, firing onStateChange and reporting any rejection instead of leaving it unhandled. */
   function run(
     operation: string,
     model: string | undefined,
-    outcome: Parameters<typeof transition>[1],
+    outcome: TransitionOutcome,
     context: CircuitBreakerCallContext | undefined,
     opts?: TransitionOptions,
   ): Promise<void> {
     return transition(model, outcome, opts)
       .then(({ from, to, failures }) => maybeFire(from, to, failures, model, context))
       .catch((error: unknown) =>
-        reportRejection(operation, bucketKey(keyPrefix, isolateByModel, model), error),
+        log.failure(operation, error, bucketKey(keyPrefix, isolateByModel, model)),
       );
   }
 
@@ -429,91 +339,43 @@ export function redisCircuitBreaker(
   function takePermitToken(key: string, context: CircuitBreakerCallContext | undefined): string {
     if (!context) return '*';
 
-    const permit = permits.get(context.state);
+    const permit = state.permits.get(context.state);
     if (!permit || permit.key !== key) return '';
 
-    permits.delete(context.state);
+    state.permits.delete(context.state);
     return permit.token;
   }
 
-  // One-time startup scan: seeds the local cache with any circuit
-  // already open elsewhere in Redis, so a fresh process doesn't default
-  // an unseen key to closed. Skipped if the client has no scan.
-  if (redis.scan) {
-    void (async () => {
-      let cursor = '0';
-      do {
-        const [nextCursor, keys] = await redis.scan!(
-          cursor,
-          'MATCH',
-          `${keyPrefix}*`,
-          'COUNT',
-          1000,
-        );
-        cursor = nextCursor;
-        if (keys.length === 0) continue;
+  void seedFromScan(redis, local, keyPrefix, () => state.disposed).catch((error: unknown) =>
+    log.failure('snapshot', error, keyPrefix),
+  );
 
-        for (const key of keys) {
-          if (disposed) return;
-
-          const raw = await redis.eval(READ_BUCKETS_SCRIPT, 1, key);
-          const entry = parseSnapshotResult(raw);
-          if (!entry) continue;
-
-          // This scan is slow and this process may have already heard
-          // about the key from a pub/sub message or its own call. That is
-          // newer than a snapshot read earlier, so never overwrite it.
-          if (!local.isPristine(entry.key)) continue;
-
-          local.set(entry.key, {
-            state: entry.state,
-            failures: entry.failures,
-            openedAt: entry.openedAt,
-            trialsHeld: 0,
-            trialToken: '',
-            breakdown: {},
-            // A snapshot carries no clock or cooldown, so a seeded open
-            // circuit reads as "cooldown may be over" until `prepare` asks.
-            serverOffset: 0,
-            cooldownMs: 0,
-            slots: 0,
-            grantAt: 0,
-          });
-        }
-      } while (cursor !== '0');
-    })().catch((error: unknown) => reportRejection('snapshot', keyPrefix, error));
-  }
-
-  if (options.subscriber) {
-    void options.subscriber.subscribe(channel).catch((error: unknown) => {
-      reportRejection('subscribe', channel, error);
-      // Without a working subscription, pub/sub will never deliver
-      // another process's transitions to this one: fall back to the
-      // same polling every idle key would get without a subscriber at
-      // all, rather than leaving convergence entirely reactive to this
-      // process's own calls.
-      startPolling();
-    });
-    options.subscriber.on('message', (receivedChannel, message) => {
-      if (disposed || receivedChannel !== channel) return;
-
-      const parsed = parseTransitionMessage(message);
-      if (!parsed) return;
-
-      // No CircuitBreakerCallContext exists for a transition observed
-      // via pub/sub, it wasn't triggered by a call this process made.
-      applyObserved(parsed.key, parsed, parsed);
-    });
-  }
+  const detachSubscriber = options.subscriber
+    ? attachSubscriber(options.subscriber, channel, {
+        isDisposed: () => state.disposed,
+        // No CircuitBreakerCallContext exists for a transition observed
+        // via pub/sub, it wasn't triggered by a call this process made.
+        onMessage(message) {
+          const parsed = parseTransitionMessage(message);
+          if (parsed) applyObserved(parsed.key, parsed, parsed);
+        },
+        // Without a working subscription, pub/sub will never deliver
+        // another process's transitions to this one: fall back to the
+        // same polling every idle key would get without a subscriber at
+        // all, rather than leaving convergence entirely reactive to this
+        // process's own calls.
+        onSubscribeError(error) {
+          log.failure('subscribe', error, channel);
+          poller.start();
+        },
+      })
+    : undefined;
 
   // No subscriber: bound staleness with a periodic re-check instead of
   // leaving convergence purely reactive to this process's own calls.
   // Only re-checks keys this process has actually touched (local.keys()),
   // there's nothing to bound for a key this process has never seen.
-  if (!options.subscriber) startPolling();
-
-  /** Refreshes already running per key, so a burst of calls shares one Redis round trip. */
-  const refreshing = new Map<string, { promise: Promise<void>; startedAt: number }>();
+  if (!options.subscriber) poller.start();
 
   /**
    * Whether asking Redis could change what `assertClosed` decides. It
@@ -564,7 +426,7 @@ export function redisCircuitBreaker(
       const key = bucketKey(keyPrefix, isolateByModel, model);
       const bucket = local.get(key);
       const priorState = bucket.state;
-      lastDemandAt.set(key, Date.now());
+      state.lastDemandAt.set(key, Date.now());
 
       // The only two ways a call is let through: the circuit is closed,
       // or it's half-open AND this process holds a trial Redis has
@@ -578,7 +440,7 @@ export function redisCircuitBreaker(
       } else if (priorState === 'half-open' && bucket.trialsHeld > 0) {
         bucket.trialsHeld -= 1;
         allowed = true;
-        if (context) permits.set(context.state, { key, token: bucket.trialToken });
+        if (context) state.permits.set(context.state, { key, token: bucket.trialToken });
       }
 
       // Fired regardless of whether this call is allowed through: a
@@ -620,9 +482,9 @@ export function redisCircuitBreaker(
       if (!context) return;
 
       const key = bucketKey(keyPrefix, isolateByModel, model);
-      const permit = permits.get(context.state);
+      const permit = state.permits.get(context.state);
       if (!permit || permit.key !== key) return;
-      permits.delete(context.state);
+      state.permits.delete(context.state);
 
       // Gives the slot back in Redis, then immediately asks for one again:
       // this process just proved it has demand, and without the re-check
@@ -649,13 +511,13 @@ export function redisCircuitBreaker(
      * Rejects if Redis does: `VernLLM` treats that as fail open.
      */
     prepare(model) {
-      if (disposed) return Promise.resolve();
+      if (state.disposed) return Promise.resolve();
 
       const key = bucketKey(keyPrefix, isolateByModel, model);
-      lastDemandAt.set(key, Date.now());
+      state.lastDemandAt.set(key, Date.now());
       if (!needsRefresh(key)) return Promise.resolve();
 
-      const running = refreshing.get(key);
+      const running = state.refreshing.get(key);
       if (running) {
         // A refresh that has already outlived the timeout means Redis is
         // slow right now. Joining it again would only make every call pay
@@ -670,10 +532,10 @@ export function redisCircuitBreaker(
           const { from, to, failures } = await transition(model, 'check');
           maybeFire(from, to, failures, model, undefined);
         } finally {
-          refreshing.delete(key);
+          state.refreshing.delete(key);
         }
       })();
-      refreshing.set(key, { promise: refresh, startedAt: Date.now() });
+      state.refreshing.set(key, { promise: refresh, startedAt: Date.now() });
       return refresh;
     },
 
@@ -694,16 +556,13 @@ export function redisCircuitBreaker(
     },
 
     dispose() {
-      disposed = true;
+      state.disposed = true;
       log.mute();
 
-      if (pollTimer) {
-        clearInterval(pollTimer as unknown as ReturnType<typeof setInterval>);
-        pollTimer = undefined;
-      }
-      if (options.subscriber?.unsubscribe) {
-        void Promise.resolve(options.subscriber.unsubscribe(channel)).catch(() => {});
-      }
+      poller.stop();
+      state.lastDemandAt.clear();
+      state.refreshing.clear();
+      detachSubscriber?.();
     },
   };
 
