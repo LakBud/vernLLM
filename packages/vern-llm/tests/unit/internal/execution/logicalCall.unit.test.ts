@@ -31,8 +31,8 @@ function toAsyncIterable(items: StreamChunk[]): AsyncIterable<StreamChunk> {
 /**
  * Builds a minimal fake `CallExecutor`: only the members
  * `runFallbackChain`/`executeLogicalCall`/`executeLogicalStreamCall`
- * actually touch (`providerName`, `model`, `assertBreakerClosed`, `run`,
- * `runStream`) are implemented, everything else is intentionally absent
+ * actually touch (`providerName`, `model`, `assertBreakerClosed`,
+ * `releaseBreakerTrial`, `run`, `runStream`) are implemented, everything else is intentionally absent
  * so a test fails loudly if the functions under test start relying on
  * something new.
  */
@@ -40,6 +40,7 @@ function fakeExecutor(overrides: {
   providerName: string;
   model?: string;
   assertBreakerClosed?: () => void;
+  releaseBreakerTrial?: () => void;
   run?: (onAttempt: () => void) => Promise<unknown>;
   runStream?: (
     onAttempt: () => void,
@@ -50,6 +51,7 @@ function fakeExecutor(overrides: {
     model: overrides.model ?? 'default-model',
     jsonObjectModeSupported: true,
     assertBreakerClosed: overrides.assertBreakerClosed ?? (() => {}),
+    releaseBreakerTrial: overrides.releaseBreakerTrial ?? (() => {}),
     run: async (_params: unknown, _requestId: unknown, onAttempt: () => void) => {
       onAttempt();
       return overrides.run ? overrides.run(onAttempt) : 'default-result';
@@ -259,6 +261,46 @@ describe('runFallbackChain', () => {
     ).rejects.toMatchObject({ type: 'api' });
 
     expect(secondaryAttempt).not.toHaveBeenCalled();
+  });
+});
+
+describe('runFallbackChain trial release', () => {
+  it("releases the failing target's half-open trial, so a non counted failure cannot wedge it", async () => {
+    const release = vi.fn();
+    const primary = fakeExecutor({
+      providerName: 'primary',
+      releaseBreakerTrial: release,
+      run: async () => {
+        throw new LLMError('bad output', 'validation');
+      },
+    });
+
+    await expect(
+      runFallbackChain(
+        dependencies([primary]),
+        {},
+        'req-1',
+        createMiddlewareStateBag(),
+        (executor, onAttempt) => executor.run({} as never, 'req-1', onAttempt),
+      ),
+    ).rejects.toBeInstanceOf(LLMError);
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not release a target that succeeded', async () => {
+    const release = vi.fn();
+    const primary = fakeExecutor({ providerName: 'primary', releaseBreakerTrial: release });
+
+    await runFallbackChain(
+      dependencies([primary]),
+      {},
+      'req-1',
+      createMiddlewareStateBag(),
+      (executor, onAttempt) => executor.run({} as never, 'req-1', onAttempt),
+    );
+
+    expect(release).not.toHaveBeenCalled();
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createBreakerGateway } from '../../../../../../src/internal/execution/circuitBreakerContext.js';
 import { prepareAttempt } from '../../../../../../src/internal/execution/utils/dispatch/attemptDispatch.utils.js';
+import { NoopLogger } from '../../../../../../src/logger.js';
 import { createMiddlewareStateBag } from '../../../../../../src/types/middleware.js';
 
 import type { RequestBuilder } from '../../../../../../src/internal/execution/requestBuilder.js';
@@ -59,6 +60,7 @@ function baseParams<T>(
     overrides.gateway ??
     createBreakerGateway({
       breaker: undefined,
+      logger: new NoopLogger(),
       requestId: 'req-1',
       model: 'test-model',
       providerName: 'openai',

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   makeEventReporter,
+  reportRejection,
   resolveExecutor,
   warnIfModelUnsupported,
 } from '../../../../../src/internal/utils/circuit-breaker/circuitBreaker.utils.js';
@@ -245,5 +246,52 @@ describe('makeEventReporter, usage/usage_failure dispatch', () => {
       message: 'onEvent boom',
       stack: expect.any(String),
     });
+  });
+});
+
+describe('reportRejection', () => {
+  /** Runs `fn`, then lets pending microtasks and timers settle, returning any unhandled rejections seen. */
+  async function unhandledDuring(fn: () => void): Promise<unknown[]> {
+    const seen: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void seen.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      fn();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    return seen;
+  }
+
+  it('logs the message of a rejected promise', async () => {
+    const logger = fakeLogger();
+
+    await unhandledDuring(() =>
+      reportRejection(logger, 'x rejected', Promise.reject(new Error('boom'))),
+    );
+
+    expect(logger.error).toHaveBeenCalledWith('x rejected', { message: 'boom' });
+  });
+
+  it('ignores a result that is not a promise', async () => {
+    const logger = fakeLogger();
+
+    const seen = await unhandledDuring(() => reportRejection(logger, 'x rejected', undefined));
+
+    expect(seen).toEqual([]);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('does not raise a second rejection when the reason cannot be turned into a string', async () => {
+    const logger = fakeLogger();
+
+    const seen = await unhandledDuring(() =>
+      reportRejection(logger, 'x rejected', Promise.reject(Object.create(null))),
+    );
+
+    expect(seen).toEqual([]);
   });
 });

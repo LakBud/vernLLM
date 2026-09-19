@@ -83,6 +83,11 @@ immediately with `LLMError('circuit_open')`, without waiting for the outstanding
 This also applies when several calls check the breaker at approximately the same time after the
 cooldown expires.
 
+A trial call that ends without recording an outcome gives its slot back: an error the breaker
+ignores (see [What counts as a failure](#what-counts-as-a-failure)), an abort, or a failure before
+dispatch. The next call then becomes the trial, instead of the circuit staying half-open with
+nobody able to settle it.
+
 `halfOpenSuccessRatio` sets the fraction of `halfOpenProbes` that must succeed to close the circuit,
 default 1 (every trial must succeed). The circuit stays half-open until every admitted trial has
 reported a result, then closes if the success ratio was met, or reopens otherwise.
@@ -418,6 +423,15 @@ for (const target of states) {
     console.log(`${target.provider} is currently blocked by the circuit breaker`);
   }
 }
+```
+
+`getCircuitStates()` reports what each breaker knows locally, which is all an in process breaker
+ever needs. For a custom adapter whose state lives in a remote store, `await
+llm.readCircuitStates(model?)` asks each breaker for its live state instead, in the same shape. A
+breaker without a live read of its own is answered from `getState`, and a failing live read rejects.
+
+```ts title="checking-live-state.ts"
+const states = await llm.readCircuitStates();
 ```
 
 ## Failure attribution

@@ -1,6 +1,13 @@
 import { LLMError } from '../../types/errors.js';
 import { type RetryBudget } from '../retryBudget.js';
-import { makeEventReporter } from '../utils/circuit-breaker/circuitBreaker.utils.js';
+import {
+  makeEventReporter,
+  reportRejection,
+} from '../utils/circuit-breaker/circuitBreaker.utils.js';
+import {
+  runPrepare,
+  type PreparableBreaker,
+} from '../utils/circuit-breaker/prepareBreaker.utils.js';
 import { readRateLimitHint } from '../utils/rate-limit/rateLimitHint.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
@@ -166,6 +173,13 @@ export class CallExecutor {
     return this.breaker?.getState?.(model);
   }
 
+  /** Live circuit state: the breaker's `readState` if it has one, otherwise its `getState`. Undefined if no breaker is configured. */
+  async readCircuitState(model?: string) {
+    return this.breaker?.readState
+      ? this.breaker.readState(model)
+      : this.breaker?.getState?.(model);
+  }
+
   /** Failure counts by `LLMErrorCode` for this target's breaker, if configured and it reports them. Undefined otherwise. */
   getFailureBreakdown(model?: string) {
     return this.breaker?.getFailureBreakdown?.(model);
@@ -179,6 +193,11 @@ export class CallExecutor {
   /** This target's current rate limit levels, if a limiter is configured and reports state. Undefined otherwise. */
   getRateLimitState() {
     return this.limiter?.getState?.();
+  }
+
+  /** Live rate limit levels: the limiter's `readState` if it has one, otherwise its `getState`. Undefined if no limiter is configured or it reports none. */
+  async readRateLimitState() {
+    return this.limiter?.readState ? this.limiter.readState() : this.limiter?.getState?.();
   }
 
   /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured, or if the breaker doesn't report this. */
@@ -204,9 +223,38 @@ export class CallExecutor {
    * has a stateful side effect (claiming a half-open trial slot), so it must
    * run exactly once per logical call: `run`/`runStream` no longer call it
    * themselves, this is now the only call site.
+   *
+   * Returns a promise only when the breaker has a `prepare` to await first
+   * (see `CircuitBreakerAdapter.prepare`), so callers `await` it only when
+   * they get one back and a plain breaker costs nothing extra.
    */
-  assertBreakerClosed(model?: string, context?: CircuitBreakerCallContext): void {
-    this.breaker?.assertClosed(model ?? this.model, context);
+  assertBreakerClosed(model?: string, context?: CircuitBreakerCallContext): void | Promise<void> {
+    const breaker = this.breaker;
+    const resolvedModel = model ?? this.model;
+
+    // No `prepare`: exactly the old synchronous check, no extra tick.
+    if (!breaker?.prepare) {
+      breaker?.assertClosed(resolvedModel, context);
+      return;
+    }
+
+    return runPrepare(breaker as PreparableBreaker, resolvedModel, context, this.logger).then(() =>
+      breaker.assertClosed(resolvedModel, context),
+    );
+  }
+
+  /**
+   * Gives back a half-open trial slot `assertBreakerClosed` may have claimed
+   * for this call, when the call ended without a recorded outcome. Safe to
+   * call on any failure path: idempotent, and a no-op if none was claimed.
+   */
+  releaseBreakerTrial(model?: string, context?: CircuitBreakerCallContext): void {
+    // Declared `void`, but a remote adapter may return a promise anyway.
+    reportRejection(
+      this.logger,
+      '[VernLLM] circuitBreaker.releaseTrial rejected',
+      this.breaker?.releaseTrial?.(model ?? this.model, context),
+    );
   }
 
   /**
@@ -576,6 +624,8 @@ export class CallExecutor {
           // would always record a success and never open it.
           if (normalized.type === 'timeout') {
             gateway.recordFailure(attempt, params.signal, state, normalized.code);
+          } else {
+            gateway.releaseTrial(attempt, params.signal, state);
           }
 
           if (usage && normalized.type !== 'aborted') {
@@ -641,6 +691,8 @@ export class CallExecutor {
             // otherwise exclude.
             if (error instanceof LLMError && this.countsTowardBreaker(error)) {
               gateway.recordFailure(attempt, params.signal, state, error.code);
+            } else {
+              gateway.releaseTrial(attempt, params.signal, state);
             }
 
             throw error;

@@ -1,6 +1,8 @@
 import { RateLimiter, type RateLimiterAdapter, type RateLimitOptions } from '../../../rateLimit.js';
 import { LLMError } from '../../../types/errors.js';
 
+import type { Logger } from '../../../logger.js';
+
 /** Not exported. Internal shorthand only, so this union isn't duplicated between the public option fields and `buildRateLimit`'s own signature. */
 export type RateLimitOption = RateLimitOptions | RateLimiterAdapter;
 
@@ -11,24 +13,31 @@ const ADAPTER_METHOD_NAMES = [
   'reactToRateLimitHint',
 ] as const;
 
+/** Optional `RateLimiterAdapter` members that must be functions when present. */
+const OPTIONAL_FUNCTION_MEMBER_NAMES = ['getState', 'readState', 'setLogger'] as const;
+
 /**
- * True when `getState` is present but not callable, e.g. someone
+ * The optional members that are present but not callable, e.g. someone
  * accidentally assigned a plain object instead of a function. Caught here
  * rather than left to surface later as a confusing "getState is not a
  * function" the first time `getRateLimitState()` calls it: `?.()` only
  * guards against `null`/`undefined`, not a present-but-wrong-type value.
  */
-function hasInvalidGetState(option: RateLimitOption): boolean {
+function invalidOptionalMembers(
+  option: RateLimitOption,
+): (typeof OPTIONAL_FUNCTION_MEMBER_NAMES)[number][] {
   const candidate = option as Partial<RateLimiterAdapter>;
-  return candidate.getState !== undefined && typeof candidate.getState !== 'function';
+  return OPTIONAL_FUNCTION_MEMBER_NAMES.filter(
+    (name) => candidate[name] !== undefined && typeof candidate[name] !== 'function',
+  );
 }
 
-/** All four required `RateLimiterAdapter` methods present and callable, and `getState` (if present at all) is also callable. `getState` itself stays optional, see `hasInvalidGetState`. */
+/** All four required `RateLimiterAdapter` methods present and callable, and the optional ones (if present at all) also callable. They stay optional, see `invalidOptionalMembers`. */
 function isRateLimiterAdapter(option: RateLimitOption): option is RateLimiterAdapter {
   const candidate = option as Partial<RateLimiterAdapter>;
   return (
     ADAPTER_METHOD_NAMES.every((name) => typeof candidate[name] === 'function') &&
-    !hasInvalidGetState(option)
+    invalidOptionalMembers(option).length === 0
   );
 }
 
@@ -46,13 +55,17 @@ function isIncompleteRateLimiterAdapter(option: RateLimitOption): boolean {
  * an incomplete adapter or being misread as plain config, either of
  * which would only surface as a confusing "not a function" error later,
  * whenever the missing method first gets called. Same reasoning for a
- * present-but-non-function `getState`.
+ * present-but-non-function optional member.
  */
 export function buildRateLimit(
   option: RateLimitOption | undefined,
+  logger?: Logger,
 ): RateLimiterAdapter | undefined {
   if (option === undefined) return undefined;
-  if (isRateLimiterAdapter(option)) return option;
+  if (isRateLimiterAdapter(option)) {
+    if (logger) option.setLogger?.(logger);
+    return option;
+  }
 
   if (isIncompleteRateLimiterAdapter(option)) {
     const missing = ADAPTER_METHOD_NAMES.filter(
@@ -67,9 +80,13 @@ export function buildRateLimit(
     }
   }
 
-  if (hasInvalidGetState(option)) {
+  const invalid = invalidOptionalMembers(option);
+  if (invalid.length > 0) {
+    const candidate = option as Partial<RateLimiterAdapter>;
+    const described = invalid.map((name) => `${name} (${typeof candidate[name]})`).join(', ');
+
     throw new LLMError(
-      `rateLimit's getState (${typeof (option as Partial<RateLimiterAdapter>).getState}) must be a function. getState is optional; omit it entirely rather than assigning a non-function value.`,
+      `rateLimit's ${described} must be a function. ${invalid.length === 1 ? 'It is' : 'They are'} optional; omit entirely rather than assigning a non-function value.`,
       'invalid_params',
     );
   }

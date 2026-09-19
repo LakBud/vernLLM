@@ -1,15 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { CircuitBreaker } from '../../../../src/circuitBreaker.js';
+import { CircuitBreaker, type CircuitBreakerAdapter } from '../../../../src/circuitBreaker.js';
 import {
   createBreakerGateway,
   type BreakerGatewayOptions,
 } from '../../../../src/internal/execution/circuitBreakerContext.js';
+import { NoopLogger } from '../../../../src/logger.js';
 import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
 
 function baseOptions(overrides: Partial<BreakerGatewayOptions> = {}): BreakerGatewayOptions {
   return {
     breaker: undefined,
+    logger: new NoopLogger(),
     requestId: 'req-1',
     model: 'gpt-test',
     providerName: 'openai',
@@ -178,5 +180,97 @@ describe('createBreakerGateway, recordSuccess/recordFailure', () => {
     const ctx = gateway.buildAttemptContext(0, undefined, state);
 
     expect(ctx.registeredMiddlewareNames).toBe(names);
+  });
+});
+
+describe('createBreakerGateway, promises handed back by an adapter', () => {
+  const state = () => createMiddlewareStateBag();
+
+  function loggerSpy() {
+    return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  }
+
+  function adapterReturning(make: () => unknown): CircuitBreakerAdapter {
+    return {
+      assertClosed: () => {},
+      onStateChange: () => {},
+      recordSuccess: make as never,
+      recordFailure: make as never,
+      releaseTrial: make as never,
+    };
+  }
+
+  it.each([
+    [
+      'recordSuccess',
+      (g: ReturnType<typeof createBreakerGateway>) => g.recordSuccess(0, undefined, state()),
+    ],
+    [
+      'recordFailure',
+      (g: ReturnType<typeof createBreakerGateway>) => g.recordFailure(0, undefined, state()),
+    ],
+    [
+      'releaseTrial',
+      (g: ReturnType<typeof createBreakerGateway>) => g.releaseTrial(0, undefined, state()),
+    ],
+  ])('%s: a rejected promise is logged instead of left unhandled', async (name, invoke) => {
+    const log = loggerSpy();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const gateway = createBreakerGateway(
+      baseOptions({
+        logger: log,
+        breaker: adapterReturning(() => Promise.reject(new Error('redis down'))),
+      }),
+    );
+
+    invoke(gateway);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    process.off('unhandledRejection', unhandled);
+
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(`[VernLLM:req-1] circuitBreaker.${name} rejected`, {
+      message: 'redis down',
+    });
+  });
+
+  it('describes a rejection that is not an Error', async () => {
+    const log = loggerSpy();
+    const gateway = createBreakerGateway(
+      baseOptions({ logger: log, breaker: adapterReturning(() => Promise.reject('plain')) }),
+    );
+
+    gateway.recordSuccess(0, undefined, state());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(log.error).toHaveBeenCalledWith(expect.any(String), { message: 'plain' });
+  });
+
+  it('leaves a promise that resolves alone, and ignores adapters that return nothing', async () => {
+    const log = loggerSpy();
+    const resolving = createBreakerGateway(
+      baseOptions({ logger: log, breaker: adapterReturning(() => Promise.resolve()) }),
+    );
+    const plain = createBreakerGateway(
+      baseOptions({ logger: log, breaker: adapterReturning(() => undefined) }),
+    );
+
+    resolving.recordSuccess(0, undefined, state());
+    plain.recordFailure(0, undefined, state());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op with no breaker configured', () => {
+    const log = loggerSpy();
+    const gateway = createBreakerGateway(baseOptions({ logger: log }));
+
+    expect(() => {
+      gateway.recordSuccess(0, undefined, state());
+      gateway.recordFailure(0, undefined, state());
+      gateway.releaseTrial(0, undefined, state());
+    }).not.toThrow();
+    expect(log.error).not.toHaveBeenCalled();
   });
 });

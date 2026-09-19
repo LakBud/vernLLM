@@ -390,6 +390,17 @@ A custom `RateLimiterAdapter` (see [Sharing a limiter across
 processes](#sharing-a-limiter-across-processes) below) can omit `getState`, in which case
 `getRateLimitState()` also returns `undefined`, exactly like no limiter being configured at all.
 
+`getRateLimitState()` is synchronous, so for a custom adapter it can only report what that adapter
+tracks locally. `await llm.readRateLimitState()` asks the limiter for its live levels instead, and
+takes the same `{ index }`:
+
+```ts title="rate-limiting-read-state.ts"
+const levels = await llm.readRateLimitState();
+```
+
+An adapter without a live read of its own is answered from `getState`, and a failing live read
+rejects.
+
 ## Sharing a limiter across processes
 
 `rateLimit` normally builds a fresh, in-process limiter from the config object above. That
@@ -425,22 +436,27 @@ interface RateLimiterAdapter {
   signalRateLimit(): void;
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
   getState?(): RateLimitState; // optional, powers getRateLimitState()
+  readState?(): Promise<RateLimitState>; // optional, powers readRateLimitState()
+  setLogger?(logger: Logger): void; // optional, receives the instance's logger
 }
 ```
 
 An object satisfying this shape is used exactly as given, never wrapped or reconstructed. Every
-method above except `getState` is required; a partial adapter missing any of the other four throws
-at construction rather than failing later with a confusing "not a function" error. `getState` is
-the one exception, an adapter with no state worth reporting can simply leave it out, see [Reading
-rate limit state](#reading-rate-limit-state) above. The
+method above except `getState`, `readState`, and `setLogger` is required; a partial adapter missing
+any of the other four throws at construction rather than failing later with a confusing "not a
+function" error. The optional ones can simply be left out, an adapter with no state worth reporting
+needs neither `getState` nor `readState`, see [Reading rate limit
+state](#reading-rate-limit-state) above. The
 same instance can be shared across the primary and a fallback target on purpose, when two targets
 genuinely draw on one provider account's real ceiling, see [Bulkhead isolation with
 fallback](#bulkhead-isolation-with-fallback) above for the opposite, more common case of keeping
 each target's capacity separate.
 
 <Callout type="info">
-  VernLLM ships no distributed limiter itself, only this seam. Coordinating across processes is
-  entirely up to whatever `RateLimiterAdapter` implementation you provide.
+  `vern-llm` ships no distributed limiter itself, only this seam. Coordinating across processes is
+  up to whatever `RateLimiterAdapter` implementation you provide. For one backed by a remote store,
+  the optional `readState` and `setLogger` members let it report live levels and share `VernLLM`'s
+  logger, see [Rate Limiting → Customization](/docs/customization/rate-limiting#optional-members).
 </Callout>
 
 ## Options reference
