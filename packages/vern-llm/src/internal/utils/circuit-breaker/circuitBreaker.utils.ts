@@ -85,10 +85,15 @@ export function warnIfModelUnsupported(
  * promise anyway. Nobody awaits it, so a rejection would otherwise be an
  * unhandled one, which in Node ends the process after the call it belonged
  * to already succeeded. Reports the rejection through `logger` instead, so
- * no adapter has to get this right for itself. A non promise `result` is ignored.
+ * no adapter has to get this right for itself. A non promise `result` resolves and is ignored.
  */
 export function reportRejection(logger: Logger, message: string, result: unknown): void {
   void Promise.resolve(result).catch((error: unknown) => {
-    logger.error(message, { message: error instanceof Error ? error.message : String(error) });
+    try {
+      logger.error(message, { message: error instanceof Error ? error.message : String(error) });
+    } catch {
+      // Reporting must never become a second, unhandled rejection: even
+      // turning the reason into a string can throw.
+    }
   });
 }
