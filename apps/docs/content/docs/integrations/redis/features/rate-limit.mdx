@@ -87,7 +87,7 @@ starved by small ones behind it, and also holds everyone behind it while it wait
 `getState()` is synchronous, as the adapter contract requires, so it cannot ask Redis. It reports
 what this process last saw, refilled forward by the time since, and it applies this process's own
 releases and refunds immediately. Other processes' activity is invisible to it, and before this
-process has made a call it reports every bucket as untouched. Use `await limiter.readState()` for a
+process has made a call it reports every bucket as untouched. Use `await limiter.readState()`, or `await llm.readRateLimitState()` from `VernLLM`, for a
 live read across every process, which also refreshes what `getState()` reports.
 
 `limiter.dispose()` stops the lease renewals and detaches from the subscriber, call it before closing
