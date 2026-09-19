@@ -23,6 +23,8 @@ export default defineConfig({
           include: ['tests/**/*.int.test.ts'],
           environment: 'node',
           testTimeout: 15_000,
+          // Starts a local Redis Cluster in the background for cluster.int.test.ts.
+          globalSetup: ['./tests/globalSetup.cluster.ts'],
           // Most integration tests wait on real Redis cooldowns and leases, so a
           // file finishes as soon as its slowest concurrent test does. The default
           // of 5 would split a big file into batches.

@@ -159,3 +159,38 @@ export function transitionMessage(
 ): string {
   return JSON.stringify({ now: 1000, cooldown: 30_000, slots: 0, grantAt: 0, ...fields });
 }
+
+/**
+ * Waits until every node of the cluster in REDIS_CLUSTER_NODES reports
+ * cluster_state:ok, i.e. globalSetup.cluster.ts has finished forming it.
+ * Cheap when the cluster is already up, and it is what lets that setup start
+ * the cluster without making the other test files wait for it.
+ */
+export async function waitForCluster(
+  nodes: Array<{ host: string; port: number }>,
+  timeoutMs = 20_000,
+): Promise<void> {
+  await waitUntil(
+    async () => {
+      const states = await Promise.all(
+        nodes.map(async ({ host, port }) => {
+          const node = new Redis({ host, port, lazyConnect: true, maxRetriesPerRequest: 0 });
+          try {
+            await node.connect();
+            const info = String(await node.cluster('INFO'));
+            return (
+              info.includes('cluster_state:ok') &&
+              info.includes(`cluster_known_nodes:${nodes.length}`)
+            );
+          } catch {
+            return false;
+          } finally {
+            node.disconnect();
+          }
+        }),
+      );
+      return states.every(Boolean);
+    },
+    { timeoutMs, intervalMs: 50 },
+  );
+}

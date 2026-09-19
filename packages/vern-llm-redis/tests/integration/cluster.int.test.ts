@@ -1,18 +1,19 @@
 import { Cluster } from 'ioredis';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { redisCache } from '../../src/cache.js';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fromIoredis, fromIoredisSubscriber } from '../../src/clients/ioredis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
 import { claimTrial, sleep } from '../breakerHelpers.js';
-import { uniquePrefix, waitUntil } from '../helpers.js';
+import { uniquePrefix, waitForCluster, waitUntil } from '../helpers.js';
 
 /**
- * Runs only against a real Redis Cluster, set `REDIS_CLUSTER_NODES` to a
- * comma separated `host:port` list (e.g. `127.0.0.1:7001,127.0.0.1:7002`).
- * Every script must touch only the one key it is given, or the cluster
- * rejects it with CROSSSLOT, and scripts, pub/sub and time all have to
+ * Runs against a real Redis Cluster. globalSetup.cluster.ts starts a local 3
+ * node one (needs redis-server on PATH), or set `REDIS_CLUSTER_NODES` to a
+ * comma separated `host:port` list (e.g. `127.0.0.1:7001,127.0.0.1:7002`) to
+ * use your own. Every script must touch only the one key it is given, or the
+ * cluster rejects it with CROSSSLOT, and scripts, pub/sub and time all have to
  * behave the same as on a single node.
  */
 const nodes = (process.env.REDIS_CLUSTER_NODES ?? '')
@@ -24,6 +25,8 @@ const nodes = (process.env.REDIS_CLUSTER_NODES ?? '')
   });
 
 describe.skipIf(nodes.length === 0)('against a real Redis Cluster', () => {
+  beforeAll(() => waitForCluster(nodes), 25_000);
+
   const clusters: Cluster[] = [];
   const disposables: Array<{ dispose(): void }> = [];
 
