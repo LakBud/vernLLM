@@ -2,6 +2,7 @@ import { TokenBucket } from './internal/tokenBucket.js';
 import { LLMError } from './types/errors.js';
 
 import type { ProviderRateLimitHint } from './internal/utils/rate-limit/rateLimitHint.utils.js';
+import type { Logger } from './logger.js';
 import type { LLMClient } from './types/client.js';
 
 /** The request shape sent to `LLMClient['chat']['completions']['create']`, used for token estimation. */
@@ -226,6 +227,10 @@ export interface RateLimiterAdapter {
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
   /** Optional: current bucket levels, for introspection. Omit if the adapter has no state worth reporting. */
   getState?(): RateLimitState;
+  /** Optional: live bucket levels for `VernLLM.readRateLimitState()`, the async counterpart of `getState`. */
+  readState?(): Promise<RateLimitState>;
+  /** Optional: receives the instance's `Logger` once, when `VernLLM` wires this adapter in. */
+  setLogger?(logger: Logger): void;
 }
 
 /**

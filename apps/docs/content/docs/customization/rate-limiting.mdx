@@ -19,6 +19,8 @@ interface RateLimiterAdapter {
   signalRateLimit(): void;
   reactToRateLimitHint(hint: ProviderRateLimitHint | undefined): void;
   getState?(): RateLimitState;
+  readState?(): Promise<RateLimitState>;
+  setLogger?(logger: Logger): void;
 }
 ```
 
@@ -61,8 +63,23 @@ const llm = new VernLLM({ client: openai, model: 'gpt-4o', rateLimit: new RedisR
   limiter at all.
 </Callout>
 
+## Optional members
+
+| Member      | Purpose                                                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `getState`  | Synchronous levels for `llm.getRateLimitState()`. It can only report what the adapter already knows locally.           |
+| `readState` | A live read for `llm.readRateLimitState()`. Without it, `readRateLimitState()` is answered from `getState`.            |
+| `setLogger` | Receives the instance's `Logger`, so the adapter follows the same `logger` and `'silent'` settings as everything else. |
+
+`readState` is for a limiter whose real levels live in a remote store: `getState` cannot wait for
+that store, so the two answer different questions, "what do I know right now" and "what is the
+truth". A failing `readState` rejects, since a live answer was asked for.
+
 <Callout>
-  VernLLM ships no distributed limiter itself, only this interface. Coordinating across processes is
-  entirely up to your implementation. See [Sharing a limiter across
-  processes](/docs/core/rate-limiting#sharing-a-limiter-across-processes) in Core.
+  `vern-llm` ships no distributed limiter itself, only this interface. Coordinating across processes
+  is up to your implementation. For a limiter backed by a remote store, `VernLLM` helps with two
+  optional members: `readState` for live levels through `llm.readRateLimitState()`, and `setLogger`
+  so its background failures follow your logger, see [Optional members](#optional-members). See
+  [Sharing a limiter across processes](/docs/core/rate-limiting#sharing-a-limiter-across-processes)
+  in Core.
 </Callout>

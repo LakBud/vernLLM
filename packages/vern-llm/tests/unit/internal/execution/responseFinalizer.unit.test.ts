@@ -31,6 +31,7 @@ function fakeGateway(): BreakerGateway {
     buildCallContext: vi.fn(),
     recordSuccess: vi.fn(),
     recordFailure: vi.fn(),
+    releaseTrial: vi.fn(),
   };
 }
 

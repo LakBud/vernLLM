@@ -60,3 +60,6 @@ const llm = new VernLLM({
   level (with a table of every internal log site), how `debug` interacts with a custom logger, and
   where `redact` does and doesn't apply.
 </Callout>
+
+The same logger reaches any circuit breaker or rate limiter adapter that implements `setLogger`, so
+their background failures follow your logger and `logger: 'silent'` too.

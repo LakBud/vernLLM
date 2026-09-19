@@ -108,7 +108,7 @@ export function buildExecutors(
       onEvent: shared.onEvent,
       breaker,
       budget,
-      limiter: buildRateLimit(target.rateLimit),
+      limiter: buildRateLimit(target.rateLimit, shared.logger),
       isFallback,
       middleware: shared.middleware,
       middlewareTimeoutMs: shared.middlewareTimeoutMs,

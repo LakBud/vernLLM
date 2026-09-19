@@ -1,9 +1,12 @@
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
+import type { Logger } from '../../logger.js';
 import type { AttemptContext, LLMErrorCode, MiddlewareStateBag } from '../../types/index.js';
 
 /** Everything one logical call needs to build attempt context and talk to its breaker. */
 export interface BreakerGatewayOptions {
   breaker?: CircuitBreakerAdapter;
+  /** Where a breaker adapter's rejected background promise is reported, see `settleQuietly`. */
+  logger: Logger;
   requestId: string;
   model: string;
   providerName: string;
@@ -32,6 +35,8 @@ export interface BreakerGateway {
   ): CircuitBreakerCallContext;
   /** No-op if no breaker was configured. */
   recordSuccess(attempt: number, signal: AbortSignal | undefined, state: MiddlewareStateBag): void;
+  /** No-op if no breaker was configured or it has no `releaseTrial`. Gives back a half-open trial when the call ended without recording an outcome. */
+  releaseTrial(attempt: number, signal: AbortSignal | undefined, state: MiddlewareStateBag): void;
   /** No-op if no breaker was configured. `code`, when present, is forwarded to the breaker for future attribution use. */
   recordFailure(
     attempt: number,
@@ -44,6 +49,7 @@ export interface BreakerGateway {
 export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGateway {
   const {
     breaker,
+    logger,
     requestId,
     model,
     providerName,
@@ -80,14 +86,44 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
     return { requestId, state, signal, attempt: attempt + 1 };
   }
 
+  /**
+   * These three adapter methods are declared `void`, but an adapter whose
+   * state is remote (Redis) naturally does its work asynchronously and
+   * may hand back a promise anyway. Nobody awaits it, so a rejection would
+   * otherwise be an unhandled one, which in Node ends the process after
+   * the call it belonged to already succeeded. Catch it here and report
+   * it, so no adapter has to get this right for itself.
+   */
+  function settleQuietly(operation: string, result: unknown): void {
+    if (typeof (result as PromiseLike<unknown> | undefined)?.then !== 'function') return;
+
+    (result as PromiseLike<unknown>).then(undefined, (error: unknown) => {
+      logger.error(`[VernLLM:${requestId}] circuitBreaker.${operation} rejected`, {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
   return {
     buildAttemptContext,
     buildCallContext,
     recordSuccess(attempt, signal, state) {
-      breaker?.recordSuccess(model, buildCallContext(attempt, signal, state));
+      settleQuietly(
+        'recordSuccess',
+        breaker?.recordSuccess(model, buildCallContext(attempt, signal, state)),
+      );
     },
     recordFailure(attempt, signal, state, code) {
-      breaker?.recordFailure(model, buildCallContext(attempt, signal, state), code);
+      settleQuietly(
+        'recordFailure',
+        breaker?.recordFailure(model, buildCallContext(attempt, signal, state), code),
+      );
+    },
+    releaseTrial(attempt, signal, state) {
+      settleQuietly(
+        'releaseTrial',
+        breaker?.releaseTrial?.(model, buildCallContext(attempt, signal, state)),
+      );
     },
   };
 }

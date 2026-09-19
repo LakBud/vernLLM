@@ -36,6 +36,11 @@ interface CircuitBreakerAdapter {
   isolateByModel?: boolean;
   open?(model?: string, context?: CircuitBreakerCallContext): void;
   close?(model?: string, context?: CircuitBreakerCallContext): void;
+  releaseTrial?(model?: string, context?: CircuitBreakerCallContext): void;
+  prepare?(model?: string, context?: CircuitBreakerCallContext): Promise<void>;
+  prepareTimeoutMs?: number;
+  readState?(model?: string): Promise<CircuitState>;
+  setLogger?(logger: Logger): void;
   onStateChange: CircuitBreakerStateChangeHandler;
 }
 ```
@@ -102,10 +107,9 @@ const llm = new VernLLM({
 <Callout>
   `assertClosed`, `recordSuccess`, `recordFailure`, and `onStateChange` are all required, four
   methods for four things, the same shape as `RateLimiterAdapter`'s four required methods.
-  `getState`, `getFailureBreakdown`, `isolateByModel`, `open`, and `close` are all optional, plain
-  data or opt-in control your adapter can simply skip. Omitting any of them makes the corresponding
-  `VernLLM` call return `undefined`/`false` or become a no-op, the same as a target with no breaker
-  configured at all.
+  Everything else is optional, see [Optional members](#optional-members). An adapter that omits one
+  behaves as if that feature were not there: `VernLLM` returns `undefined` or `false`, does nothing,
+  or takes the plain synchronous path.
 </Callout>
 
 <Callout type="info">
@@ -142,15 +146,80 @@ handler doing anything.
   what was meant to be a fresh adapter) is visible rather than silent.
 </Callout>
 
-`getFailureBreakdown`, `open`, and `close` are all optional on `CircuitBreakerAdapter`. Implement
-`getFailureBreakdown` (mirroring `getState`) if your adapter tracks per-code failure counts and
-wants `llm.getFailureBreakdown()` to read them. Implement `open`/`close` only if you want to grant
-VernLLM the ability to force a transition from outside, a distributed breaker may deliberately keep
-that decision local instead, see the callouts in [Checking and controlling state
-manually](/docs/core/circuit-breaker#checking-and-controlling-state-manually) and [Failure
-attribution](/docs/core/circuit-breaker#failure-attribution) in Core. Omitting any of the three
-makes VernLLM's corresponding call a no-op (`openCircuit`/`closeCircuit`) or return `undefined`
-(`getFailureBreakdown`), the same as a target with no breaker configured at all.
+## Optional members
+
+The four required members make a working adapter. Everything else is opt in:
+
+| Member                        | Purpose                                                                                                                                                                                                                          |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getState`                    | Reports state for `llm.getCircuitState()`. Without it that returns `undefined`.                                                                                                                                                  |
+| `getFailureBreakdown`         | Reports per code failure counts for `llm.getFailureBreakdown()`, see [Failure attribution](/docs/core/circuit-breaker#failure-attribution).                                                                                      |
+| `open`, `close`               | Let `VernLLM` force a transition from outside. A distributed breaker may keep that decision local on purpose, see [Checking and controlling state manually](/docs/core/circuit-breaker#checking-and-controlling-state-manually). |
+| `releaseTrial`                | Gives back a half-open trial slot when a call ends without an outcome.                                                                                                                                                           |
+| `prepare`, `prepareTimeoutMs` | Refreshes local state right before each check.                                                                                                                                                                                   |
+| `readState`                   | Live state for `llm.readCircuitStates()`.                                                                                                                                                                                        |
+| `setLogger`                   | Receives the instance's `Logger`.                                                                                                                                                                                                |
+
+### Releasing a trial
+
+A half-open breaker lets a trial call through to test recovery. If that call ends in an error the
+breaker ignores (quota, validation, an abort, a local rate limit rejection, a failure before
+dispatch), `recordSuccess` and `recordFailure` never run, and the slot would stay claimed. Implement
+`releaseTrial` so `VernLLM` can hand it back: the next call then becomes the trial. It must be
+idempotent, and a no-op for a call that holds no slot or whose outcome was already recorded.
+
+### Preparing before a check
+
+`assertClosed` must answer synchronously, so an adapter whose state lives in a remote store decides
+from a local copy. Implement `prepare` to refresh that copy, for example to read the real state of a
+key it has never seen, or to claim a half-open trial. `VernLLM` awaits it right before
+`assertClosed`, in `call()` and for every target in a fallback chain:
+
+```ts title="breaker-prepare.ts"
+class RemoteBreaker implements CircuitBreakerAdapter {
+  prepareTimeoutMs = 250;
+  private local = new Map<string, { state: CircuitState; checkedAt: number }>();
+
+  // Runs before every check, so return fast when the local copy is fresh.
+  async prepare(model = 'default') {
+    const known = this.local.get(model);
+    if (known && Date.now() - known.checkedAt < 1_000) return;
+    this.local.set(model, { state: await store.readState(model), checkedAt: Date.now() });
+  }
+
+  // Still synchronous: decides from the copy `prepare` just refreshed.
+  assertClosed(model = 'default') {
+    if (this.local.get(model)?.state === 'open') {
+      throw new LLMError('Circuit open', 'circuit_open', { code: 'circuit_cooling_down' });
+    }
+  }
+
+  // recordSuccess, recordFailure, onStateChange ...
+}
+```
+
+`prepare` never blocks or fails a call. If it rejects, or takes longer than `prepareTimeoutMs`
+(default `1000`, a finite number greater than `0`), `VernLLM` logs a warning and carries on with
+`assertClosed` against whatever the adapter knows locally. A call that is aborted while `prepare`
+is waiting rejects with `aborted`. An adapter without `prepare` is checked as before, with no extra
+wait.
+
+### Live state
+
+`getState` is synchronous, so it can only report a local copy. Implement `readState` to return the
+real state, which `llm.readCircuitStates()` uses. An adapter without it is answered from `getState`.
+
+### Logging
+
+Implement `setLogger` if your adapter logs. `VernLLM` calls it once with its own `Logger`, so the
+adapter follows the same `logger` and `'silent'` settings as everything else. The logger is already
+safe to call: one that throws cannot break your adapter.
+
+### Background calls
+
+`recordSuccess`, `recordFailure`, and `releaseTrial` are not awaited. If your implementation is
+async and the returned promise rejects, `VernLLM` logs it at `error` level instead of leaving an
+unhandled rejection that could end the process after the call already succeeded.
 
 Nothing stops your adapter from reusing `RollingTripping` or `ConsecutiveTripping` internally for
 its own trip decision, rather than reimplementing that math. Both are exported from the package
@@ -189,9 +258,11 @@ class RedisCircuitBreakerWithTripping implements CircuitBreakerAdapter {
 ```
 
 <Callout>
-  VernLLM ships no distributed breaker itself, only this interface. Coordinating across processes is
-  entirely up to your implementation, the same tradeoff as `RateLimiterAdapter`. See [Rate Limiting
-  → Customization](/docs/customization/rate-limiting) for the equivalent pattern on the rate limiter
+  `vern-llm` ships no distributed breaker itself, only this interface. Coordinating across processes
+  is up to your implementation, the same tradeoff as `RateLimiterAdapter`. For a breaker backed by a
+  remote store, `VernLLM` helps with optional `prepare`, `releaseTrial`, `readState`, and
+  `setLogger` members, see [Optional members](#optional-members). See [Rate Limiting →
+  Customization](/docs/customization/rate-limiting) for the equivalent pattern on the rate limiter
   side.
 </Callout>
 

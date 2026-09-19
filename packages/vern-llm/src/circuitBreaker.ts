@@ -3,6 +3,7 @@ import { RollingRatio } from './internal/rollingRatio.js';
 import { validateMinCalls, validateRatio } from './internal/utils/validate.utils.js';
 import { LLMError, type LLMErrorCode } from './types/errors.js';
 
+import type { Logger } from './logger.js';
 import type { MiddlewareStateBag } from './types/middleware.js';
 
 /** The call this mutation happened as part of, forwarded to `onStateChange` untouched. */
@@ -227,6 +228,16 @@ export interface CircuitBreakerAdapter {
   open?(model?: string, context?: CircuitBreakerCallContext): void;
   /** Manually closes the circuit, without requiring a real success first. Same opt-in reasoning as `open`. */
   close?(model?: string, context?: CircuitBreakerCallContext): void;
+  /** Gives back a half-open trial slot when a call ends without `recordSuccess` or `recordFailure`. Idempotent, and a no-op for a call that holds no slot. */
+  releaseTrial?(model?: string, context?: CircuitBreakerCallContext): void;
+  /** Awaited right before `assertClosed` to refresh local state. Never blocks or fails a call: a rejection or `prepareTimeoutMs` is logged and the call carries on. */
+  prepare?(model?: string, context?: CircuitBreakerCallContext): Promise<void>;
+  /** How long to wait for `prepare`, in ms. Default 1000. */
+  prepareTimeoutMs?: number;
+  /** Live counterpart of `getState`, read by `VernLLM.readCircuitStates()`. */
+  readState?(model?: string): Promise<CircuitState>;
+  /** Receives the instance's `Logger` once, when `VernLLM` wires this adapter in. */
+  setLogger?(logger: Logger): void;
   /**
    * Called after every real state change, never a no-op transition. VernLLM
    * wraps it the same way it wraps the built in `CircuitBreaker`'s
@@ -376,6 +387,9 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     }
 
     if (bucket.state === 'half-open' && bucket.trial && claimsCurrentTrial(bucket, context)) {
+      // Outcome recorded, so this call's permit is spent: a later
+      // `releaseTrial` for the same call must not hand its slot back.
+      if (context) trialPermits.delete(context.state);
       bucket.trial.successes += 1;
       this.settleTrialIfComplete(bucket, model, context);
       return;
@@ -401,6 +415,7 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     const bucket = this.ensureBucketFor(model);
 
     if (bucket.state === 'half-open' && bucket.trial && claimsCurrentTrial(bucket, context)) {
+      if (context) trialPermits.delete(context.state);
       bucket.trial.failures += 1;
       attributeFailure(bucket, code);
       this.settleTrialIfComplete(bucket, model, context);
@@ -416,6 +431,24 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     if (this.tripping.onFailure(this.trippingKeyFor(model))) {
       this.openBucket(bucket, model, context);
     }
+  }
+
+  /**
+   * Gives back the half-open trial slot `context`'s call claimed, when
+   * that call ended without recording an outcome. No-op without a
+   * `context`, when the bucket isn't half-open, or when the call's permit
+   * is stale or already spent (an outcome was recorded), so calling it
+   * defensively on every failure path is safe.
+   */
+  releaseTrial(model?: string, context?: CircuitBreakerCallContext): void {
+    if (!context) return;
+
+    const bucket = this.lookupBucket(model);
+    if (!bucket || bucket.state !== 'half-open' || !bucket.trial) return;
+    if (!claimsCurrentTrial(bucket, context)) return;
+
+    trialPermits.delete(context.state);
+    bucket.trial.slotsRemaining += 1;
   }
 
   /** With `isolateByModel` off, `model` is ignored and the shared circuit's state is returned. */

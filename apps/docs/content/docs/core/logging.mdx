@@ -80,7 +80,9 @@ calls (and multiple `VernLLM` instances) stay distinguishable in one log stream:
 | `warn`  | A cache adapter's `delete` throws (swallowed)                                                                                                           | `[VernLLM] cache delete failed: <message>`                                                          |
 | `warn`  | `model` was passed but has no effect (`isolateByModel` off)                                                                                             | ``[VernLLM] call: `model: 'x'` has no effect here...``                                              |
 | `warn`  | A `CircuitBreakerAdapter` instance is shared across more than one target (logged once per adapter, not once per additional target)                      | `[VernLLM] circuitBreaker: this adapter instance is already wired to another target...`             |
+| `warn`  | A `CircuitBreakerAdapter`'s `prepare` rejects or takes longer than `prepareTimeoutMs` (the call carries on with the adapter's local state)              | `[VernLLM] circuitBreaker.prepare failed, continuing with the adapter's local state: <message>`     |
 | `warn`  | `detectSoftFailure` itself throws (treated as no soft failure)                                                                                          | `[VernLLM] detectSoftFailure threw and was ignored, treated as no soft failure: <message>\n<stack>` |
+| `error` | A `CircuitBreakerAdapter`'s `recordSuccess`, `recordFailure`, or `releaseTrial` returns a promise that rejects                                          | `[VernLLM:req_abc] circuitBreaker.recordSuccess rejected` with `meta: { message }`                  |
 | `error` | A user-supplied hook throws (`onUsage`, `onUsageFailure`, `onEvent`, `circuitBreaker.onStateChange`, labeled middleware hooks)                          | `[VernLLM] onUsage failed` with `meta: { message, stack }`                                          |
 
 <Callout type="info">
@@ -89,6 +91,9 @@ calls (and multiple `VernLLM` instances) stay distinguishable in one log stream:
   and `message` is `'unknown'` if the thrown value wasn't an `Error`). This is produced by a single
   internal helper, so every hook failure logs the same way, stack included.
 </Callout>
+
+A `CircuitBreakerAdapter` or `RateLimiterAdapter` that implements `setLogger` receives this same
+logger, so `logger: 'silent'` reaches it too.
 
 ## Default logger behavior
 

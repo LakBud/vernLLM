@@ -53,6 +53,10 @@ const OPTIONAL_FUNCTION_MEMBER_NAMES = [
   'getFailureBreakdown',
   'open',
   'close',
+  'releaseTrial',
+  'setLogger',
+  'prepare',
+  'readState',
 ] as const;
 
 /** Any of `OPTIONAL_FUNCTION_MEMBER_NAMES` present but not callable, the same mistake `rateLimitAdapter.utils.ts` guards against for `getState`. */
@@ -62,6 +66,14 @@ function invalidOptionalMembers(
   const candidate = option as Partial<CircuitBreakerAdapter>;
   return OPTIONAL_FUNCTION_MEMBER_NAMES.filter(
     (name) => candidate[name] !== undefined && typeof candidate[name] !== 'function',
+  );
+}
+
+/** `prepareTimeoutMs` present but not a finite number greater than 0. Only meaningful on an adapter, plain `CircuitBreakerOptions` has no such field. */
+function hasInvalidPrepareTimeout(option: CircuitBreakerOptions | CircuitBreakerAdapter): boolean {
+  const { prepareTimeoutMs } = option as Partial<CircuitBreakerAdapter>;
+  return (
+    prepareTimeoutMs !== undefined && (!Number.isFinite(prepareTimeoutMs) || prepareTimeoutMs <= 0)
   );
 }
 
@@ -272,6 +284,13 @@ export function buildCircuitBreaker(
       );
     }
 
+    if (attemptsAdapter && hasInvalidPrepareTimeout(circuitBreakerOption)) {
+      throw new LLMError(
+        `circuitBreaker's prepareTimeoutMs (${String((circuitBreakerOption as Partial<CircuitBreakerAdapter>).prepareTimeoutMs)}) must be a finite number greater than 0. It is optional, omit it to use the default.`,
+        'invalid_params',
+      );
+    }
+
     if (invalid.length > 0) {
       const candidate = circuitBreakerOption as Partial<CircuitBreakerAdapter>;
       const described = invalid.map((name) => `${name} (${typeof candidate[name]})`).join(', ');
@@ -300,6 +319,7 @@ export function buildCircuitBreaker(
     if (attemptsAdapter) {
       const adapter = circuitBreakerOption as CircuitBreakerAdapter;
       wireAdapterOnStateChange(adapter, wrap(undefined), logger);
+      adapter.setLogger?.(logger);
       return adapter;
     }
   }

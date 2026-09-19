@@ -102,6 +102,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
   const attempts: RetryAttempt[] = [];
   const gateway = createBreakerGateway({
     breaker,
+    logger,
     requestId,
     model,
     providerName,
@@ -180,6 +181,10 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
       // the loop is one past that. `recordFailure` converts to 1-based
       // itself.
       gateway.recordFailure(attempts.length, signal, resolvedState, normalized.code);
+    } else {
+      // Nothing was recorded, so a half-open trial this call claimed would
+      // otherwise stay held forever. Idempotent, a no-op when it holds none.
+      gateway.releaseTrial(attempts.length, signal, resolvedState);
     }
 
     logger.debug(`[VernLLM:${requestId}] ${logLabel}:\n${redactText(describeError(error))}`);

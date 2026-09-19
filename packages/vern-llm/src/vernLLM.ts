@@ -376,43 +376,80 @@ export class VernLLM {
               throw new LLMError('LLM request aborted', 'aborted');
             }
 
-            this.executors[0]!.assertBreakerClosed(effectiveParams.model, {
+            const checking = this.executors[0]!.assertBreakerClosed(effectiveParams.model, {
               requestId,
               state: middlewareState,
               signal: effectiveParams.signal,
             });
+            // Only a breaker with a `prepare` hands back something to wait for.
+            if (checking) await checking;
           }
 
-          let meta: CallMeta | undefined;
+          // Everything from here runs after a half-open trial may have been
+          // claimed, but before `runFallbackChain` (which releases on its own
+          // failures) is reached: usage reservation, for one. Release on any
+          // throw, idempotent if `runFallbackChain` already did.
+          const releaseSoleTrial = () => {
+            if (!soleTarget) return;
 
-          // Captures `meta` from the `{ value, meta }` shape both
-          // `executeLogicalCall`/`executeLogicalStreamCall` return, so the
-          // stream/non-stream branches below only differ in which
-          // `withReservedUsage*`/`executeLogical*Call` pair they use, not
-          // in how the result is unpacked.
-          const captureMeta = async <V>(
-            resultPromise: Promise<{ value: V; meta?: CallMeta }>,
-          ): Promise<V> => {
-            const result = await resultPromise;
-            meta = result.meta;
-            return result.value;
+            this.executors[0]!.releaseBreakerTrial(effectiveParams.model, {
+              requestId,
+              state: middlewareState,
+              signal: effectiveParams.signal,
+            });
           };
 
-          if (effectiveParams.stream) {
-            // Same breaker/logging treatment as non-streaming, applied around
-            // opening the stream; mid-stream failures are handled separately
-            // inside the executor and never fall over (see `runFallbackChain`).
-            // Usage refund/report is deferred onto finalResult, since call()
-            // must return { chunks, finalResult } before the real outcome is
-            // known. `effectiveParams.meta.current` is still populated by the
-            // time we return below, though: `executeLogicalStreamCall` writes
-            // it as a side effect on this same `effectiveParams` object once
-            // the stream opens, which is also all `call()` itself waits for.
-            const value = await withReservedUsageForStream(
+          try {
+            let meta: CallMeta | undefined;
+
+            // Captures `meta` from the `{ value, meta }` shape both
+            // `executeLogicalCall`/`executeLogicalStreamCall` return, so the
+            // stream/non-stream branches below only differ in which
+            // `withReservedUsage*`/`executeLogical*Call` pair they use, not
+            // in how the result is unpacked.
+            const captureMeta = async <V>(
+              resultPromise: Promise<{ value: V; meta?: CallMeta }>,
+            ): Promise<V> => {
+              const result = await resultPromise;
+              meta = result.meta;
+              return result.value;
+            };
+
+            if (effectiveParams.stream) {
+              // Same breaker/logging treatment as non-streaming, applied around
+              // opening the stream; mid-stream failures are handled separately
+              // inside the executor and never fall over (see `runFallbackChain`).
+              // Usage refund/report is deferred onto finalResult, since call()
+              // must return { chunks, finalResult } before the real outcome is
+              // known. `effectiveParams.meta.current` is still populated by the
+              // time we return below, though: `executeLogicalStreamCall` writes
+              // it as a side effect on this same `effectiveParams` object once
+              // the stream opens, which is also all `call()` itself waits for.
+              const value = await withReservedUsageForStream(
+                effectiveParams,
+                () =>
+                  captureMeta(
+                    executeLogicalStreamCall(
+                      this.logicalCallDependencies,
+                      effectiveParams,
+                      requestId,
+                      soleTarget,
+                      middlewareState,
+                    ),
+                  ),
+                effectiveParams.signal,
+                (logMessage, error) => this.logRefundError(logMessage, error),
+              );
+
+              return { value, meta };
+            }
+
+            const value = await withReservedUsage(
               effectiveParams,
+              false,
               () =>
                 captureMeta(
-                  executeLogicalStreamCall(
+                  executeLogicalCall(
                     this.logicalCallDependencies,
                     effectiveParams,
                     requestId,
@@ -425,26 +462,10 @@ export class VernLLM {
             );
 
             return { value, meta };
+          } catch (error) {
+            releaseSoleTrial();
+            throw error;
           }
-
-          const value = await withReservedUsage(
-            effectiveParams,
-            false,
-            () =>
-              captureMeta(
-                executeLogicalCall(
-                  this.logicalCallDependencies,
-                  effectiveParams,
-                  requestId,
-                  soleTarget,
-                  middlewareState,
-                ),
-              ),
-            effectiveParams.signal,
-            (logMessage, error) => this.logRefundError(logMessage, error),
-          );
-
-          return { value, meta };
         },
         skipCachedCallWrap,
       );
@@ -794,6 +815,39 @@ export class VernLLM {
       isolateByModel: executor.isolateByModel,
       state: executor.getCircuitState(model ?? executor.model),
     }));
+  }
+
+  /**
+   * The live counterpart of `getRateLimitState`, asking the limiter for its current levels.
+   *
+   * @param target.index Which target to read. Defaults to the primary.
+   * @returns This target's live rate limit levels, or `undefined` if that target has no limiter
+   * configured.
+   * @throws {RangeError} If `target.index` names no target.
+   */
+  async readRateLimitState(
+    target?: Pick<CircuitTarget, 'index'>,
+  ): Promise<RateLimitState | undefined> {
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'readRateLimitState');
+    return executor.readRateLimitState();
+  }
+
+  /**
+   * The live counterpart of `getCircuitStates`, asking each breaker for its current state.
+   *
+   * @param model Which model bucket to read, for targets that isolate by model.
+   * @returns Every target's state, in chain order.
+   */
+  async readCircuitStates(model?: string): Promise<TargetCircuitState[]> {
+    return Promise.all(
+      this.executors.map(async (executor, index) => ({
+        provider: executor.providerName,
+        index,
+        isFallback: index > 0,
+        isolateByModel: executor.isolateByModel,
+        state: await executor.readCircuitState(model ?? executor.model),
+      })),
+    );
   }
 
   /**

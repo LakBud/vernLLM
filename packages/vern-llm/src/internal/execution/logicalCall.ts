@@ -91,11 +91,13 @@ export async function runFallbackChain<R>(
       // that just claimed it) or double-claim a slot no concurrent
       // caller actually has.
       if (!(targetIndex === 0 && skipBreakerCheckForFirst)) {
-        executor.assertBreakerClosed(params.model, {
+        const checking = executor.assertBreakerClosed(params.model, {
           requestId,
           state: middlewareState,
           signal: params.signal,
         });
+        // Only a breaker with a `prepare` hands back something to wait for.
+        if (checking) await checking;
       }
 
       const result = await attempt(executor, () => {
@@ -104,6 +106,15 @@ export async function runFallbackChain<R>(
       return { result, executor, index: targetIndex, attemptCount };
     } catch (error) {
       const normalizedError = normalizeError(error, params.signal);
+
+      // Whatever ended this target, a half-open trial it claimed and never
+      // settled must not stay held. Idempotent, so this is also safe when
+      // the failure was already recorded against the breaker.
+      executor.releaseBreakerTrial(params.model, {
+        requestId,
+        state: middlewareState,
+        signal: params.signal,
+      });
 
       fallbackAttempts.push({
         index: targetIndex - 1,
