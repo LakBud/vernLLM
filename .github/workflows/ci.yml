@@ -156,7 +156,7 @@ jobs:
       - uses: nrwl/nx-set-shas@v5
 
       - name: Test unit, affected projects
-        run: pnpm exec nx affected -t test:unit:coverage
+        run: pnpm exec nx affected -t test:unit:coverage --output-style=static
 
       # Each of these is a no-op (hashFiles empty, step skipped) unless
       # that specific project's test:unit:coverage actually ran above.
@@ -235,7 +235,7 @@ jobs:
           redis-server --version
 
       - name: Test integration, affected projects
-        run: pnpm exec nx affected -t test:int:coverage
+        run: pnpm exec nx affected -t test:int:coverage --output-style=static
 
       - name: Upload vern-llm coverage to Codecov
         if: hashFiles('packages/vern-llm/coverage/lcov.info') != ''
