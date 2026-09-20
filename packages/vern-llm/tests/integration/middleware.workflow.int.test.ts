@@ -659,4 +659,135 @@ describe('middleware workflow integration', () => {
     expect(streamingMeta).toEqual(expectedMetaShape);
     expect(nonStreamingMeta).toEqual(expectedMetaShape);
   });
+
+  describe('onEvent delivery relative to the call path', () => {
+    const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
+
+    function withUsage(text: string) {
+      return { ...textResponse(text), usage };
+    }
+
+    // An earlier entry with a slow async `enabled`. The delay is far longer than the rest of the
+    // call takes, so if it held back later entries' onEvent, the call would already have returned.
+    function slowGate(): VernLLMMiddleware {
+      return {
+        name: 'slow-gate',
+        priority: -10,
+        enabled: () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 40)),
+        onEvent: () => {},
+      };
+    }
+
+    function observer(order: string[]): VernLLMMiddleware {
+      return {
+        name: 'observer',
+        priority: 10,
+        wrap: async (_request, next) => {
+          const result = await next();
+          order.push('wrap:after');
+          return result;
+        },
+        onEvent: (event) => {
+          order.push(`event:${event.kind}`);
+        },
+      };
+    }
+
+    it('delivers usage before the code after next() on a plain success', async () => {
+      const { client } = createMockClient([withUsage('ok')]);
+      const order: string[] = [];
+
+      const llm = new VernLLM({
+        client,
+        model: 'test-model',
+        middleware: [slowGate(), observer(order)],
+      });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      expect(order).toEqual(['event:usage', 'wrap:after']);
+    });
+
+    it('delivers retry and then usage before the code after next()', async () => {
+      const { client } = createMockClient([new FakeApiError('temporary', 500), withUsage('ok')]);
+      const order: string[] = [];
+
+      const llm = new VernLLM({
+        client,
+        model: 'test-model',
+        maxRetries: 1,
+        baseDelayMs: 1,
+        middleware: [slowGate(), observer(order)],
+      });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      expect(order).toEqual(['event:retry', 'event:usage', 'wrap:after']);
+    });
+
+    it('delivers fallback and then usage before the code after next()', async () => {
+      const { client: primaryClient } = createMockClient([new FakeApiError('down', 500)]);
+      const { client: fallbackClient } = createMockClient([withUsage('from fallback')]);
+      const order: string[] = [];
+
+      const llm = new VernLLM({
+        client: primaryClient,
+        model: 'test-model',
+        maxRetries: 0,
+        fallback: { client: fallbackClient, model: 'fallback-model', name: 'fallback' },
+        middleware: [slowGate(), observer(order)],
+      });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      expect(order).toEqual(['event:fallback', 'event:usage', 'wrap:after']);
+    });
+
+    it('delivers usage before finalResult settles on a stream', async () => {
+      const { client } = createMockStreamingClient([
+        [
+          { type: 'text-delta', delta: 'hello' },
+          { type: 'usage', usage },
+        ],
+      ]);
+      const order: string[] = [];
+
+      const llm = new VernLLM({
+        client,
+        model: 'test-model',
+        middleware: [slowGate(), observer(order)],
+      });
+
+      const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+      await finalResult;
+      order.push('finalResult');
+
+      expect(order).toContain('wrap:after');
+      expect(order.indexOf('event:usage')).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf('event:usage')).toBeLessThan(order.indexOf('finalResult'));
+    });
+
+    it('lets a handler start another call on the same instance without deadlocking', async () => {
+      const { client } = createMockClient([withUsage('ok')]);
+      let inner: Promise<unknown> | undefined;
+
+      const llm: VernLLM = new VernLLM({
+        client,
+        model: 'test-model',
+        middleware: [
+          {
+            name: 'reentrant',
+            onEvent: (event) => {
+              if (event.kind === 'usage' && inner === undefined) {
+                inner = llm.call({ userContent: 'inner', jsonMode: false });
+              }
+            },
+          },
+        ],
+      });
+
+      await expect(llm.call({ userContent: 'outer', jsonMode: false })).resolves.toBe('ok');
+      await expect(inner).resolves.toBe('ok');
+    });
+  });
 });

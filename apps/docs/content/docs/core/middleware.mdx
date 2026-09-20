@@ -202,6 +202,15 @@ always fire.
   Breaker](/docs/core/circuit-breaker#checking-and-controlling-state-manually).
 </Callout>
 
+<Callout type="info">
+  A middleware without an `enabled` function, or with a boolean one, gets each event synchronously,
+  in registration order, before the code that emitted it continues. A `usage` event has therefore
+  arrived before the code after `await next()` in `wrap` runs, and before a stream's `finalResult`
+  settles. A function `enabled` is resolved on its own, so a slow one only delays that middleware's
+  handler, never another's. Handlers run on the call path: keep them fast, and start any slow work
+  without awaiting it. A handler may call `llm.call()` safely.
+</Callout>
+
 ## `ctx.state` and `ctx.own`
 
 Two middleware sharing a value, a span ID one sets and another reads, use `ctx.state`, keyed by a
