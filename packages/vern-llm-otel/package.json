@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-otel",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "OpenTelemetry traces and metrics for vern-llm, following the GenAI semantic conventions",
   "keywords": [
     "vern-llm",

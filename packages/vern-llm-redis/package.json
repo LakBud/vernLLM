@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-redis",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Redis-backed circuit breaker, rate limiter, and cache adapters for vern-llm",
   "keywords": [
     "vern-llm",
@@ -108,10 +108,10 @@
     "size": "size-limit"
   },
   "peerDependencies": {
-    "vern-llm": "workspace:^2.8.0"
+    "vern-llm": "workspace:^2.9.0"
   },
   "devDependencies": {
-    "vern-llm": "workspace:^2.8.0",
+    "vern-llm": "workspace:^2.9.0",
     "@types/node": "^26.4.1",
     "ioredis": "^5.4.1",
     "redis": "^4.7.0",
