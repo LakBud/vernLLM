@@ -42,3 +42,10 @@ breaks the call it was meant to speed up.
   failed write or delete is logged and swallowed. This is universal `cachedCall` behavior, not
   something specific to this adapter.
 </Callout>
+
+## TTL edge cases
+
+A TTL of 0, a negative value or `NaN` means the entry is already expired: nothing is stored and any
+older value under that key is deleted, matching `InMemoryCacheAdapter`. A sub millisecond TTL is
+rounded up to 1ms, and an infinite TTL is capped at the largest value Redis accepts, so no TTL makes
+Redis reject the write.

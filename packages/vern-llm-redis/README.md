@@ -14,7 +14,7 @@
 npm i vern-llm-redis
 ```
 
-`vern-llm` is a runtime dependency. Bring your own Redis client, ioredis and node-redis (the official "redis" package) are both supported directly.
+`vern-llm` is a peer dependency, so this package shares the copy your app already uses. Bring your own Redis client, ioredis and node-redis (the official "redis" package) are both supported directly.
 
 ## Usage with ioredis
 
@@ -77,7 +77,11 @@ const llm = new VernLLM({
 
 **redisCircuitBreaker** gates each call against Redis backed state. `assertClosed` throws synchronously off a local cache. With `subscriber`, every real transition anywhere is pushed to every process over pub/sub, typically within a few ms. Without one, a background poll (`pollIntervalMs`, default 5000) re-checks every key this process has touched, bounding staleness instead of leaving it purely reactive to this process's own calls.
 
-**redisRateLimit** enforces requests per minute, tokens per minute, and concurrency across processes, including a shared AIMD ceiling when `aimd` is set. Requests/min and tokens/min waits are always precise: the exact refill time is computed from live bucket state and slept, never polled. Concurrency waits, which only clear via an external release, wake on that release's pub/sub notification when `subscriber` is set; without one they fall back to polling every `pollIntervalMs` (default 250), since nothing else can know when a slot freed.
+It keeps the built in breaker's failure rules wherever they can run inside Redis: `tripping` (`{ kind: 'consecutive', threshold }` or `{ kind: 'rolling', windowMs, minCalls, failureRatio }`), `halfOpenProbes`, `halfOpenSuccessRatio`, and an exponential `cooldownBackoff`. A custom `TrippingPolicy` or a function `cooldownBackoff` cannot run inside Redis, so they throw at construction. See the [docs](https://vernllm.dev/docs/integrations/redis/features/circuit-breaker) for every option.
+
+**redisRateLimit** enforces requests per minute, tokens per minute, and concurrency across processes, including a shared AIMD ceiling when `aimd` is set. Requests/min and tokens/min waits are always precise: the exact refill time is computed from live bucket state and slept, never polled. Concurrency waits, which only clear via an external release, wake on that release's pub/sub notification when `subscriber` is set; without one they fall back to polling every `pollIntervalMs` (default 250), since nothing else can know when a slot freed. Waiters are served first come first served across processes (`fairQueue`, on by default), and a crashed holder's slot comes back after `concurrencyLeaseMs`. See the [docs](https://vernllm.dev/docs/integrations/redis/features/rate-limit) for every option.
+
+Both adapters return a `dispose()` method, call it before closing the Redis client. Redis 5 or newer is required, since scripts read the server clock.
 
 **redisCache** matches `vern-llm`'s own `CacheAdapter` shape. Drop it in anywhere `InMemoryCacheAdapter` is used today.
 

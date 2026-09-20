@@ -5,6 +5,9 @@ import { vi } from 'vitest';
 import type { RedisClient, RedisSubscriber } from '../src/types.js';
 import type { LLMClient } from 'vern-llm';
 
+/** Which server the integration tests talk to. Set `REDIS_PORT` to run the same suite against another Redis version. */
+const REDIS_PORT = Number(process.env.REDIS_PORT ?? 6379);
+
 /** A RedisClient stand-in whose eval/get/set/del/scan are individually stubbable per test, no real Redis involved. scan defaults to an empty result (no keys, cursor '0'), so redisCircuitBreaker's startup snapshot is a no-op unless a test explicitly configures otherwise, and never touches eval's own mock queue. */
 export function fakeRedisClient(): RedisClient & {
   get: ReturnType<typeof vi.fn>;
@@ -43,7 +46,7 @@ export function fakeSubscriber(): RedisSubscriber & {
 
 /** A fresh ioredis connection to the local Redis instance the integration suite runs against. */
 export function connect(): Redis {
-  return new Redis({ host: '127.0.0.1', port: 6379, lazyConnect: false });
+  return new Redis({ host: '127.0.0.1', port: REDIS_PORT, lazyConnect: false });
 }
 
 /**
@@ -52,7 +55,7 @@ export function connect(): Redis {
  * fromNodeRedis/fromNodeRedisSubscriber specifically.
  */
 export async function connectNodeRedis(): Promise<RedisClientType> {
-  const client = createClient({ socket: { host: '127.0.0.1', port: 6379 } });
+  const client = createClient({ socket: { host: '127.0.0.1', port: REDIS_PORT } });
   await client.connect();
   return client as RedisClientType;
 }
@@ -140,4 +143,54 @@ export function createMockClient(script: Array<{ content: string } | Error>): {
 
   const client: LLMClient = { chat: { completions: { create } } };
   return { client, create };
+}
+
+/**
+ * A pub/sub message as TRANSITION_SCRIPT publishes it, with the clock,
+ * cooldown and slot fields filled in. Override only what a test cares about.
+ */
+export function transitionMessage(
+  fields: { key: string; state: string; failures: number; openedAt: number } & Partial<{
+    now: number;
+    cooldown: number;
+    slots: number;
+    grantAt: number;
+  }>,
+): string {
+  return JSON.stringify({ now: 1000, cooldown: 30_000, slots: 0, grantAt: 0, ...fields });
+}
+
+/**
+ * Waits until every node of the cluster in REDIS_CLUSTER_NODES reports
+ * cluster_state:ok, i.e. globalSetup.cluster.ts has finished forming it.
+ * Cheap when the cluster is already up, and it is what lets that setup start
+ * the cluster without making the other test files wait for it.
+ */
+export async function waitForCluster(
+  nodes: Array<{ host: string; port: number }>,
+  timeoutMs = 20_000,
+): Promise<void> {
+  await waitUntil(
+    async () => {
+      const states = await Promise.all(
+        nodes.map(async ({ host, port }) => {
+          const node = new Redis({ host, port, lazyConnect: true, maxRetriesPerRequest: 0 });
+          try {
+            await node.connect();
+            const info = String(await node.cluster('INFO'));
+            return (
+              info.includes('cluster_state:ok') &&
+              info.includes(`cluster_known_nodes:${nodes.length}`)
+            );
+          } catch {
+            return false;
+          } finally {
+            node.disconnect();
+          }
+        }),
+      );
+      return states.every(Boolean);
+    },
+    { timeoutMs, intervalMs: 50 },
+  );
 }

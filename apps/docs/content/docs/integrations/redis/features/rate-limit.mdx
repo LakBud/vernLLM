@@ -23,17 +23,23 @@ const limiter = redisRateLimit(client, {
 
 ## Options
 
-| Option              | Default                 | Notes                                                                                                   |
-| ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------- |
-| `requestsPerMinute` | unlimited               | Also the AIMD ceiling's starting value when `aimd` is set.                                              |
-| `tokensPerMinute`   | unlimited               | Checked against a pre-flight estimate from `estimateTokens`.                                            |
-| `maxConcurrent`     | unlimited               | Max requests in flight at once, shared across every process using this key.                             |
-| `maxQueueMs`        | `30000`                 | Max time a call may wait for capacity before throwing.                                                  |
-| `pollIntervalMs`    | `250`                   | Fallback poll interval used only while waiting on the concurrency bucket without a subscriber.          |
-| `estimateTokens`    | `defaultEstimateTokens` | Same tokenizer seam described in [Customization → Tokenizer](/docs/customization/tokenizer).            |
-| `keyPrefix`         | `'vernllm:rl'`          | Prefix for every Redis key this adapter writes.                                                         |
-| `aimd`              | none                    | AIMD against the requests-per-minute bucket, shared across every process. Requires `requestsPerMinute`. |
-| `subscriber`        | none                    | A dedicated pub or sub connection. Enables push based wake-ups for concurrency waits.                   |
+| Option               | Default                 | Notes                                                                                                                                                    |
+| -------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestsPerMinute`  | unlimited               | Also the AIMD ceiling's starting value when `aimd` is set.                                                                                               |
+| `tokensPerMinute`    | unlimited               | Checked against a pre-flight estimate from `estimateTokens`.                                                                                             |
+| `maxConcurrent`      | unlimited               | Max requests in flight at once, shared across every process using this key.                                                                              |
+| `maxQueueMs`         | `30000`                 | Max time a call may wait for capacity before throwing.                                                                                                   |
+| `maxQueueSize`       | unbounded               | Max calls this process may have waiting at once before new ones throw `rate_limit_queue_full`. Counted per process.                                      |
+| `estimateFraction`   | `1`                     | Scales the pre-flight token estimate down. Above 1 is clamped to 1, must be greater than 0.                                                              |
+| `fairQueue`          | `true`                  | Serve waiters first come first served across every process. See [Fair queue](#fair-queue).                                                               |
+| `queueLeaseMs`       | `15000`                 | How long a waiter's place in line survives without renewal, so a crashed waiter stops blocking it.                                                       |
+| `logger`             | the instance's logger   | Where background failures are reported. Defaults to the `logger` of the `VernLLM` it is passed to, or the one created last if several share the adapter. |
+| `concurrencyLeaseMs` | `30000`                 | How long a concurrency slot may go unrenewed before Redis frees it. Live calls renew automatically.                                                      |
+| `pollIntervalMs`     | `250`                   | Fallback poll interval used only while waiting on the concurrency bucket without a subscriber.                                                           |
+| `estimateTokens`     | `defaultEstimateTokens` | Same tokenizer seam described in [Customization → Tokenizer](/docs/customization/tokenizer).                                                             |
+| `keyPrefix`          | `'vernllm:rl'`          | Prefix for every Redis key this adapter writes.                                                                                                          |
+| `aimd`               | none                    | AIMD against the requests-per-minute bucket, shared across every process. Requires `requestsPerMinute`.                                                  |
+| `subscriber`         | none                    | A dedicated pub or sub connection. Enables push based wake-ups for concurrency waits.                                                                    |
 
 `requestsPerMinute`, `tokensPerMinute`, and `maxConcurrent` are independent limits, set any
 combination of them, a call waits on whichever bucket it hits first.
@@ -52,6 +58,40 @@ combination of them, a call waits on whichever bucket it hits first.
   As with the circuit breaker, `subscriber` must be a separate connection from `client`, wrapped
   with `fromIoredisSubscriber` or `fromNodeRedisSubscriber`.
 </Callout>
+
+## Concurrency slots survive crashes
+
+Each in flight call holds a lease that it renews while it runs. If a process dies, its leases stop
+being renewed and lapse after `concurrencyLeaseMs`, so a crash can no longer shrink `maxConcurrent`
+for good. The lease only decides how fast a dead process's slots come back, not how long a call may
+run.
+
+All refill timing uses the Redis clock, so a process with a skewed clock cannot refill a bucket early
+or stall it for everyone else. Redis 5 or newer is required.
+
+## Fair queue
+
+Waiters are served first come first served across every process sharing the limiter, so capacity goes
+to whoever has waited longest rather than whoever's poll fires first. A call that has to wait takes a
+ticket in one shared Redis line, only the call at the head may take capacity, and a newcomer that
+finds anyone waiting joins behind them instead of taking capacity out from under them. A release
+wakes the next waiter through the subscriber, or the poll if there is none.
+
+A waiter renews its place on every check. If its process dies, the place lapses after
+`queueLeaseMs` and the line moves on. The order is strict, so a large request at the head is not
+starved by small ones behind it, and also holds everyone behind it while it waits for capacity. Set
+`fairQueue: false` to skip the line and race, which saves a few Redis calls per waiting call.
+
+## Reading state and shutting down
+
+`getState()` is synchronous, as the adapter contract requires, so it cannot ask Redis. It reports
+what this process last saw, refilled forward by the time since, and it applies this process's own
+releases and refunds immediately. Other processes' activity is invisible to it, and before this
+process has made a call it reports every bucket as untouched. Use `await limiter.readState()`, or `await llm.readRateLimitState()` from `VernLLM`, for a
+live read across every process, which also refreshes what `getState()` reports.
+
+`limiter.dispose()` stops the lease renewals and detaches from the subscriber, call it before closing
+the client.
 
 ## AIMD
 
@@ -80,11 +120,12 @@ curve itself works, that math is identical to the in-process limiter.
 
 ## Errors
 
-`acquire` throws `LLMError` in three cases, none of them tied to Redis connectivity:
+`acquire` throws `LLMError` in four cases, none of them tied to Redis connectivity:
 
 | type           | code                           | When                                                                                                                                                                                                    |
 | -------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rate_limited` | `rate_limit_capacity_exceeded` | The estimated tokens exceed a fixed `tokensPerMinute`, which AIMD never grows, so the request could never succeed no matter how long it waited. Thrown immediately instead of waiting out `maxQueueMs`. |
+| `rate_limited` | `rate_limit_queue_full`        | `maxQueueSize` calls from this process were already waiting.                                                                                                                                            |
 | `rate_limited` | `rate_limit_queue_timeout`     | The call waited `maxQueueMs` without capacity becoming available.                                                                                                                                       |
 | `aborted`      | none                           | The `AbortSignal` passed to `acquire` fired while it was waiting.                                                                                                                                       |
 
@@ -99,3 +140,8 @@ Neither `redisRateLimit` nor `vern-llm` core catches a Redis connection failure 
 out of `acquire()`, and `vern-llm`'s own `acquireRateLimit` dispatch has no try/catch around that
 call either. A Redis outage genuinely fails the LLM call, there is no fail-open path anywhere in the
 stack for rate limiting, unlike caching, where `vern-llm` core catches adapter failures universally.
+
+Work that happens after a call has already succeeded is different: a failed release, token refund,
+lease renewal or AIMD resize is logged with `console.error` and swallowed, never thrown, so an outage
+cannot crash the process for a call that finished. If Redis fails between two bucket takes inside
+`acquire`, the buckets already taken are given back before the error is thrown.

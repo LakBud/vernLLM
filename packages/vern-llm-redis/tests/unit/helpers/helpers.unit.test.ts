@@ -21,6 +21,7 @@ import {
   expectNearInstant,
   fakeSubscriber,
   uniquePrefix,
+  waitForCluster,
   waitUntil,
 } from '../../helpers.js';
 
@@ -173,5 +174,91 @@ describe('waitUntil', () => {
     await expect(waitUntil(() => false, { timeoutMs: 30, intervalMs: 10 })).rejects.toThrow(
       /condition not met within 30ms/,
     );
+  });
+});
+
+describe('waitForCluster', () => {
+  const nodes = [
+    { host: '127.0.0.1', port: 7001 },
+    { host: '127.0.0.1', port: 7002 },
+    { host: '127.0.0.1', port: 7003 },
+  ];
+  const ready = 'cluster_state:ok\r\ncluster_known_nodes:3\r\n';
+
+  /** Makes every `new Redis(...)` return a node whose connect and CLUSTER INFO are scripted per call. */
+  function scriptNodes(script: { connect?: () => Promise<void>; info: () => Promise<string> }): {
+    disconnect: ReturnType<typeof vi.fn>;
+  } {
+    const disconnect = vi.fn();
+    vi.mocked(Redis).mockReset();
+    vi.mocked(Redis).mockImplementation(function () {
+      return {
+        connect: script.connect ?? (async () => undefined),
+        cluster: script.info,
+        disconnect,
+      } as unknown as Redis;
+    });
+    return { disconnect };
+  }
+
+  it('resolves once every node reports the cluster ready, and closes each connection', async () => {
+    const { disconnect } = scriptNodes({ info: async () => ready });
+
+    await expect(waitForCluster(nodes)).resolves.toBeUndefined();
+
+    expect(vi.mocked(Redis)).toHaveBeenCalledWith({
+      host: '127.0.0.1',
+      port: 7002,
+      lazyConnect: true,
+      maxRetriesPerRequest: 0,
+    });
+    expect(disconnect).toHaveBeenCalledTimes(nodes.length);
+  });
+
+  it('keeps polling while a node still says the cluster is not ready', async () => {
+    let calls = 0;
+    scriptNodes({
+      info: async () => {
+        calls += 1;
+        return calls <= nodes.length ? 'cluster_state:fail\r\ncluster_known_nodes:1\r\n' : ready;
+      },
+    });
+
+    await expect(waitForCluster(nodes)).resolves.toBeUndefined();
+
+    expect(calls).toBe(nodes.length * 2);
+  });
+
+  it('treats a node that cannot be reached yet as not ready, then succeeds once it can', async () => {
+    let connects = 0;
+    const { disconnect } = scriptNodes({
+      connect: async () => {
+        connects += 1;
+        if (connects <= nodes.length) throw new Error('ECONNREFUSED');
+      },
+      info: async () => ready,
+    });
+
+    await expect(waitForCluster(nodes)).resolves.toBeUndefined();
+
+    expect(connects).toBe(nodes.length * 2);
+    expect(disconnect).toHaveBeenCalledTimes(nodes.length * 2);
+  });
+
+  it('does not accept a cluster that has not met every node yet', async () => {
+    scriptNodes({ info: async () => 'cluster_state:ok\r\ncluster_known_nodes:2\r\n' });
+
+    await expect(waitForCluster(nodes, 30)).rejects.toThrow(/condition not met/);
+  });
+
+  it('gives up with the timeout when a node never becomes reachable', async () => {
+    scriptNodes({
+      connect: async () => {
+        throw new Error('ECONNREFUSED');
+      },
+      info: async () => ready,
+    });
+
+    await expect(waitForCluster(nodes, 30)).rejects.toThrow(/within 30ms/);
   });
 });

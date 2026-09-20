@@ -24,8 +24,8 @@ constructor and don't depend on each other.
 The three adapters don't share a failure contract, each page above covers its own in full, but
 here's the difference at a glance:
 
-| Adapter         | On a Redis outage                                                                                                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Circuit Breaker | Writes (`recordSuccess`/`recordFailure`) fail closed: logged and swallowed. Reads (`assertClosed`) never touch Redis live in the first place, they're always local-cache-only. |
-| Rate Limit      | No fail-open path anywhere in the stack. A rejected Redis call propagates and genuinely fails the LLM call.                                                                    |
-| Cache           | Fails open, but this comes from `vern-llm` core's `CacheOrchestrator`, universal to any `CacheAdapter`, not something `redisCache` implements itself.                          |
+| Adapter         | On a Redis outage                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Circuit Breaker | Writes (`recordSuccess`/`recordFailure`) fail closed: logged and swallowed. `assertClosed` never touches Redis, it reads the local copy, and the async `prepare` step refreshes it, bounded by `prepareTimeoutMs`. |
+| Rate Limit      | No fail-open path anywhere in the stack. A rejected Redis call propagates and genuinely fails the LLM call.                                                                                                        |
+| Cache           | Fails open, but this comes from `vern-llm` core's `CacheOrchestrator`, universal to any `CacheAdapter`, not something `redisCache` implements itself.                                                              |

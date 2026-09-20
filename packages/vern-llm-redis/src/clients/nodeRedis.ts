@@ -48,6 +48,7 @@ export interface NodeRedisSubscriberLike {
     channel: string,
     listener: (message: string, channel: string) => void,
   ): Promise<unknown>;
+  unsubscribe?(channel: string): Promise<unknown>;
 }
 
 /**
@@ -80,6 +81,13 @@ export function fromNodeRedisSubscriber(client: NodeRedisSubscriberLike): RedisS
         subscribed.delete(channel);
         throw error;
       }
+    },
+    async unsubscribe(channel) {
+      if (!subscribed.has(channel)) return;
+      subscribed.delete(channel);
+      // Listeners stay: another adapter may share this subscriber, and
+      // node-redis stops delivering this channel once it is unsubscribed.
+      await client.unsubscribe?.(channel);
     },
     on(event, listener) {
       if (event === 'message') listeners.push(listener);

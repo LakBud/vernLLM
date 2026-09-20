@@ -156,7 +156,7 @@ jobs:
       - uses: nrwl/nx-set-shas@v5
 
       - name: Test unit, affected projects
-        run: pnpm exec nx affected -t test:unit:coverage
+        run: pnpm exec nx affected -t test:unit:coverage --output-style=static
 
       # Each of these is a no-op (hashFiles empty, step skipped) unless
       # that specific project's test:unit:coverage actually ran above.
@@ -189,7 +189,7 @@ jobs:
 
     services:
       redis:
-        image: redis:7
+        image: redis:8.10
         ports:
           - 6379:6379
         options: >-
@@ -216,8 +216,26 @@ jobs:
 
       - uses: nrwl/nx-set-shas@v5
 
+      # The cluster tests (tests/integration/cluster.int.test.ts) run in this
+      # job. tests/globalSetup.cluster.ts starts its own 3 node Redis Cluster
+      # from the redis-server binary, so only the binary is needed here. With
+      # CI set, a missing binary fails the run instead of skipping them.
+      #
+      # The service container above already owns port 6379, and installing
+      # the package would start its own service on that port. A failed
+      # start can fail the install, so services are blocked during it (the
+      # policy-rc.d exit code 101 means "not allowed to start").
+      - name: Install redis-server for the cluster tests
+        run: |
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod +x /usr/sbin/policy-rc.d
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends redis-server
+          sudo rm -f /usr/sbin/policy-rc.d
+          redis-server --version
+
       - name: Test integration, affected projects
-        run: pnpm exec nx affected -t test:int:coverage
+        run: pnpm exec nx affected -t test:int:coverage --output-style=static
 
       - name: Upload vern-llm coverage to Codecov
         if: hashFiles('packages/vern-llm/coverage/lcov.info') != ''

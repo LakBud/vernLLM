@@ -11,13 +11,29 @@ export interface LocalCircuitBucket {
   failures: number;
   openedAt: number;
   /**
-   * True only while this process holds a Redis-confirmed half-open
-   * trial it hasn't used yet (see TRANSITION_SCRIPT's wonProbe). Never
-   * set optimistically, only after an async transition() result
-   * confirms this process actually won the lease, so assertClosed can
-   * make its synchronous allow/deny decision without ever guessing.
+   * How many Redis-confirmed half-open trial slots this process holds and
+   * has not spent yet (see TRANSITION_SCRIPT's wonProbe). Never set
+   * optimistically, only after an async transition() result confirms this
+   * process actually won them, so assertClosed can make its synchronous
+   * allow/deny decision without ever guessing.
+   *
+   * A count, not a flag: background checks can overlap, and each one that
+   * wins a slot in Redis is a slot this process now owns. Folding them
+   * into one flag would strand the rest until their lease ran out.
    */
-  trialAvailable: boolean;
+  trialsHeld: number;
+  /** The half-open epoch those slots belong to. Only meaningful while `trialsHeld` is above 0. */
+  trialToken: string;
+  /** Failure counts by error code, as last reported by Redis. */
+  breakdown: Record<string, number>;
+  /** Redis's clock minus this process's, in ms, as of the last report. Adding it to `Date.now()` estimates Redis's time without asking. */
+  serverOffset: number;
+  /** The cooldown in force, in ms, as last reported by Redis. */
+  cooldownMs: number;
+  /** Half-open trial slots not yet handed out, as last reported by Redis. */
+  slots: number;
+  /** When the latest half-open slot was handed out, on Redis's clock, or 0. */
+  grantAt: number;
 }
 
 /**
@@ -36,16 +52,34 @@ export interface LocalCircuitCache {
   set(key: string, bucket: LocalCircuitBucket): void;
   /** Every key this cache has ever been asked about, the set a background poll (see redisCircuitBreaker's pollIntervalMs) re-checks against Redis. */
   keys(): IterableIterator<string>;
+  /** True while `key` is still exactly the fresh closed bucket `get` creates: nothing has ever been written to it. */
+  isPristine(key: string): boolean;
+}
+
+function freshBucket(): LocalCircuitBucket {
+  return {
+    state: 'closed',
+    failures: 0,
+    openedAt: 0,
+    trialsHeld: 0,
+    trialToken: '',
+    breakdown: {},
+    serverOffset: 0,
+    cooldownMs: 0,
+    slots: 0,
+    grantAt: 0,
+  };
 }
 
 export function createLocalCircuitCache(): LocalCircuitCache {
   const cache = new Map<string, LocalCircuitBucket>();
+  const written = new Set<string>();
 
   return {
     get(key) {
       let bucket = cache.get(key);
       if (!bucket) {
-        bucket = { state: 'closed', failures: 0, openedAt: 0, trialAvailable: false };
+        bucket = freshBucket();
         cache.set(key, bucket);
       }
       return bucket;
@@ -53,10 +87,15 @@ export function createLocalCircuitCache(): LocalCircuitCache {
 
     set(key, bucket) {
       cache.set(key, bucket);
+      written.add(key);
     },
 
     keys() {
       return cache.keys();
+    },
+
+    isPristine(key) {
+      return !written.has(key);
     },
   };
 }

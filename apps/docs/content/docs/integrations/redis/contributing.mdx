@@ -16,7 +16,8 @@ pnpm install
 ```
 
 Integration tests need a local `redis-server` running, this is a real setup difference from
-`vern-llm`'s suite, which runs entirely on fakes and mocks.
+`vern-llm`'s suite, which needs no external service: its tests use fakes and mocks, or a local
+loopback HTTP server standing in for a provider.
 
 ## Coding standard
 
@@ -55,9 +56,32 @@ vern-llm-redis:<script>` from the repo root:
 ```
 
 `test:int` and `test:int:coverage` need a local `redis-server` running, this is a real setup
-difference from `vern-llm`'s suite, which runs entirely on fakes and mocks. `prepublishOnly` runs
+difference from `vern-llm`'s suite, which needs no external service. Set `REDIS_PORT` to run
+the same suite against another server, for example an older Redis build on a different port. The
+cluster tests start their own cluster, see [Cluster tests](#cluster-tests). `prepublishOnly` runs
 automatically before publish and isn't something you need to run by hand, it's listed here since it
 shows the exact sequence a release goes through: typecheck, build, size, smoke test.
+
+## Cluster tests
+
+`test:int` starts a throwaway 3 node Redis Cluster for `cluster.int.test.ts`, so there is nothing
+to set up by hand. It only needs `redis-server` on your `PATH`, the same binary as your local
+Redis.
+
+1. The nodes use random free ports, so your Redis on 6379 is never touched.
+2. The cluster forms in the background. Only the cluster test file waits, about 2 seconds.
+3. The nodes and their temp directories are removed when the run ends, including on Ctrl-C.
+
+To use a cluster you already run, set `REDIS_CLUSTER_NODES` to a comma separated `host:port` list
+and nothing is started:
+
+```bash
+REDIS_CLUSTER_NODES=127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003 pnpm run test:int
+```
+
+If `redis-server` is missing, the cluster tests skip locally and print the reason. When `CI` is set
+they fail the run instead, so they can never quietly stop running. CI installs `redis-server` for
+this in its integration job.
 
 ## Before opening a PR
 

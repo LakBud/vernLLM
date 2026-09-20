@@ -231,10 +231,6 @@ importers:
         version: 4.5.4
 
   packages/vern-llm-redis:
-    dependencies:
-      vern-llm:
-        specifier: workspace:^2.8.0
-        version: link:../vern-llm
     devDependencies:
       '@size-limit/esbuild':
         specifier: 13.1.1
@@ -269,6 +265,9 @@ importers:
       unplugin-unused:
         specifier: ^0.5.7
         version: 0.5.7(esbuild@0.28.2)(rolldown@1.2.7)(vite@8.1.5(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.0))
+      vern-llm:
+        specifier: workspace:^2.8.0
+        version: link:../vern-llm
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@26.4.1)(@vitest/coverage-v8@4.1.11)(vite@8.1.5(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.0))

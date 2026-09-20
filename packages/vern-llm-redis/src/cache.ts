@@ -1,3 +1,5 @@
+import { ttlToPx } from './internal/ttl.utils.js';
+
 import type { RedisClient } from './types.js';
 import type { CacheAdapter } from 'vern-llm';
 
@@ -43,7 +45,18 @@ export function redisCache<T = unknown>(
           `redisCache: value for key "${key}" is not JSON-serializable (got undefined, a function, or a symbol)`,
         );
       }
-      await redis.set(fullKey(key), serialized, 'PX', ttl * 1000);
+
+      // A spent TTL means "expired on arrival", as it does for
+      // InMemoryCacheAdapter: nothing is stored and any older value under
+      // the key is dropped. Redis would reject it with "invalid expire
+      // time" instead.
+      const px = ttlToPx(ttl);
+      if (px === undefined) {
+        await redis.del(fullKey(key));
+        return;
+      }
+
+      await redis.set(fullKey(key), serialized, 'PX', px);
     },
 
     async delete(key) {
