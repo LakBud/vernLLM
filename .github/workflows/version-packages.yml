@@ -29,6 +29,7 @@ jobs:
             code:
               - 'packages/vern-llm/**'
               - 'packages/vern-llm-redis/**'
+              - 'packages/vern-llm-otel/**'
               - '.changeset/**'
               - 'package.json'
               - 'pnpm-lock.yaml'

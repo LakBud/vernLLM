@@ -35,6 +35,12 @@ chain moving to the next `fallback` target, or a real spend once a response is e
 single event stream instead of a separate option per concern, so handling one kind doesn't require
 leaving the others unset.
 
+<Callout>
+  Want spans and metrics instead of wiring `onEvent` by hand? The [OpenTelemetry
+  integration](/docs/integrations/otel) turns these same events into traces and metrics that follow
+  the GenAI semantic conventions.
+</Callout>
+
 ## Fire and forget
 
 `onEvent` mirrors `onUsage`: it is synchronous, fire and forget, and wrapped in a try/catch at the

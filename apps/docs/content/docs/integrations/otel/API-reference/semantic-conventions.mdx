@@ -1,0 +1,111 @@
+---
+title: Semantic Conventions
+description: Which GenAI semantic conventions vern-llm-otel follows, and which it leaves out
+---
+
+<Callout type="warn">
+  Every GenAI semantic convention is in Development status, so attribute and metric names can change
+  in a later release. This package was written against semantic conventions 1.44.0. It copies the
+  names into one file instead of importing them, so a rename after a spec change is a small release
+  of its own.
+</Callout>
+
+The package always emits the names it was built against. It does not read
+`OTEL_SEMCONV_STABILITY_OPT_IN`, since it is a new instrumentation with no older names to keep.
+Anything specific to VernLLM, such as retries and fallbacks, lives under `vernllm.*` and never
+under `gen_ai.*`, which the spec owns.
+
+## Coverage
+
+| Convention                                                            | Status      | Notes                                                                                           |
+| --------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------- |
+| Inference span, `chat`                                                | Emitted     | One per attempt, see [Traces](/docs/integrations/otel/features/traces).                         |
+| Sampling attributes: operation, provider, request model               | Emitted     | Present when the attempt span starts.                                                           |
+| `server.address`, `server.port`                                       | Not emitted | No adapter exposes its endpoint.                                                                |
+| `max_tokens`, `temperature`, `output.type`, `request.reasoning.level` | Emitted     | From the wire request.                                                                          |
+| `top_p`, `top_k`, stop sequences, seed, penalties, choice count       | Not emitted | Not on the wire request.                                                                        |
+| `response.model`, `response.id`, `finish_reasons`                     | Not emitted | VernLLM does not surface them, and reporting the requested model there would be wrong.          |
+| Input, output, and reasoning token usage                              | Emitted     | Reasoning tokens only when the provider reports them.                                           |
+| Cache read and cache creation tokens                                  | Not emitted | No data source in `TokenUsage`.                                                                 |
+| `error.type` and span status                                          | Emitted     | Low cardinality, never the provider's message.                                                  |
+| `gen_ai.conversation.id`                                              | On request  | Set through the `attributes` hook, since VernLLM has no conversation concept.                   |
+| Content on span attributes                                            | Opt in      | See [Content Capture](/docs/integrations/otel/features/content-capture).                        |
+| Content through the operation details event, or external storage      | Not emitted | Needs the Logs API, which is a later decision.                                                  |
+| `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`       | Emitted     | Per attempt.                                                                                    |
+| `gen_ai.client.operation.time_to_first_chunk`                         | Emitted     | Streams only.                                                                                   |
+| `gen_ai.response.time_to_first_chunk`                                 | Emitted     | The same measurement, as a span attribute.                                                      |
+| `gen_ai.client.operation.time_per_output_chunk`                       | Not emitted | Chunks are buffered, so middleware cannot see when each one arrived.                            |
+| Server metrics, `gen_ai.server.*`                                     | Not emitted | VernLLM is a client.                                                                            |
+| Embeddings, retrieval, and memory operations                          | Not emitted | VernLLM has no such APIs.                                                                       |
+| `execute_tool` span                                                   | Your app    | VernLLM returns tool calls and your app runs them, see [below](#your-own-agent-and-tool-spans). |
+| Agent and workflow spans, and their metrics                           | Your app    | VernLLM spans nest under yours automatically.                                                   |
+| Evaluation events                                                     | Not emitted | VernLLM runs no evaluations.                                                                    |
+| Provider specific conventions such as `openai.*`, and MCP             | Not emitted | Only `gen_ai.provider.name` is set.                                                             |
+
+Every VernLLM call is a chat style operation, so every attempt uses `gen_ai.operation.name` set to
+`chat`, Gemini included. `gen_ai.provider.name` comes from your
+[`providerNames`](/docs/integrations/otel/API-reference/configuration#providernames).
+
+## Avoid double counting
+
+A provider SDK with its own OpenTelemetry instrumentation already emits GenAI spans and token
+metrics for the same request. With both active you get two inference spans and two token counts.
+Set `genAiConventions` to `false` to keep only VernLLM's own telemetry:
+
+```ts title="otel-vernllm-only.ts"
+otelMiddleware({ genAiConventions: false });
+```
+
+In this mode there are no `gen_ai.*` attributes and no GenAI metrics. Attempt spans become
+`vernllm.attempt` INTERNAL spans, the `vernllm.*` metrics are unchanged, and content capture is off
+because its attributes are `gen_ai.*` ones.
+
+## Your own agent and tool spans
+
+VernLLM does not run agents or tools, so those spans are yours. Start them around the call and VernLLM's
+spans nest underneath, using the same attribute names as the conventions:
+
+```ts title="otel-agent-and-tool-spans.ts"
+import { SpanStatusCode, trace } from '@opentelemetry/api';
+
+const tracer = trace.getTracer('my-app');
+
+await tracer.startActiveSpan('invoke_agent weather-agent', async (agent) => {
+  try {
+    agent.setAttributes({
+      'gen_ai.operation.name': 'invoke_agent',
+      'gen_ai.agent.name': 'weather-agent',
+    });
+
+    const result = await llm.call({
+      userContent: 'What is the weather in Oslo?',
+      tools: [weatherTool],
+    });
+
+    if (result.type === 'tool_calls') {
+      for (const call of result.toolCalls) {
+        await tracer.startActiveSpan(`execute_tool ${call.name}`, async (tool) => {
+          try {
+            tool.setAttributes({
+              'gen_ai.operation.name': 'execute_tool',
+              'gen_ai.tool.name': call.name,
+              'gen_ai.tool.call.id': call.id,
+            });
+            await runTool(call);
+          } catch (error) {
+            tool.setStatus({ code: SpanStatusCode.ERROR });
+            throw error;
+          } finally {
+            tool.end();
+          }
+        });
+      }
+    }
+  } finally {
+    agent.end();
+  }
+});
+```
+
+The `vernllm.call` span becomes a child of `invoke_agent`, and each `execute_tool` span is its
+sibling.

@@ -555,6 +555,35 @@ describe('middleware workflow integration', () => {
     expect(observedBeforeNext).toBeUndefined();
   });
 
+  it("an outermost claimant's wrap nesting follows registration order, not the priority it uses for transform", async () => {
+    const { client } = createMockClient([textResponse('hi')]);
+    const events: string[] = [];
+
+    const claimant = (name: string, priority: number): VernLLMMiddleware => ({
+      name,
+      position: 'outermost',
+      priority,
+      wrap: async (_request, next) => {
+        events.push(`${name}:before`);
+        const result = await next();
+        events.push(`${name}:after`);
+        return result;
+      },
+    });
+
+    // `late` has the higher priority, so it transforms last, yet it was registered first and
+    // therefore still holds the outermost wrap slot.
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [claimant('late', 1000), claimant('early', -1000)],
+    });
+
+    await llm.call({ userContent: 'hi', jsonMode: false });
+
+    expect(events).toEqual(['late:before', 'early:before', 'early:after', 'late:after']);
+  });
+
   it('cachedCall: two concurrent callers on the same cacheKey join a single in-flight miss, each still getting exactly one wrap invocation of their own', async () => {
     let resolveCall: (value: unknown) => void;
     const pendingCall = new Promise((resolve) => {

@@ -1,0 +1,122 @@
+---
+title: Traces
+description: The call span, the attempt spans, their attributes, events, and how they end
+---
+
+Every call produces two kinds of span. The call span covers the whole logical operation, retries
+and fallbacks included, which is what the GenAI conventions ask of a span. Each attempt inside it
+gets its own span, and that one is the inference span.
+
+| Span    | Name                    | Kind     | Starts                 | Ends                                                                                                  |
+| ------- | ----------------------- | -------- | ---------------------- | ----------------------------------------------------------------------------------------------------- |
+| Call    | `vernllm.call`          | INTERNAL | When the call starts   | When the call settles, for a stream when `finalResult` settles                                        |
+| Attempt | `chat {requestedModel}` | CLIENT   | When an attempt begins | A failed attempt when its retry or fallback is announced, the answering attempt when the call settles |
+
+The call span has no `gen_ai.operation.name`, so a backend that counts inference spans counts
+attempts only. Every attempt uses the `chat` operation, including on Gemini, since each VernLLM
+call is a chat style request.
+
+## Attempt span attributes
+
+| Attribute                                                                                         | Set                                                                    |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`                           | At start, so a sampler can act on them                                 |
+| `gen_ai.request.max_tokens`, `gen_ai.request.temperature`                                         | At start, when the request sets them                                   |
+| `gen_ai.output.type`                                                                              | At start, `json` when the request has a response format, else `text`   |
+| `gen_ai.request.reasoning.level`                                                                  | At start, the reasoning effort sent to the provider                    |
+| `gen_ai.request.stream`                                                                           | `true` when the call turned out to be a stream                         |
+| `gen_ai.response.time_to_first_chunk`                                                             | Seconds, streams only                                                  |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.reasoning.output_tokens` | After the attempt, when the provider reported them                     |
+| `error.type`, `http.response.status_code`                                                         | On failure, the status only when the error has one                     |
+| `vernllm.target`                                                                                  | The raw target label, `primary` or `fallback[0]` or your `name`        |
+| `vernllm.attempt`, `vernllm.is_fallback`                                                          | Attempt number within its target, and whether the target is a fallback |
+| `vernllm.request.reasoning_effort`, `vernllm.request.budget_tokens`                               | At start, when the request sets them                                   |
+| `vernllm.rate_limit.wait_ms`                                                                      | Time spent waiting for local rate limit capacity                       |
+| `vernllm.usage.failed`                                                                            | `true` when the attempt spent tokens and then failed                   |
+
+Attempts across targets are ordered by span start time.
+
+## Call span attributes
+
+| Attribute                                                                 | Set                                                                                           |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `vernllm.request_id`, `vernllm.primary.provider`, `vernllm.primary.model` | At start                                                                                      |
+| `vernllm.content.captured`                                                | At start, only when `captureContent` is set                                                   |
+| Whatever your `attributes` hook returns                                   | At start, see [Configuration](/docs/integrations/otel/API-reference/configuration#attributes) |
+| `vernllm.answered.provider`, `vernllm.answered.model`                     | At end, the target that answered                                                              |
+| `vernllm.used_fallback`, `vernllm.fallback_index`                         | At end                                                                                        |
+| `vernllm.total_attempts`                                                  | At end, every attempt across every target                                                     |
+| `vernllm.streaming`, `gen_ai.request.stream`                              | At end and at stream open                                                                     |
+| `vernllm.no_attempt.reason`, `vernllm.short_circuit.by`                   | At end, when the call made no attempt of its own                                              |
+| `error.type`, `http.response.status_code`, `vernllm.fallback.attempts`    | At end, on failure                                                                            |
+
+## Calls with no attempt
+
+A call can finish without a provider request of its own. It ends with status OK, and
+`vernllm.no_attempt.reason` says why:
+
+| Reason          | Meaning                                                             |
+| --------------- | ------------------------------------------------------------------- |
+| `cache_hit`     | Answered from the cache, so there is no `meta` and no provider call |
+| `coalesced`     | A `cachedCall` joined another caller's in flight request            |
+| `short_circuit` | An inner middleware `wrap` answered without calling `next`          |
+
+A coalesced call reports the answering target from `meta` and no token usage, since the request
+that spent the tokens belongs to another call.
+
+## Span events
+
+Events go on the call span:
+
+| Event                   | Attributes                                                           |
+| ----------------------- | -------------------------------------------------------------------- |
+| `vernllm.retry`         | `attempt`, `delay_ms`, `retry_after_honored`, `error.type`           |
+| `vernllm.fallback`      | `from`, `to`, `elapsed_ms`, `error.type`                             |
+| `vernllm.circuit_state` | `provider`, `model`, `from`, `to`, `consecutive_failures`            |
+| `vernllm.middleware`    | `name`, `hook`, `patched_fields`, only with `middlewareEvents: true` |
+
+A rate limit wait is not an event. It is the `vernllm.rate_limit.wait_ms` attribute on the
+attempt and the `vernllm.rate_limit.wait` [metric](/docs/integrations/otel/features/metrics). The attempt
+span still covers the wait, while the duration metric leaves it out.
+
+## Status and errors
+
+1. `error.type` is the `LLMError` `code` when it has one, else its `type`, and `_OTHER` for
+   anything that is not an `LLMError`. Both are enumerated sets, see
+   [Error handling](/docs/core/error-handling). A `FallbackExhaustedError` reports
+   `fallback_exhausted` on the call span, with the number of targets tried in
+   `vernllm.fallback.attempts`, while the last attempt span keeps the reason that attempt failed.
+2. Every failure sets status ERROR, aborts included. The status message is the same low
+   cardinality string, never the provider's message, because that can echo prompt text.
+3. An `LLMError` with a numeric status also sets `http.response.status_code`.
+4. Exception events are off by default. `recordExceptions` adds an `exception` event carrying only
+   the error code, and a stack only with `{ stack: true }`, see
+   [Configuration](/docs/integrations/otel/API-reference/configuration#recordexceptions).
+5. Errors are recognised by shape, not `instanceof`, so a second installed copy of `vern-llm` can
+   never turn real errors into `_OTHER`.
+
+The exact error object thrown by the call is rethrown, so callers see what they would see without
+this middleware.
+
+## Streaming
+
+For a stream, the call span and the answering attempt span stay open until `finalResult` settles,
+so the span covers the whole response and the output can still be recorded.
+
+The core opens a stream only after its first chunk has arrived, so the time to first chunk is
+taken at that moment: seconds since the attempt started, minus any local rate limit wait. It is
+recorded as the `gen_ai.response.time_to_first_chunk` attribute and the
+`gen_ai.client.operation.time_to_first_chunk` metric, from one measurement.
+
+There is no per chunk metric. `chunks` is buffered and read at the consumer's pace, so middleware
+cannot see when a chunk really arrived. The package observes `finalResult` on the side and never
+replaces it or `chunks`, so stream behavior is identical with and without it.
+
+## Parents and HTTP spans
+
+The call span's parent is whatever context is active when the call starts. Attempt spans are
+parented to the call span explicitly, so parenting works even with no context manager installed.
+
+An attempt starts before the request is dispatched, so it cannot be the active span while the
+provider request runs. Auto instrumented HTTP client spans therefore nest under the call span,
+next to the attempt spans.

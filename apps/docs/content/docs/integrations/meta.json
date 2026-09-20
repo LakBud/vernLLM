@@ -2,5 +2,5 @@
   "title": "Integrations",
   "icon": "Boxes",
   "root": true,
-  "pages": ["---Introduction---", "index", "---Integrations---", "redis"]
+  "pages": ["---Introduction---", "index", "---Integrations---", "redis", "otel"]
 }

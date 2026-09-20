@@ -47,20 +47,20 @@ Tests live under `tests/unit/` and `tests/integration/`. No live provider API is
 
 ## CI
 
-Every PR runs through several workflows in `.github/workflows/`:
+Every PR runs `ci.yml`, plus two smaller workflows, all in `.github/workflows/`. Nx runs each `ci.yml` job only for the projects the PR affects.
 
-| Workflow               | Checks                                                                                             |
-| ---------------------- | -------------------------------------------------------------------------------------------------- |
-| `lint.yml`             | oxlint across the workspace                                                                        |
-| `typecheck.yml`        | `tsc --noEmit` on `src` and on tests separately                                                    |
-| `test-unit.yml`        | `tests/unit/*`, uploads coverage to Codecov under the `unit` flag                                  |
-| `test-integration.yml` | `tests/integration/*`, uploads coverage to Codecov under the `integration` flag                    |
-| `build-checks.yml`     | peer dependency check, `tsdown` build, bundle size limit, smoke test on the built output           |
-| `changeset.yml`        | fails if a PR touching `packages/vern-llm` has no changeset                                        |
-| `docs-build.yml`       | lint, typecheck, and build the docs site. It only runs when `apps/docs/**` or the lockfile changes |
-| `codeql.yml`           | static analysis, runs on PRs, pushes to `main`, and a weekly schedule                              |
+| Job or workflow             | Checks                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `ci.yml` `lint`             | oxlint on affected projects                                                                                         |
+| `ci.yml` `typecheck`        | `tsc --noEmit` on `src` and on tests separately, plus the docs type check                                           |
+| `ci.yml` `build`            | peer dependency check, `tsdown` build, bundle size limit, smoke test on the built output                            |
+| `ci.yml` `test-unit`        | `tests/unit/*` with coverage, uploaded to Codecov under each package's unit flag                                    |
+| `ci.yml` `test-integration` | `tests/integration/*` with coverage, uploaded to Codecov under each package's integration flag                      |
+| `ci.yml` `docs`             | lint, typecheck, and build the docs site, as three separate commands. It only does work when the docs are affected  |
+| `changeset.yml`             | fails if a PR touching `packages/vern-llm`, `packages/vern-llm-redis`, or `packages/vern-llm-otel` has no changeset |
+| `codeql.yml`                | static analysis, runs on PRs, pushes to `main`, and a weekly schedule                                               |
 
-Codecov merges the `unit` and `integration` coverage flags into one view, scoped to `packages/vern-llm/**` via `codecov.yml` at the repo root. It enforces two checks: `codecov/patch` requires at least 80% coverage on changed lines, and `codecov/project` fails if overall coverage regresses by more than 0.5%.
+Codecov merges the `unit` and `integration` coverage flags into one view, scoped to `packages/vern-llm/**` via `codecov.yml` at the repo root. It enforces two checks: `codecov/patch` requires at least 80% coverage on changed lines, and `codecov/project` fails if overall coverage regresses by more than 0.5%. Each integration package has its own pair of flags and its own project and patch status, scoped to its own directory.
 
 Two more workflows run outside the PR flow:
 

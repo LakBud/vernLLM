@@ -280,10 +280,17 @@ export function resolveMiddlewareOrder(
  * `wrapOrder`, ties broken by `transformOrder` position since `sort` is
  * stable. Entries with no `position` at all default to `0`, so they
  * interleave with numeric-positioned entries rather than always sorting
- * after them. Multiple `'outermost'` claimants keep their relative
- * order, so the first one registered holds the true outermost slot.
+ * after them. Multiple `'outermost'` claimants are ordered by registration,
+ * so the first one registered holds the true outermost slot. Multiple
+ * `'innermost'` claimants are ordered by registration, so the last one
+ * registered holds the true innermost slot. Their `priority` and
+ * `runsAfter`/`runsBefore` decide `transformOrder` only, never who wraps
+ * whom.
  */
-function applyPositionOverride(order: readonly VernLLMMiddleware[]): VernLLMMiddleware[] {
+function applyPositionOverride(
+  order: readonly VernLLMMiddleware[],
+  entries: readonly VernLLMMiddleware[],
+): VernLLMMiddleware[] {
   const outermost: VernLLMMiddleware[] = [];
   const innermost: VernLLMMiddleware[] = [];
   const middle: VernLLMMiddleware[] = [];
@@ -303,6 +310,13 @@ function applyPositionOverride(order: readonly VernLLMMiddleware[]): VernLLMMidd
     const bPos = typeof b.position === 'number' ? b.position : 0;
     return aPos - bPos;
   });
+  // Registration order, not `order`'s: `order` is sorted by priority, which would let a
+  // claimant's `transform` priority decide who wraps whom.
+  const registered = (a: VernLLMMiddleware, b: VernLLMMiddleware): number =>
+    entries.indexOf(a) - entries.indexOf(b);
+  outermost.sort(registered);
+  innermost.sort(registered);
+
   return [...outermost, ...sortedMiddle, ...innermost];
 }
 
@@ -319,7 +333,7 @@ export function buildMiddlewarePipeline(
   const transformOrder = resolveMiddlewareOrder(entries, logger);
   return {
     transformOrder,
-    wrapOrder: applyPositionOverride(transformOrder),
+    wrapOrder: applyPositionOverride(transformOrder, entries),
     names: Object.freeze(transformOrder.map(idFor)),
   };
 }

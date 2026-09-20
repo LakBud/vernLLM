@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 
 import { icons } from 'lucide-react';
-import { siRedis } from 'simple-icons';
+import { siOpentelemetry, siRedis } from 'simple-icons';
 
 // Brand logos that aren't part of Lucide's generic icon set. Each entry is
 // simple-icons path data for an official, actively-maintained brand mark,
@@ -9,6 +9,7 @@ import { siRedis } from 'simple-icons';
 // the brand's own color, to match every other sidebar icon.
 const brandIcons: Record<string, { path: string }> = {
   Redis: siRedis,
+  OpenTelemetry: siOpentelemetry,
 };
 
 function BrandIcon({ path }: { path: string }) {

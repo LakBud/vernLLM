@@ -1,0 +1,98 @@
+---
+title: Contributing
+description: How to set up, test, and open a PR for vern-llm-otel
+icon: GitPullRequest
+---
+
+This page covers `packages/vern-llm-otel` specifically. For the coding standard and PR checklist
+that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+No external service is needed. The tests use fakes for the LLM client and in memory OpenTelemetry
+exporters and readers, never a live provider or a real collector.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
+explain non obvious decisions with a short comment, and keep `any` as a last resort. This package
+only observes calls, so it adds no app logic, storage, or agent tracing, and it never throws into
+the call path. Anything that fails is logged through the package logger and swallowed, and
+anything that could leak content fails closed.
+
+## Scripts
+
+These are `packages/vern-llm-otel`'s own scripts, exactly as they appear in its `package.json`.
+Run them with `pnpm run <script>` from inside `packages/vern-llm-otel`, or `pnpm nx run
+vern-llm-otel:<script>` from the repo root:
+
+```json title="packages/vern-llm-otel/package.json"
+"scripts": {
+  "build": "tsdown",
+  "dev": "tsdown --watch",
+  "smoke-test": "node scripts/smoke-test.ts",
+  "typecheck": "tsc -p tsconfig.json --noEmit",
+  "typecheck:test": "tsc -p tsconfig.test.json",
+  "lint": "oxlint .",
+  "lint:fix": "oxlint . --fix",
+  "test": "vitest run",
+  "test:unit": "vitest run --project unit",
+  "test:unit:coverage": "vitest run --project unit --coverage",
+  "test:int": "vitest run --project integration",
+  "test:int:coverage": "vitest run --project integration --coverage",
+  "test:watch": "vitest",
+  "test:coverage": "vitest run --coverage",
+  "changeset": "changeset",
+  "version-packages": "changeset version",
+  "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+  "size": "size-limit"
+}
+```
+
+`prepublishOnly` runs automatically before publish and isn't something you need to run by hand,
+it's listed here since it shows the exact sequence a release goes through: typecheck, build, size,
+smoke test.
+
+## Tests
+
+Unit tests live in `tests/unit/`, one file per source file with logic. Integration tests live in
+`tests/integration/` and use a real `VernLLM` with the real OpenTelemetry SDK and in memory
+exporters, driven by a table of scenarios plus focused tests for behavior a table can't express.
+Use fake timers for every timing assertion.
+
+## Before opening a PR
+
+Every PR touching `packages/vern-llm-otel` runs through the same CI workflows described in
+[Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                          | Local command                                                                                               |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Lint                           | `pnpm nx run vern-llm-otel:lint`                                                                            |
+| Typecheck source               | `pnpm nx run vern-llm-otel:typecheck`                                                                       |
+| Typecheck tests                | `pnpm nx run vern-llm-otel:typecheck:test`                                                                  |
+| Unit tests + coverage          | `pnpm nx run vern-llm-otel:test:unit:coverage`                                                              |
+| Integration tests              | `pnpm nx run vern-llm-otel:test:int:coverage`                                                               |
+| Build, bundle size, smoke test | `pnpm nx run vern-llm-otel:build && pnpm nx run vern-llm-otel:size && pnpm nx run vern-llm-otel:smoke-test` |
+| Changeset present              | `pnpm changeset status --since=origin/main`                                                                 |
+
+## Changesets
+
+Record your change with:
+
+```bash
+pnpm nx run vern-llm-otel:changeset
+```
+
+`vern-llm-otel` versions and releases independently of `vern-llm`, on its own changelog. See
+[Development](/docs/development#ci) for what drives the release itself.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

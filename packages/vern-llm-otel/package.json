@@ -1,0 +1,108 @@
+{
+  "name": "vern-llm-otel",
+  "version": "0.0.0",
+  "description": "OpenTelemetry traces and metrics for vern-llm, following the GenAI semantic conventions",
+  "keywords": [
+    "vern-llm",
+    "opentelemetry",
+    "otel",
+    "tracing",
+    "metrics",
+    "observability",
+    "genai",
+    "llm"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "smoke-test": "node scripts/smoke-test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:unit:coverage": "vitest run --project unit --coverage",
+    "test:int": "vitest run --project integration",
+    "test:int:coverage": "vitest run --project integration --coverage",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+    "size": "size-limit"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "vern-llm": "workspace:^"
+  },
+  "devDependencies": {
+    "vern-llm": "workspace:^",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.11.0",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@types/node": "^26.4.1",
+    "typescript": "^5.5.0",
+    "tsdown": "^0.23.0",
+    "publint": "^0.3.24",
+    "unplugin-unused": "^0.5.7",
+    "@size-limit/esbuild": "13.1.1",
+    "@size-limit/file": "13.1.1",
+    "size-limit": "13.1.1",
+    "vitest": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.11"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@11.25.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LakBud/vernLLM.git",
+    "directory": "packages/vern-llm-otel"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "size-limit": [
+    {
+      "path": "dist/index.mjs",
+      "limit": "8.3 KB",
+      "ignore": [
+        "vern-llm",
+        "@opentelemetry/api"
+      ]
+    },
+    {
+      "path": "dist/index.cjs",
+      "limit": "8.4 KB",
+      "ignore": [
+        "vern-llm",
+        "@opentelemetry/api"
+      ]
+    }
+  ]
+}

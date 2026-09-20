@@ -263,6 +263,47 @@ describe('buildMiddlewarePipeline', () => {
       expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual(['first', 'second', 'other']);
     });
 
+    it('does not let priority decide which outermost claimant wraps the other', () => {
+      const first = mw({ name: 'first', position: 'outermost', priority: 1000 });
+      const second = mw({ name: 'second', position: 'outermost', priority: -1000 });
+
+      const pipeline = buildMiddlewarePipeline([first, second]);
+
+      // `priority` still decides transform order.
+      expect(pipeline.transformOrder.map((entry) => entry.name)).toEqual(['second', 'first']);
+      expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual(['first', 'second']);
+    });
+
+    it('does not let runsAfter decide which outermost claimant wraps the other', () => {
+      const ref = createMiddlewareRef('late');
+      const first = mw({ name: 'first', position: 'outermost', runsAfter: [ref] });
+      const second = mw({ name: 'second', position: 'outermost', ref });
+
+      const pipeline = buildMiddlewarePipeline([first, second]);
+
+      expect(pipeline.transformOrder.map((entry) => entry.name)).toEqual(['second', 'first']);
+      expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual(['first', 'second']);
+    });
+
+    it('resolves two innermost claimants by registration order, whatever their priority', () => {
+      const first = mw({ name: 'first', position: 'innermost', priority: 1000 });
+      const second = mw({ name: 'second', position: 'innermost', priority: -1000 });
+      const other = mw({ name: 'other' });
+
+      const pipeline = buildMiddlewarePipeline([first, other, second]);
+
+      expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual(['other', 'first', 'second']);
+    });
+
+    it('keeps the outermost claimants ahead of a middle entry with a lower priority', () => {
+      const claimant = mw({ name: 'claimant', position: 'outermost', priority: 1000 });
+      const low = mw({ name: 'low', priority: -5000 });
+
+      const pipeline = buildMiddlewarePipeline([low, claimant]);
+
+      expect(pipeline.wrapOrder.map((entry) => entry.name)).toEqual(['claimant', 'low']);
+    });
+
     it('lets a numeric position behave like priority, for wrapOrder only', () => {
       const a = mw({ name: 'a' });
       const b = mw({ name: 'b', position: -5 });

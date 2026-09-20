@@ -78,7 +78,7 @@ reviews:
         - Correctness of the adapter contract, assertClosed stays synchronous, acquire's waiting behavior, cache get/set/delete semantics.
         - Lua script correctness and atomicity.
         - Parity between the ioredis and node-redis client wrappers.
-        - vern-llm is a regular runtime dependency (not peer-only), matching that its `LLMError` export is used directly at runtime for every thrown error, never a look-alike class, since vern-llm's normalizeError() does an `instanceof LLMError` check. Purely structural types stay `import type` only.
+        - vern-llm is a peer dependency and is never bundled, so the app's own copy is used. Its `LLMError` export is used directly at runtime for every thrown error, never a look-alike class, since vern-llm's normalizeError() does an `instanceof LLMError` check. Purely structural types stay `import type` only.
         - assertClosed never optimistically guesses cooldown has elapsed; it only allows a call once Redis has confirmed this process holds the half-open trial. Flag anything that skips that confirmation.
         - Timing assertions use the shared helpers instead of a fresh fixed sleep.
 
@@ -98,6 +98,28 @@ reviews:
         - Unit tests never open a real Redis connection.
         - Integration tests use the shared helpers (waitUntil, expectNearInstant) instead of ad hoc sleeps.
         - Cross-process behavior (circuit breaker/rate limiter state propagation) uses two separate client connections, not one reused.
+
+    - path: 'packages/vern-llm-otel/**'
+      instructions: |
+        This is vern-llm-otel: OpenTelemetry traces and metrics for vern-llm, built only on its public middleware system.
+
+        Review TypeScript changes with focus on:
+        - The middleware never changes what a call returns or throws. Every OpenTelemetry call and user callback goes through the guard, next()'s exact error is rethrown, and every span ends in a finally block even when a span write fails.
+        - Streams are observed on the side only. Flag anything that replaces or wraps chunks or finalResult, or adds a promise that can reject.
+        - Errors are recognised by shape, never with instanceof or isLLMError, since vern-llm's ESM and CJS builds have separate LLMError classes. The entry stays static with no enabled function, which would make event delivery async.
+        - Privacy fails closed: content is off by default, redact runs before truncation, only error codes are recorded, and metric attributes stay bounded with no request ids or messages.
+        - Names live only in semconv.ts, gen_ai.* must exist in the GenAI conventions, and vern-llm and @opentelemetry/api stay unbundled peer dependencies.
+
+        For new features, require unit tests and integration tests against in memory exporters, keep coverage at 100 percent, and document public API changes.
+
+        Pay special attention to renamed or removed spans, attributes, metrics, or options, since dashboards depend on them.
+
+    - path: 'packages/vern-llm-otel/tests/**'
+      instructions: |
+        Review tests for:
+        - Meaningful assertions, with no live provider or collector, only fakes and in memory exporters and readers.
+        - Scenarios that compare each case with and without the middleware, and span leaks checked with the open span tracker in the shared helpers.
+        - Timing assertions with a wide margin, and any global provider or context manager removed afterwards.
 
     - path: 'apps/docs/**'
       instructions: |

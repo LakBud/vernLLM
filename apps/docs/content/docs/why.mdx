@@ -9,10 +9,10 @@ each pairs a client library with a gateway. So each one is compared here as a pa
 
 <Callout type="info">
   Based on source and docs from September 2026: `ai` 7.0.107, `@ai-sdk/gateway` 4.0.87, LiteLLM
-  1.103.0, `portkey-ai` 3.1.0, Portkey Gateway 1.15.2, `vern-llm` 2.8.0, `vern-llm-redis` 0.1.0.
-  Vercel AI Gateway and hosted Portkey are hosted services, so only what their repos and docs show
-  is compared. "None found" means not in what was read, not proven absent. Something out of date?
-  [Open an issue](https://github.com/LakBud/vernLLM/issues).
+  1.103.0, `portkey-ai` 3.1.0, Portkey Gateway 1.15.2 and `vern-llm` 2.9.0. Vercel AI Gateway and
+  hosted Portkey are hosted services, so only what their repos and docs show is compared. "None
+  found" means not in what was read, not proven absent. Something out of date? [Open an
+  issue](https://github.com/LakBud/vernLLM/issues).
 </Callout>
 
 ## What each one is
@@ -29,24 +29,24 @@ each pairs a client library with a gateway. So each one is compared here as a pa
 Cells marked Proxy or Gateway need that server. VernLLM gets the cross process versions of its
 features from the optional `vern-llm-redis` package instead of a server.
 
-| Feature                 | VernLLM               | AI SDK + AI Gateway              | LiteLLM SDK + Proxy       | Portkey SDK + Gateway           |
-| ----------------------- | --------------------- | -------------------------------- | ------------------------- | ------------------------------- |
-| Retries                 | Yes                   | Yes                              | Yes                       | Yes, in the gateway             |
-| Retry budget            | Yes                   | None found                       | None found                | None found                      |
-| Timeouts                | Yes                   | Yes                              | Yes                       | Yes                             |
-| Circuit breaker         | Yes                   | None found                       | Cooldowns                 | Hooks only, handler not in repo |
-| Fallback                | Your ordered list     | Gateway                          | Yes                       | Gateway                         |
-| Load balancing          | No, by design         | Gateway, sort by cost or speed   | Yes, several strategies   | Gateway, weighted               |
-| Outbound rate limits    | Yes                   | None found                       | Partial                   | None found in repo              |
-| Caller limits, budgets  | Hooks you wire up     | Gateway quota                    | Proxy                     | None found in repo              |
-| Response caching        | Yes                   | Recipe, plus gateway option      | Yes                       | Yes, in memory                  |
-| Semantic caching        | Guide only            | None found                       | Yes                       | Hosted feature                  |
-| Middleware              | Yes                   | Yes                              | Callback hooks            | Gateway hooks                   |
-| Guardrails              | None found            | None found                       | Proxy                     | Gateway plugins                 |
-| Cost tracking           | Tokens only           | Gateway                          | Yes                       | Pricing hook only               |
-| Observability           | Event stream          | OpenTelemetry, Gateway dashboard | Callbacks, Proxy admin UI | Gateway logs, traces            |
-| Shared across processes | With `vern-llm-redis` | Gateway                          | Redis, Proxy              | Gateway                         |
-| Extra network hop       | None                  | Only through the Gateway         | Only through the Proxy    | Yes                             |
+| Feature                 | VernLLM                     | AI SDK + AI Gateway              | LiteLLM SDK + Proxy       | Portkey SDK + Gateway           |
+| ----------------------- | --------------------------- | -------------------------------- | ------------------------- | ------------------------------- |
+| Retries                 | Yes                         | Yes                              | Yes                       | Yes, in the gateway             |
+| Retry budget            | Yes                         | None found                       | None found                | None found                      |
+| Timeouts                | Yes                         | Yes                              | Yes                       | Yes                             |
+| Circuit breaker         | Yes                         | None found                       | Cooldowns                 | Hooks only, handler not in repo |
+| Fallback                | Your ordered list           | Gateway                          | Yes                       | Gateway                         |
+| Load balancing          | No, by design               | Gateway, sort by cost or speed   | Yes, several strategies   | Gateway, weighted               |
+| Outbound rate limits    | Yes                         | None found                       | Partial                   | None found in repo              |
+| Caller limits, budgets  | Hooks you wire up           | Gateway quota                    | Proxy                     | None found in repo              |
+| Response caching        | Yes                         | Recipe, plus gateway option      | Yes                       | Yes, in memory                  |
+| Semantic caching        | Guide only                  | None found                       | Yes                       | Hosted feature                  |
+| Middleware              | Yes                         | Yes                              | Callback hooks            | Gateway hooks                   |
+| Guardrails              | None found                  | None found                       | Proxy                     | Gateway plugins                 |
+| Cost tracking           | Tokens only                 | Gateway                          | Yes                       | Pricing hook only               |
+| Observability           | Event stream, OpenTelemetry | OpenTelemetry, Gateway dashboard | Callbacks, Proxy admin UI | Gateway logs, traces            |
+| Shared across processes | Redis                       | Gateway                          | Redis, Proxy              | Gateway                         |
+| Extra network hop       | None                        | Only through the Gateway         | Only through the Proxy    | Yes                             |
 
 ## What VernLLM does differently
 
