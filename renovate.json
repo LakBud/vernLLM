@@ -94,7 +94,7 @@
     {
       "description": "Hold Node.js runtime separate, no automerge until LTS flips",
       "groupName": "node runtime",
-      "matchDatasources": ["node"],
+      "matchDatasources": ["node-version"],
       "automerge": false,
       "dependencyDashboardApproval": true
     },
