@@ -11,6 +11,6 @@ A function `enabled` is now resolved independently per middleware. A slow predic
 What to expect:
 
 1. A handler can observe state before the emitting code's next line runs.
-2. A slow synchronous handler delays the call path. It always did, only later.
+2. A slow synchronous handler delays the emitting call path when `enabled` is static or absent, so keep handlers fast. It always did, only later. A handler behind a function `enabled` runs asynchronously and does not delay it.
 3. A handler that calls `llm.call()` is fine and cannot deadlock.
 4. A throwing or rejecting handler is still logged and never affects the call.
