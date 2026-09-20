@@ -51,8 +51,8 @@ bun add vern-llm-redis # [!code word:add]
 keeps the `LLMError` these adapters throw the same class your own `instanceof` checks see. Current
 npm, pnpm and yarn install a missing peer for you.
 
-Redis 5 or newer is required. The adapters are tested against Redis 5.0, 6.2, 7.0, 7.2, 7.4 and
-8.0, and against 7.0 and 8.0 Redis Clusters.
+Redis 5 or newer is required, since scripts read the server clock. The adapters are tested in CI
+against Redis 8.10, the newest release.
 
 <Cards>
   <Card title="Features" href="/docs/integrations/redis/features">

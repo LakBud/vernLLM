@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -187,7 +187,7 @@ async function start(): Promise<(() => void) | void> {
       ports.push(port);
 
       const nodeDir = join(dir, String(port));
-      spawnSync('mkdir', ['-p', nodeDir]);
+      mkdirSync(nodeDir, { recursive: true });
       const child = spawn(
         'redis-server',
         [
