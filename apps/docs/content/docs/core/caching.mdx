@@ -9,7 +9,8 @@ local + shared cache), plus a `CacheAdapter` interface for bringing your own.
 
 The built-in `InMemoryCacheAdapter` provides a simple in-memory cache with no external dependencies.
 It is useful for local development or single-process deployments; use a shared adapter such as Redis
-or Upstash when multiple processes need the same cache.
+(ready made in [`vern-llm-redis`](/docs/integrations/redis/features/cache)) or Upstash when multiple
+processes need the same cache.
 
 ```ts title="cached-call-setup.ts"
 import { InMemoryCacheAdapter } from 'vern-llm';
@@ -74,7 +75,7 @@ caller does not cancel the shared in-flight operation for other callers; that ca
 active receive the shared operation's result.
 
 <Callout>
-Although `fn` executes only once per in-flight window, usage metering still runs per caller. Each
+Although `fn` executes only once per in-flight window, budget reservation still runs per caller. Each
 caller performs its own `reserveUsage` and, if that reservation succeeds, gets its own
 `refundUsage` lifecycle.
 
@@ -279,4 +280,5 @@ const cacheKey = `cv:${cvId}:${model}:v2`; // bump version when prompt/schema ch
 Bringing your own `CacheAdapter` (Redis, Upstash, or anything else), including the specific
 things to get right when implementing one (`hit` semantics, `resolveKey`, `ttl` convention, and
 how a broken adapter is handled) is covered as a customization topic, with a full worked
-example, over on [Caching → Customization](/docs/customization/caching).
+example, over on [Caching → Customization](/docs/customization/caching). If Redis is what you need,
+[`vern-llm-redis`](/docs/integrations/redis/features/cache) already provides `redisCache`.

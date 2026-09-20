@@ -33,22 +33,27 @@ Open [http://localhost:3000](http://localhost:3000) to see the site.
 
 Docs pages live in [`content/docs`](./content/docs) as MDX, organized by section:
 
-| Section                                                     | Contents                                                                                                   |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [`getting-started.mdx`](./content/docs/getting-started.mdx) | Install and make your first call.                                                                          |
-| [`core/`](./content/docs/core)                              | Structured output, caching, circuit breaker, error handling, cancellation, logging, usage tracking.        |
-| [`adapters/`](./content/docs/adapters)                      | OpenAI-compatible providers, Anthropic, Gemini, Bedrock, and the raw-fetch escape hatch.                   |
-| [`guides/`](./content/docs/guides)                          | End-to-end walkthroughs (resume parsing, provider fallback, multi-turn conversations, per-call overrides). |
-| [`API-reference/`](./content/docs/API-reference)            | Call params, instance configuration, development setup, and other reference notes.                         |
-| [`changelog.mdx`](./content/docs/changelog.mdx)             | Release notes.                                                                                             |
+| Section                                          | Contents                                                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| [`index.mdx`](./content/docs/index.mdx)          | Getting started: install and make your first call.                                               |
+| [`about.mdx`](./content/docs/about.mdx)          | What VernLLM is and why it exists.                                                               |
+| [`core/`](./content/docs/core)                   | Fallback, circuit breaker, retry budget, rate limiting, caching, observability, and more.        |
+| [`customization/`](./content/docs/customization) | Custom middleware, breakers, caches, rate limiters, tokenizers, schemas, providers, and loggers. |
+| [`guides/`](./content/docs/guides)               | End to end walkthroughs: fallback patterns, tuning, caching methods, streaming, tool loops.      |
+| [`API-reference/`](./content/docs/API-reference) | Call params, instance configuration, and reference notes.                                        |
+| [`adapters/`](./content/docs/adapters)           | OpenAI-compatible providers, Anthropic, Gemini, Bedrock, and the raw fetch escape hatch.         |
+| [`integrations/`](./content/docs/integrations)   | Companion packages such as `vern-llm-redis`.                                                     |
+| `development`, `migration-notes`, `changelog`    | Dev setup, upgrade notes, and release notes.                                                     |
+| `contributing`, `security`, `code-of-conduct`    | Community pages.                                                                                 |
 
 Each folder has a `meta.json` controlling sidebar ordering. Edit or add `.mdx` files there and the site picks them up automatically.
 
 ## Project structure
 
-- `src/app`: Next.js App Router routes: `(home)` for the landing page, `docs` for the documentation layout, `api/search/route.ts` for the search endpoint.
+- `src/app`: Next.js App Router routes: `(home)` for the landing page, `docs` for the documentation layout, `changelog`, `og` for social images, `llms.txt` and `llms-full.txt` for LLM friendly docs, and `api/search` for search.
 - `src/lib/source.ts`: the content source adapter; Fumadocs' [`loader()`](https://fumadocs.dev/docs/headless/source-api) exposes the MDX content to the app.
 - `src/lib/layout.shared.tsx`: shared layout options used across routes.
+- `src/components`: MDX components, search dialog, and UI primitives.
 - `source.config.ts`: Fumadocs MDX configuration (frontmatter schema, etc.). See the [MDX introduction](https://fumadocs.dev/docs/mdx) for details.
 
 ## Scripts

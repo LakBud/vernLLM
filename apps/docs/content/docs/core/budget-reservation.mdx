@@ -1,9 +1,9 @@
 ---
-title: Usage Metering
-description: Reserve and refund usage before LLM calls
+title: Budget Reservation
+description: Reserve budget before LLM calls and refund it if the call fails
 ---
 
-Usage metering lets you control whether a request is allowed to run before it reaches the
+Budget reservation lets you control whether a request is allowed to run before it reaches the
 provider. Use `reserveUsage` to reserve quota or budget before dispatch, and `refundUsage` to
 release that reservation when a call fails after reservation succeeded.
 
@@ -14,7 +14,7 @@ release that reservation when a call fails after reservation succeeded.
 - A successful reservation is refunded if the request is aborted before the wrapped operation starts.
 - If `reserveUsage` fails, no refund is performed because no reservation was created.
 
-```ts title="usage-metering-setup.ts"
+```ts title="budget-reservation-setup.ts"
 const llm = new VernLLM({
   client: fromOpenAI(openai),
   model: 'gpt-4o',
@@ -59,7 +59,7 @@ await llm.call({
 
 ## With caching
 
-Usage metering also works with `cachedCall`. Provide usage hooks at the cache level, not inside the
+Budget reservation also works with `cachedCall`. Provide usage hooks at the cache level, not inside the
 nested `call` options. `CachedCallParams`'s `call` field doesn't type-permit `reserveUsage`/
 `refundUsage` at all, so this is a compile error for a normally-typed caller. A caller that bypasses
 the type system and sets them inside `call` anyway hits a runtime `LLMError('validation')` instead
@@ -69,7 +69,7 @@ skipping reservation, are both worth failing loudly over.
 On a cache miss, the usage flow runs around the underlying call. A cache hit skips the LLM call
 entirely, so no new reservation or usage record is created.
 
-```ts title="cached-call-metering.ts"
+```ts title="cached-call-reservation.ts"
 const result = await llm.cachedCall({
   cacheKey: `cv:${cvId}`,
   ttl: 3600,
@@ -86,7 +86,7 @@ underlying call. Other callers share the same in-flight result.
 
 Each caller still gets its own `reserveUsage` and `refundUsage` lifecycle, its own `signal`, and
 its own cancellation behavior. The `coalesced` flag lets your application decide how shared
-requests should be metered.
+requests should be charged.
 
 <Callout>
   Although the underlying call executes only once per in-flight window, `reserveUsage` and
@@ -97,7 +97,7 @@ requests should be metered.
 
 ## Relationship with usage tracking
 
-Usage metering controls whether a request can start.
+Budget reservation controls whether a request can start.
 
 Usage tracking reports provider usage after a provider response, through `onUsage` on success or
 `onUsageFailure` if VernLLM's own post-processing then fails.

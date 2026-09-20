@@ -87,8 +87,8 @@ const llm = new VernLLM({
   `onUsage` fires only after the call fully succeeds, meaning the raw completion, JSON parsing, and
   schema validation all passed. If the `onUsage` callback itself throws, that failure is logged and
   swallowed rather than propagated. It cannot fail or retrigger retries on an otherwise successful
-  call. If you need to gate a call before it is dispatched, such as enforcing a quota, see [Usage
-  Metering](/docs/core/usage-metering).
+  call. If you need to gate a call before it is dispatched, such as enforcing a quota, see [Budget
+  Reservation](/docs/core/budget-reservation).
 </Callout>
 
 <Callout type="warn">
@@ -151,7 +151,7 @@ attempt that then failed would go unreported even though the provider already ch
 For `stream: true`, this is not guaranteed. A stream can deliver a usage chunk and then fail later,
 such as an idle timeout while waiting for the final close. In that case `onUsageFailure` does
 fire. See
-[Usage metering and tracking while streaming](/docs/core/streaming#usage-metering-and-tracking-while-streaming).
+[Budget reservation and usage tracking while streaming](/docs/core/streaming#budget-reservation-and-usage-tracking-while-streaming).
 
 </Callout>
 

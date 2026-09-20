@@ -3,6 +3,8 @@ title: Multi Provider Fallback
 description: Try a declared list of backup providers, in order, when the primary fails
 ---
 
+If your primary provider fails, VernLLM tries your backups in the order you declare.
+
 ```ts title="provider-fallback-setup.ts"
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';

@@ -21,7 +21,8 @@ A failed trial reopens the circuit and restarts the cooldown.
 <Callout type="info">
   `circuitBreaker` also accepts a full `CircuitBreakerAdapter` instead of `CircuitBreakerOptions`,
   for a breaker shared across processes rather than the in process default. See [Circuit Breaker →
-  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker).
+  Customization](/docs/customization/circuit-breaker#bringing-your-own-breaker). For a ready made
+  Redis backed one, use [`vern-llm-redis`](/docs/integrations/redis/features/circuit-breaker).
 </Callout>
 
 ## What counts as a failure

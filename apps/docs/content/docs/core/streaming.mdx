@@ -94,8 +94,8 @@ for await (const chunk of chunks) {
 <Callout>
   A `usage` chunk, when the provider reports one, always arrives last, after every `text-delta` or
   `tool_call_delta` chunk for that response. Not every provider sends usage data mid-stream; some
-  only report it in the same place non-streaming responses do. See the [usage metering and
-  tracking](#usage-metering-and-tracking-while-streaming) section below.
+  only report it in the same place non-streaming responses do. See the [budget reservation and usage
+  tracking](#budget-reservation-and-usage-tracking-while-streaming) section below.
 </Callout>
 
 ## `finalResult` mirrors non-streaming `call()`
@@ -185,7 +185,7 @@ parse it incrementally yourself.
 See [Tool Calling](/docs/core/tool-calling) for everything else about the tool calling
 contract, none of which changes when `stream` is also set.
 
-## Usage metering and tracking while streaming
+## Budget reservation and usage tracking while streaming
 
 `reserveUsage` and `refundUsage` work the same way they do for non-streaming calls, with one
 difference in timing: `reserveUsage` runs before the stream opens, but because `call()` must hand
@@ -193,7 +193,7 @@ back `{ chunks, finalResult }` before the real outcome of the stream is known, t
 step is deferred onto `finalResult` instead of happening inline. `onUsage` fires once `finalResult`
 resolves successfully; `onUsageFailure` fires if the stream fails after usage was already reserved.
 
-See [Usage Metering](/docs/core/usage-metering) and
+See [Budget Reservation](/docs/core/budget-reservation) and
 [Usage Tracking](/docs/core/usage-tracking) for the full reference, both apply unchanged.
 
 ## What gets retried
@@ -214,9 +214,10 @@ stream rather than the whole response:
 </Cards>
 
 <Callout type="warn">
-  A mid-stream failure rejects `finalResult` with a normalized `LLMError`, not `chunks` itself. If
-  you only iterate `chunks` and never await or otherwise observe `finalResult`, attach a no-op
-  `.catch()` to it, or Node will report an unhandled rejection once the stream fails.
+  A mid-stream failure rejects `finalResult` with a normalized `LLMError`, and the `for await` loop
+  over `chunks` throws that same error once the chunks already delivered have been read. If you only
+  iterate `chunks` and never await or otherwise observe `finalResult`, attach a no-op `.catch()` to
+  it, or Node will report an unhandled rejection once the stream fails.
 </Callout>
 
 The circuit breaker, when configured, records a failure for the stream-opening step, matching

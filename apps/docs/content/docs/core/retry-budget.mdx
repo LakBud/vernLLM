@@ -3,6 +3,8 @@ title: Retry Budget
 description: Cap how much of a target's traffic is allowed to be retries
 ---
 
+Retry budgets sit on top of per attempt retries. Read [Retries](/docs/core/retries) first if you need the backoff basics.
+
 ```ts title="retry-budget-setup.ts"
 const llm = new VernLLM({
   client: fromOpenAI(openai),

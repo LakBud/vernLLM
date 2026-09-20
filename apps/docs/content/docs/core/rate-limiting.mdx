@@ -453,10 +453,12 @@ fallback](#bulkhead-isolation-with-fallback) above for the opposite, more common
 each target's capacity separate.
 
 <Callout type="info">
-  `vern-llm` ships no distributed limiter itself, only this seam. Coordinating across processes is
-  up to whatever `RateLimiterAdapter` implementation you provide. For one backed by a remote store,
-  the optional `readState` and `setLogger` members let it report live levels and share `VernLLM`'s
-  logger, see [Rate Limiting → Customization](/docs/customization/rate-limiting#optional-members).
+  `vern-llm` core ships no distributed limiter itself, only this seam. For Redis, the separate
+  [`vern-llm-redis`](/docs/integrations/redis/features/rate-limit) package provides one. Otherwise
+  coordinating across processes is up to whatever `RateLimiterAdapter` implementation you provide.
+  For one backed by a remote store, the optional `readState` and `setLogger` members let it report
+  live levels and share `VernLLM`'s logger, see [Rate Limiting →
+  Customization](/docs/customization/rate-limiting#optional-members).
 </Callout>
 
 ## Options reference

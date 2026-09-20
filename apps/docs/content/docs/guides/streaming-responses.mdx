@@ -34,7 +34,7 @@ export async function streamChat(req: Request, res: Response) {
       }
     }
 
-    const result = await finalResult; // surfaces a mid-stream failure, see below
+    const result = await finalResult; // the full response, once the stream completes
 
     res.write(`data: ${JSON.stringify({ done: true, result })}\n\n`);
   } catch (err) {
@@ -46,12 +46,11 @@ export async function streamChat(req: Request, res: Response) {
 ```
 
 <Callout type="warn">
-  A failure after the first chunk arrives rejects `finalResult`, not `chunks` itself. The `for
-  await` loop over `chunks` finishes normally even on a mid-stream failure, so the error only
-  surfaces when you `await finalResult` afterward, as in the example above. Skipping that `await`
-  silently drops the failure from view. See [What gets
-  retried](/docs/core/streaming#what-gets-retried) for why a mid-stream failure isn't retried
-  automatically.
+  A failure after the first chunk arrives rejects `finalResult`, and the `for await` loop over
+  `chunks` throws the same error after the chunks already delivered, so the `catch` in the example
+  above sees it. If you never await `finalResult`, attach a no-op `.catch()` to it to avoid an
+  unhandled rejection. See [What gets retried](/docs/core/streaming#what-gets-retried) for why a
+  mid-stream failure isn't retried automatically.
 </Callout>
 
 ## Forwarding client cancellation

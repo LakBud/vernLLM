@@ -4,20 +4,20 @@
   "pages": [
     "index",
     "provider-fallback",
-    "caching",
-    "rate-limiting",
-    "observability",
-    "usage-metering",
-    "usage-tracking",
     "circuit-breaker",
     "retry-budget",
+    "rate-limiting",
+    "caching",
+    "observability",
     "middleware",
-    "retries",
-    "error-handling",
-    "cancellation",
+    "budget-reservation",
+    "usage-tracking",
     "structured-output",
     "tool-calling",
     "streaming",
+    "retries",
+    "error-handling",
+    "cancellation",
     "logging"
   ]
 }

@@ -100,7 +100,7 @@ This is invisible, not incorrect, but it has real consequences worth knowing abo
 - **Amplified retries.** A failure can be retried by the SDK, then, if it still fails, retried again by VernLLM, each with its own separate backoff policy, uncoordinated with the other.
 - **A blind circuit breaker.** A burst of 429s the SDK quietly retries through to eventual success never reaches VernLLM as a failure, so the breaker never sees it, even though the provider was genuinely under strain.
 - **A blind rate limiter.** [AIMD](/docs/core/rate-limiting#aimd)'s reactive shrink only fires once a 429 actually reaches VernLLM; an SDK that retries the 429 away internally gives AIMD nothing to react to until the SDK's own retries are exhausted too.
-- **Blind telemetry.** `onEvent`'s `retry` events, the logger, and usage metering all see nothing while a retry happens at the SDK layer.
+- **Blind telemetry.** `onEvent`'s `retry` events, the logger, and budget reservation all see nothing while a retry happens at the SDK layer.
 - **A shared timeout budget.** `timeoutMs` wraps the whole `create()` call, SDK-internal retries included, so they can eat into the budget before VernLLM's own retry loop gets a turn.
 
 If you want VernLLM to be the sole retry authority, disable the SDK's own retries when constructing the client:
