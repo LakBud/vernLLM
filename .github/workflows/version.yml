@@ -92,13 +92,70 @@ jobs:
       fail-fast: false
 
     steps:
+      - name: Checkout merged main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        env:
+          TAG: ${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+          NAME="${TAG%@*}"
+          VERSION="${TAG##*@}"
+          export NAME
+          echo "Tag: $TAG -> package: $NAME version: $VERSION"
+
+          DIR="$(node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const name = process.env.NAME;
+            for (const root of ["packages", "apps"]) {
+              if (!fs.existsSync(root)) continue;
+              for (const entry of fs.readdirSync(root)) {
+                const pkgPath = path.join(root, entry, "package.json");
+                if (!fs.existsSync(pkgPath)) continue;
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+                if (pkg.name === name) {
+                  process.stdout.write(path.join(root, entry));
+                  process.exit(0);
+                }
+              }
+            }
+          ')"
+
+          if [ -z "$DIR" ]; then
+            echo "ERROR: no workspace package named '$NAME' found"
+            exit 1
+          fi
+
+          CHANGELOG="$DIR/CHANGELOG.md"
+          NOTES_FILE="$RUNNER_TEMP/release-notes-$NAME.md"
+
+          if [ -f "$CHANGELOG" ]; then
+            awk -v ver="$VERSION" '$0 == "## " ver {p=1; print; next} /^## / && p {exit} p' "$CHANGELOG" > "$NOTES_FILE" || true
+          else
+            touch "$NOTES_FILE"
+          fi
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "WARNING: no CHANGELOG excerpt found for $TAG, using fallback"
+            echo "Release $TAG" > "$NOTES_FILE"
+          fi
+
+          head -n 5 "$NOTES_FILE"
+          echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ matrix.tag }}
           name: ${{ matrix.tag }}
           target_commitish: main
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.file }}
 
       - name: Trigger production publish
         env:
