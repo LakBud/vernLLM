@@ -161,16 +161,40 @@ jobs:
       - name: Commit changelog docs update
         if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel'
         run: |
+          set -euo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git fetch origin main
-          git checkout main
 
-          git add apps/docs/content/docs/changelog.mdx apps/docs/content/docs/integrations/redis/changelog.mdx apps/docs/content/docs/integrations/otel/changelog.mdx
+          WORKTREE="$(mktemp -d)"
+          git worktree add --detach "$WORKTREE" origin/main
 
-          git commit -m "docs: update changelog" || exit 0
-          git push origin main
+          trap 'git worktree remove --force "$WORKTREE"' EXIT
+
+          files=(
+            "apps/docs/content/docs/changelog.mdx"
+            "apps/docs/content/docs/integrations/redis/changelog.mdx"
+            "apps/docs/content/docs/integrations/otel/changelog.mdx"
+          )
+
+          for file in "${files[@]}"; do
+            mkdir -p "$WORKTREE/$(dirname "$file")"
+            cp "$file" "$WORKTREE/$file"
+          done
+
+          cd "$WORKTREE"
+
+          git add "${files[@]}"
+
+          if git diff --cached --quiet; then
+            echo "No changelog changes to commit"
+            exit 0
+          fi
+
+          git commit -m "docs: update changelog"
+          git push origin HEAD:main
 
       - name: Deploy to Vercel
         if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel'
