@@ -1,5 +1,179 @@
 # vern-llm
 
+## 2.9.0
+
+### Minor Changes
+
+- 2de140f: `fromBedrock`'s legacy `jsonSchema` path now throws `LLMError('validation')` when Bedrock doesn't return a compliant forced tool call, in both `create()` and `createStream()`.
+
+  Two cases are covered. The tool is missing entirely (previously resolved with empty content). The tool's `input` isn't a JSON object (previously stringified whatever was returned, e.g. `null` or an array, as if it were valid structured output).
+
+  This matches `fromAnthropic`'s existing behavior for the same scenario. Anyone relying on the old silent empty content or malformed passthrough should catch `LLMError` with `type: 'validation'` instead.
+
+- 7277ee1: Add `CircuitBreakerAdapter`, a pluggable interface for `circuitBreaker`, the same pattern `RateLimiterAdapter` already offers for `rateLimit`. Pass a full adapter (a cross process breaker, for example a Redis backed one) instead of `CircuitBreakerOptions`, and VernLLM drives it the same way it drives the built in `CircuitBreaker`.
+
+  `CircuitBreaker` now implements `CircuitBreakerAdapter`, so existing code using `circuitBreaker: { ... }` or `circuitBreaker: true` is unchanged.
+
+  ```ts
+  import { VernLLM, fromOpenAI, type CircuitBreakerAdapter } from 'vern-llm';
+
+  const myBreaker: CircuitBreakerAdapter = {
+    assertClosed(model, context) {
+      /* throw an LLMError('circuit_open', ...) when tripped */
+    },
+    recordSuccess(model, context) {
+      /* ... */
+    },
+    recordFailure(model, context, code) {
+      /* ... */
+    },
+    onStateChange(from, to, consecutiveFailures, model) {
+      /* required, but a no-op () => {} is a valid implementation */
+    },
+    // all four below are optional
+    getState(model) {
+      return 'closed';
+    },
+    getFailureBreakdown(model) {
+      return {};
+    },
+    open(model, context) {
+      /* ... */
+    },
+    close(model, context) {
+      /* ... */
+    },
+  };
+
+  const client = new VernLLM({
+    provider: fromOpenAI({ apiKey }),
+    circuitBreaker: myBreaker,
+  });
+  ```
+
+  `assertClosed`, `recordSuccess`, `recordFailure`, and `onStateChange` are required, four members for four things, the same shape as `RateLimiterAdapter`'s four required methods. `getState`, `getFailureBreakdown`, `isolateByModel`, `open`, and `close` are all optional, plain data or opt-in control an adapter can simply skip. `llm.getCircuitState()`/`getFailureBreakdown()` return `undefined` and `llm.openCircuit()`/`closeCircuit()` become no-ops for a target whose adapter doesn't implement the corresponding member, the same as a target with no breaker configured at all.
+
+  `open`/`close` stay optional rather than required on purpose: they hand VernLLM the ability to force a transition from outside, which a distributed adapter may deliberately not want to grant, one caller unilaterally forcing every replica open, for example.
+
+  `onStateChange` is required rather than optional, unlike the other five. It's the one member whose absence has no visible symptom: an adapter missing it still trips and recovers correctly, the only effect is that `circuit_state` events silently never fire for that target, which the middleware ecosystem's `onEvent` and any alerting built on it depend on. Requiring it turns a silent omission into an explicit choice, `onStateChange: () => {}` is a perfectly fine implementation for an adapter that genuinely doesn't want the notification. VernLLM wraps whatever you provide the same way it wraps the built in class's: reports the `circuit_state` event first, then calls your handler, even a no-op one.
+
+  Passing an object that implements some but not all four required members throws `LLMError('invalid_params')` at construction, naming what's missing, rather than surfacing later as a confusing runtime error. `onStateChange` alone, with none of `assertClosed`/`recordSuccess`/`recordFailure`, is never treated as an incomplete adapter, since it's a legitimate `CircuitBreakerOptions` field too (`circuitBreaker: { threshold: 5, onStateChange: fn }` keeps working exactly as before). A present but non function `getState`/`getFailureBreakdown`/`open`/`close` also throws at construction, the same treatment `RateLimiterAdapter`'s `getState` already gets.
+
+  One thing to note: sharing one adapter instance across more than one target is supported. Every sharing target still gets its own correctly tagged `circuit_state` event, and your original `onStateChange` fires exactly once per real transition, not once per sharing target. VernLLM logs a `[VernLLM] circuitBreaker: this adapter instance is already wired...` warning the first time it notices sharing, once per adapter, not once per additional target, so accidental sharing is visible without being noisy.
+
+  Minor, not breaking. Every existing `circuitBreaker` option keeps working exactly as before.
+
+  Also exports `CircuitBreakerAdapter`, `CircuitBreakerCallContext`, and `CircuitBreakerStateChangeHandler` from the package root, alongside the existing `CircuitBreaker`/`CircuitBreakerOptions`/`CircuitState` exports.
+
+  Fixes a sharing bug found in review: passing the same `CircuitBreakerAdapter` instance to more than one target previously chained `onStateChange` wrapping one call deeper on every build, an unbounded, invisible call chain over the life of the process. It now installs exactly one dispatcher per adapter instance, every sharing target still gets its own correctly tagged `circuit_state` event, and the adapter's own original `onStateChange` fires exactly once per real transition, not once per sharing target. A `[VernLLM] circuitBreaker: this adapter instance is already wired...` warning is logged the first time sharing is detected.
+
+- 0187299: Order `position: 'outermost'` and `position: 'innermost'` claimants by registration, not by `priority`.
+
+  The docs already said that when several middleware claim `'outermost'` (or `'innermost'`), registration order should decide who holds the real edge slot. In practice their `priority` decided it, because the claimants kept their `transform` order, which is sorted by `priority` first. A middleware that needed a late `transform` slot, for example to see the request after redaction, therefore lost its outer `wrap` slot to any other claimant with a lower priority.
+
+  Now `wrap` nesting among pinned entries follows registration order only: the first registered claimant is truly outermost, and the last registered claimant is truly innermost. `priority` and `runsAfter`/`runsBefore` still decide `transform` and `onEvent` order, and entries without a pin are unaffected.
+
+  ```ts
+  const llm = new VernLLM({
+    client,
+    model: 'gpt-4o',
+    middleware: [
+      { name: 'audit', position: 'outermost', priority: 1000, wrap: audit },
+      { name: 'metering', position: 'outermost', priority: -1000, wrap: metering },
+    ],
+  });
+
+  // Before: metering wrapped audit, because its priority was lower.
+  // Now: audit wraps metering, because it was registered first.
+  ```
+
+  This changes `wrap` nesting only for setups where two entries pin the same side and their priorities disagree with their registration order. To keep the old nesting, register the entry you want outermost first. Everything else, including setups that pin a single entry or leave `priority` unset, behaves the same.
+
+- 00b1c0f: Fix a circuit breaker that could stay half-open forever, let circuit breaker and rate limiter adapters with remote state cooperate with `VernLLM` (an async `prepare` step, live `readState` reads), and let them follow the instance's `logger`.
+
+  A half-open breaker lets one trial call through. If that call ended in an error the breaker deliberately ignores (quota, validation, a caller abort, a local rate limit rejection, a failure before dispatch), nothing recorded an outcome, so the trial slot stayed claimed and every later call was rejected with "no trial available". `VernLLM` now hands the slot back whenever a call ends without a recorded outcome, so the next call becomes the new trial.
+
+  `assertClosed` has to decide synchronously, so an adapter whose real state is remote (Redis) can only decide from a local copy: a key it has never seen reads as closed, and the first call after a cooldown is rejected while a background check wins the trial. A new optional `prepare` on `CircuitBreakerAdapter` fixes this. `VernLLM` awaits it right before `assertClosed`, so the adapter can refresh its copy first. It never blocks or fails a call: a rejection, or taking longer than `prepareTimeoutMs` (default 1000), is logged as a warning and the call carries on with the adapter's local state. A call aborted while waiting rejects with `aborted`.
+
+  Adapters can also implement `readState` for a live read, surfaced as `VernLLM.readCircuitStates()` and `VernLLM.readRateLimitState()`. Both fall back to `getState` when an adapter has no `readState`. Finally, `recordSuccess`, `recordFailure` and `releaseTrial` are fire and forget, so if an adapter hands back a promise from one of them and it rejects, `VernLLM` now logs it instead of leaving an unhandled rejection that could end the process after the call had already succeeded.
+
+  ```ts
+  import type { CircuitBreakerAdapter, Logger, RateLimiterAdapter } from 'vern-llm';
+
+  // The new optional members, shown on their own. Your adapter still
+  // implements the rest of the interface as before.
+  const breaker: Pick<
+    CircuitBreakerAdapter,
+    'prepare' | 'prepareTimeoutMs' | 'readState' | 'releaseTrial' | 'setLogger'
+  > = {
+    async prepare(model, context) {
+      // Refresh local state from the remote store. Return quickly when it is
+      // already fresh, this runs on every call's path.
+    },
+    prepareTimeoutMs: 250,
+    async readState(model) {
+      return 'closed'; // the live state, not a local copy
+    },
+    releaseTrial(model, context) {
+      // Give back the trial slot this call claimed. Must be idempotent, and a
+      // no-op for a call that holds no slot.
+    },
+    setLogger(logger: Logger) {
+      // Called once with the instance's own logger.
+    },
+  };
+
+  const limiter: Pick<RateLimiterAdapter, 'readState' | 'setLogger'> = {
+    async readState() {
+      return { requestsRemaining: 42 }; // live levels
+    },
+    setLogger(logger: Logger) {
+      // Same handoff, so background failures follow `logger` and `'silent'`.
+    },
+  };
+
+  const live = await llm.readCircuitStates();
+  const levels = await llm.readRateLimitState();
+  ```
+
+  Existing code keeps compiling: every new member is optional, and an adapter that omits them behaves exactly as before, with no extra wait. Runtime differences to know about. The built in `CircuitBreaker` now treats a call's half-open permit as spent once its success or failure is recorded, so a duplicate outcome for the same call is no longer counted twice. A custom adapter whose `prepare`, `readState`, `releaseTrial` or `setLogger` is present but not a function, or whose `prepareTimeoutMs` is not a finite number greater than 0, now fails validation at construction, like its other optional members. The same applies to a rate limiter adapter's `readState`.
+
+- abac0fb: Add `'usage'` and `'usage_failure'` to `VernLLMEvent`, so a middleware's own `onEvent` can observe token usage the same way it already observes `retry`/`fallback`/`rate_limited`/`circuit_state`.
+
+  `VernLLMOptions.onUsage`/`onUsageFailure` are unchanged. They're now driven from these same two events rather than a separate reporting path, so they and a middleware's `onEvent` observe identical data independently: neither knows the other ran, and a throwing handler in one can't stop the other from running.
+
+  ```ts
+  import type { VernLLMMiddleware } from 'vern-llm';
+
+  const costTracking: VernLLMMiddleware = {
+    name: 'cost-tracking',
+    onEvent: (event) => {
+      if (event.kind === 'usage') {
+        recordTokenCost(event.requestId, event.usage.totalTokens);
+      }
+    },
+  };
+  ```
+
+  Minor, not breaking at runtime. Nothing about `onUsage`/`onUsageFailure`'s existing behavior, timing, or field shape changes, and a handler written as a `switch` with a `default` branch already treats unknown `kind` values as expected.
+
+  An exhaustive `switch` over `event.kind` with no `default` (e.g. an `assertNever(event)` fallback) will fail to compile until it adds cases for `'usage'` and `'usage_failure'`, the same as every prior addition to this union. Add the two new cases wherever such a switch exists; each new case can simply call the same logic as `default` used to, or a no op if usage was never handled there.
+
+### Patch Changes
+
+- b6b1400: Deliver a middleware's `onEvent` synchronously, before the code that emitted the event continues.
+
+  Handlers of a middleware with no `enabled` function, or a boolean one, now run in registration order in the same tick as the event. A `'usage'` event has therefore arrived before the code after `await next()` in `wrap` runs, and before a stream's `finalResult` settles. Previously each handler ran after an awaited `enabled` check, so a middleware relying on `'usage'` to finish its work could be called after the call had already returned.
+
+  A function `enabled` is now resolved independently per middleware. A slow predicate on one middleware no longer delays the `onEvent` of the middleware after it.
+
+  What to expect:
+
+  1. A handler can observe state before the emitting code's next line runs.
+  2. A slow synchronous handler delays the emitting call path when `enabled` is static or absent, so keep handlers fast. It always did, only later. A handler behind a function `enabled` runs asynchronously and does not delay it.
+  3. A handler that calls `llm.call()` is fine and cannot deadlock.
+  4. A throwing or rejecting handler is still logged and never affects the call.
+
 ## 2.8.0
 
 ### Minor Changes
