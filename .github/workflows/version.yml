@@ -72,7 +72,7 @@ jobs:
 
             if [ "$NEW_VERSION" != "$OLD_VERSION" ]; then
               TAG="$NAME@$NEW_VERSION"
-              TAGS_JSON="$(echo "$TAGS_JSON" | jq --arg t "$TAG" '. + [$t]')"
+              TAGS_JSON="$(jq -c --arg t "$TAG" '. + [$t]' <<< "$TAGS_JSON")"
             fi
           done
 
