@@ -55,7 +55,7 @@ jobs:
         run: |
           node --version
           pnpm --version
-          test "$(pnpm --version)" = "11.25.0"
+          test "$(pnpm --version)" = "$(node -p "require('./package.json').packageManager.split('@')[1]")"
 
       - if: steps.filter.outputs.code == 'true'
         name: Open or update the Version Packages PR
