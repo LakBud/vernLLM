@@ -53,7 +53,12 @@ export function otelMiddleware(options?: OtelMiddlewareOptions): VernLLMMiddlewa
       );
       if (!tracker) return next();
 
-      ctx.state.set(trackerKey, tracker);
+      try {
+        ctx.state.set(trackerKey, tracker);
+      } catch (error) {
+        guard('finish', () => tracker.finish({ kind: 'error', error }), undefined);
+        return next();
+      }
 
       let result: CallResult;
       try {

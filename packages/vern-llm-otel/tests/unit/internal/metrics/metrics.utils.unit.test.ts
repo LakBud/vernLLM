@@ -192,6 +192,27 @@ describe('normalizeModel', () => {
     });
   });
 
+  it('normalizes each unique model once per metrics instance', async () => {
+    const normalizeModel = vi.fn((model: string) => model.split(':')[0]!);
+    const { harness, metrics } = setup({ normalizeModel });
+
+    metrics.record('operationDuration', 1, {
+      'gen_ai.request.model': 'ft:gpt-4o:acme',
+      'vernllm.model': 'ft:gpt-4o:acme',
+    });
+    metrics.record('retryCount', 1, { 'vernllm.model': 'ft:gpt-4o:acme' });
+    const collected = await harness.collect();
+
+    expect(normalizeModel).toHaveBeenCalledTimes(1);
+    expect(pointsOf(collected.get('gen_ai.client.operation.duration'))[0]?.attributes).toEqual({
+      'gen_ai.request.model': 'ft',
+      'vernllm.model': 'ft',
+    });
+    expect(pointsOf(collected.get('vernllm.retry.count'))[0]?.attributes).toEqual({
+      'vernllm.model': 'ft',
+    });
+  });
+
   it('keeps the raw model and logs when the normalizer throws', async () => {
     const { harness, metrics, logger } = setup({
       normalizeModel: () => {

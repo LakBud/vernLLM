@@ -74,6 +74,7 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
 
   // Models come from requests, so they are the one unbounded attribute. The normalizer bounds
   // it, and a throwing or empty answer keeps the raw model rather than losing the measurement.
+  const normalizedModelCache = new Map<string, string>();
   const withNormalizedModels = (attributes: Attributes): Attributes => {
     const { normalizeModel } = config;
     if (!normalizeModel) return attributes;
@@ -83,12 +84,20 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
       const model = result[key];
       if (typeof model !== 'string') continue;
 
+      const cached = normalizedModelCache.get(model);
+      if (cached !== undefined) {
+        result[key] = cached;
+        continue;
+      }
+
       const normalized: unknown = guard<unknown>(
         'normalizeModel',
         () => normalizeModel(model),
         model,
       );
-      result[key] = isNonEmptyString(normalized) ? normalized : model;
+      const next = isNonEmptyString(normalized) ? normalized : model;
+      normalizedModelCache.set(model, next);
+      result[key] = next;
     }
     return result;
   };

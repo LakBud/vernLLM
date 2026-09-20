@@ -280,10 +280,12 @@ export function resolveMiddlewareOrder(
  * `wrapOrder`, ties broken by `transformOrder` position since `sort` is
  * stable. Entries with no `position` at all default to `0`, so they
  * interleave with numeric-positioned entries rather than always sorting
- * after them. Multiple `'outermost'` (or `'innermost'`) claimants are
- * ordered by registration, so the first one registered holds the true
- * outermost (or innermost) slot. Their `priority` and `runsAfter`/
- * `runsBefore` decide `transformOrder` only, never who wraps whom.
+ * after them. Multiple `'outermost'` claimants are ordered by registration,
+ * so the first one registered holds the true outermost slot. Multiple
+ * `'innermost'` claimants are ordered by registration, so the last one
+ * registered holds the true innermost slot. Their `priority` and
+ * `runsAfter`/`runsBefore` decide `transformOrder` only, never who wraps
+ * whom.
  */
 function applyPositionOverride(
   order: readonly VernLLMMiddleware[],

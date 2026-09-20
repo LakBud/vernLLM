@@ -59,6 +59,10 @@ span, not the call span.
 spend it on the newest messages first, since a long history is read for what was asked last. A cut
 is marked with `…[truncated]` and never splits a surrogate pair, so an emoji stays whole.
 
+`Infinity` is valid and useful when you want the full content, but it can push very large attributes
+into your exporter and backend retention settings, so prefer a finite cap unless you intentionally
+want to keep the unbounded payload.
+
 Tool definitions step down instead of being cut: the full definitions, then names only, then
 nothing, so the attribute is always valid JSON.
 

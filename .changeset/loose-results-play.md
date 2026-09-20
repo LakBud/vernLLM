@@ -4,9 +4,9 @@
 
 Order `position: 'outermost'` and `position: 'innermost'` claimants by registration, not by `priority`.
 
-The docs already said that when several middleware claim `'outermost'` (or `'innermost'`), the first one registered holds the true outermost (or innermost) slot. In practice their `priority` decided it, because the claimants kept their `transform` order, which is sorted by `priority` first. A middleware that needed a late `transform` slot, for example to see the request after redaction, therefore lost its outer `wrap` slot to any other claimant with a lower priority.
+The docs already said that when several middleware claim `'outermost'` (or `'innermost'`), registration order should decide who holds the real edge slot. In practice their `priority` decided it, because the claimants kept their `transform` order, which is sorted by `priority` first. A middleware that needed a late `transform` slot, for example to see the request after redaction, therefore lost its outer `wrap` slot to any other claimant with a lower priority.
 
-Now `wrap` nesting among pinned entries follows registration order only. `priority` and `runsAfter`/`runsBefore` still decide `transform` and `onEvent` order, and entries without a pin are unaffected.
+Now `wrap` nesting among pinned entries follows registration order only: the first registered claimant is truly outermost, and the last registered claimant is truly innermost. `priority` and `runsAfter`/`runsBefore` still decide `transform` and `onEvent` order, and entries without a pin are unaffected.
 
 ```ts
 const llm = new VernLLM({

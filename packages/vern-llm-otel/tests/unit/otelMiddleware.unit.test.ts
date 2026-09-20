@@ -1,4 +1,4 @@
-import { createMiddlewareRef, requireRef } from 'vern-llm';
+import { createMiddlewareRef, requireRef, type PreDispatchContext } from 'vern-llm';
 import { describe, expect, it } from 'vitest';
 
 import { otelMiddleware, otelMiddlewareRef } from '../../src/otelMiddleware.js';
@@ -56,6 +56,22 @@ describe('otelMiddleware entry', () => {
 
   it('builds without an SDK registered and without touching any global', () => {
     expect(() => otelMiddleware()).not.toThrow();
+  });
+
+  it('does not change a call if storing the tracker throws', async () => {
+    const entry = otelMiddleware();
+    const ctx = {
+      state: {
+        set: () => {
+          throw new Error('state broke');
+        },
+        get: () => undefined,
+      },
+    } as unknown as PreDispatchContext;
+
+    await expect(entry.wrap!({} as never, async () => ({ value: 'ok' }), ctx)).resolves.toEqual({
+      value: 'ok',
+    });
   });
 
   it('gives every instance its own hooks', () => {
