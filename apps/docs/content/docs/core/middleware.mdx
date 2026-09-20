@@ -208,7 +208,8 @@ always fire.
   arrived before the code after `await next()` in `wrap` runs, and before a stream's `finalResult`
   settles. A function `enabled` is resolved on its own, so a slow one only delays that middleware's
   handler, never another's. Handlers run on the call path: keep them fast, and start any slow work
-  without awaiting it. A handler may call `llm.call()` safely.
+  without awaiting it. A handler may call `llm.call()` safely. The [OpenTelemetry
+  integration](/docs/integrations/otel) relies on this to put token counts on its spans.
 </Callout>
 
 ## `ctx.state` and `ctx.own`

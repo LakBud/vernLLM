@@ -1,0 +1,15 @@
+{
+  "title": "OpenTelemetry",
+  "icon": "OpenTelemetry",
+  "pages": [
+    "index",
+    "traces",
+    "metrics",
+    "content-capture",
+    "configuration",
+    "semantic-conventions",
+    "troubleshooting",
+    "contributing",
+    "changelog"
+  ]
+}

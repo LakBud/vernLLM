@@ -107,9 +107,12 @@ export class CallTracker {
       () => {
         if (!span.isRecording()) return;
 
-        // Ours are written after the user's, so a custom attribute cannot overwrite `vernllm.*`.
+        // The span already carries our start attributes, and the user's are written over them,
+        // so ours are applied once more afterwards. A custom attribute can then never replace a
+        // `vernllm.*` one, and the end attributes are written later still.
         const extra = guard('attributes', () => config.attributes?.(ctx), undefined);
         span.setAttributes(sanitizeAttributes(extra));
+        span.setAttributes(callStartAttributes(ctx));
 
         if (deps.content) {
           captureContent = guard(

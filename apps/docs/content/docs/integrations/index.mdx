@@ -14,7 +14,8 @@ memory stops being a source of truth. Each process only knows its own half of th
 An integration is a separate package that plugs a piece of shared infrastructure, a database, a
 store, a message bus, into the same interfaces VernLLM already exposes for customization. Nothing
 about how you use VernLLM has to change, only where its state actually lives: from one process's
-memory to something every process can read and write.
+memory to something every process can read and write. Not every integration is about shared state: some
+connect VernLLM to the tooling you already use to observe it.
 
 ## Why it helps
 
@@ -41,6 +42,9 @@ memory to something every process can read and write.
 <Cards>
   <Card title="Redis" href="/docs/integrations/redis">
     Coordinate state across every process running VernLLM.
+  </Card>
+  <Card title="OpenTelemetry" href="/docs/integrations/otel">
+    Turn every call into traces and metrics that follow the GenAI semantic conventions.
   </Card>
 </Cards>
 

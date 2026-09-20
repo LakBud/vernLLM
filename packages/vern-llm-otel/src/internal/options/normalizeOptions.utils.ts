@@ -49,12 +49,15 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
   // Entries are left for the core to validate, so its own error names the bad ref.
   const runsAfter = [...(opts.runsAfter ?? [])];
 
-  // Capture has to see the request after redaction, so it defaults to the last transform slot
-  // unless an explicit ordering was given. Without capture there is no ordering need, and the
-  // low value makes this the first `outermost` claimant so the call span covers the others.
+  // Capture has to see the request after redaction, so it takes the last transform slot whatever
+  // `runsAfter` says. A ref that fails to resolve is only dropped with a warning by the core, and
+  // a lower default would then run capture before the very middleware it was meant to follow.
+  // `position: 'outermost'` still keeps the call span outside every middleware that is not also
+  // outermost, because the core moves outermost entries to the front of the wrap order whatever
+  // their priority. Without capture there is no ordering need, and the low value makes this the
+  // first outermost claimant.
   const capturesContent = capture !== undefined && capture.anyGroup;
-  const defaultPriority =
-    capturesContent && runsAfter.length === 0 ? PRIORITY_AFTER_OTHERS : PRIORITY_OUTERMOST;
+  const defaultPriority = capturesContent ? PRIORITY_AFTER_OTHERS : PRIORITY_OUTERMOST;
 
   return {
     tracer: opts.tracer,

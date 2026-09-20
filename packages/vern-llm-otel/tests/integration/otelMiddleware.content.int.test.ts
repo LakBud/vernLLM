@@ -1,5 +1,11 @@
 import { AlwaysOffSampler } from '@opentelemetry/sdk-trace-base';
-import { createMiddlewareRef, VernLLM, type Logger, type VernLLMMiddleware } from 'vern-llm';
+import {
+  createMiddlewareRef,
+  requireRef,
+  VernLLM,
+  type Logger,
+  type VernLLMMiddleware,
+} from 'vern-llm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { otelMiddleware } from '../../src/otelMiddleware.js';
@@ -338,6 +344,26 @@ describe('content capture end to end', () => {
       expect(input).toContain('my *** question');
       expect(input).not.toContain('SECRET');
     });
+
+    it('still sees redacted text when runsAfter holds a ref that matches nothing', async () => {
+      // The core drops an unresolved bare ref with a warning, so the order must not depend on it.
+      const stranger = createMiddlewareRef('redaction');
+      const input = await run({ captureContent: true, runsAfter: [stranger] });
+
+      expect(input).toContain('my *** question');
+      expect(input).not.toContain('SECRET');
+    });
+
+    it('still sees redacted text with an explicit low priority and a required ref', async () => {
+      const input = await run({
+        captureContent: true,
+        priority: -1000,
+        runsAfter: [requireRef(redaction)],
+      });
+
+      expect(input).toContain('my *** question');
+      expect(input).not.toContain('SECRET');
+    });
   });
 
   describe('call span position', () => {
@@ -384,16 +410,52 @@ describe('content capture end to end', () => {
       expect(other.parentSpanContext?.spanId).toBe(call.spanContext().spanId);
     });
 
-    it('sits inside it when capture is on with no explicit order, so capture runs last', async () => {
+    it('sits inside another outermost entry when capture is on, so capture runs last', async () => {
       const { other, call } = await run({ captureContent: true });
       expect(other.parentSpanContext).toBeUndefined();
       expect(call.parentSpanContext?.spanId).toBe(other.spanContext().spanId);
     });
 
-    it('wraps it again once capture states its order with runsAfter', async () => {
+    it('does not change that with runsAfter alone', async () => {
       const { other, call } = await run({ captureContent: true, runsAfter: [redaction] });
+      expect(other.parentSpanContext).toBeUndefined();
+      expect(call.parentSpanContext?.spanId).toBe(other.spanContext().spanId);
+    });
+
+    it('wraps it again once the priority is set explicitly', async () => {
+      const { other, call } = await run({
+        captureContent: true,
+        priority: -1000,
+        runsAfter: [requireRef(redaction)],
+      });
       expect(call.parentSpanContext).toBeUndefined();
       expect(other.parentSpanContext?.spanId).toBe(call.spanContext().spanId);
+    });
+
+    it('is outside a middleware that is not outermost, with capture on', async () => {
+      const inner: VernLLMMiddleware = {
+        name: 'inner',
+        priority: -5000,
+        wrap: (_request, next) =>
+          trace.tracer.startActiveSpan('inner', async (span) => {
+            try {
+              return await next();
+            } finally {
+              span.end();
+            }
+          }),
+      };
+      const client = createMockClient([textResponse('ok', USAGE)]).client;
+      const llm = new VernLLM({
+        ...BASE,
+        client,
+        middleware: [inner, otel({ captureContent: true })],
+      });
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      const innerSpan = spans().find((span) => span.name === 'inner')!;
+      expect(callSpans()[0]!.parentSpanContext).toBeUndefined();
+      expect(innerSpan.parentSpanContext?.spanId).toBe(callSpans()[0]!.spanContext().spanId);
     });
   });
 });

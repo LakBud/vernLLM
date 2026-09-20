@@ -42,9 +42,10 @@ export interface OtelMiddlewareOptions {
   /** Entry name. Default `'otel'`. */
   name?: string;
   /**
-   * Transform order. Default 1000 when content capture is on and `runsAfter` is empty, so capture
-   * runs after other transforms. Otherwise default -1000, so this entry is the first `outermost`
-   * claimant and its call span covers the others.
+   * Transform order, and the order among other `outermost` middleware. Default 1000 when content
+   * capture is on, so capture runs after other transforms and sees the request as sent. Otherwise
+   * default -1000, so this entry is the first `outermost` claimant and its call span covers the
+   * others. The call span is outside every middleware that is not `outermost` either way.
    */
   priority?: number;
   /** Order relative to other middleware, typically a redaction ref, for content capture. */

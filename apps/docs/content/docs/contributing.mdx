@@ -65,33 +65,31 @@ Before a change is merged, expect a personal canary test on a simple real app, l
 
 Every PR runs the following checks in CI. Run the equivalent commands locally first so nothing surprises you:
 
-| Check                                       | Workflow               | Local command                                                                                                                  |
-| ------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Lint                                        | `lint.yml`             | `pnpm run lint`                                                                                                                |
-| Typecheck source                            | `typecheck.yml`        | `pnpm run typecheck:package`                                                                                                   |
-| Typecheck tests                             | `typecheck.yml`        | `pnpm run typecheck:test`                                                                                                      |
-| Unit tests + coverage                       | `test-unit.yml`        | `pnpm run test:unit:coverage`                                                                                                  |
-| Integration tests + coverage                | `test-integration.yml` | `pnpm run test:int:coverage`                                                                                                   |
-| Build, bundle size, smoke test              | `build-checks.yml`     | `pnpm run build:package && pnpm --filter vern-llm run size && pnpm --filter vern-llm run smoke-test`                           |
-| Changeset present                           | `changeset.yml`        | `pnpm changeset status --since=origin/main`                                                                                    |
-| Docs build (only if `apps/docs/**` changed) | `docs-build.yml`       | `pnpm --filter vern-llm-docs run lint && pnpm --filter vern-llm-docs run types:check && pnpm --filter vern-llm-docs run build` |
-| Coverage thresholds                         | Codecov                | `pnpm run test:coverage`                                                                                                       |
-| Static analysis                             | `codeql.yml`           | runs on GitHub only                                                                                                            |
+| Check                                       | CI job or workflow          | Local command                                                                                                                  |
+| ------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Lint                                        | `ci.yml` `lint`             | `pnpm run lint`                                                                                                                |
+| Typecheck source, tests, and docs           | `ci.yml` `typecheck`        | `pnpm run typecheck`                                                                                                           |
+| Unit tests + coverage                       | `ci.yml` `test-unit`        | `pnpm run test:unit:coverage`                                                                                                  |
+| Integration tests + coverage                | `ci.yml` `test-integration` | `pnpm run test:int:coverage`                                                                                                   |
+| Build, bundle size, smoke test              | `ci.yml` `build`            | `pnpm run build && pnpm exec nx run vern-llm:size && pnpm exec nx run vern-llm:smoke-test`                                     |
+| Changeset present                           | `changeset.yml`             | `pnpm changeset status --since=origin/main`                                                                                    |
+| Docs build (only if `apps/docs/**` changed) | `ci.yml` `docs`             | `pnpm --filter vern-llm-docs run lint && pnpm --filter vern-llm-docs run types:check && pnpm --filter vern-llm-docs run build` |
+| Coverage thresholds                         | Codecov                     | `pnpm run test:coverage`                                                                                                       |
+| Static analysis                             | `codeql.yml`                | runs on GitHub only                                                                                                            |
 
 The quickest local pass before pushing:
 
 ```bash
 pnpm run lint
 pnpm run typecheck
-pnpm run typecheck:test
 pnpm run test:unit:coverage
 pnpm run test:int:coverage
-pnpm run build:package
+pnpm run build
 ```
 
-`build-checks.yml` also verifies peer dependencies (`pnpm peers check`), checks the published bundle stays under the configured `size-limit`, and runs a smoke test against the built output, so if you're touching `packages/vern-llm`'s public surface or its dependencies, run `pnpm run build:package` and `pnpm --filter vern-llm run size` before pushing.
+The `build` job also verifies peer dependencies (`pnpm peers check`), checks the published bundle stays under the configured `size-limit`, and runs a smoke test against the built output, so if you're touching `packages/vern-llm`'s public surface or its dependencies, run `pnpm run build` and `pnpm exec nx run vern-llm:size` before pushing.
 
-`changeset.yml` blocks any PR touching `packages/vern-llm` that doesn't include a changeset (see below). `docs-build.yml` only runs when `apps/docs/**` or the lockfile changes, so it won't fire on pure library changes.
+`changeset.yml` blocks any PR touching a package under `packages/` that doesn't include a changeset (see below). The `docs` job only does work when the docs project is affected, so it won't do anything on pure library changes.
 
 ## Changesets
 

@@ -1,0 +1,86 @@
+---
+title: Metrics
+description: The GenAI client metrics and the vernllm.* counters and histograms
+---
+
+Metrics come from the same events as the spans. There are three GenAI client metrics and eight
+`vernllm.*` instruments. Instruments are created on first use, from the `meter` option or the
+global meter.
+
+## GenAI client metrics
+
+| Metric                                        | Unit      | Attributes                                                                                       | Recorded                                      |
+| --------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| `gen_ai.client.token.usage`                   | `{token}` | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.token.type`     | Per attempt, input and output separately      |
+| `gen_ai.client.operation.duration`            | `s`       | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `error.type` on failure | Per attempt, without local rate limit waiting |
+| `gen_ai.client.operation.time_to_first_chunk` | `s`       | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`                          | Streams only, when the stream opens           |
+
+Token usage is recorded for an attempt that spent tokens and then failed too, since spent tokens
+are spent. `gen_ai.client.operation.time_per_output_chunk` is not emitted, see
+[Traces](/docs/integrations/otel/traces#streaming).
+
+## VernLLM metrics
+
+| Metric                        | Type                    | Attributes                                                                                        |
+| ----------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------- |
+| `vernllm.call.duration`       | Histogram, `s`          | `vernllm.call.outcome`, `error.type` on failure, `vernllm.used_fallback` when the call has `meta` |
+| `vernllm.call.attempts`       | Histogram, `{attempt}`  | `vernllm.call.outcome`                                                                            |
+| `vernllm.retry.count`         | Counter, `{retry}`      | `vernllm.provider`, `vernllm.model`, `error.type`, `vernllm.retry_after_honored`                  |
+| `vernllm.retry.delay`         | Histogram, `s`          | `vernllm.provider`, `vernllm.model`                                                               |
+| `vernllm.fallback.count`      | Counter, `{fallback}`   | `vernllm.fallback.from`, `vernllm.fallback.to`                                                    |
+| `vernllm.rate_limit.wait`     | Histogram, `s`          | `vernllm.provider`, `vernllm.model`, `vernllm.rate_limit.reason`                                  |
+| `vernllm.circuit.transitions` | Counter, `{transition}` | `vernllm.provider`, `vernllm.model`, `vernllm.circuit.from`, `vernllm.circuit.to`                 |
+| `vernllm.usage_failure.count` | Counter, `{failure}`    | `vernllm.provider`, `vernllm.model`                                                               |
+
+`vernllm.call.duration` and `vernllm.call.attempts` are per logical call, so they include retries,
+fallbacks, and waiting. For a stream the call ends when `finalResult` settles.
+
+`vernllm.call.outcome` is one of `ok`, `error`, `cache_hit`, `coalesced`, or `short_circuit`.
+
+Provider values, including `vernllm.fallback.from` and `vernllm.fallback.to`, go through
+`providerNames`, so their cardinality is bounded by your configuration. No request id and no error
+message is ever a metric attribute.
+
+## Buckets
+
+Every histogram carries explicit bucket boundaries as instrument advice, so an SDK `View` can still
+override them.
+
+| Histogram                            | Boundaries                                              |
+| ------------------------------------ | ------------------------------------------------------- |
+| `gen_ai.client.token.usage`          | 1, 4, 16, 64, 256, 1024, and so on by 4, up to 67108864 |
+| Every duration and delay, in seconds | 0.01, 0.02, 0.04, and so on doubling, up to 81.92       |
+| `vernllm.call.attempts`              | 1, 2, 3, 4, 5, 8, 13                                    |
+
+## Duration excludes rate limit waiting
+
+`gen_ai.client.operation.duration` and the time to first chunk subtract time spent waiting for
+local rate limit capacity, so they measure the provider, not your own queue. The attempt span
+still covers the wait, and `vernllm.rate_limit.wait_ms` on it says how long it was.
+
+## Model names
+
+Model names come from requests, so they are the one unbounded attribute. `normalizeModel` maps
+a model to the value used for `gen_ai.request.model` and `vernllm.model` on metrics, for example
+to collapse per user fine tuned model names:
+
+```ts title="otel-normalize-model.ts"
+otelMiddleware({
+  normalizeModel: (model) => (model.startsWith('ft:') ? model.split(':')[1]! : model),
+});
+```
+
+Spans keep the exact model. A throwing normalizer, or one returning an empty string, keeps the raw
+model instead of losing the measurement.
+
+## Linking to spans
+
+Each measurement is recorded against the attempt span's context, or the call span's when there is
+no attempt, so exemplars point at the right span rather than whatever context was active inside
+the event handler.
+
+## Turning metrics off
+
+`metrics: false` disables every instrument. `genAiConventions: false` keeps only the `vernllm.*`
+instruments, see
+[Semantic Conventions](/docs/integrations/otel/semantic-conventions#avoid-double-counting).

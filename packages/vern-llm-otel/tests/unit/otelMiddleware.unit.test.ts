@@ -39,11 +39,12 @@ describe('otelMiddleware entry', () => {
     expect(entry.runsAfter).toEqual([redaction, required]);
   });
 
-  it('defaults capture to run after other transforms, unless it states an order', () => {
+  it('defaults capture to run after other transforms, with or without runsAfter', () => {
     const redaction = createMiddlewareRef('redaction');
 
     expect(otelMiddleware({ captureContent: true }).priority).toBe(1000);
-    expect(otelMiddleware({ captureContent: true, runsAfter: [redaction] }).priority).toBe(-1000);
+    expect(otelMiddleware({ captureContent: true, runsAfter: [redaction] }).priority).toBe(1000);
+    expect(otelMiddleware({ captureContent: true }).position).toBe('outermost');
   });
 
   it('rejects bad options at construction with a plain Error', () => {

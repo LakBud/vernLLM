@@ -1,0 +1,124 @@
+---
+title: OpenTelemetry Overview
+description: Traces and metrics for every VernLLM call, following the GenAI semantic conventions
+---
+
+`vern-llm-otel` is one middleware that turns every VernLLM call into OpenTelemetry traces and
+metrics. Retries, fallbacks, rate limit waits, and circuit breaker transitions show up as spans,
+span events, and metrics, with no change to how you call VernLLM.
+
+<Callout>
+  OpenTelemetry is a Cloud Native Computing Foundation project. This is an unofficial community
+  integration, not affiliated with or endorsed by the CNCF or the OpenTelemetry project
+</Callout>
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-otel @opentelemetry/api # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-otel @opentelemetry/api # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-otel @opentelemetry/api # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-otel @opentelemetry/api # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` and `@opentelemetry/api` are peer dependencies, so the package shares the copies your
+app already uses. `@opentelemetry/api` 1.9 or newer is required. The package depends on no SDK:
+spans and metrics go wherever your own OpenTelemetry setup sends them.
+
+<Cards>
+  <Card title="Traces" href="/docs/integrations/otel/traces">
+    One call span per call, one attempt span per attempt, and every retry and fallback in between.
+  </Card>
+  <Card title="Metrics" href="/docs/integrations/otel/metrics">
+    GenAI client metrics plus counters and histograms for retries, fallbacks, and rate limits.
+  </Card>
+  <Card title="Content Capture" href="/docs/integrations/otel/content-capture">
+    Opt in prompt and response capture, with redaction, truncation, and per call gating.
+  </Card>
+  <Card title="Configuration" href="/docs/integrations/otel/configuration">
+    Every option, provider names, ordering, and the logger.
+  </Card>
+  <Card title="Semantic Conventions" href="/docs/integrations/otel/semantic-conventions">
+    What follows the GenAI conventions, what does not, and why.
+  </Card>
+</Cards>
+
+## Basic usage
+
+Start your OpenTelemetry SDK before the first call. This example uses the Node SDK with OTLP over
+HTTP:
+
+```ts title="otel-sdk-setup.ts"
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+
+new NodeSDK({
+  traceExporter: new OTLPTraceExporter(),
+  metricReaders: [new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter() })],
+}).start();
+```
+
+Then add `otelMiddleware` to your `VernLLM`:
+
+```ts title="otel-basic-usage.ts"
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+import { otelMiddleware } from 'vern-llm-otel';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [otelMiddleware({ providerNames: { primary: 'openai' } })],
+});
+```
+
+The tracer and meter are looked up on first use, so nothing here has to be imported in a
+particular order. Spans nest under whatever span is active when the call starts, so an app's own
+request or agent span adopts them with no configuration.
+
+`providerNames` maps a VernLLM target to `gen_ai.provider.name`, see
+[Configuration](/docs/integrations/otel/configuration#providernames). Without it the target's own
+label, `primary` for a lone target, is used.
+
+Register the middleware once per `VernLLM`: two entries in one `middleware` array throw at
+construction. The same `otelMiddleware()` object can be shared by several `VernLLM` instances.
+
+## What one call looks like
+
+A call that timed out on its primary target and was answered by a fallback:
+
+```text title="otel-trace-shape.txt"
+vernllm.call                 INTERNAL   one per call
+├── chat gpt-4o              CLIENT     attempt 1, error.type = timeout
+└── chat gpt-4o-mini         CLIENT     attempt 1 of fallback[0], ok
+```
+
+See [Traces](/docs/integrations/otel/traces) for every attribute and event.

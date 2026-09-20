@@ -1,0 +1,157 @@
+---
+title: Content Capture
+description: Record prompts and responses on spans, opt in, with redaction and per call gating
+---
+
+<Callout type="warn">
+  Prompts and responses can hold personal data, secrets, and customer text. Capture is off by
+  default and stays off until you turn it on. Anything you record ends up in your tracing backend,
+  with that backend's retention and access rules.
+</Callout>
+
+## Turning it on
+
+```ts title="otel-capture-content.ts"
+otelMiddleware({ captureContent: true });
+```
+
+`true` captures input, output, and system instructions, and leaves tool definitions out. Pass an
+object to choose:
+
+```ts title="otel-capture-content-options.ts"
+otelMiddleware({
+  captureContent: {
+    toolDefinitions: true,
+    maxLength: 4096,
+    redact: scrubPii,
+  },
+});
+```
+
+| Option               | Default | Records on the attempt span                               |
+| -------------------- | ------- | --------------------------------------------------------- |
+| `input`              | `true`  | `gen_ai.input.messages`                                   |
+| `output`             | `true`  | `gen_ai.output.messages`                                  |
+| `systemInstructions` | `true`  | `gen_ai.system_instructions`                              |
+| `toolDefinitions`    | `false` | `gen_ai.tool.definitions`, can be large                   |
+| `maxLength`          | `8192`  | A positive integer or `Infinity`, the limit per attribute |
+| `redact`             | none    | See [Redaction](#redaction)                               |
+| `when`               | none    | See [Per call gating](#per-call-gating)                   |
+
+## What is recorded
+
+Each attribute is a JSON string in the shape the GenAI conventions describe, written on the attempt
+span, not the call span.
+
+1. Input is recorded when the attempt starts, after earlier middleware has patched the request, so
+   a retry records what was actually sent.
+2. Output is recorded on the attempt that answered, once the call settles.
+3. System messages become system instructions. User, assistant, and tool messages become input
+   messages made of `text`, `tool_call`, and `tool_call_response` parts.
+4. Images are recorded as a `[image]` text part. Image bytes are never recorded.
+5. The conventions require a finish reason on every output message and VernLLM does not expose the
+   provider's, so it is inferred: `tool_call` for a tool call result, `stop` otherwise.
+6. A cache hit has no attempt, so nothing is captured whatever you configure.
+
+## Length limits
+
+`maxLength` is the budget for one attribute, shared by everything going into it. Input messages
+spend it on the newest messages first, since a long history is read for what was asked last. A cut
+is marked with `…[truncated]` and never splits a surrogate pair, so an emoji stays whole.
+
+Tool definitions step down instead of being cut: the full definitions, then names only, then
+nothing, so the attribute is always valid JSON.
+
+## Redaction
+
+`redact` runs on every text piece before it is truncated and recorded:
+
+```ts title="otel-capture-redact.ts"
+otelMiddleware({
+  captureContent: {
+    redact: (text) => text.replace(/\b[\w.+]+@[\w.]+\.\w+\b/g, '[email]'),
+  },
+});
+```
+
+It fails closed. A `redact` that throws, or returns anything other than a string, drops that
+piece, so the original text is never recorded.
+
+To capture what other middleware has already redacted, order this entry after it, see
+[Ordering](#ordering).
+
+## Per call gating
+
+`when` decides, once per call, whether content is captured for that call. Use it for one tenant,
+an opt in flag, or a sample:
+
+```ts title="otel-capture-when.ts"
+otelMiddleware({
+  captureContent: {
+    when: (ctx) => ctx.requestId.endsWith('0') || debugTenants.has(currentTenant()),
+    redact: scrubPii,
+  },
+});
+```
+
+1. It runs once, synchronously, right after the call span starts. Every retry and fallback attempt
+   of that call then follows the same decision.
+2. Only a return value of exactly `true` captures. A throw, a promise, or any other value means
+   no capture, and a throw or promise is logged.
+3. It receives the request as `wrap` sees it, before any transform, so it can hold raw user text. Do not log or forward it.
+4. It is not called when no content group is enabled or when the span is not recording.
+5. A `false` decision skips serialization, `redact`, and all four content attributes. Metrics and
+   every other attribute are unaffected.
+6. `vernllm.content.captured` on the call span records the outcome, so a gated setup is
+   debuggable.
+
+`when` is an option of this middleware, not an `enabled` predicate, so it does not change event
+delivery, see [Configuration](/docs/integrations/otel/configuration#ordering-and-event-delivery).
+
+## Ordering
+
+Capture has to see the request after your redaction middleware has run. It does by default: with
+capture on, the entry takes the last transform slot, so it sees the request as it is sent, after
+every other transform.
+
+Adding `runsAfter` is still worth it, because it states the dependency and can enforce it. Give the
+redaction middleware a `ref` and wrap it in `requireRef`:
+
+```ts title="otel-capture-after-redaction.ts"
+import { VernLLM, createMiddlewareRef, requireRef } from 'vern-llm';
+import { otelMiddleware } from 'vern-llm-otel';
+
+export const piiRedactionRef = createMiddlewareRef('pii-redaction');
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [
+    {
+      name: 'pii-redaction',
+      ref: piiRedactionRef,
+      transform: (request) => ({ messages: redactMessages(request.messages) }),
+    },
+    otelMiddleware({
+      captureContent: true,
+      runsAfter: [requireRef(piiRedactionRef)],
+    }),
+  ],
+});
+```
+
+With `requireRef`, a missing redaction middleware throws at construction instead of running with
+nothing to redact. A bare ref that matches nothing is only dropped with a warning, but the order
+stays safe either way, since it does not lower the default slot.
+
+The call span stays outside every middleware that is not `outermost`. Only another `outermost`
+entry with a lower priority wraps outside it. To be outside that one too, set `priority` yourself
+and keep `runsAfter`, see
+[Configuration](/docs/integrations/otel/configuration#ordering-and-event-delivery).
+
+## When content is missing
+
+Check `vernllm.content.captured` on the call span. When it is `false`, `when` did not return
+`true`, or no group is enabled, or the span was not recording. When the attribute is absent,
+`captureContent` is not set, or `genAiConventions` is `false`, which turns capture off because the
+content attributes are `gen_ai.*` ones.

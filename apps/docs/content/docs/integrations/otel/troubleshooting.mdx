@@ -1,0 +1,65 @@
+---
+title: Troubleshooting
+description: Symptoms and fixes for missing spans, wrong provider names, and lost telemetry
+---
+
+## No spans appear
+
+Either no SDK is registered, or your app holds two copies of `@opentelemetry/api`. Each copy has
+its own global registry, so a tracer provider registered with one is invisible to the other. Run
+`npm ls @opentelemetry/api` and make sure one version is installed. Without a registered SDK the
+calls behave normally and record nothing.
+
+You can also pass `tracer` and `meter` explicitly, which skips the global lookup.
+
+## Every provider shows as `primary`
+
+`gen_ai.provider.name` falls back to the target label when it is not mapped. Add
+[`providerNames`](/docs/integrations/otel/configuration#providernames).
+
+## Two inference spans, or doubled token counts
+
+A provider SDK's own OpenTelemetry instrumentation is also emitting GenAI telemetry. Set
+`genAiConventions: false`, see
+[Semantic Conventions](/docs/integrations/otel/semantic-conventions#avoid-double-counting).
+
+## Token attributes are missing
+
+The provider reported no usage for that attempt, or `vern-llm` is 2.8.0 or older. Those releases
+deliver a middleware's events after the call can already have returned, so the tokens arrive too
+late for the span. Upgrade `vern-llm`, see the delivery note in
+[Middleware](/docs/core/middleware#onevent-and-the-middleware-event). Also check that nothing added
+an `enabled` function to this entry, which makes its events arrive late too.
+
+## Content attributes are missing
+
+Read `vernllm.content.captured` on the call span, see
+[Content Capture](/docs/integrations/otel/content-capture#when-content-is-missing).
+
+## Spans are lost on serverless
+
+Exporters send in the background, and a frozen process never finishes the send. Call
+`forceFlush()` on your tracer and meter providers before the handler returns. The Node SDK's
+`shutdown()` also flushes, but it ends the SDK for good, so it suits process exit, not a warm
+invocation.
+
+## Correlating logs with traces
+
+The call span is the active span while the call runs. A log line written by code inside the call,
+such as your own `LLMClient` or an inner middleware, carries its trace id when your logging is
+OpenTelemetry aware. Lines written around the call carry the parent span's trace id, so both land
+in the same trace.
+
+## A `[VernLLM] otel:` line in the logs
+
+The middleware caught a failure in one of its own steps or in a callback you gave it, logged it,
+and carried on, so the call itself was unaffected. The operation name says where:
+
+| Operation                                                                              | Where                                                          |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `startCall`, `startCallDetails`, `startAttempt`, `startAttemptSpan`, `activateContext` | Starting the call span, an attempt span, or the active context |
+| `handleEvent`, `recordEvent`, `recordMetric`, `createInstrument`                       | Recording an event or a measurement                            |
+| `markUsage`, `markRateLimit`, `markStream`, `markFirstChunk`, `addSpanEvent`           | Writing an attribute or event to a span                        |
+| `settleAttempt`, `settleSpan`, `endCallSpan`, `finish`                                 | Ending a span                                                  |
+| `decideCapture`, `captureInput`, `captureOutput`                                       | Content capture                                                |
+| `attributes`, `normalizeModel`, `captureContent.when`, `captureContent.redact`         | One of your callbacks threw                                    |

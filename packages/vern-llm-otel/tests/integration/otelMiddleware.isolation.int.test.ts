@@ -254,6 +254,9 @@ describe('failure isolation and delivery', () => {
               'app.tenant': 'acme',
               'app.nested': { secret: 'x' } as never,
               'vernllm.total_attempts': 999,
+              'vernllm.request_id': 'spoofed',
+              'vernllm.primary.model': 'spoofed',
+              'vernllm.primary.provider': 'spoofed',
             }),
           }),
         ],
@@ -265,8 +268,12 @@ describe('failure isolation and delivery', () => {
       expect(attributes['gen_ai.conversation.id']).toBe('conv_1');
       expect(attributes['app.tenant']).toBe('acme');
       expect(attributes).not.toHaveProperty('app.nested');
-      // Ours are written after the user's, so a custom attribute cannot overwrite them.
+      // Ours are written after the user's, at the start and at the end of the call, so a custom
+      // attribute cannot overwrite them.
       expect(attributes['vernllm.total_attempts']).toBe(1);
+      expect(attributes['vernllm.request_id']).not.toBe('spoofed');
+      expect(attributes['vernllm.primary.model']).toBe('gpt-4o');
+      expect(attributes['vernllm.primary.provider']).not.toBe('spoofed');
     });
   });
 

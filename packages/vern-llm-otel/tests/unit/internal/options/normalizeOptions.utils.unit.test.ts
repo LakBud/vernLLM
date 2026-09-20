@@ -126,11 +126,12 @@ describe('default priority', () => {
     ['capture off', {}, -1000],
     ['capture on, no runsAfter', { captureContent: true }, 1000],
     ['capture on, empty runsAfter', { captureContent: true, runsAfter: [] }, 1000],
-    ['capture on with runsAfter', { captureContent: true, runsAfter: [ref] }, -1000],
+    // A ref that fails to resolve is only dropped by the core, so runsAfter cannot lower this.
+    ['capture on with runsAfter', { captureContent: true, runsAfter: [ref] }, 1000],
     [
       'capture on with a required ref',
       { captureContent: true, runsAfter: [requireRef(ref)] },
-      -1000,
+      1000,
     ],
     [
       'capture object with no enabled group',
@@ -144,6 +145,9 @@ describe('default priority', () => {
 
   it('an explicit priority always wins, including zero', () => {
     expect(normalizeOptions({ captureContent: true, priority: 0 }).priority).toBe(0);
+    expect(
+      normalizeOptions({ captureContent: true, runsAfter: [ref], priority: -1000 }).priority,
+    ).toBe(-1000);
     expect(normalizeOptions({ priority: 5 }).priority).toBe(5);
     expect(normalizeOptions({ priority: -Number.MAX_VALUE }).priority).toBe(-Number.MAX_VALUE);
   });

@@ -1,0 +1,124 @@
+---
+title: Configuration
+description: Every otelMiddleware option, provider names, ordering, and the logger
+---
+
+Every option is optional. `otelMiddleware()` with no arguments works, and a bad option throws a
+plain `Error` at construction, never during a call.
+
+## Options
+
+| Option             | Default           | Notes                                                                                                                                     |
+| ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `tracer`           | The global tracer | Acquired on first use under the scope name `vern-llm-otel`, so an SDK registered later is still found.                                    |
+| `meter`            | The global meter  | Same lookup as `tracer`.                                                                                                                  |
+| `providerNames`    | none              | Maps a target label to `gen_ai.provider.name`, see [below](#providernames).                                                               |
+| `metrics`          | `true`            | `false` disables every instrument.                                                                                                        |
+| `normalizeModel`   | none              | Maps a model to its metric attribute value. Sync and guarded. See [Metrics](/docs/integrations/otel/metrics#model-names).                 |
+| `genAiConventions` | `true`            | `false` keeps only `vernllm.*` telemetry, see [Semantic Conventions](/docs/integrations/otel/semantic-conventions#avoid-double-counting). |
+| `captureContent`   | `false`           | `true` or an options object, see [Content Capture](/docs/integrations/otel/content-capture).                                              |
+| `attributes`       | none              | Extra attributes for the call span, see [below](#attributes).                                                                             |
+| `recordExceptions` | `false`           | Adds `exception` events, see [below](#recordexceptions).                                                                                  |
+| `middlewareEvents` | `false`           | Emits VernLLM `middleware` events as `vernllm.middleware` span events on the call span.                                                   |
+| `logger`           | A `ConsoleLogger` | A `Logger`, or `'silent'`, the same shape as `VernLLMOptions.logger`.                                                                     |
+| `name`             | `'otel'`          | The middleware entry's name, shown in VernLLM `middleware` events.                                                                        |
+| `priority`         | `1000` or `-1000` | See [Ordering and event delivery](#ordering-and-event-delivery).                                                                          |
+| `runsAfter`        | `[]`              | Refs this entry must run after, typically a redaction middleware.                                                                         |
+
+## `providerNames`
+
+VernLLM's provider names are labels for your targets, not provider identities: `primary`, then
+`fallback[0]`, `fallback[1]`, or the `name` you set. `providerNames` says which real provider each
+one is:
+
+```ts title="otel-provider-names.ts"
+otelMiddleware({
+  providerNames: { primary: 'openai', 'fallback[0]': 'anthropic' },
+});
+```
+
+An unmapped label is used as is, which works but makes backends group by `primary` instead of by
+provider. Values must be non empty strings. Any string is accepted, and these well known values
+autocomplete:
+
+`openai`, `anthropic`, `aws.bedrock`, `azure.ai.openai`, `azure.ai.inference`, `gcp.gemini`,
+`gcp.vertex_ai`, `gcp.gen_ai`, `groq`, `mistral_ai`, `deepseek`, `x_ai`, `cohere`, `perplexity`,
+`ibm.watsonx.ai`, `moonshot_ai`
+
+## `attributes`
+
+Adds attributes to the call span when it starts, for example a conversation id or a tenant:
+
+```ts title="otel-attributes-hook.ts"
+otelMiddleware({
+  attributes: () => ({
+    'gen_ai.conversation.id': currentConversationId(),
+    'app.tenant': currentTenant(),
+  }),
+});
+```
+
+VernLLM has no conversation concept, and the conventions say not to invent an id, so
+`gen_ai.conversation.id` only exists when you provide it. The hook is sync and guarded: a throw is
+logged and adds nothing. Only strings, finite numbers, booleans, and arrays of one of those are
+kept, everything else is dropped rather than stringified.
+
+## `recordExceptions`
+
+Off by default. `true` adds an `exception` event to every failed attempt span and to the call
+span. It carries only the low cardinality error code, never the provider's message, which can echo
+prompt text. A stack trace is a separate opt in, because a stack's first line carries the message:
+
+```ts title="otel-record-exceptions.ts"
+otelMiddleware({ recordExceptions: { stack: true } });
+```
+
+## Ordering and event delivery
+
+The entry wraps as `outermost`, so its call span is outside every middleware that is not also
+`outermost`, whatever its priority. `priority` decides where `transform` runs, and the order among
+other `outermost` middleware. The default depends on content capture:
+
+| Content capture | Default `priority` | Effect                                                                                                                                               |
+| --------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Off             | `-1000`            | The call span covers other outermost middleware, since this entry claims the outermost slot first.                                                   |
+| On              | `1000`             | Capture runs after other transforms, so it sees the request as sent. Another outermost middleware with a lower priority wraps outside the call span. |
+
+`runsAfter` does not change the default. A ref that fails to resolve is only dropped with a warning,
+so a lower default would run capture before the middleware it meant to follow.
+
+To have the call span outside another outermost middleware while capturing content, set both
+yourself. The required ref keeps capture after redaction:
+
+```ts title="otel-outermost-with-capture.ts"
+otelMiddleware({
+  captureContent: true,
+  priority: -1000,
+  runsAfter: [requireRef(piiRedactionRef)],
+});
+```
+
+See [Content Capture](/docs/integrations/otel/content-capture#ordering).
+
+The returned entry has no `enabled` function, on purpose. A function `enabled` makes the core
+deliver that entry's events asynchronously, and the token attributes rely on the usage event
+arriving before the call span ends. If you add one yourself, you lose that. Gate content capture
+with `captureContent.when` instead, which does not affect delivery.
+
+## Failure isolation and logging
+
+The middleware never throws into a call and never wraps or replaces an error. Every step it takes,
+and every callback you give it, runs guarded: a failure is logged and the call carries on. Spans
+end in `finally` blocks, so a failure cannot leave one open.
+
+Logs use the same shape as every other VernLLM hook failure, `[VernLLM] otel: <operation> failed`
+at `error` level with `meta: { message, stack }`, see
+[Logging](/docs/core/logging#what-gets-logged-at-each-level). A logger that throws cannot break a
+call either.
+
+## Cost
+
+The entry has a `transform`, because that is the only signal that an attempt has started, so the
+core clones the request once per attempt for it. That is one clone of the messages per attempt,
+small next to a network call. Nothing is serialized unless content capture is on and the span is
+recording, and a call with no SDK registered costs little more than the clone.
