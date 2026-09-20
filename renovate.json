@@ -40,7 +40,19 @@
     {
       "description": "Group TypeScript ecosystem updates",
       "groupName": "typescript tooling",
-      "matchPackageNames": ["typescript", "tsdown", "vitest", "@vitest/**", "@types/node"]
+      "matchPackageNames": ["typescript", "tsdown", "vitest", "@vitest/**"]
+    },
+
+    {
+      "description": "Group Redis clients into their own PR",
+      "groupName": "redis",
+      "matchPackageNames": ["ioredis", "redis"]
+    },
+
+    {
+      "description": "Group OpenTelemetry into its own PR",
+      "groupName": "opentelemetry",
+      "matchPackageNames": ["@opentelemetry/**"]
     },
 
     {
@@ -75,6 +87,22 @@
     {
       "description": "Require manual dashboard approval and no automerge for majors",
       "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+
+    {
+      "description": "Hold Node.js runtime separate, no automerge until LTS flips",
+      "groupName": "node runtime",
+      "matchDatasources": ["node-version"],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+
+    {
+      "description": "Hold @types/node separate, no automerge until LTS flips",
+      "groupName": "node",
+      "matchPackageNames": ["@types/node"],
       "automerge": false,
       "dependencyDashboardApproval": true
     }
