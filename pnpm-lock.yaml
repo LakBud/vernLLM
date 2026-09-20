@@ -182,8 +182,8 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1
       '@google/genai':
-        specifier: ^2.19.0
-        version: 2.19.0(@modelcontextprotocol/sdk@1.29.0(supports-color@10.2.2)(zod@4.5.4))(supports-color@10.2.2)
+        specifier: ^2.23.0
+        version: 2.23.0(@modelcontextprotocol/sdk@1.29.0(supports-color@10.2.2)(zod@4.5.4))(supports-color@10.2.2)
       '@size-limit/file':
         specifier: ^13.0.3
         version: 13.1.1(size-limit@13.1.1)
@@ -1608,8 +1608,8 @@ packages:
       react: ^16 || ^17 || ^18 || ^19
       react-dom: ^16 || ^17 || ^18 || ^19
 
-  '@google/genai@2.19.0':
-    resolution: {integrity: sha512-IM3u1FjpOLyOPsPh0smGA6Ntj2olUWCPbTs/WQj7cA/2AKCGw/652W7IaySx0XtwuscFnMYBoraebQusSZ0zSQ==}
+  '@google/genai@2.23.0':
+    resolution: {integrity: sha512-NFMzktoZ7jJg9AA3vUbWZocnkQP6DSGzL21ORwdVcBWkHli3k7v6B9zy07M4bTiKDAyIWfUh2J/oLYxCu0hNpQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -9806,7 +9806,7 @@ snapshots:
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
 
-  '@google/genai@2.19.0(@modelcontextprotocol/sdk@1.29.0(supports-color@10.2.2)(zod@4.5.4))(supports-color@10.2.2)':
+  '@google/genai@2.23.0(@modelcontextprotocol/sdk@1.29.0(supports-color@10.2.2)(zod@4.5.4))(supports-color@10.2.2)':
     dependencies:
       google-auth-library: 10.9.1(supports-color@10.2.2)
       p-retry: 4.6.2

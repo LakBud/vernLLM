@@ -62,7 +62,7 @@
     "@anthropic-ai/sdk": "^0.127.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
     "@changesets/cli": "^3.0.1",
-    "@google/genai": "^2.19.0",
+    "@google/genai": "^2.23.0",
     "@size-limit/file": "^13.0.3",
     "@smithy/eventstream-serde-node": "^4.5.2",
     "@smithy/node-http-handler": "^4.12.1",
