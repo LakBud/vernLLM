@@ -17,12 +17,12 @@ each pairs a client library with a gateway. So each one is compared here as a pa
 
 ## What each one is
 
-| Tool                    | Shape                                                                               | Where the reliability logic runs                |
-| ----------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------- |
-| **VernLLM**             | TypeScript library, no runtime dependencies. Optional `vern-llm-redis` shares state | Your process                                    |
-| **AI SDK + AI Gateway** | TypeScript SDK. Plain model ids resolve through the Gateway                         | Retries in your process, routing in the Gateway |
-| **LiteLLM**             | Python SDK and Router, plus a self hosted Proxy server                              | Your process, or the Proxy                      |
-| **Portkey**             | Node SDK that is a thin client, plus an open source gateway                         | The gateway, hosted or self run                 |
+| Tool                    | Shape                                                                                          | Where the reliability logic runs                |
+| ----------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| **VernLLM**             | TypeScript LLM call framework, no runtime dependencies. Optional `vern-llm-redis` shares state | Your process                                    |
+| **AI SDK + AI Gateway** | TypeScript SDK. Plain model ids resolve through the Gateway                                    | Retries in your process, routing in the Gateway |
+| **LiteLLM**             | Python SDK and Router, plus a self hosted Proxy server                                         | Your process, or the Proxy                      |
+| **Portkey**             | Node SDK that is a thin client, plus an open source gateway                                    | The gateway, hosted or self run                 |
 
 ## Feature matrix
 
@@ -239,16 +239,15 @@ failing provider from VernLLM's breaker.
   </Card>
   <Card title="VernLLM">
     TypeScript apps that want retries, breakers, fallback, and rate limits in process, with no extra
-    hop and no server to run.
+    hop, good observability and no server to run.
   </Card>
 </Cards>
 
 ## Honest tradeoffs
 
-1. VernLLM is a library, not a gateway. No proxy, dashboard, key management, or server side limits
+1. VernLLM is a call framework, not a gateway. No proxy, dashboard, key management, or server side limits
    on your callers.
-2. State is per process until you add [`vern-llm-redis`](/docs/integrations/redis). It is at 0.1.0,
-   and rate limited calls fail if Redis is down.
+2. State is per process until you add [`vern-llm-redis`](/docs/integrations/redis).
 3. No pricing table or cost tracking. Usage is token counts.
 4. It is not an agent or UI framework, and it never executes tools for you.
 5. Semantic caching is a [worked guide](/docs/guides/caching-methods/semantic), not a built in
