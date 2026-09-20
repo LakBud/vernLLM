@@ -11,6 +11,12 @@ flags:
   vern-llm-redis-integration:
     paths:
       - 'packages/vern-llm-redis/**'
+  vern-llm-otel-unit:
+    paths:
+      - 'packages/vern-llm-otel/**'
+  vern-llm-otel-integration:
+    paths:
+      - 'packages/vern-llm-otel/**'
 
 coverage:
   status:
@@ -25,6 +31,11 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/vern-llm-redis/**'
+      vern-llm-otel:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/vern-llm-otel/**'
     patch:
       default:
         target: 80%
@@ -34,6 +45,10 @@ coverage:
         target: 80%
         paths:
           - 'packages/vern-llm-redis/**'
+      vern-llm-otel:
+        target: 80%
+        paths:
+          - 'packages/vern-llm-otel/**'
 
 ignore:
   - '**/index.ts'

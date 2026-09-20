@@ -178,6 +178,15 @@ jobs:
           flags: vern-llm-redis-unit
           fail_ci_if_error: true
 
+      - name: Upload vern-llm-otel coverage to Codecov
+        if: hashFiles('packages/vern-llm-otel/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm-otel/coverage/lcov.info
+          flags: vern-llm-otel-unit
+          fail_ci_if_error: true
+
   # No Nx cache here, deliberately: this job runs against a real Redis
   # service container. A cached "pass" from a previous run could hide a
   # real regression in how an adapter behaves against actual Redis state
@@ -255,6 +264,15 @@ jobs:
           flags: vern-llm-redis-integration
           fail_ci_if_error: true
 
+      - name: Upload vern-llm-otel coverage to Codecov
+        if: hashFiles('packages/vern-llm-otel/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm-otel/coverage/lcov.info
+          flags: vern-llm-otel-integration
+          fail_ci_if_error: true
+
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -298,10 +316,10 @@ jobs:
       # targets have no ordering guarantee within the same project and
       # can run concurrently, racing on that file.
       - name: Lint affected docs
-        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis
+        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel
 
       - name: Typecheck affected docs
-        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis
+        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel
 
       - name: Build affected docs
-        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis
+        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel

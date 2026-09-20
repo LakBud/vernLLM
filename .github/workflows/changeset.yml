@@ -6,6 +6,7 @@ on:
     paths:
       - 'packages/vern-llm/**'
       - 'packages/vern-llm-redis/**'
+      - 'packages/vern-llm-otel/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -12,7 +12,7 @@ on:
           - canary
 
       tag:
-        description: 'Production release tag, e.g. vern-llm@1.2.3 or vern-llm-redis@0.2.0'
+        description: 'Production release tag, e.g. vern-llm@1.2.3, vern-llm-redis@0.2.0 or vern-llm-otel@0.1.0'
         required: false
         type: string
 
@@ -155,11 +155,11 @@ jobs:
       # files into one combined docs page, so a vern-llm-redis release
       # needs this refresh (and redeploy) just as much as vern-llm's does.
       - name: Update docs changelog
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis'
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel'
         run: pnpm update-changelog
 
       - name: Commit changelog docs update
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis'
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -167,13 +167,13 @@ jobs:
           git fetch origin main
           git checkout main
 
-          git add apps/docs/content/docs/changelog.mdx apps/docs/content/docs/integrations/redis/changelog.mdx
+          git add apps/docs/content/docs/changelog.mdx apps/docs/content/docs/integrations/redis/changelog.mdx apps/docs/content/docs/integrations/otel/changelog.mdx
 
           git commit -m "docs: update changelog" || exit 0
           git push origin main
 
       - name: Deploy to Vercel
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis'
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel'
         run: |
           curl -X POST "${{ secrets.VERNLLM_RELEASE }}"
 

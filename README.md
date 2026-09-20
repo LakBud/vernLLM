@@ -50,12 +50,13 @@ Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI,
 
 ## Repository layout
 
-This is a pnpm monorepo with three workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
+This is a pnpm monorepo with four workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
 
 | Path                                                   | Description                                                                                                      |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | [`packages/vern-llm`](./packages/vern-llm)             | The `vern-llm` npm package: source, tests, and its own README with the full API reference.                       |
 | [`packages/vern-llm-redis`](./packages/vern-llm-redis) | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`. |
+| [`packages/vern-llm-otel`](./packages/vern-llm-otel)   | The `vern-llm-otel` npm package: OpenTelemetry traces and metrics for `vern-llm`.                                |
 | [`apps/docs`](./apps/docs)                             | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                 |
 
 ## License
