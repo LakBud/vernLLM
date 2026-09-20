@@ -17,7 +17,7 @@ global meter.
 
 Token usage is recorded for an attempt that spent tokens and then failed too, since spent tokens
 are spent. `gen_ai.client.operation.time_per_output_chunk` is not emitted, see
-[Traces](/docs/integrations/otel/traces#streaming).
+[Traces](/docs/integrations/otel/features/traces#streaming).
 
 ## VernLLM metrics
 
@@ -83,4 +83,4 @@ the event handler.
 
 `metrics: false` disables every instrument. `genAiConventions: false` keeps only the `vernllm.*`
 instruments, see
-[Semantic Conventions](/docs/integrations/otel/semantic-conventions#avoid-double-counting).
+[Semantic Conventions](/docs/integrations/otel/API-reference/semantic-conventions#avoid-double-counting).

@@ -38,17 +38,17 @@ Attempts across targets are ordered by span start time.
 
 ## Call span attributes
 
-| Attribute                                                                 | Set                                                                             |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `vernllm.request_id`, `vernllm.primary.provider`, `vernllm.primary.model` | At start                                                                        |
-| `vernllm.content.captured`                                                | At start, only when `captureContent` is set                                     |
-| Whatever your `attributes` hook returns                                   | At start, see [Configuration](/docs/integrations/otel/configuration#attributes) |
-| `vernllm.answered.provider`, `vernllm.answered.model`                     | At end, the target that answered                                                |
-| `vernllm.used_fallback`, `vernllm.fallback_index`                         | At end                                                                          |
-| `vernllm.total_attempts`                                                  | At end, every attempt across every target                                       |
-| `vernllm.streaming`, `gen_ai.request.stream`                              | At end and at stream open                                                       |
-| `vernllm.no_attempt.reason`, `vernllm.short_circuit.by`                   | At end, when the call made no attempt of its own                                |
-| `error.type`, `http.response.status_code`, `vernllm.fallback.attempts`    | At end, on failure                                                              |
+| Attribute                                                                 | Set                                                                                           |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `vernllm.request_id`, `vernllm.primary.provider`, `vernllm.primary.model` | At start                                                                                      |
+| `vernllm.content.captured`                                                | At start, only when `captureContent` is set                                                   |
+| Whatever your `attributes` hook returns                                   | At start, see [Configuration](/docs/integrations/otel/API-reference/configuration#attributes) |
+| `vernllm.answered.provider`, `vernllm.answered.model`                     | At end, the target that answered                                                              |
+| `vernllm.used_fallback`, `vernllm.fallback_index`                         | At end                                                                                        |
+| `vernllm.total_attempts`                                                  | At end, every attempt across every target                                                     |
+| `vernllm.streaming`, `gen_ai.request.stream`                              | At end and at stream open                                                                     |
+| `vernllm.no_attempt.reason`, `vernllm.short_circuit.by`                   | At end, when the call made no attempt of its own                                              |
+| `error.type`, `http.response.status_code`, `vernllm.fallback.attempts`    | At end, on failure                                                                            |
 
 ## Calls with no attempt
 
@@ -76,7 +76,7 @@ Events go on the call span:
 | `vernllm.middleware`    | `name`, `hook`, `patched_fields`, only with `middlewareEvents: true` |
 
 A rate limit wait is not an event. It is the `vernllm.rate_limit.wait_ms` attribute on the
-attempt and the `vernllm.rate_limit.wait` [metric](/docs/integrations/otel/metrics). The attempt
+attempt and the `vernllm.rate_limit.wait` [metric](/docs/integrations/otel/features/metrics). The attempt
 span still covers the wait, while the duration metric leaves it out.
 
 ## Status and errors
@@ -91,7 +91,7 @@ span still covers the wait, while the duration metric leaves it out.
 3. An `LLMError` with a numeric status also sets `http.response.status_code`.
 4. Exception events are off by default. `recordExceptions` adds an `exception` event carrying only
    the error code, and a stack only with `{ stack: true }`, see
-   [Configuration](/docs/integrations/otel/configuration#recordexceptions).
+   [Configuration](/docs/integrations/otel/API-reference/configuration#recordexceptions).
 5. Errors are recognised by shape, not `instanceof`, so a second installed copy of `vern-llm` can
    never turn real errors into `_OTHER`.
 

@@ -106,7 +106,7 @@ otelMiddleware({
    debuggable.
 
 `when` is an option of this middleware, not an `enabled` predicate, so it does not change event
-delivery, see [Configuration](/docs/integrations/otel/configuration#ordering-and-event-delivery).
+delivery, see [Configuration](/docs/integrations/otel/API-reference/configuration#ordering-and-event-delivery).
 
 ## Ordering
 
@@ -144,10 +144,9 @@ With `requireRef`, a missing redaction middleware throws at construction instead
 nothing to redact. A bare ref that matches nothing is only dropped with a warning, but the order
 stays safe either way, since it does not lower the default slot.
 
-The call span stays outside every middleware that is not `outermost`. Only another `outermost`
-entry with a lower priority wraps outside it. To be outside that one too, set `priority` yourself
-and keep `runsAfter`, see
-[Configuration](/docs/integrations/otel/configuration#ordering-and-event-delivery).
+The call span stays outside every middleware that is not `outermost`, and outside another
+`outermost` entry when this one is registered first, since priority does not decide wrap order. See
+[Configuration](/docs/integrations/otel/API-reference/configuration#ordering-and-event-delivery).
 
 ## When content is missing
 

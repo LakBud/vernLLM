@@ -50,20 +50,11 @@ app already uses. `@opentelemetry/api` 1.9 or newer is required. The package dep
 spans and metrics go wherever your own OpenTelemetry setup sends them.
 
 <Cards>
-  <Card title="Traces" href="/docs/integrations/otel/traces">
-    One call span per call, one attempt span per attempt, and every retry and fallback in between.
+  <Card title="Features" href="/docs/integrations/otel/features">
+    Traces, metrics, and opt in content capture.
   </Card>
-  <Card title="Metrics" href="/docs/integrations/otel/metrics">
-    GenAI client metrics plus counters and histograms for retries, fallbacks, and rate limits.
-  </Card>
-  <Card title="Content Capture" href="/docs/integrations/otel/content-capture">
-    Opt in prompt and response capture, with redaction, truncation, and per call gating.
-  </Card>
-  <Card title="Configuration" href="/docs/integrations/otel/configuration">
-    Every option, provider names, ordering, and the logger.
-  </Card>
-  <Card title="Semantic Conventions" href="/docs/integrations/otel/semantic-conventions">
-    What follows the GenAI conventions, what does not, and why.
+  <Card title="API Reference" href="/docs/integrations/otel/API-reference">
+    Every option, and which GenAI conventions are followed.
   </Card>
 </Cards>
 
@@ -105,7 +96,7 @@ particular order. Spans nest under whatever span is active when the call starts,
 request or agent span adopts them with no configuration.
 
 `providerNames` maps a VernLLM target to `gen_ai.provider.name`, see
-[Configuration](/docs/integrations/otel/configuration#providernames). Without it the target's own
+[Configuration](/docs/integrations/otel/API-reference/configuration#providernames). Without it the target's own
 label, `primary` for a lone target, is used.
 
 Register the middleware once per `VernLLM`: two entries in one `middleware` array throw at
@@ -121,4 +112,4 @@ vernllm.call                 INTERNAL   one per call
 └── chat gpt-4o-mini         CLIENT     attempt 1 of fallback[0], ok
 ```
 
-See [Traces](/docs/integrations/otel/traces) for every attribute and event.
+See [Traces](/docs/integrations/otel/features/traces) for every attribute and event.

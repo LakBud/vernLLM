@@ -19,7 +19,7 @@ under `gen_ai.*`, which the spec owns.
 
 | Convention                                                            | Status      | Notes                                                                                           |
 | --------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------- |
-| Inference span, `chat`                                                | Emitted     | One per attempt, see [Traces](/docs/integrations/otel/traces).                                  |
+| Inference span, `chat`                                                | Emitted     | One per attempt, see [Traces](/docs/integrations/otel/features/traces).                         |
 | Sampling attributes: operation, provider, request model               | Emitted     | Present when the attempt span starts.                                                           |
 | `server.address`, `server.port`                                       | Not emitted | No adapter exposes its endpoint.                                                                |
 | `max_tokens`, `temperature`, `output.type`, `request.reasoning.level` | Emitted     | From the wire request.                                                                          |
@@ -29,7 +29,7 @@ under `gen_ai.*`, which the spec owns.
 | Cache read and cache creation tokens                                  | Not emitted | No data source in `TokenUsage`.                                                                 |
 | `error.type` and span status                                          | Emitted     | Low cardinality, never the provider's message.                                                  |
 | `gen_ai.conversation.id`                                              | On request  | Set through the `attributes` hook, since VernLLM has no conversation concept.                   |
-| Content on span attributes                                            | Opt in      | See [Content Capture](/docs/integrations/otel/content-capture).                                 |
+| Content on span attributes                                            | Opt in      | See [Content Capture](/docs/integrations/otel/features/content-capture).                        |
 | Content through the operation details event, or external storage      | Not emitted | Needs the Logs API, which is a later decision.                                                  |
 | `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`       | Emitted     | Per attempt.                                                                                    |
 | `gen_ai.client.operation.time_to_first_chunk`                         | Emitted     | Streams only.                                                                                   |
@@ -44,7 +44,7 @@ under `gen_ai.*`, which the spec owns.
 
 Every VernLLM call is a chat style operation, so every attempt uses `gen_ai.operation.name` set to
 `chat`, Gemini included. `gen_ai.provider.name` comes from your
-[`providerNames`](/docs/integrations/otel/configuration#providernames).
+[`providerNames`](/docs/integrations/otel/API-reference/configuration#providernames).
 
 ## Avoid double counting
 

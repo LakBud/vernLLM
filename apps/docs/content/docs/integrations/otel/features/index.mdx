@@ -1,0 +1,29 @@
+---
+title: Features Overview
+description: The traces, metrics, and content capture vern-llm-otel produces
+---
+
+`vern-llm-otel` produces three kinds of telemetry from the same middleware. They share one set of
+events, so they always agree with each other, and each can be tuned on its own.
+
+<Cards>
+  <Card title="Traces" href="/docs/integrations/otel/features/traces">
+    A call span per call and an attempt span per attempt, with every retry and fallback as events.
+  </Card>
+  <Card title="Metrics" href="/docs/integrations/otel/features/metrics">
+    The GenAI client metrics, plus counters and histograms for retries, fallbacks, and rate limits.
+  </Card>
+  <Card title="Content Capture" href="/docs/integrations/otel/features/content-capture">
+    Opt in prompt and response capture, with redaction, truncation, and per call gating.
+  </Card>
+</Cards>
+
+## Which one answers what
+
+| Question                                                          | Look at                                                             |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------- |
+| What happened to this one call, step by step?                     | [Traces](/docs/integrations/otel/features/traces)                   |
+| How often do calls retry or fall back, and how long do they take? | [Metrics](/docs/integrations/otel/features/metrics)                 |
+| What did the model actually receive and answer?                   | [Content Capture](/docs/integrations/otel/features/content-capture) |
+
+Traces and metrics are on by default. Content capture is off until you turn it on.

@@ -1,0 +1,38 @@
+---
+title: API Reference Overview
+description: The public exports of vern-llm-otel, and where each option is documented
+---
+
+`vern-llm-otel` has a deliberately small surface: one factory, one ref, and the types for its
+options.
+
+| Export                    | Kind     | What it is                                                                                                    |
+| ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `otelMiddleware`          | Function | Takes `OtelMiddlewareOptions` and returns one `VernLLMMiddleware`. Register it once per `VernLLM`.            |
+| `otelMiddlewareRef`       | Constant | The `MiddlewareRef` of that entry, so other middleware can order themselves against it.                       |
+| `OtelMiddlewareOptions`   | Type     | Every option, see [Configuration](/docs/integrations/otel/API-reference/configuration).                       |
+| `CaptureContentOptions`   | Type     | The object form of `captureContent`, see [Content Capture](/docs/integrations/otel/features/content-capture). |
+| `RecordExceptionsOptions` | Type     | The object form of `recordExceptions`.                                                                        |
+| `GenAiProviderName`       | Type     | Well known `gen_ai.provider.name` values with autocomplete, any string is accepted.                           |
+
+```ts title="otel-exports.ts"
+import { otelMiddleware, otelMiddlewareRef } from 'vern-llm-otel';
+import type {
+  OtelMiddlewareOptions,
+  CaptureContentOptions,
+  RecordExceptionsOptions,
+  GenAiProviderName,
+} from 'vern-llm-otel';
+```
+
+<Cards>
+  <Card title="Configuration" href="/docs/integrations/otel/API-reference/configuration">
+    Every option, provider names, ordering, and the logger.
+  </Card>
+  <Card
+    title="Semantic Conventions"
+    href="/docs/integrations/otel/API-reference/semantic-conventions"
+  >
+    What follows the GenAI conventions, what does not, and why.
+  </Card>
+</Cards>

@@ -393,10 +393,13 @@ describe('content capture end to end', () => {
           }),
       }) satisfies VernLLMMiddleware;
 
-    const run = async (options: OtelMiddlewareOptions) => {
+    const run = async (options: OtelMiddlewareOptions, otelFirst: boolean) => {
       const client = createMockClient([textResponse('ok', USAGE)]).client;
       const marker: VernLLMMiddleware = { name: 'redaction', ref: redaction };
-      const llm = new VernLLM({ ...BASE, client, middleware: [marker, outer(), otel(options)] });
+      const middleware = otelFirst
+        ? [otel(options), marker, outer()]
+        : [marker, outer(), otel(options)];
+      const llm = new VernLLM({ ...BASE, client, middleware });
       await llm.call({ userContent: 'hi', jsonMode: false });
 
       const other = spans().find((span) => span.name === 'other')!;
@@ -404,32 +407,28 @@ describe('content capture end to end', () => {
       return { other, call };
     };
 
-    it('wraps the other entry when capture is off', async () => {
-      const { other, call } = await run({});
+    const callWrapsOther = ({ other, call }: Awaited<ReturnType<typeof run>>) => {
       expect(call.parentSpanContext).toBeUndefined();
       expect(other.parentSpanContext?.spanId).toBe(call.spanContext().spanId);
-    });
+    };
 
-    it('sits inside another outermost entry when capture is on, so capture runs last', async () => {
-      const { other, call } = await run({ captureContent: true });
+    const otherWrapsCall = ({ other, call }: Awaited<ReturnType<typeof run>>) => {
       expect(other.parentSpanContext).toBeUndefined();
       expect(call.parentSpanContext?.spanId).toBe(other.spanContext().spanId);
+    };
+
+    it('wraps another outermost entry registered after it, with capture off', async () => {
+      callWrapsOther(await run({}, true));
     });
 
-    it('does not change that with runsAfter alone', async () => {
-      const { other, call } = await run({ captureContent: true, runsAfter: [redaction] });
-      expect(other.parentSpanContext).toBeUndefined();
-      expect(call.parentSpanContext?.spanId).toBe(other.spanContext().spanId);
+    it('wraps it with capture on too, because priority does not decide wrap order', async () => {
+      callWrapsOther(await run({ captureContent: true }, true));
+      callWrapsOther(await run({ captureContent: true, runsAfter: [requireRef(redaction)] }, true));
     });
 
-    it('wraps it again once the priority is set explicitly', async () => {
-      const { other, call } = await run({
-        captureContent: true,
-        priority: -1000,
-        runsAfter: [requireRef(redaction)],
-      });
-      expect(call.parentSpanContext).toBeUndefined();
-      expect(other.parentSpanContext?.spanId).toBe(call.spanContext().spanId);
+    it('sits inside another outermost entry registered before it', async () => {
+      otherWrapsCall(await run({}, false));
+      otherWrapsCall(await run({ captureContent: true }, false));
     });
 
     it('is outside a middleware that is not outermost, with capture on', async () => {

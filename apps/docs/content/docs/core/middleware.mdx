@@ -371,8 +371,9 @@ middleware's `wrap`; `'innermost'` sits closest to the real dispatch:
 }
 ```
 
-Multiple `'outermost'` (or `'innermost'`) claimants keep their relative registration order, so the
-first one registered holds the true outermost (or innermost) slot. A numeric `position` behaves
+Multiple `'outermost'` (or `'innermost'`) claimants are ordered by registration, so the first one
+registered holds the true outermost (or innermost) slot. Their `priority` and `runsAfter`/`runsBefore`
+still decide `transform` order, but never who wraps whom. A numeric `position` behaves
 like `priority`, but only for `wrap` nesting; an entry with no `position` at all defaults to `0`,
 so it interleaves with numeric-positioned entries rather than always sorting after them.
 
