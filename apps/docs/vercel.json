@@ -1,7 +1,9 @@
 {
   "git": {
     "deploymentEnabled": {
-      "main": false
+      "main": false,
+      "renovate/*": false,
+      "changeset-release/*": false
     }
   }
 }
