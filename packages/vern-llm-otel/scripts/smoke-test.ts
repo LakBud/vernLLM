@@ -39,7 +39,7 @@ function pack(cwd: string): string {
 
 try {
   const otelTarball = pack(packageRoot);
-  const vernLlmTarball = pack(path.join(packageRoot, '..', 'vern-llm'));
+  const vernLLMTarball = pack(path.join(packageRoot, '..', 'vern-llm'));
 
   const consumerDir = path.join(scratchDir, 'consumer');
   mkdirSync(consumerDir, { recursive: true });
@@ -54,7 +54,7 @@ try {
 
   execFileSync(
     'npm',
-    ['install', '--no-save', vernLlmTarball, otelTarball, `@opentelemetry/api@${LOWEST_API}`],
+    ['install', '--no-save', vernLLMTarball, otelTarball, `@opentelemetry/api@${LOWEST_API}`],
     { cwd: consumerDir, stdio: 'inherit' },
   );
 

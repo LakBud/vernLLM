@@ -6,12 +6,15 @@ import {
   type VernLLMMiddleware,
 } from 'vern-llm';
 
-import { createContentCapture } from './content.js';
-import { createGuard } from './guard.js';
-import { createMetrics } from './metrics.js';
-import { normalizeOptions, type OtelMiddlewareOptions } from './options.js';
-import { INSTRUMENTATION_NAME } from './semconv.js';
-import { CallTracker, handleEvent, type TrackerDeps } from './tracker.js';
+import { createContentCapture } from './internal/content/contentCapture.utils.js';
+import { createGuard } from './internal/guard.utils.js';
+import { createMetrics } from './internal/metrics/metrics.utils.js';
+import { normalizeOptions } from './internal/options/normalizeOptions.utils.js';
+import { INSTRUMENTATION_NAME } from './internal/semconv.js';
+import { CallTracker } from './internal/tracker/callTracker.js';
+import { handleEvent } from './internal/tracker/handleEvent.utils.js';
+
+import type { OtelMiddlewareOptions, TrackerDeps } from './types/index.js';
 
 /** One module level ref, so registering two instances hits the core's duplicate ref check. */
 export const otelMiddlewareRef = createMiddlewareRef('otel');
