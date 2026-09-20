@@ -28,17 +28,17 @@ describe.concurrent('redisRateLimit leases, real Redis', () => {
 
   it('a live call keeps its slot well past one lease, via renewal', async ({ makeLimiter }) => {
     const prefix = uniquePrefix('rl');
-    const holder = makeLimiter({ keyPrefix: prefix, maxConcurrent: 1, concurrencyLeaseMs: 150 });
+    const holder = makeLimiter({ keyPrefix: prefix, maxConcurrent: 1, concurrencyLeaseMs: 1000 });
     const other = makeLimiter({
       keyPrefix: prefix,
       maxConcurrent: 1,
-      concurrencyLeaseMs: 150,
-      maxQueueMs: 300,
+      concurrencyLeaseMs: 1000,
+      maxQueueMs: 500,
       pollIntervalMs: 50,
     });
 
     const held = await holder.acquire(1);
-    await new Promise((r) => setTimeout(r, 500)); // > 3 leases
+    await new Promise((resolve) => setTimeout(resolve, 2500)); // > 2 leases
 
     await expect(other.acquire(1)).rejects.toMatchObject({ code: 'rate_limit_queue_timeout' });
 

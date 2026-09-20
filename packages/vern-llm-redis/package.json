@@ -2,6 +2,18 @@
   "name": "vern-llm-redis",
   "version": "0.1.0",
   "description": "Redis-backed circuit breaker, rate limiter, and cache adapters for vern-llm",
+  "keywords": [
+    "vern-llm",
+    "redis",
+    "llm",
+    "ai",
+    "caching",
+    "cache",
+    "rate-limit",
+    "rate-limiter",
+    "circuit-breaker",
+    "typescript"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",

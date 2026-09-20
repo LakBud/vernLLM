@@ -20,6 +20,7 @@ import {
   createMockClient,
   expectNearInstant,
   fakeSubscriber,
+  waitForRedisValue,
   uniquePrefix,
   waitForCluster,
   waitUntil,
@@ -174,6 +175,42 @@ describe('waitUntil', () => {
     await expect(waitUntil(() => false, { timeoutMs: 30, intervalMs: 10 })).rejects.toThrow(
       /condition not met within 30ms/,
     );
+  });
+});
+
+describe('waitForRedisValue', () => {
+  it('resolves as soon as the Redis value satisfies the predicate', async () => {
+    let calls = 0;
+    const redis = {
+      async hlen() {
+        calls += 1;
+        return calls >= 3 ? 2 : 0;
+      },
+    };
+
+    await expect(
+      waitForRedisValue(
+        () => redis.hlen(),
+        (count) => count > 0,
+        { timeoutMs: 100, intervalMs: 5 },
+      ),
+    ).resolves.toBe(2);
+  });
+
+  it('throws once the timeout elapses without a matching value', async () => {
+    const redis = {
+      async hlen() {
+        return 0;
+      },
+    };
+
+    await expect(
+      waitForRedisValue(
+        () => redis.hlen(),
+        (count) => count > 0,
+        { timeoutMs: 30, intervalMs: 5 },
+      ),
+    ).rejects.toThrow(/condition not met within 30ms/);
   });
 });
 

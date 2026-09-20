@@ -3,7 +3,7 @@ import { describe, expect } from 'vitest';
 import { fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
 import { QUEUE_SCRIPT } from '../../../src/internal/rate-limit/scripts.js';
 import { it } from '../../fixtures.js';
-import { uniquePrefix, waitUntil } from '../../helpers.js';
+import { uniquePrefix, waitForRedisValue, waitUntil } from '../../helpers.js';
 
 import type { RedisRateLimitOptions } from '../../../src/rateLimit.js';
 
@@ -16,6 +16,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 describe.concurrent('redisRateLimit fair queue across processes, real Redis', () => {
   it('waiters on different processes are served in the order they arrived', async ({
+    redis,
     makeLimiter,
     newConnection,
   }) => {
@@ -36,13 +37,41 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
     };
 
     const all = [arrive('A')];
-    await sleep(60);
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count >= 2,
+      {
+        timeoutMs: 1000,
+        intervalMs: 10,
+      },
+    );
     all.push(arrive('B'));
-    await sleep(60);
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count >= 3,
+      {
+        timeoutMs: 1000,
+        intervalMs: 10,
+      },
+    );
     all.push(arrive('C'));
-    await sleep(60);
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count >= 4,
+      {
+        timeoutMs: 1000,
+        intervalMs: 10,
+      },
+    );
     all.push(arrive('D'));
-    await sleep(60);
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count >= 5,
+      {
+        timeoutMs: 1000,
+        intervalMs: 10,
+      },
+    );
 
     held.release();
     for (let i = 0; i < 4; i++) {
@@ -90,6 +119,7 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
   });
 
   it('with a subscriber the line advances on release, not on the poll interval', async ({
+    redis,
     makeLimiter,
     newConnection,
   }) => {
@@ -110,7 +140,14 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
     });
     let acquiredAt = 0;
     const waiting = waiter.acquire(1).then(() => (acquiredAt = Date.now()));
-    await sleep(300);
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count > 0,
+      {
+        timeoutMs: 1000,
+        intervalMs: 10,
+      },
+    );
 
     const releasedAt = Date.now();
     held.release();
@@ -127,13 +164,22 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
     const make = (options: RedisRateLimitOptions) => makeLimiter(options, newConnection());
     const prefix = uniquePrefix('rl');
     // A ghost took the first ticket and will never come back.
-    await redis.eval(QUEUE_SCRIPT, 1, `${prefix}:queue`, 'enter', 'ghost', 300, `${prefix}:wake`);
+    const queueKey = `${prefix}:queue`;
+    await redis.eval(QUEUE_SCRIPT, 1, queueKey, 'enter', 'ghost', 1000, `${prefix}:wake`);
+    await waitForRedisValue(
+      () => redis.hget(queueKey, 'w:ghost'),
+      (value) => value !== null,
+      {
+        timeoutMs: 1000,
+        intervalMs: 10,
+      },
+    );
 
     const limiter = make({
       keyPrefix: prefix,
       requestsPerMinute: 60,
       maxConcurrent: 1,
-      queueLeaseMs: 300,
+      queueLeaseMs: 1000,
       pollIntervalMs: 50,
       maxQueueMs: 5000,
     });
@@ -149,8 +195,8 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
 
     const got = await limiter.acquire(1);
 
-    // It waited out the ghost's 300ms lease rather than being stuck behind it.
-    expect(got.waitedMs).toBeGreaterThan(150);
+    // It waited out the ghost's 1000ms lease rather than being stuck behind it.
+    expect(got.waitedMs).toBeGreaterThan(700);
     expect(got.waitedMs).toBeLessThan(3000);
   });
 

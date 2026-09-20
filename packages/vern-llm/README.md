@@ -27,7 +27,7 @@
 ## Install
 
 ```bash
-pnpm add vern-llm
+npm i vern-llm
 ```
 
 ## Quick start

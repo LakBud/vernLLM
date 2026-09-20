@@ -81,6 +81,30 @@ export async function waitUntil(
   throw new Error(`waitUntil: condition not met within ${timeoutMs}ms`);
 }
 
+/**
+ * Polls a Redis-backed read until it satisfies a predicate. This is the
+ * integration-test equivalent of waitUntil for server state, and it avoids
+ * hard-coded sleeps when the real Redis instance is slower or busier than CI.
+ */
+export async function waitForRedisValue<T>(
+  read: () => Promise<T>,
+  predicate: (value: T) => boolean,
+  { timeoutMs = 2000, intervalMs = 20 }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const value = await read();
+    if (predicate(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  const lastValue = await read();
+  throw new Error(
+    `waitForRedisValue: condition not met within ${timeoutMs}ms (last value: ${String(lastValue)})`,
+  );
+}
+
 /** A unique key prefix per test, so parallel tests never collide over the same Redis keys. */
 export function uniquePrefix(base: string): string {
   return `${base}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
