@@ -1,7 +1,6 @@
 import { optionalBoolean, optionalFunction } from './validate.utils.js';
 
-import type { CaptureContentOptions } from '../../types/index.js';
-import type { ResolvedCapture } from './resolvedConfig.js';
+import type { CaptureContentOptions, ResolvedCapture } from '../../types/index.js';
 
 export const DEFAULT_MAX_LENGTH = 8192;
 

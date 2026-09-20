@@ -3,8 +3,7 @@ import { normalizeExceptions } from './exceptionOptions.utils.js';
 import { normalizeProviderNames } from './providerNames.utils.js';
 import { optionalBoolean, optionalFunction } from './validate.utils.js';
 
-import type { OtelMiddlewareOptions } from '../../types/index.js';
-import type { ResolvedConfig } from './resolvedConfig.js';
+import type { OtelMiddlewareOptions, ResolvedConfig } from '../../types/index.js';
 
 export const DEFAULT_NAME = 'otel';
 const PRIORITY_AFTER_OTHERS = 1000;
