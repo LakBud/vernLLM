@@ -376,7 +376,14 @@ export function reclassifyMiddlewareThrow(
   });
 }
 
-/** Reports `event` through the instance-level reporter, then fans it out, fire-and-forget, to every applicable middleware's own `onEvent`. */
+/**
+ * Reports `event` through the instance-level reporter, then fans it out to every applicable
+ * middleware's own `onEvent`. Never throws or rejects.
+ *
+ * Handlers of entries with a static (or absent) `enabled` run synchronously, in registration
+ * order, before this returns. Emit sites sit on the call path, so a token attribute or a span
+ * ended off a `usage` event is visible before the code after `next()` resumes.
+ */
 export function emitEvent(
   event: VernLLMEvent,
   ctx: MiddlewareContext,
@@ -389,31 +396,55 @@ export function emitEvent(
 
   if (middleware.length === 0) return;
 
-  void dispatchEventToMiddleware(middleware, event, ctx, middlewareTimeoutMs, logger);
+  dispatchEventToMiddleware(middleware, event, ctx, middlewareTimeoutMs, logger);
 }
 
-/** Calls `onEvent` on every middleware whose `enabled` resolves `true`. Never throws or rejects. */
-async function dispatchEventToMiddleware(
+/** Calls `onEvent`, logging a sync throw or a rejection instead of propagating either. */
+function invokeOnEvent(
+  entry: VernLLMMiddleware,
+  label: string,
+  event: VernLLMEvent,
+  ctx: MiddlewareContext,
+  logger: Logger,
+): void {
+  try {
+    void Promise.resolve(entry.onEvent!(event, { ...ctx, own: {} })).catch((error: unknown) => {
+      logHookError(logger, `middleware "${label}".onEvent`, error);
+    });
+  } catch (error) {
+    logHookError(logger, `middleware "${label}".onEvent`, error);
+  }
+}
+
+/**
+ * Calls `onEvent` on every middleware whose `enabled` allows it. Never throws or rejects.
+ *
+ * A function `enabled` is async, so it is resolved independently per entry: awaiting it inline
+ * would hold back every later entry's handler (static ones included) until it settled, which
+ * can be after the call has already returned.
+ */
+function dispatchEventToMiddleware(
   middleware: VernLLMMiddleware[],
   event: VernLLMEvent,
   ctx: MiddlewareContext,
   middlewareTimeoutMs: number,
   logger: Logger,
-): Promise<void> {
+): void {
   for (let index = 0; index < middleware.length; index++) {
     const entry = middleware[index]!;
     if (!entry.onEvent) continue;
 
     const label = middlewareLabel(entry, index);
-    const isEnabled = await resolveEnabled(entry, ctx, label, middlewareTimeoutMs, logger);
-    if (!isEnabled) continue;
+    const { enabled } = entry;
 
-    try {
-      void Promise.resolve(entry.onEvent(event, { ...ctx, own: {} })).catch((error: unknown) => {
-        logHookError(logger, `middleware "${label}".onEvent`, error);
+    if (enabled === undefined || enabled === true) {
+      invokeOnEvent(entry, label, event, ctx, logger);
+    } else if (enabled === false) {
+      continue;
+    } else {
+      void resolveEnabled(entry, ctx, label, middlewareTimeoutMs, logger).then((isEnabled) => {
+        if (isEnabled) invokeOnEvent(entry, label, event, ctx, logger);
       });
-    } catch (error) {
-      logHookError(logger, `middleware "${label}".onEvent`, error);
     }
   }
 }
