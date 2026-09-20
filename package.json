@@ -21,7 +21,7 @@
     "test:coverage": "nx run-many -t test:coverage",
     "test:affected": "nx affected -t test:unit:coverage test:int:coverage",
     "changeset": "changeset",
-    "changeset:version": "changeset version",
+    "changeset:version": "changeset version && pnpm install --lockfile-only --ignore-scripts",
     "update-changelog": "node scripts/update-changelog.ts",
     "prepare": "husky"
   },
