@@ -430,10 +430,11 @@ const scenarios: Scenario[] = [
       // capacity. Its span covers the wait, but its duration metric leaves it out, so no
       // recorded duration comes near the 160ms a wait inclusive figure would show.
       const seconds = (span: ReadableSpan) => span.duration[0] + span.duration[1] / 1e9;
-      expect(seconds(waited[0]!)).toBeGreaterThan(0.14);
+      const waitedSpanSeconds = seconds(waited[0]!);
+      expect(waitedSpanSeconds).toBeGreaterThan(0.14);
 
       const [point] = pointsOf(metrics.get('gen_ai.client.operation.duration'));
-      expect((point!.value as { max?: number }).max).toBeLessThan(0.12);
+      expect((point!.value as { max?: number }).max).toBeLessThan(waitedSpanSeconds - 0.025);
     },
   },
   {

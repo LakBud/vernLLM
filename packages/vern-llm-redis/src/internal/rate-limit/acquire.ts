@@ -26,6 +26,8 @@ export interface AcquirerDeps {
   queueLeaseMs: number;
   fairQueue: boolean;
   hasSubscriber: boolean;
+  /** Settles once the wake subscription is live. Waiting for it stops a release from being missed right after startup. */
+  subscriptionReady?: Promise<void>;
   queueKey: string;
   waiterRegistry: WaiterRegistry;
   /** One op against the shared FIFO line, `id` being this call's own lease id. */
@@ -61,6 +63,12 @@ export function createAcquirer(
   /** Calls waiting for capacity in this process right now, for `maxQueueSize`. */
   let waiting = 0;
 
+  /** True once the wake subscription has settled, so later calls skip the wait entirely. */
+  let subscribed = deps.subscriptionReady === undefined;
+  void deps.subscriptionReady?.then(() => {
+    subscribed = true;
+  });
+
   /** Longest any single sleep may last, so a waiter always renews its place in line well inside `queueLeaseMs`. */
   const maxSleepMs = Math.max(1, Math.floor(deps.queueLeaseMs / 3));
 
@@ -70,6 +78,23 @@ export function createAcquirer(
         `Rate limit acquire called with an invalid estimatedTokens value: ${estimatedTokens}`,
         'invalid_params',
       );
+    }
+
+    // A release published before the subscription is live is lost, and the
+    // waiter would then only wake on the poll. Wait for it, bounded by the
+    // poll interval so a hung subscribe can never stall a call.
+    if (!subscribed && deps.subscriptionReady) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          deps.subscriptionReady,
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, Math.min(pollIntervalMs, maxSleepMs));
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     // tokensPerMinute is a fixed cap, never grown by AIMD (only rpm

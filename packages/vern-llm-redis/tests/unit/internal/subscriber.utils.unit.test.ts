@@ -77,3 +77,31 @@ describe('attachSubscriber', () => {
     expect(() => detach()).not.toThrow();
   });
 });
+
+describe('attachSubscriber ready', () => {
+  it('settles only once subscribe is confirmed', async () => {
+    let confirm!: () => void;
+    const subscriber = fakeSubscriber();
+    subscriber.subscribe.mockImplementation(
+      () => new Promise<void>((resolve) => (confirm = resolve)),
+    );
+    let settled = false;
+    void attachSubscriber(subscriber, 'chan', hooks()).ready.then(() => (settled = true));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    confirm();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(true);
+  });
+
+  it('settles, without rejecting, when subscribe fails, and reports the error', async () => {
+    const subscriber = fakeSubscriber();
+    const boom = new Error('boom');
+    subscriber.subscribe.mockRejectedValue(boom);
+    const h = hooks();
+
+    await expect(attachSubscriber(subscriber, 'chan', h).ready).resolves.toBeUndefined();
+    expect(h.onSubscribeError).toHaveBeenCalledWith(boom);
+  });
+});
