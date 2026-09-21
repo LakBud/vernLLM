@@ -2,9 +2,15 @@
   <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/integrations/redis.png" alt="VernLLM + redis banner"/>
 </p>
 
+<p align="center">
+  <a href="https://vernllm.dev/docs/integrations/redis">Documentation</a> ·
+  <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm-redis">Package</a> ·
+  <a href="https://www.npmjs.com/package/vern-llm-otel">npm</a>
+</p>
+
 <h1 align="center">vern-llm-redis</h1>
 
-<p align="center">Redis backed circuit breaker, rate limiter, and cache adapters for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>. Use these when you run more than one process and need shared state instead of each process tracking its own. Docs: <a href="https://vernllm.dev/docs/integrations/redis">vernllm.dev</a></p>
+<p align="center">Redis backed circuit breaker, rate limiter, and cache adapters for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>. Use these when you run more than one process and need shared state instead of each process tracking its own.</p>
 
 <p align="center"><sub>Redis® is a registered trademark of Redis Ltd. This is an unofficial community integration, not affiliated with or endorsed by Redis Ltd.</sub></p>
 

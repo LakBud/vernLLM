@@ -54,7 +54,7 @@ jobs:
       - uses: nrwl/nx-set-shas@v5
 
       - name: Lint affected projects
-        run: pnpm exec nx affected -t lint
+        run: pnpm exec nx affected -t lint --verbose
 
   typecheck:
     runs-on: ubuntu-latest
@@ -91,7 +91,7 @@ jobs:
       # first" step needed here the way the old per-package workflows
       # required.
       - name: Typecheck affected projects
-        run: pnpm exec nx affected -t typecheck typecheck:test types:check
+        run: pnpm exec nx affected -t typecheck typecheck:test types:check --verbose
 
   build:
     runs-on: ubuntu-latest
@@ -125,7 +125,7 @@ jobs:
       - uses: nrwl/nx-set-shas@v5
 
       - name: Build, bundle-size check, and smoke test affected projects
-        run: pnpm exec nx affected -t build size smoke-test
+        run: pnpm exec nx affected -t build size smoke-test --verbose
 
   test-unit:
     runs-on: ubuntu-latest
@@ -156,7 +156,7 @@ jobs:
       - uses: nrwl/nx-set-shas@v5
 
       - name: Test unit, affected projects
-        run: pnpm exec nx affected -t test:unit:coverage --output-style=static
+        run: pnpm exec nx affected -t test:unit:coverage --output-style=static --verbose
 
       # Each of these is a no-op (hashFiles empty, step skipped) unless
       # that specific project's test:unit:coverage actually ran above.
@@ -244,7 +244,7 @@ jobs:
           redis-server --version
 
       - name: Test integration, affected projects
-        run: pnpm exec nx affected -t test:int:coverage --output-style=static
+        run: pnpm exec nx affected -t test:int:coverage --output-style=static --verbose
 
       - name: Upload vern-llm coverage to Codecov
         if: hashFiles('packages/vern-llm/coverage/lcov.info') != ''
@@ -316,10 +316,10 @@ jobs:
       # targets have no ordering guarantee within the same project and
       # can run concurrently, racing on that file.
       - name: Lint affected docs
-        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel
+        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel --verbose
 
       - name: Typecheck affected docs
-        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel
+        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel --verbose
 
       - name: Build affected docs
-        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel
+        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel --verbose

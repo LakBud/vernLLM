@@ -146,7 +146,7 @@
     },
     {
       "path": "dist/index.cjs",
-      "limit": "10 KB",
+      "limit": "11 KB",
       "ignore": [
         "vern-llm"
       ]

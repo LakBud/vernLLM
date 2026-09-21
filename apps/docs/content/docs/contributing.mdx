@@ -14,6 +14,27 @@ Fork the repo and branch off `main`, then install the workspace:
 pnpm install
 ```
 
+## Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages. Start with a
+type such as `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, or `ci`, followed by a short
+description:
+
+```text
+fix: prevent a missed rate-limit wake
+```
+
+Add a scope in parentheses when it helps identify the package or area that changed. Scopes can
+include a package and subsystem, separated by `/`:
+
+```text
+fix(vern-llm/circuitBreaker): preserve state after a trial failure
+feat(vern-llm-redis/rateLimit): support shared queue wakeups
+```
+
+Keep the description brief and written in the imperative mood. A scope is optional, but is useful
+when a change is limited to a specific package or subsystem.
+
 ## Coding standard
 
 VernLLM's job is to make the **call** reliable, not necessarily the app. Every module in

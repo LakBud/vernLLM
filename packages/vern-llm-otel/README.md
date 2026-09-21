@@ -2,9 +2,15 @@
   <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/integrations/otel.png" alt="VernLLM + OpenTelemetry banner"/>
 </p>
 
+<p align="center">
+  <a href="https://vernllm.dev/docs/integrations/otel">Documentation</a> ·
+  <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm-otel">Package</a> ·
+  <a href="https://www.npmjs.com/package/vern-llm-redis">npm</a>
+</p>
+
 <h1 align="center">vern-llm-otel</h1>
 
-<p align="center">OpenTelemetry traces and metrics for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>, following the GenAI semantic conventions. One middleware turns every call into spans and metrics, with retries, fallbacks, rate limit waits, and circuit breaker transitions visible. Docs: <a href="https://vernllm.dev/docs/integrations/otel">vernllm.dev</a></p>
+<p align="center">OpenTelemetry traces and metrics for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>, following the GenAI semantic conventions. One middleware turns every call into spans and metrics, with retries, fallbacks, rate limit waits, and circuit breaker transitions visible.</p>
 
 <p align="center"><sub>OpenTelemetry is a Cloud Native Computing Foundation project. This is an unofficial community integration, not affiliated with or endorsed by the CNCF or the OpenTelemetry project.</sub></p>
 

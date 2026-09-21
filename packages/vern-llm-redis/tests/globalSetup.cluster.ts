@@ -21,6 +21,13 @@ import { join } from 'node:path';
 const NODE_COUNT = 3;
 const SLOTS = 16384;
 
+/**
+ * Set by cleanup. Cluster formation runs in the background, so a short run
+ * (one test file) can finish, and kill the nodes, while it is still polling.
+ * Without this the polling loops keep the process alive until their deadline.
+ */
+let stopped = false;
+
 /** True when nothing is listening on the port. */
 function isFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -53,7 +60,7 @@ function hasRedisServer(): boolean {
 
 async function waitForAllReady(ports: number[], timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  while (!stopped && Date.now() < deadline) {
     const ready = await Promise.all(
       ports.map(async (port) => {
         const node = new Redis({
@@ -79,6 +86,7 @@ async function waitForAllReady(ports: number[], timeoutMs: number): Promise<void
     if (ready.every(Boolean)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+  if (stopped) return;
   throw new Error(`the test cluster was not ready within ${timeoutMs}ms`);
 }
 
@@ -98,6 +106,7 @@ async function waitForNodesUp(ports: number[], timeoutMs: number): Promise<void>
         await node.ping();
         break;
       } catch {
+        if (stopped) return;
         if (Date.now() > deadline)
           throw new Error(`node ${port} did not start within ${timeoutMs}ms`);
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -163,6 +172,7 @@ async function start(): Promise<(() => void) | void> {
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    stopped = true;
     for (const child of children) child.kill('SIGKILL');
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -226,6 +236,7 @@ async function start(): Promise<(() => void) | void> {
   // Formation runs in the background. The cluster test file waits for it.
   const formed = (async () => {
     await waitForNodesUp(ports, 10_000);
+    if (stopped) return;
     await formCluster(ports);
     await waitForAllReady(ports, 15_000);
   })();

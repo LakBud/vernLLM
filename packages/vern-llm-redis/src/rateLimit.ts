@@ -386,6 +386,7 @@ export function redisRateLimit(
     queueLeaseMs,
     fairQueue: config.fairQueue,
     hasSubscriber: options.subscriber !== undefined,
+    subscriptionReady: detachSubscriber?.ready,
     queueKey,
     waiterRegistry,
     queueOp,

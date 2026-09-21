@@ -2,7 +2,7 @@ import { describe, expect } from 'vitest';
 
 import { fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
 import { it } from '../../fixtures.js';
-import { expectNearInstant, uniquePrefix, waitUntil } from '../../helpers.js';
+import { expectNearInstant, uniquePrefix, waitForRedisValue, waitUntil } from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
 
@@ -38,11 +38,15 @@ describe.concurrent('redisRateLimit, real Redis, single process', () => {
     await thirdPromise;
   });
 
-  it('enforces max concurrency, blocking until a release frees a slot', async ({ makeLimiter }) => {
+  it('enforces max concurrency, blocking until a release frees a slot', async ({
+    redis,
+    makeLimiter,
+  }) => {
+    const keyPrefix = uniquePrefix('rl');
     const limiter = makeLimiter({
       maxConcurrent: 1,
       pollIntervalMs: 50,
-      keyPrefix: uniquePrefix('rl'),
+      keyPrefix,
     });
 
     const { release } = await limiter.acquire(1);
@@ -53,7 +57,21 @@ describe.concurrent('redisRateLimit, real Redis, single process', () => {
       return result;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    // Wait until the second call has actually blocked (entered the fair
+    // queue) instead of a fixed sleep. A fixed 150ms flakes whenever that
+    // call's first Redis round trip takes longer (Docker Desktop / WSL /
+    // remote Redis, busy machine): the release lands first, the call takes
+    // the slot immediately, and reason is undefined instead of
+    // 'concurrency'. The queue entry is only written after a failed take,
+    // so seeing it proves lastReason is already set.
+    await waitForRedisValue(
+      () => redis.hlen(`${keyPrefix}:queue`),
+      (count) => count >= 2,
+      {
+        timeoutMs: 2000,
+        intervalMs: 10,
+      },
+    );
     expect(secondResolved).toBe(false);
 
     release();
