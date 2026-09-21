@@ -168,14 +168,14 @@ An AI SDK middleware gets no attempt information, only the params for one model 
 
 ## Observability and errors
 
-| Tool                    | Approach                                                                                                                                                                                                                                 |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | One `onEvent` stream for retries, fallback, circuit state, rate limit waits, middleware, and usage, all tagged with a `requestId`. `redact` scrubs debug logs. Errors carry a type, a code, and attempt history. Send it to any backend. |
-| **AI SDK + AI Gateway** | OpenTelemetry through `@ai-sdk/otel` and lifecycle callbacks. Gateway adds a dashboard, generation lookup, and `tags` and `user`.                                                                                                        |
-| **LiteLLM**             | Callbacks to Langfuse, Datadog, Prometheus, OpenTelemetry, and more. Proxy adds spend logs and an admin UI.                                                                                                                              |
-| **Portkey**             | Gateway logs, trace IDs, custom metadata, and a local console. Hosted adds analytics.                                                                                                                                                    |
+| Tool                    | Approach                                                                                                                                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **VernLLM**             | One `onEvent` stream for retries, fallback, circuit state, rate limit waits, middleware, and usage, all tagged with a `requestId`. `redact` scrubs debug logs. Errors carry a type, a code, and attempt history. `vern-llm-otel` adds OpenTelemetry traces and metrics. |
+| **AI SDK + AI Gateway** | OpenTelemetry through `@ai-sdk/otel` and lifecycle callbacks. Gateway adds a dashboard, generation lookup, and `tags` and `user`.                                                                                                                                       |
+| **LiteLLM**             | Callbacks to Langfuse, Datadog, Prometheus, OpenTelemetry, and more. Proxy adds spend logs and an admin UI.                                                                                                                                                             |
+| **Portkey**             | Gateway logs, trace IDs, custom metadata, and a local console. Hosted adds analytics.                                                                                                                                                                                   |
 
-VernLLM ships no dashboard or exporter. You bring the backend.
+`vern-llm-otel` emits spans and metrics through your own OpenTelemetry setup. VernLLM ships no dashboard, so you bring the backend.
 
 ## Shared state across processes
 
