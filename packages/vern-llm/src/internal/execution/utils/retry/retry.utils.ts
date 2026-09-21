@@ -43,9 +43,11 @@ function clampTimeoutMs(ms: number): number {
  * Runs an async function and cancels it if it takes longer than the given
  * timeout. Creates an internal abort controller that fires after the
  * timeout elapses, and combines it with any external signal the caller
- * passed in so either one can cancel the underlying call. If the internal
- * timeout triggers and the underlying operation aborts, the error is
- * converted into an LLMError with type "timeout". External cancellations
+ * passed in so either one can cancel the underlying call. The call is
+ * raced against the timer, so a client that ignores the signal still
+ * times out. Once the internal timeout fires, any error is converted into
+ * an LLMError with type "timeout", whatever abort error type the client
+ * threw. External cancellations
  * continue to propagate as aborted errors. The internal timer is always
  * cleared afterward, whether the function succeeds, fails, or is aborted,
  * so nothing is left running in the background.
@@ -62,27 +64,32 @@ export async function withTimeout<T>(
 
   const activeTimeoutMs = resolveActiveTimeoutMs(timeoutMs);
 
-  const timer =
-    activeTimeoutMs === undefined
-      ? undefined
-      : setTimeout(() => {
-          controller.abort();
-        }, clampTimeoutMs(activeTimeoutMs));
-
   const signal = externalSignal
     ? AbortSignal.any([externalSignal, controller.signal])
     : controller.signal;
 
+  const timeoutError = () =>
+    new LLMError('Request timed out', 'timeout', { code: 'request_timeout' });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  // Raced against `fn`, so a client that ignores the signal still times out.
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    if (activeTimeoutMs === undefined) return;
+
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(timeoutError());
+    }, clampTimeoutMs(activeTimeoutMs));
+  });
+
   try {
-    return await fn(signal);
+    return await Promise.race([fn(signal), timeoutPromise]);
   } catch (err) {
-    if (
-      controller.signal.aborted &&
-      !externalSignal?.aborted &&
-      err instanceof DOMException &&
-      err.name === 'AbortError'
-    ) {
-      throw new LLMError('Request timed out', 'timeout', { code: 'request_timeout' });
+    // Any error raised after the internal timer fired counts as a timeout,
+    // whatever abort error type the client threw. External aborts propagate.
+    if (controller.signal.aborted && !externalSignal?.aborted) {
+      throw err instanceof LLMError && err.type === 'timeout' ? err : timeoutError();
     }
 
     throw err;

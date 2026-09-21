@@ -305,4 +305,28 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     expect(typeof fromModels.chat.completions.create).toBe('function');
     expect(typeof fromTopLevel.chat.completions.create).toBe('function');
   });
+
+  it('reports a timeout against a real Google GenAI SDK client that never responds', async () => {
+    server = await startRealSdkServer([{ hang: true }]);
+
+    const ai = new GoogleGenAI({
+      apiKey: 'test-key',
+      httpOptions: { baseUrl: server.url },
+    });
+
+    const llm = new VernLLM({
+      client: fromGemini(ai.models),
+      model: 'gemini-test',
+      maxRetries: 0,
+      timeoutMs: 100,
+    });
+
+    // Guards that the SDK's own abort error still surfaces as a timeout
+    // rather than 'unknown'.
+    await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'timeout',
+      code: 'request_timeout',
+    });
+  });
 });

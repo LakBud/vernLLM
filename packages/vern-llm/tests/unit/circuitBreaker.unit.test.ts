@@ -2074,3 +2074,29 @@ describe('RollingTripping (unit)', () => {
     expect(tripping.onFailure('model-b')).toBe(false); // model-b's own count is 1, below minCalls
   });
 });
+
+describe('CircuitBreaker, rolling recovery (unit)', () => {
+  it('clears pre-open failures when a half-open trial closes the circuit', () => {
+    vi.useFakeTimers();
+    try {
+      const cb = new CircuitBreaker({
+        cooldownMs: 1000,
+        tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 4, failureRatio: 0.5 },
+      });
+
+      for (let i = 0; i < 4; i++) cb.recordFailure();
+      expect(cb.getState()).toBe('open');
+
+      vi.advanceTimersByTime(1001);
+      cb.assertClosed();
+      cb.recordSuccess();
+      expect(cb.getState()).toBe('closed');
+
+      // One new failure must not reopen off the old window.
+      cb.recordFailure();
+      expect(cb.getState()).toBe('closed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

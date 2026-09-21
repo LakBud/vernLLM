@@ -129,9 +129,13 @@ describe('startRealSdkServer', () => {
   });
 
   it('does nothing (no double-write on a destroyed socket) when a raw writer rejects after the client has already disconnected', async () => {
+    let rawStarted!: () => void;
+    const started = new Promise<void>((resolve) => (rawStarted = resolve));
+
     server = await startRealSdkServer([
       {
         raw: async () => {
+          rawStarted();
           // Gives the client time to abort before this rejects, so the
           // catch handler observes `res.destroyed: true`.
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -147,7 +151,9 @@ describe('startRealSdkServer', () => {
     req.on('error', () => {}); // destroying the socket surfaces as a client-side error too
     req.end('{}');
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Wait until the server has actually received the request, rather than
+    // a fixed delay that can lose the race on a loaded machine.
+    await started;
     req.destroy();
 
     // Give the server's raw() rejection time to fire against the now-

@@ -579,7 +579,10 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
 
     if (ratio >= this.halfOpenSuccessRatio) {
       bucket.consecutiveFailures = 0;
-      this.tripping.onSuccess(this.trippingKeyFor(model));
+      // Reset rather than record a success, so failures from before the
+      // circuit opened can't push a rolling window straight back over
+      // its threshold. Same as the manual `close()`.
+      this.tripping.reset(this.trippingKeyFor(model));
       bucket.reopenCount = 0;
       bucket.failuresByReason.clear();
       this.transition(bucket, 'closed', model, context);
