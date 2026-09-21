@@ -828,4 +828,53 @@ describe('retryWithBackoff', () => {
     expect(attempts[0]?.request).toEqual({ id: 'first' });
     expect(attempts[1]?.request).toBeUndefined();
   });
+
+  it('times out a client that ignores the abort signal', async () => {
+    vi.useFakeTimers();
+    try {
+      const result = withTimeout(() => new Promise<string>(() => {}), 50);
+      const assertion = expect(result).rejects.toMatchObject({
+        type: 'timeout',
+        code: 'request_timeout',
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('converts a non DOMException abort error into a timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      class SdkAbortError extends Error {}
+      const fn = (signal: AbortSignal) =>
+        new Promise<string>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new SdkAbortError('aborted')));
+        });
+
+      const result = withTimeout(fn, 50);
+      const assertion = expect(result).rejects.toMatchObject({ type: 'timeout' });
+
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still propagates the raw error when the external signal aborted', async () => {
+    const external = new AbortController();
+    const boom = new Error('external');
+    const fn = (signal: AbortSignal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(boom));
+      });
+
+    const result = withTimeout(fn, 10_000, external.signal);
+    external.abort();
+
+    await expect(result).rejects.toBe(boom);
+  });
 });

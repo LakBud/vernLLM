@@ -395,4 +395,25 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
       type: 'aborted',
     });
   });
+
+  it('reports a timeout against a real Anthropic SDK client that never responds', async () => {
+    server = await startRealSdkServer([{ hang: true }]);
+
+    const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url, maxRetries: 0 });
+
+    const llm = new VernLLM({
+      client: fromAnthropic(anthropic),
+      model: 'claude-test',
+      maxRetries: 0,
+      timeoutMs: 100,
+    });
+
+    // The SDK throws its own abort error type here, not a DOMException, so
+    // this guards that it still surfaces as a timeout rather than 'unknown'.
+    await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'timeout',
+      code: 'request_timeout',
+    });
+  });
 });

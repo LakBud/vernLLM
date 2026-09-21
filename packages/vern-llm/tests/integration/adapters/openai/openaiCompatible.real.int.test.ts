@@ -460,4 +460,50 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
       type: 'aborted',
     });
   });
+
+  it('reports a timeout against a real OpenAI SDK client that never responds', async () => {
+    server = await startRealSdkServer([{ hang: true }]);
+
+    const openai = new OpenAI({
+      apiKey: 'test-key',
+      baseURL: `${server.url}/v1`,
+      maxRetries: 0,
+    });
+
+    const llm = new VernLLM({
+      client: fromOpenAICompatible(openai),
+      model: 'gpt-test',
+      maxRetries: 0,
+      timeoutMs: 100,
+    });
+
+    // The SDK throws its own abort error type here, not a DOMException, so
+    // this guards that it still surfaces as a timeout rather than 'unknown'.
+    await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'timeout',
+      code: 'request_timeout',
+    });
+  });
+
+  it('reports a timeout against a real Groq SDK client that never responds', async () => {
+    server = await startRealSdkServer([{ hang: true }]);
+
+    const groq = new Groq({ apiKey: 'test-key', baseURL: server.url, maxRetries: 0 });
+
+    const llm = new VernLLM({
+      client: fromGroq(groq),
+      model: 'llama-test',
+      maxRetries: 0,
+      timeoutMs: 100,
+    });
+
+    // The SDK throws its own abort error type here, not a DOMException, so
+    // this guards that it still surfaces as a timeout rather than 'unknown'.
+    await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'timeout',
+      code: 'request_timeout',
+    });
+  });
 });

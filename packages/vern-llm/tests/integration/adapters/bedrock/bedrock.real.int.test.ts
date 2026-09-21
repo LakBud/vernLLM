@@ -545,4 +545,23 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
 
     await expect(finalResult).resolves.toBe('hi');
   });
+
+  it('reports a timeout against a real Bedrock SDK client that never responds', async () => {
+    server = await startRealSdkServer([{ hang: true }]);
+
+    const llm = new VernLLM({
+      client: fromBedrock(wrapBedrockClient(makeClient())),
+      model: 'anthropic.claude-test',
+      maxRetries: 0,
+      timeoutMs: 100,
+    });
+
+    // Guards that the SDK's own abort error still surfaces as a timeout
+    // rather than 'unknown'.
+    await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'timeout',
+      code: 'request_timeout',
+    });
+  });
 });
