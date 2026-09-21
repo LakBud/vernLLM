@@ -84,17 +84,10 @@ export function createAcquirer(
     // waiter would then only wake on the poll. Wait for it, bounded by the
     // poll interval so a hung subscribe can never stall a call.
     if (!subscribed && deps.subscriptionReady) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          deps.subscriptionReady,
-          new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, Math.min(pollIntervalMs, maxSleepMs));
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
+      await Promise.race([
+        deps.subscriptionReady,
+        sleepOrAbort(Math.min(pollIntervalMs, maxSleepMs), signal),
+      ]);
     }
 
     // tokensPerMinute is a fixed cap, never grown by AIMD (only rpm
