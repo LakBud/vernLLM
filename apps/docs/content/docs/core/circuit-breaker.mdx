@@ -79,7 +79,8 @@ A response that arrives successfully can still be turned into a circuit breaker 
 
 A call admitted while closed can finish after the circuit opens. Its outcome is ignored: a late
 success doesn't close the circuit, and a late failure doesn't restart the cooldown. Only a half open
-trial can close it.
+trial can close it. The same holds once the circuit has recovered, so an earlier call can't count
+against the new generation.
 
 ## Half open behavior
 

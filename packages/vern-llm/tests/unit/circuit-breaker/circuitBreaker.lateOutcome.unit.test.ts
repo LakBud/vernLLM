@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CircuitBreaker } from '../../../src/circuitBreaker.js';
+import { CircuitBreaker, type CircuitBreakerCallContext } from '../../../src/circuitBreaker.js';
+import { createMiddlewareStateBag } from '../../../src/types/index.js';
+
+function ctx(requestId: string): CircuitBreakerCallContext {
+  return { requestId, state: createMiddlewareStateBag() };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -111,5 +116,104 @@ describe('CircuitBreaker.getState after cooldown (unit)', () => {
     expect(cb.getState('a')).toBe('half-open');
     expect(cb.getState('b')).toBe('open');
     expect(cb.getState('c')).toBe('closed');
+  });
+});
+
+describe('CircuitBreaker, outcomes from an earlier generation (unit)', () => {
+  function recoveredBreaker() {
+    const onStateChange = vi.fn();
+    const cb = new CircuitBreaker({ threshold: 2, cooldownMs: 1000, onStateChange });
+
+    // Admitted while closed, settles only after recovery.
+    const straggler = ctx('straggler');
+    cb.assertClosed(undefined, straggler);
+
+    const tripper = ctx('tripper');
+    cb.assertClosed(undefined, tripper);
+    cb.recordFailure(undefined, tripper, 'server_error');
+    cb.recordFailure(undefined, ctx('other'), 'server_error');
+    expect(cb.getState()).toBe('open');
+
+    vi.advanceTimersByTime(1000);
+    const probe = ctx('probe');
+    cb.assertClosed(undefined, probe);
+    cb.recordSuccess(undefined, probe);
+    expect(cb.getState()).toBe('closed');
+    onStateChange.mockClear();
+
+    return { cb, straggler, onStateChange };
+  }
+
+  it('a late failure cannot count against the recovered generation', () => {
+    const { cb, straggler, onStateChange } = recoveredBreaker();
+
+    cb.recordFailure(undefined, straggler, 'request_timeout');
+
+    expect(cb.getFailureBreakdown()).toEqual({});
+    // One fresh failure alone must not trip a threshold of 2.
+    const fresh = ctx('fresh');
+    cb.assertClosed(undefined, fresh);
+    cb.recordFailure(undefined, fresh, 'server_error');
+    expect(cb.getState()).toBe('closed');
+    expect(cb.getFailureBreakdown()).toEqual({ server_error: 1 });
+    expect(onStateChange).not.toHaveBeenCalled();
+  });
+
+  it('a late success cannot reset the recovered generation', () => {
+    const { cb, straggler } = recoveredBreaker();
+
+    const fresh = ctx('fresh');
+    cb.assertClosed(undefined, fresh);
+    cb.recordFailure(undefined, fresh, 'server_error');
+
+    cb.recordSuccess(undefined, straggler);
+
+    // The fresh failure still stands, so one more trips a threshold of 2.
+    const next = ctx('next');
+    cb.assertClosed(undefined, next);
+    cb.recordFailure(undefined, next, 'server_error');
+    expect(cb.getState()).toBe('open');
+  });
+});
+
+describe('CircuitBreaker, shrinking cooldownBackoff (unit)', () => {
+  it('a multiplier below 1 never takes a repeat cooldown under cooldownMs', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 0.5 },
+    });
+
+    cb.recordFailure();
+    vi.advanceTimersByTime(1000);
+    cb.assertClosed();
+
+    // Trial fails: reopenCount 1, exp 500, but the floor stays 1000.
+    cb.recordFailure();
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(1);
+    expect(() => cb.assertClosed()).not.toThrow();
+
+    randomSpy.mockRestore();
+  });
+});
+
+describe('CircuitBreaker, outcomes from a call this breaker never admitted (unit)', () => {
+  it('cannot settle a half-open trial it holds no permit for', () => {
+    const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 1000 });
+
+    cb.recordFailure();
+    vi.advanceTimersByTime(1000);
+    cb.assertClosed(undefined, ctx('probe'));
+    expect(cb.getState()).toBe('half-open');
+
+    cb.recordSuccess(undefined, ctx('stranger'));
+    cb.recordFailure(undefined, ctx('stranger'));
+
+    expect(cb.getState()).toBe('half-open');
   });
 });
