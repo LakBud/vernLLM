@@ -1,4 +1,3 @@
-import { LLMError } from '../../types/errors.js';
 import {
   withReservedUsage,
   withReservedUsageForStream,
@@ -13,6 +12,7 @@ import {
 } from './utils/sharedAbort.utils.js';
 
 import type { Logger } from '../../logger.js';
+import type { LLMError } from '../../types/errors.js';
 import type { CacheAdapter, StreamChunk, UsageHooks } from '../../types/index.js';
 import type { InternalCacheParams, InternalCacheStreamParams } from './utils/cache.utils.js';
 
@@ -187,15 +187,15 @@ export class CacheOrchestrator {
     this.sharedAborts.set(promise, shared);
     this.inFlight.track(key, promise);
 
-    let started: Promise<V> | undefined;
+    let started = false;
 
+    // Called exactly once: by the trigger, or by `onTriggerFailed` when
+    // the trigger failed before calling it.
     const start = (): Promise<V> => {
-      if (!started) {
-        started = run(shared.signal);
-        started.then(resolveShared, rejectShared);
-      }
-
-      return started;
+      started = true;
+      const running = run(shared.signal);
+      running.then(resolveShared, rejectShared);
+      return running;
     };
 
     /**
@@ -206,8 +206,11 @@ export class CacheOrchestrator {
     const onTriggerFailed = (error: unknown) => {
       if (started) return;
 
-      if (error instanceof LLMError && error.type === 'aborted' && shared.participants > 0) {
-        void start().catch(() => {});
+      // Before `start`, the trigger can only fail in usage reservation or
+      // an abort check, and both throw an LLMError.
+      if ((error as LLMError).type === 'aborted' && shared.participants > 0) {
+        // `start` already routes a rejection into the shared promise.
+        void start();
         return;
       }
 

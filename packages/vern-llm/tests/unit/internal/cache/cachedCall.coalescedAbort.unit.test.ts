@@ -191,3 +191,108 @@ describe('VernLLM.cachedCall stream: true, coalesced aborts', () => {
     expect(createStream).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('VernLLM.cachedCall, trigger failing before it starts the shared call', () => {
+  it('still starts the shared call for a joiner when the trigger aborts during reservation', async () => {
+    const { client, create, resolveGate } = gatedClient();
+    const llm = new VernLLM({ client, model: 'm' });
+    const triggerAbort = new AbortController();
+
+    const trigger = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      signal: triggerAbort.signal,
+      reserveUsage: ({ signal }) =>
+        new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('stopped')), { once: true });
+        }),
+      call: { userContent: 'hi' },
+    });
+    await tick();
+    const joiner = llm.cachedCall({ cacheKey: 'k', ttl: 60, call: { userContent: 'hi' } });
+    await tick();
+
+    triggerAbort.abort();
+    await expect(trigger).rejects.toSatisfy((e) => isLLMError(e) && e.type === 'aborted');
+    await tick();
+    expect(create).toHaveBeenCalledTimes(1);
+
+    resolveGate(jsonResponse({ ok: true }));
+    await expect(joiner).resolves.toEqual({ ok: true });
+  });
+
+  it('fails a joiner with the trigger error when reservation fails for another reason', async () => {
+    const { client, create } = gatedClient();
+    const llm = new VernLLM({ client, model: 'm' });
+    let rejectReserve!: (error: Error) => void;
+
+    const trigger = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      reserveUsage: () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectReserve = reject;
+        }),
+      call: { userContent: 'hi' },
+    });
+    await tick();
+    const joiner = llm.cachedCall({ cacheKey: 'k', ttl: 60, call: { userContent: 'hi' } });
+    await tick();
+
+    rejectReserve(new Error('over budget'));
+
+    await expect(trigger).rejects.toSatisfy((e) => isLLMError(e) && e.type === 'quota_exceeded');
+    await expect(joiner).rejects.toSatisfy((e) => isLLMError(e) && e.type === 'quota_exceeded');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('honors a top level signal and call.signal together', async () => {
+    const { client } = gatedClient();
+    const llm = new VernLLM({ client, model: 'm' });
+    const top = new AbortController();
+    const inner = new AbortController();
+
+    const pending = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      signal: top.signal,
+      call: { userContent: 'hi', signal: inner.signal },
+    });
+    await tick();
+    top.abort();
+
+    await expect(pending).rejects.toSatisfy((e) => isLLMError(e) && e.type === 'aborted');
+  });
+});
+
+describe('VernLLM.cachedCall stream: true, trigger chunks', () => {
+  it("stops the trigger's chunk iteration at its own abort", async () => {
+    const { client } = createMockStreamingClient([
+      () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta' as const, delta: 'Hello' };
+          await new Promise(() => {});
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm' });
+    const controller = new AbortController();
+
+    const { chunks, finalResult } = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true, signal: controller.signal },
+    });
+    finalResult.catch(() => {});
+    const iterator = chunks[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'text-delta', delta: 'Hello' },
+    });
+    const next = iterator.next();
+    controller.abort();
+
+    await expect(next).rejects.toSatisfy((e) => isLLMError(e) && e.type === 'aborted');
+  });
+});
