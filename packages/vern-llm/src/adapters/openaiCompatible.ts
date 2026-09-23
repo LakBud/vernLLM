@@ -131,13 +131,22 @@ function ensureJsonKeyword(
 }
 
 /**
- * Matches OpenAI's reasoning model ids: the o-series (`o1`, `o3-mini`,
- * `o4-mini`, ...) and the `gpt-5` family. The `gpt-5.x-chat-latest` ids are
- * non-reasoning chat models, so they're excluded. Only bare ids match: a
- * gateway id such as `openai/o3` is left for the gateway to normalize, since
- * this adapter serves many providers that still expect `max_tokens`.
+ * Whether `model` is an OpenAI reasoning model: the o-series (`o1`, `o3`,
+ * `o4-mini`, ...) and every GPT generation from 5 on (`gpt-5`, `gpt-5.6-sol`,
+ * `gpt-6-sol`, ...). GPT is matched as a version threshold, like
+ * `isDefaultAdaptiveOnly`'s Opus rule, so later generations are covered
+ * without a code change. `-chat` ids are non-reasoning chat models, so
+ * they're excluded. Only bare ids match: a gateway id such as `openai/o3` is
+ * left for the gateway to normalize, since this adapter serves many
+ * providers that still expect `max_tokens`.
  */
-const REASONING_MODEL_PATTERN = /^(o\d|gpt-5)(?!.*-chat)/;
+function isOpenAIReasoningModel(model: string): boolean {
+  if (/-chat/.test(model)) return false;
+  if (/^o\d/.test(model)) return true;
+
+  const gptMajor = /^gpt-(\d+)/.exec(model)?.[1];
+  return gptMajor !== undefined && Number(gptMajor) >= 5;
+}
 
 /**
  * OpenAI reasoning models reject `max_tokens` (they need
@@ -148,7 +157,7 @@ const REASONING_MODEL_PATTERN = /^(o\d|gpt-5)(?!.*-chat)/;
 function applyReasoningModelParams<
   P extends { model: string; max_tokens: number; temperature?: number },
 >(params: P): P {
-  if (!REASONING_MODEL_PATTERN.test(params.model)) return params;
+  if (!isOpenAIReasoningModel(params.model)) return params;
 
   const { max_tokens, temperature: _temperature, ...rest } = params;
 
