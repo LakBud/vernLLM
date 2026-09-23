@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CircuitBreaker, type CircuitBreakerCallContext } from '../../src/circuitBreaker.js';
-import { createMiddlewareStateBag } from '../../src/types/index.js';
+import { CircuitBreaker, type CircuitBreakerCallContext } from '../../../src/circuitBreaker.js';
+import { createMiddlewareStateBag } from '../../../src/types/index.js';
 
 function ctx(): CircuitBreakerCallContext {
   return { requestId: 'r', state: createMiddlewareStateBag() };

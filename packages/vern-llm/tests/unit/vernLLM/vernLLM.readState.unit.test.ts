@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, jsonResponse } from '../../helpers.js';
 
-import type { CircuitBreakerAdapter } from '../../src/circuitBreaker.js';
-import type { RateLimiterAdapter } from '../../src/rateLimit.js';
+import type { CircuitBreakerAdapter } from '../../../src/circuitBreaker.js';
+import type { RateLimiterAdapter } from '../../../src/rateLimit.js';
 
 function breaker(overrides: Partial<CircuitBreakerAdapter> = {}): CircuitBreakerAdapter {
   return {

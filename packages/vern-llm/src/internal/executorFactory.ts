@@ -99,7 +99,7 @@ export function buildExecutors(
           ? shared.primaryDefaultBudgetTokens
           : target.defaultBudgetTokens,
       nonRetryableStatus: target.nonRetryableStatus ??
-        shared.nonRetryableStatus ?? [400, 401, 403, 404, 422],
+        shared.nonRetryableStatus ?? [400, 401, 402, 403, 404, 413, 422],
       parseJson: shared.parseJson,
       logger: shared.logger,
       redact: shared.redact,

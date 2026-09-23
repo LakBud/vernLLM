@@ -400,8 +400,7 @@ const llm = new VernLLM({
 and resets to 0 on recovery, the same moments `TrippingPolicy.reset()` fires.
 
 <Callout type="warn">
-  The `{ multiplier, maxMs }` shorthand always applies full jitter (the computed cooldown is
-  randomized anywhere between zero and its full value), so several client instances don't reopen in
-  lockstep. A custom `CooldownBackoff` function is never jittered automatically, apply your own if
+  The `{ multiplier, maxMs }` shorthand applies full jitter to the growth above `cooldownMs`, so
+  several client instances don't reopen in lockstep but none waits less than `cooldownMs`. A custom `CooldownBackoff` function is never jittered automatically, apply your own if
   you want it.
 </Callout>

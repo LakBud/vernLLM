@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 
-import { LLMError } from '../../src/types/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { at, createMockClient, jsonResponse, textResponse } from '../helpers.js';
+import { LLMError } from '../../../src/types/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { at, createMockClient, jsonResponse, textResponse } from '../../helpers.js';
 
 describe('VernLLM.call, conversation history', () => {
   it('sends only system + current user turn when no history is given', async () => {

@@ -5,11 +5,11 @@ import {
   ConsecutiveTripping,
   RollingTripping,
   type TrippingPolicy,
-} from '../../src/circuitBreaker.js';
-import { FallbackExhaustedError } from '../../src/types/fallback.js';
-import { createMiddlewareStateBag, type VernLLMMiddleware } from '../../src/types/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from './../helpers.js';
+} from '../../../src/circuitBreaker.js';
+import { FallbackExhaustedError } from '../../../src/types/fallback.js';
+import { createMiddlewareStateBag, type VernLLMMiddleware } from '../../../src/types/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, jsonResponse } from './../../helpers.js';
 
 describe('CircuitBreaker (unit)', () => {
   it('recordSuccess is a no-op when no bucket exists yet for the model (isolateByModel)', () => {
@@ -490,7 +490,7 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     vi.useRealTimers();
   });
 
-  it('the shorthand always applies full jitter: falls in [0, exp], not the exact value', () => {
+  it('the shorthand jitters only the growth above cooldownMs: falls in [base, exp]', () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.3);
     const cb = new CircuitBreaker({
@@ -499,10 +499,14 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, full jitter
-    // with random() pinned at 0.3 gives exactly 300ms.
+    // First open: reopenCount 0, exp = 1000 = base, so nothing to jitter.
     cb.recordFailure();
-    vi.advanceTimersByTime(299);
+    vi.advanceTimersByTime(1000);
+    cb.assertClosed();
+
+    // Trial fails: reopenCount 1, exp = 2000, 1000 + 0.3 * 1000 = 1300ms.
+    cb.recordFailure();
+    vi.advanceTimersByTime(1299);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
@@ -514,23 +518,50 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     vi.useRealTimers();
   });
 
-  it('full jitter can draw a value below the old half-jitter floor', () => {
+  it('the first cooldown never drops below cooldownMs, even at the lowest jitter draw', () => {
     vi.useFakeTimers();
-    // Pin random() well under 0.5: under half/equal jitter this value
-    // would have been impossible, since the floor was exp/2.
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.1);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     const cb = new CircuitBreaker({
       threshold: 1,
       cooldownMs: 1000,
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // exp = 1000, full jitter at random()=0.1 gives 100ms, well below
-    // the old 500ms floor.
     cb.recordFailure();
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(1);
     expect(() => cb.assertClosed()).not.toThrow();
-    expect(cb.getState()).toBe('half-open');
+
+    // Repeat opens keep the same floor.
+    cb.recordFailure();
+    vi.advanceTimersByTime(999);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+
+    randomSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('a maxMs below cooldownMs lowers the floor with it, so the cap still holds', () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const cb = new CircuitBreaker({
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 2, maxMs: 400 },
+    });
+
+    cb.recordFailure();
+    vi.advanceTimersByTime(399);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(1);
+    expect(() => cb.assertClosed()).not.toThrow();
 
     randomSpy.mockRestore();
     vi.useRealTimers();
@@ -544,6 +575,10 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
+    // Reach reopenCount 1, where there's a range to jitter over.
+    cb.recordFailure();
+    vi.advanceTimersByTime(10_000);
+    cb.assertClosed();
     cb.recordFailure();
 
     const messages: string[] = [];
@@ -555,12 +590,8 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       }
     }
 
-    // Every check above happened at the same elapsed time (0ms since
-    // open, no time advanced between calls). The full-jitter range here
-    // spans several whole seconds ([0, 10000]ms), so if the cooldown
-    // were resampled per check, the reported "Retry in Xs" would very
-    // likely differ across the 20 draws. Sampled once and cached, every
-    // check reports the identical wait.
+    // The jitter range spans [10000, 20000]ms, so resampling per check
+    // would very likely change the reported "Retry in Xs" across 20 draws.
     expect(messages).toHaveLength(20);
     expect(new Set(messages).size).toBe(1);
 
@@ -595,36 +626,35 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // First open: reopenCount 0, exp = 1000 * 2^0 = 1000, full jitter at
-    // random()=0.5 gives exactly 500ms.
+    // reopenCount 0: exp = 1000 = base, exactly 1000ms.
     cb.recordFailure();
-    vi.advanceTimersByTime(499);
-    expect(() => cb.assertClosed()).toThrow(
-      expect.objectContaining({ code: 'circuit_cooling_down' }),
-    );
-    vi.advanceTimersByTime(1); // total 500
-    cb.assertClosed();
-    expect(cb.getState()).toBe('half-open');
-
-    // Trial fails: reopenCount 1, exp = 1000 * 2^1 = 2000, jittered to 1000ms.
-    cb.recordFailure();
-    expect(cb.getState()).toBe('open');
     vi.advanceTimersByTime(999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(1); // total 1000
+    vi.advanceTimersByTime(1);
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
-    // Trial fails again: reopenCount 2, exp = 1000 * 2^2 = 4000, jittered to 2000ms.
+    // reopenCount 1: exp = 2000, 1000 + 0.5 * 1000 = 1500ms.
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(1999);
+    vi.advanceTimersByTime(1499);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(1); // total 2000
+    vi.advanceTimersByTime(1);
+    cb.assertClosed();
+    expect(cb.getState()).toBe('half-open');
+
+    // reopenCount 2: exp = 4000, 1000 + 0.5 * 3000 = 2500ms.
+    cb.recordFailure();
+    expect(cb.getState()).toBe('open');
+    vi.advanceTimersByTime(2499);
+    expect(() => cb.assertClosed()).toThrow(
+      expect.objectContaining({ code: 'circuit_cooling_down' }),
+    );
+    vi.advanceTimersByTime(1);
     cb.assertClosed();
     expect(cb.getState()).toBe('half-open');
 
@@ -641,20 +671,18 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 10, maxMs: 5000 },
     });
 
-    // First open: reopenCount 0, exp = 1000 * 10^0 = 1000, jittered to 500ms.
     cb.recordFailure();
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(1000);
     cb.assertClosed();
 
-    // Trial fails: reopenCount 1, uncapped exp would be 10000, capped to
-    // 5000, jittered (at random()=0.5) to 2500ms.
+    // reopenCount 1: uncapped exp 10000, capped to 5000, 1000 + 0.5 * 4000 = 3000ms.
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(2499);
+    vi.advanceTimersByTime(2999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(1); // total 2500, the capped-and-jittered value
+    vi.advanceTimersByTime(1);
     expect(() => cb.assertClosed()).not.toThrow();
 
     randomSpy.mockRestore();
@@ -694,7 +722,8 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
     });
 
     cb.recordFailure();
-    expect(cb.getState()).toBe('open');
+    // A 0ms cooldown is already elapsed, so getState reports trial-ready.
+    expect(cb.getState()).toBe('half-open');
     // Clamped to 0: no wait at all, admits a trial immediately.
     expect(() => cb.assertClosed()).not.toThrow();
     expect(cb.getState()).toBe('half-open');
@@ -711,33 +740,29 @@ describe('CircuitBreaker, cooldown backoff (unit)', () => {
       cooldownBackoff: { multiplier: 2 },
     });
 
-    // Open, reopen once via a failed trial (reopenCount -> 1, jittered to
-    // 1000ms at random()=0.5), then recover with a successful trial,
-    // which should reset reopenCount.
+    // Open, reopen once via a failed trial (reopenCount 1, 1500ms), then
+    // recover with a successful trial, which resets reopenCount.
     cb.recordFailure();
-    vi.advanceTimersByTime(500); // reopenCount 0, jittered value
+    vi.advanceTimersByTime(1000);
     cb.assertClosed();
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(1000); // reopenCount 1, jittered value
+    vi.advanceTimersByTime(1500);
     cb.assertClosed();
     cb.recordSuccess();
     expect(cb.getState()).toBe('closed');
 
-    // Trip again: reopenCount should be back to 0, so the jittered
-    // value is 500ms again, not a continuation of the earlier growth
-    // (1000ms or beyond).
+    // Trip again: back to reopenCount 0, so 1000ms, not 1500ms or more.
     cb.recordFailure();
     expect(cb.getState()).toBe('open');
-    vi.advanceTimersByTime(499);
+    vi.advanceTimersByTime(999);
     expect(() => cb.assertClosed()).toThrow(
       expect.objectContaining({ code: 'circuit_cooling_down' }),
     );
-    vi.advanceTimersByTime(1); // total 500, past the reset ceiling
+    vi.advanceTimersByTime(1);
     expect(() => cb.assertClosed()).not.toThrow();
 
     randomSpy.mockRestore();
-
     vi.useRealTimers();
   });
 });
@@ -904,7 +929,12 @@ describe('CircuitBreaker, isolateByModel (unit)', () => {
     cb.recordFailure('gpt-4o');
     expect(buckets.size).toBe(1);
 
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000);
+    cb.assertClosed('gpt-4o');
     cb.recordSuccess('gpt-4o');
+    vi.useRealTimers();
+
     expect(cb.getState('gpt-4o')).toBe('closed');
     expect(buckets.size).toBe(0);
   });
@@ -1086,7 +1116,7 @@ describe('VernLLM, circuit breaker integration', () => {
       client,
       model: 'm',
       maxRetries: 0,
-      circuitBreaker: { threshold: 1, cooldownMs: 1 },
+      circuitBreaker: { threshold: 1, cooldownMs: 1000 },
       middleware: [slowWrap],
     });
 
@@ -1095,7 +1125,7 @@ describe('VernLLM, circuit breaker integration', () => {
     expect(llm.getCircuitState()).toBe('open');
 
     // Wait past cooldown so the circuit is eligible for a half-open trial.
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
 
     // Start a trial call and abort it while `wrap` is still delaying, i.e.
     // before `assertBreakerClosed` (inside `coreOperation`) has run at all.

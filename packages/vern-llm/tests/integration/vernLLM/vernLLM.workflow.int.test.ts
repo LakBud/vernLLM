@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, FakeApiError, jsonResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, FakeApiError, jsonResponse } from '../../helpers.js';
 
 describe('VernLLM workflow integration', () => {
   it('retries, parses JSON, validates schema, and reports usage', async () => {

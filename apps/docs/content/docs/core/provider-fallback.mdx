@@ -150,14 +150,16 @@ const fallbackOn: FallbackOn = (error, context) => {
 };
 ```
 
-| `error` matches                                             | Decision | Why                                                                                                        |
-| ----------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `type: 'parse'`                                             | `'stop'` | The response wasn't valid JSON. A different provider given the same prompt is likely to fail the same way. |
-| `type: 'validation'`                                        | `'stop'` | The response failed schema validation. Same reasoning as `parse`.                                          |
-| `type: 'aborted'`                                           | `'stop'` | The caller cancelled the call. Trying another provider ignores that intent.                                |
-| `type: 'quota_exceeded'`                                    | `'stop'` | `reserveUsage` rejected before any provider was contacted. No provider can fix an application-level quota. |
-| `code: 'unknown_tool'` or `code: 'duplicate_tool_call_id'`  | `'stop'` | The model ignored the tool contract. This is a model response defect, not a sick provider.                 |
-| Anything else (`api`, `timeout`, `circuit_open`, `unknown`) | `'next'` | Transient or provider-specific failures are exactly what fallback exists for.                              |
+| `error` matches                                                   | Decision | Why                                                                                                        |
+| ----------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `type: 'parse'`                                                   | `'stop'` | The response wasn't valid JSON. A different provider given the same prompt is likely to fail the same way. |
+| `type: 'validation'`                                              | `'stop'` | The response failed schema validation. Same reasoning as `parse`.                                          |
+| `type: 'aborted'`                                                 | `'stop'` | The caller cancelled the call. Trying another provider ignores that intent.                                |
+| `type: 'quota_exceeded'`                                          | `'stop'` | `reserveUsage` rejected before any provider was contacted. No provider can fix an application-level quota. |
+| `code: 'unknown_tool'` or `code: 'duplicate_tool_call_id'`        | `'stop'` | The model ignored the tool contract. This is a model response defect, not a sick provider.                 |
+| `type: 'invalid_params'`, except `code: 'unsupported_capability'` | `'stop'` | Caller input rejected locally. Every target rejects it the same way.                                       |
+| `code: 'unsupported_capability'`                                  | `'next'` | One adapter's limit. Another target may support it.                                                        |
+| Anything else (`api`, `timeout`, `circuit_open`, `unknown`)       | `'next'` | Transient or provider-specific failures are exactly what fallback exists for.                              |
 
 A `circuit_open` error therefore normally moves the call to the next configured target. This is
 particularly useful when each target has its own breaker: a provider that is already known to be

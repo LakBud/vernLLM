@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, createMockStreamingClient, drain, textResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, createMockStreamingClient, drain, textResponse } from '../../helpers.js';
 
 // A non-empty placeholder the model sometimes returns instead of a real
 // answer. Deliberately non-empty so it clears the existing empty-response

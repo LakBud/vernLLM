@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { type VernLLMEvent } from '../../src/types/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from '../helpers.js';
+import { type VernLLMEvent } from '../../../src/types/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, jsonResponse } from '../../helpers.js';
 
 describe('VernLLM, onEvent: retry', () => {
   it('fires a "retry" event before each backoff wait, with the upcoming attempt number', async () => {

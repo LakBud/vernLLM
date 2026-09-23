@@ -136,7 +136,7 @@ export class VernLLM {
    * @param options Client, model, and tunables. Defaults: `maxRetries` 1,
    * `timeoutMs` 25000, `baseDelayMs` 500, `defaultMaxTokens` 1000,
    * `defaultTemperature` 0.2, `cache` an in-memory adapter,
-   * `nonRetryableStatus` `[400, 401, 403, 404, 422]`, `debug` false.
+   * `nonRetryableStatus` `[400, 401, 402, 403, 404, 413, 422]`, `debug` false.
    */
   constructor(options: VernLLMOptions) {
     this.logger = createSafeLogger(

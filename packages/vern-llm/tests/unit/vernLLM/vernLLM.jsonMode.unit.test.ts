@@ -1,13 +1,13 @@
 import { describe, it, expect, expectTypeOf, onTestFinished, vi } from 'vitest';
 
-import { VernLLM, type ConversationTurn, type JsonValue } from '../../src/index.js';
+import { VernLLM, type ConversationTurn, type JsonValue } from '../../../src/index.js';
 import {
   at,
   createMockClient,
   createMockStreamingClient,
   jsonResponse,
   textResponse,
-} from '../helpers.js';
+} from '../../helpers.js';
 
 describe('VernLLM.call, jsonMode return type and runtime shape', () => {
   it('jsonMode: false returns the raw string, unparsed', async () => {

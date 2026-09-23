@@ -13,8 +13,8 @@ import {
   defineTool,
   defineCallParams,
   defineCachedCallParams,
-} from '../../src/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
+} from '../../../src/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
 import {
   createMockClient,
   createMockStreamingClient,
@@ -23,7 +23,7 @@ import {
   toolCallResponse,
   at,
   drain,
-} from '../helpers.js';
+} from '../../helpers.js';
 
 const weatherTool = {
   name: 'get_weather',
@@ -270,7 +270,7 @@ describe('VernLLM.call, multi-turn continuation via history', () => {
       content: [{ type: 'text', text: 'ok' }],
     }));
 
-    const { fromAnthropic } = await import('../../src/adapters/index.js');
+    const { fromAnthropic } = await import('../../../src/adapters/index.js');
 
     const llm = new VernLLM({
       client: fromAnthropic({ messages: { create } } as AnthropicClient),

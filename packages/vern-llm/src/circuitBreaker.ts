@@ -79,7 +79,11 @@ export interface ExponentialBackoffOptions {
   maxMs?: number;
 }
 
-/** Not exported. Applies full jitter so several instances don't reopen in lockstep. */
+/**
+ * Not exported. Jitters only the growth above `baseCooldownMs`, so several
+ * instances don't reopen in lockstep but none ever cools down for less
+ * than the configured base.
+ */
 function buildCooldownBackoff(
   option: ExponentialBackoffOptions | CooldownBackoff | undefined,
 ): CooldownBackoff | undefined {
@@ -89,7 +93,11 @@ function buildCooldownBackoff(
   const { multiplier, maxMs = Infinity } = option;
   return (reopenCount, baseCooldownMs) => {
     const exp = Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
-    return fullJitter(exp);
+    // Only an explicit `maxMs` below the base may lower the floor; a
+    // shrinking `multiplier` must not. The ternary also maps a NaN `exp` to the floor.
+    const floor = Math.min(baseCooldownMs, maxMs);
+    const upper = exp > floor ? exp : floor;
+    return floor + fullJitter(upper - floor);
   };
 }
 
@@ -262,6 +270,8 @@ interface CircuitBucket {
   failuresByReason: Map<LLMErrorCode | 'unknown', number>;
   /** Cooldown for this open period, sampled once so a jittered value doesn't change mid-cooldown. */
   cooldownMsForOpen: number;
+  /** Breaker-wide generation this bucket last opened in, 0 if never opened. */
+  openedInGeneration: number;
 }
 
 function newBucket(): CircuitBucket {
@@ -273,6 +283,7 @@ function newBucket(): CircuitBucket {
     reopenCount: 0,
     failuresByReason: new Map(),
     cooldownMsForOpen: 0,
+    openedInGeneration: 0,
   };
 }
 
@@ -323,6 +334,14 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   private readonly sharedBucket: CircuitBucket = newBucket();
   private readonly bucketsByModel = new Map<string, CircuitBucket>();
 
+  /**
+   * Breaker-wide rather than per bucket, since an evicted bucket is
+   * recreated with no history and a per bucket generation would restart.
+   */
+  private generation = 0;
+  /** Each call's generation at admission, keyed by its `state`, so its outcome can be told apart from a later generation's. */
+  private readonly admittedInGeneration = new WeakMap<object, number>();
+
   constructor(options: CircuitBreakerOptions = {}) {
     const threshold = options.threshold ?? 5;
     this.cooldownMs = options.cooldownMs ?? 30_000;
@@ -346,7 +365,10 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   assertClosed(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
 
-    if (bucket.state === 'closed') return;
+    if (bucket.state === 'closed') {
+      this.markAdmitted(context);
+      return;
+    }
 
     if (bucket.state === 'open') {
       const elapsed = Date.now() - bucket.openedAt;
@@ -362,6 +384,7 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
       // Set before transition() so a synchronous re-entrant caller sees the slot as already claimed.
       bucket.trial = { slotsRemaining: this.halfOpenProbes - 1, successes: 0, failures: 0 };
       if (context) trialPermits.set(context.state, bucket.trial);
+      this.markAdmitted(context);
       this.transition(bucket, 'half-open', model, context);
       return;
     }
@@ -377,6 +400,7 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
 
     bucket.trial.slotsRemaining -= 1;
     if (context) trialPermits.set(context.state, bucket.trial);
+    this.markAdmitted(context);
   }
 
   recordSuccess(model?: string, context?: CircuitBreakerCallContext): void {
@@ -385,6 +409,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     if (!bucket) {
       return;
     }
+
+    if (this.isFromEarlierGeneration(bucket, context)) return;
 
     if (bucket.state === 'half-open' && bucket.trial && claimsCurrentTrial(bucket, context)) {
       // Outcome recorded, so this call's permit is spent: a later
@@ -397,6 +423,10 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
 
     // Stale trial permit: ignore, don't settle a trial it wasn't part of.
     if (bucket.state === 'half-open') return;
+
+    // A call admitted before the circuit opened can finish after it. Only
+    // a half-open trial may close an open circuit, never a late straggler.
+    if (bucket.state === 'open') return;
 
     bucket.consecutiveFailures = 0;
     this.tripping.onSuccess(this.trippingKeyFor(model));
@@ -414,6 +444,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   recordFailure(model?: string, context?: CircuitBreakerCallContext, code?: LLMErrorCode): void {
     const bucket = this.ensureBucketFor(model);
 
+    if (this.isFromEarlierGeneration(bucket, context)) return;
+
     if (bucket.state === 'half-open' && bucket.trial && claimsCurrentTrial(bucket, context)) {
       if (context) trialPermits.delete(context.state);
       bucket.trial.failures += 1;
@@ -424,6 +456,10 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
 
     // Stale trial permit: ignore, don't fall through to the closed-state counter below.
     if (bucket.state === 'half-open') return;
+
+    // A late failure from a call admitted before the circuit opened would
+    // otherwise re-trip it, restamping `openedAt` and extending the cooldown.
+    if (bucket.state === 'open') return;
 
     bucket.consecutiveFailures += 1;
     attributeFailure(bucket, code);
@@ -451,9 +487,20 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     bucket.trial.slotsRemaining += 1;
   }
 
-  /** With `isolateByModel` off, `model` is ignored and the shared circuit's state is returned. */
+  /**
+   * With `isolateByModel` off, `model` is ignored and the shared circuit's
+   * state is returned. An open circuit whose cooldown has elapsed reports
+   * `'half-open'`, since the next call will be admitted as a trial. Read
+   * only: the real transition, and its `onStateChange`, still happens on
+   * that next call.
+   */
   getState(model?: string): CircuitState {
-    return this.lookupBucket(model)?.state ?? 'closed';
+    const bucket = this.lookupBucket(model);
+    if (!bucket) return 'closed';
+    if (bucket.state === 'open' && Date.now() - bucket.openedAt >= bucket.cooldownMsForOpen) {
+      return 'half-open';
+    }
+    return bucket.state;
   }
 
   /** Failure counts by `LLMErrorCode` for `model`'s bucket. Returned as a plain object copy. */
@@ -499,6 +546,7 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   ): void {
     bucket.openedAt = Date.now();
     bucket.cooldownMsForOpen = this.computeCooldown(bucket);
+    bucket.openedInGeneration = ++this.generation;
     this.transition(bucket, 'open', model, context);
   }
 
@@ -509,6 +557,25 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     const computed = this.cooldownBackoff(bucket.reopenCount, this.cooldownMs);
     if (Number.isNaN(computed)) return 0;
     return Math.max(0, computed);
+  }
+
+  private markAdmitted(context: CircuitBreakerCallContext | undefined): void {
+    if (context) this.admittedInGeneration.set(context.state, this.generation);
+  }
+
+  /**
+   * True if this call was admitted before `bucket` last opened, so its
+   * outcome belongs to a generation that has already ended. A call with no
+   * `context`, or never admitted by this breaker, always counts, matching
+   * the behavior before generation tracking.
+   */
+  private isFromEarlierGeneration(
+    bucket: CircuitBucket,
+    context: CircuitBreakerCallContext | undefined,
+  ): boolean {
+    if (!context) return false;
+    const admitted = this.admittedInGeneration.get(context.state);
+    return admitted !== undefined && admitted < bucket.openedInGeneration;
   }
 
   /** Returns the bucket for a model if one already exists, without allocating. */

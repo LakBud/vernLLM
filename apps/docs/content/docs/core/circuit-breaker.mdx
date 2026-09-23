@@ -37,7 +37,7 @@ A failed trial reopens the circuit and restarts the cooldown.
 Counts as a failure:
 
 - Timeouts
-- Non 2xx responses
+- 5xx responses, and 408, 425, or 429
 - Network errors
 - An empty response body
 - Other errors indicating that the provider did not successfully return a usable response
@@ -60,6 +60,9 @@ Does not count as a failure:
   not a signal that the provider itself is unhealthy, so it's excluded even though it's still
   retried.
 
+Any other 4xx status is also excluded. It describes one caller's request or account, so counting it
+would let a single bad caller open the circuit for everyone.
+
 The tool contract errors are model response defects rather than provider health failures. An
 `unknown_tool` error means the model requested a tool that was not offered. A
 `duplicate_tool_call_id` error means the model reused a tool call ID. Neither error indicates that
@@ -71,6 +74,13 @@ available tool contract or repair the duplicate ID.
 A response that arrives successfully can still be turned into a circuit breaker failure via
 `detectSoftFailure`, the same as a real transport or provider failure would be. See
 [Soft Failure Detection](/docs/core/error-handling#soft-failure-detection).
+
+## Late outcomes
+
+A call admitted while closed can finish after the circuit opens. Its outcome is ignored: a late
+success doesn't close the circuit, and a late failure doesn't restart the cooldown. Only a half open
+trial can close it. The same holds once the circuit has recovered, so an earlier call can't count
+against the new generation.
 
 ## Half open behavior
 
@@ -129,10 +139,9 @@ const llm = new VernLLM({
 (default `Infinity`). A repeat open counts a trial that failed back to open, not the first open from
 a closed circuit.
 
-The shorthand always applies full jitter (the computed cooldown is randomized anywhere between zero
-and its full value), so several client instances don't reopen in lockstep. See AWS's
-[Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
-for why full jitter is preferred over equal jitter. For anything beyond exponential growth, or an
+The shorthand applies full jitter to the growth above `cooldownMs`, so several client instances
+don't reopen in lockstep but none waits less than `cooldownMs`. The first open, with nothing to grow
+yet, waits exactly `cooldownMs`. A `maxMs` below `cooldownMs` lowers that floor to `maxMs`. For anything beyond exponential growth, or an
 exact deterministic value, pass a `CooldownBackoff` function instead, never jittered automatically.
 See [Circuit Breaker → Customization](/docs/customization/circuit-breaker) for a worked example.
 
@@ -356,7 +365,8 @@ llm.getCircuitStates('gpt-4o');
 // ]
 ```
 
-`getCircuitState(target?)` and `getCircuitStates(model?)` are read-only. `openCircuit(target?)` and
+`getCircuitState(target?)` and `getCircuitStates(model?)` are read-only. An open circuit whose
+cooldown has elapsed reports `'half-open'`, since the next call is admitted as a trial. `openCircuit(target?)` and
 `closeCircuit(target?)` mutate a target's breaker directly:
 
 ```ts title="circuit-breaker-manual-control.ts"

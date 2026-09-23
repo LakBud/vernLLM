@@ -96,7 +96,7 @@ export interface VernLLMOptions {
    * degrades safely instead of failing every call.
    */
   detectSoftFailure?: DetectSoftFailure;
-  /** HTTP status codes that should fail fast without retrying. Default [400, 401, 403, 404, 422] */
+  /** HTTP status codes that should fail fast without retrying. Default [400, 401, 402, 403, 404, 413, 422] */
   nonRetryableStatus?: number[];
   /** Custom JSON parser. Must return undefined/null on failure. Default: JSON.parse wrapped in try/catch */
   parseJson?: (content: string) => unknown;
@@ -171,9 +171,10 @@ export interface VernLLMOptions {
    * once per failed target, after that target's own retries are
    * exhausted or abandoned early, so `'retry'` is never a valid return
    * here. Defaults to `defaultFallbackOn`, which stops on
-   * parse/validation/aborted/quota errors and on tool-contract failures
+   * parse/validation/aborted/quota errors, on tool-contract failures
    * (the model ignoring the request, not the provider being unhealthy),
-   * and moves on for everything else.
+   * and on `invalid_params` other than `unsupported_capability`, and
+   * moves on for everything else.
    */
   fallbackOn?: FallbackOn;
   /**

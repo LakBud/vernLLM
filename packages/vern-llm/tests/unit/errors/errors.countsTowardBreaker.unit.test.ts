@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { LLMError, type LLMErrorType } from '../../src/types/errors.js';
+import { LLMError, type LLMErrorType } from '../../../src/types/errors.js';
 
 /**
  * `quota_exceeded` is the one type where `retryable` and

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, FakeApiError, jsonResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, FakeApiError, jsonResponse } from '../../helpers.js';
 
 /**
  * A half-open trial that ends in an error the breaker deliberately ignores

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, FakeApiError, jsonResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, FakeApiError, jsonResponse } from '../../helpers.js';
 
 /**
  * `quota_exceeded` is retryable but should no longer count toward the

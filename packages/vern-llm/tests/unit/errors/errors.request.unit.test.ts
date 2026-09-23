@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { LLMError, toRequestSnapshot } from '../../src/types/errors.js';
+import { LLMError, toRequestSnapshot } from '../../../src/types/errors.js';
 
 describe('toRequestSnapshot', () => {
   it('returns provider, model, body, and startedAt', () => {
