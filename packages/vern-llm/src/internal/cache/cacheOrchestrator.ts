@@ -97,6 +97,11 @@ export class CacheOrchestrator {
     return { resolvedParams, cached: await this.getCached(resolvedKey) };
   }
 
+  /** The shared in-flight promise for `key`, if any, so callers can wait for it to settle. */
+  inFlightFor(key: string): Promise<unknown> | undefined {
+    return this.inFlight.get(key);
+  }
+
   /**
    * Returns the in-flight entry for `key` a new caller can still join, or
    * `undefined`. An entry whose shared signal already fired is doomed, so

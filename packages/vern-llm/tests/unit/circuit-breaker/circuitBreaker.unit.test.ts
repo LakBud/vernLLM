@@ -1947,19 +1947,23 @@ describe('CircuitBreaker, tripping policy (unit)', () => {
     expect(cb.getFailureBreakdown('gpt')).toEqual({});
   });
 
-  it('RollingTripping.forget drops the window for a model reset with close() (isolateByModel)', () => {
-    const tripping = new RollingTripping(60_000, 1, 0.5);
+  it('RollingTripping.forget clears the failure window when close() resets a model (isolateByModel)', () => {
+    const tripping = new RollingTripping(60_000, 2, 0.5);
     const cb = new CircuitBreaker({ cooldownMs: 1000, isolateByModel: true, tripping });
     const forget = vi.spyOn(tripping, 'forget');
 
     cb.recordFailure('gpt');
+    cb.recordFailure('gpt');
     expect(cb.getState('gpt')).toBe('open');
 
     cb.close('gpt');
-
     expect(forget).toHaveBeenCalledWith('gpt');
+
+    cb.recordFailure('gpt');
     expect(cb.getState('gpt')).toBe('closed');
-    expect(tripping.onFailure('gpt')).toBe(true);
+
+    cb.recordFailure('gpt');
+    expect(cb.getState('gpt')).toBe('open');
   });
 
   it('minCalls gates tripping even at 100% failure ratio within the window', () => {

@@ -4,7 +4,7 @@ import { isLLMError } from '../../../../src/types/errors.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { createMockClient, createMockStreamingClient, jsonResponse } from '../../../helpers.js';
 
-import type { LLMClient } from '../../../../src/types/index.js';
+import type { CallMeta, LLMClient } from '../../../../src/types/index.js';
 
 type CreateResult = Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
 
@@ -294,5 +294,80 @@ describe('VernLLM.cachedCall stream: true, trigger chunks', () => {
     controller.abort();
 
     await expect(next).rejects.toSatisfy((e) => isLLMError(e) && e.type === 'aborted');
+  });
+});
+
+describe('VernLLM.cachedCall, meta for a joiner arriving after the trigger left', () => {
+  it('sets meta.current on a late joiner', async () => {
+    const { client, resolveGate } = gatedClient();
+    const llm = new VernLLM({ client, model: 'm' });
+    const triggerAbort = new AbortController();
+
+    const trigger = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', signal: triggerAbort.signal },
+    });
+    await tick();
+    const early = llm.cachedCall({ cacheKey: 'k', ttl: 60, call: { userContent: 'hi' } });
+    await tick();
+    triggerAbort.abort();
+    await expect(trigger).rejects.toBeDefined();
+
+    const lateMeta: { current?: CallMeta } = {};
+    const late = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', meta: lateMeta },
+    });
+    await tick();
+
+    resolveGate(jsonResponse({ ok: true }));
+    await Promise.all([early, late]);
+
+    expect(lateMeta.current).toMatchObject({ provider: 'primary', model: 'm' });
+  });
+
+  it('sets meta.current on a late stream joiner', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { client } = createMockStreamingClient([
+      () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta' as const, delta: 'Hello' };
+          await gate;
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm' });
+    const triggerAbort = new AbortController();
+
+    const trigger = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true, signal: triggerAbort.signal },
+    });
+    const early = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true },
+    });
+    triggerAbort.abort();
+    await expect(trigger.finalResult).rejects.toBeDefined();
+    await tick();
+
+    const lateMeta: { current?: CallMeta } = {};
+    const late = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false, stream: true, meta: lateMeta },
+    });
+
+    release();
+    await Promise.all([early.finalResult, late.finalResult]);
+
+    expect(lateMeta.current).toMatchObject({ provider: 'primary', model: 'm' });
   });
 });

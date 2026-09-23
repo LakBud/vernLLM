@@ -621,8 +621,17 @@ export class VernLLM {
       this.cachedCallMeta.set(resolvedCacheKey, metaHolder);
     }
 
+    // The shared call writes into this holder, and it can outlive the
+    // owner when the owner aborts. Keep the holder until the shared call
+    // settles, so a joiner arriving after the owner left still gets meta.
     const releaseMetaHolder = () => {
-      if (ownsMetaHolder) this.cachedCallMeta.delete(resolvedCacheKey);
+      if (!ownsMetaHolder) return;
+
+      const deleteHolder = () => this.cachedCallMeta.delete(resolvedCacheKey);
+      const shared = this.cacheOrchestrator.inFlightFor(resolvedCacheKey);
+
+      if (shared) void shared.then(deleteHolder, deleteHolder);
+      else deleteHolder();
     };
 
     const callerMeta = restCallParams.meta;
