@@ -115,8 +115,10 @@ export interface TrippingPolicy {
   onFailure(key: string): boolean;
   reset(key: string): void;
   /**
-   * Called when `key`'s bucket is discarded (closed and idle, under
-   * `isolateByModel`), so a keyed policy can release that key's state.
+   * Called when `key`'s circuit is reset closed (manual `close()` or a
+   * passed half-open trial, under `isolateByModel`), so a keyed policy can
+   * release that key's state. Not called on an ordinary success, since
+   * that state may still be needed, e.g. a rolling window.
    * Optional: omit if there's nothing to release.
    */
   forget?(key: string): void;
@@ -128,7 +130,8 @@ export class ConsecutiveTripping implements TrippingPolicy {
   constructor(private readonly threshold: number) {}
 
   onSuccess(key: string): void {
-    this.failuresByKey.set(key, 0);
+    // Delete rather than store 0: same count, and an idle key holds no memory.
+    this.failuresByKey.delete(key);
   }
 
   onFailure(key: string): boolean {
@@ -435,8 +438,10 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
+    // Drop only the idle bucket. The tripping state stays, since a rolling
+    // window must keep this success and earlier failures to ever trip.
     if (this.isolateByModel && bucket.state === 'closed' && bucket.consecutiveFailures === 0) {
-      this.forgetModel(model);
+      this.dropBucket(model);
     }
   }
 
@@ -612,9 +617,14 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     return bucket;
   }
 
-  /** Drops an idle model's bucket and lets `tripping` release that key's state too. */
-  private forgetModel(model: string | undefined): void {
+  /** Drops an idle model's bucket, keeping its tripping state. */
+  private dropBucket(model: string | undefined): void {
     this.bucketsByModel.delete(keyFor(model));
+  }
+
+  /** Drops a reset model's bucket and lets `tripping` release that key's state too. */
+  private forgetModel(model: string | undefined): void {
+    this.dropBucket(model);
     this.tripping.forget?.(this.trippingKeyFor(model));
   }
 

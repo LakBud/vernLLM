@@ -1895,6 +1895,40 @@ describe('CircuitBreaker, tripping policy (unit)', () => {
     expect(cb.getState()).toBe('open');
   });
 
+  it('rolling tripping still trips under isolateByModel when successes are interleaved', () => {
+    const cb = new CircuitBreaker({
+      cooldownMs: 1000,
+      isolateByModel: true,
+      tripping: { kind: 'rolling', windowMs: 60_000, minCalls: 4, failureRatio: 0.5 },
+    });
+
+    cb.assertClosed('gpt');
+    cb.recordFailure('gpt'); // 1/1
+    cb.recordSuccess('gpt'); // 1/2, bucket dropped, window kept
+    cb.recordFailure('gpt'); // 2/3
+    expect(cb.getState('gpt')).toBe('closed');
+    cb.recordFailure('gpt'); // 3/4, ratio 0.75
+    expect(cb.getState('gpt')).toBe('open');
+  });
+
+  it('a success does not call tripping.forget under isolateByModel', () => {
+    const forget = vi.fn();
+    const custom: TrippingPolicy = {
+      onSuccess: () => {},
+      onFailure: () => false,
+      reset: () => {},
+      forget,
+    };
+    const cb = new CircuitBreaker({ cooldownMs: 1000, isolateByModel: true, tripping: custom });
+
+    cb.assertClosed('gpt');
+    cb.recordSuccess('gpt');
+    expect(forget).not.toHaveBeenCalled();
+
+    cb.close('gpt');
+    expect(forget).toHaveBeenCalledWith('gpt');
+  });
+
   it('lets a RollingTripping policy release a discarded model bucket (isolateByModel)', () => {
     const cb = new CircuitBreaker({
       cooldownMs: 1000,
@@ -1905,8 +1939,7 @@ describe('CircuitBreaker, tripping policy (unit)', () => {
     // assertClosed allocates the bucket (recordSuccess alone is a no-op
     // for a model with no bucket yet). Then a success on that fresh,
     // still-closed, zero-consecutive-failures bucket discards it,
-    // calling RollingTripping's own forget() to release its per-key
-    // state too.
+    // while RollingTripping keeps its window.
     cb.assertClosed('gpt');
     cb.recordSuccess('gpt');
 
