@@ -240,8 +240,9 @@ Provider-specific `jsonSchema` and `tools` compatibility is documented in [Combi
   </Card>
 </Cards>
 
-For `cachedCall`, each caller has its own cancellation signal. Aborting one coalesced caller does
-not cancel the shared operation for other callers.
+For `cachedCall`, each caller has its own cancellation signal and deadline. Aborting one coalesced
+caller, or hitting its `deadlineMs`, does not cancel the shared operation for other callers. The
+shared request is aborted once every caller has left.
 
 ## Budget reservation
 

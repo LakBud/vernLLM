@@ -10,12 +10,14 @@ import type { UsageHooks } from '../../../types/usage.js';
  *
  * `cacheKey` looks up existing results, `fn` runs only on cache misses, and
  * concurrent misses for the same key are coalesced into a single in-flight
- * operation.
+ * operation. `fn` receives the shared signal, which fires only once every
+ * coalesced caller has left. `signal` is this caller's own: it ends only
+ * this caller's wait.
  */
 export interface InternalCacheParams<T> extends UsageHooks {
   cacheKey: string;
   ttl: number;
-  fn: () => Promise<T>;
+  fn: (sharedSignal: AbortSignal) => Promise<T>;
   signal?: AbortSignal;
 }
 
@@ -28,6 +30,8 @@ export interface InternalCacheParams<T> extends UsageHooks {
 export interface InternalCacheStreamParams<T> extends UsageHooks {
   cacheKey: string;
   ttl: number;
-  openStream: () => Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }>;
+  openStream: (
+    sharedSignal: AbortSignal,
+  ) => Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }>;
   signal?: AbortSignal;
 }

@@ -7,6 +7,9 @@ import { LLMError } from '../../../types/errors.js';
  */
 export const DEADLINE_REASON = Symbol('deadlineExceeded');
 
+/** Largest delay `setTimeout` honors (2^31 - 1 ms, about 24.8 days). */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 /** The signal `call()` should actually use, and the timer to clear when done. */
 export interface DeadlineSetup {
   signal: AbortSignal | undefined;
@@ -25,7 +28,11 @@ export function setupDeadline(
   deadlineMs: number | undefined,
   callerSignal: AbortSignal | undefined,
 ): DeadlineSetup {
-  if (deadlineMs === undefined) {
+  // setTimeout clamps anything above MAX_TIMER_DELAY_MS (and NaN) to about
+  // 1ms, so an unbounded or out of range deadline would abort almost
+  // immediately. Infinity and anything past the timer range mean no
+  // deadline; NaN is treated the same as omitting it.
+  if (deadlineMs === undefined || Number.isNaN(deadlineMs) || deadlineMs > MAX_TIMER_DELAY_MS) {
     return { signal: callerSignal, timer: undefined };
   }
 
