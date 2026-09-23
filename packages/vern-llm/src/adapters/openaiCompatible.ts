@@ -87,12 +87,81 @@ function toOpenAIMessages(
     }
 
     if (m.role === 'tool') {
-      const { is_error: _isError, ...openAIToolMessage } = m;
-      return openAIToolMessage;
+      const { is_error: isError, ...openAIToolMessage } = m;
+      // OpenAI's tool message has no error field, so the failure is kept in
+      // the content itself rather than dropped, or the model would read a
+      // failed tool's output as a success.
+      return isError
+        ? { ...openAIToolMessage, content: `Error: ${openAIToolMessage.content}` }
+        : openAIToolMessage;
     }
 
     return m;
   });
+}
+
+/**
+ * OpenAI rejects `response_format: { type: 'json_object' }` with a 400
+ * unless the word "json" appears somewhere in `messages`. VernLLM defaults
+ * `jsonMode` to `true`, so a plain prompt that never says "json" would fail
+ * on every call. When no message mentions it, a short system instruction is
+ * prepended. Messages that already mention it are left untouched.
+ */
+function ensureJsonKeyword(
+  messages: unknown[],
+  responseFormat: Parameters<LLMClient['chat']['completions']['create']>[0]['response_format'],
+): unknown[] {
+  if (responseFormat?.type !== 'json_object') return messages;
+
+  // Only text is checked: base64 image data can contain "json" by chance,
+  // which would skip the instruction while OpenAI still rejects the call.
+  const mentionsJson = messages.some((m) => {
+    const content = (m as { content?: unknown }).content;
+    const parts = Array.isArray(content) ? content : [content];
+
+    return parts.some((part) => {
+      const text = typeof part === 'string' ? part : (part as { text?: unknown } | null)?.text;
+      return typeof text === 'string' && /json/i.test(text);
+    });
+  });
+
+  return mentionsJson
+    ? messages
+    : [{ role: 'system', content: 'Respond with a valid JSON object.' }, ...messages];
+}
+
+/**
+ * Whether `model` is an OpenAI reasoning model: the o-series (`o1`, `o3`,
+ * `o4-mini`, ...) and every GPT generation from 5 on (`gpt-5`, `gpt-5.6-sol`,
+ * `gpt-6-sol`, ...). GPT is matched as a version threshold, like
+ * `isDefaultAdaptiveOnly`'s Opus rule, so later generations are covered
+ * without a code change. `-chat` ids are non-reasoning chat models, so
+ * they're excluded. Only bare ids match: a gateway id such as `openai/o3` is
+ * left for the gateway to normalize, since this adapter serves many
+ * providers that still expect `max_tokens`.
+ */
+function isOpenAIReasoningModel(model: string): boolean {
+  if (/-chat/.test(model)) return false;
+  if (/^o\d/.test(model)) return true;
+
+  const gptMajor = /^gpt-(\d+)/.exec(model)?.[1];
+  return gptMajor !== undefined && Number(gptMajor) >= 5;
+}
+
+/**
+ * OpenAI reasoning models reject `max_tokens` (they need
+ * `max_completion_tokens`, which also covers reasoning tokens) and reject any
+ * non-default `temperature`. VernLLM always sends `max_tokens` and defaults
+ * `temperature` to 0.2, so both are rewritten here for those models.
+ */
+function applyReasoningModelParams<
+  P extends { model: string; max_tokens: number; temperature?: number },
+>(params: P): P {
+  if (!isOpenAIReasoningModel(params.model)) return params;
+
+  const { max_tokens, temperature: _temperature, ...rest } = params;
+
+  return { ...rest, max_completion_tokens: max_tokens } as unknown as P;
 }
 
 /**
@@ -216,10 +285,9 @@ export function fromOpenAICompatible(
     chat: {
       completions: {
         async create(params, options) {
-          const messages = toOpenAIMessages(params);
-          const built = applyReasoningBudget(
-            { ...params, messages },
-            effortTokenTable,
+          const messages = ensureJsonKeyword(toOpenAIMessages(params), params.response_format);
+          const built = applyReasoningModelParams(
+            applyReasoningBudget({ ...params, messages }, effortTokenTable),
           ) as Parameters<LLMClient['chat']['completions']['create']>[0];
 
           if (!supportsWithResponse) {
@@ -243,15 +311,17 @@ export function fromOpenAICompatible(
         },
 
         async *createStream(params, options) {
-          const messages = toOpenAIMessages(params);
-          const built = applyReasoningBudget(
-            {
-              ...params,
-              messages,
-              stream: true,
-              ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
-            },
-            effortTokenTable,
+          const messages = ensureJsonKeyword(toOpenAIMessages(params), params.response_format);
+          const built = applyReasoningModelParams(
+            applyReasoningBudget(
+              {
+                ...params,
+                messages,
+                stream: true,
+                ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+              },
+              effortTokenTable,
+            ),
           );
 
           let stream: AsyncIterable<OpenAIStreamChunk>;

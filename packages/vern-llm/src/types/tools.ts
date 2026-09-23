@@ -70,9 +70,10 @@ export interface ToolResult {
   content: unknown;
   /**
    * Signals a failed tool execution back to the model (matches Anthropic's
-   * native `is_error` on tool_result blocks). Only `fromAnthropic` honors
-   * this today, Gemini and Bedrock have no equivalent wire concept, so
-   * other adapters ignore it silently.
+   * native `is_error` on tool_result blocks). `fromAnthropic` sends it as
+   * `is_error`, `fromBedrock` as `toolResult.status: 'error'`, and the
+   * OpenAI-compatible adapters prefix the content with `Error: `. Gemini has
+   * no equivalent wire concept and ignores it silently.
    */
   isError?: boolean;
 }

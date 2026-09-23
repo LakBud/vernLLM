@@ -193,6 +193,95 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
     });
   });
 
+  function completionBody(content: string) {
+    return {
+      id: 'chatcmpl-1',
+      object: 'chat.completion',
+      created: 1234567890,
+      model: 'gpt-test',
+      choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+    };
+  }
+
+  function makeLLM(model: string) {
+    if (!server) throw new Error('server not started');
+    const openai = new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` });
+    return new VernLLM({ client: fromOpenAICompatible(openai), model });
+  }
+
+  it('adds the word json to a default jsonMode call that never mentions it', async () => {
+    server = await startRealSdkServer([{ body: completionBody('{"colors":["red"]}') }]);
+
+    const result = await makeLLM('gpt-test').call({
+      systemPrompt: 'You are helpful.',
+      userContent: 'List one color.',
+    });
+
+    expect(result).toEqual({ colors: ['red'] });
+
+    // OpenAI returns a 400 for json_object unless "json" appears in messages.
+    const sentBody = at(server.requests, 0).body as {
+      response_format: unknown;
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(sentBody.response_format).toEqual({ type: 'json_object' });
+    expect(sentBody.messages.some((m) => /json/i.test(String(m.content)))).toBe(true);
+  });
+
+  it('sends max_completion_tokens and no temperature to a real reasoning model request', async () => {
+    server = await startRealSdkServer([{ body: completionBody('Paris.') }]);
+
+    await makeLLM('gpt-6-sol').call({
+      userContent: "What's the capital of France?",
+      jsonMode: false,
+      maxTokens: 1000,
+    });
+
+    const sentBody = at(server.requests, 0).body as Record<string, unknown>;
+    expect(sentBody).toMatchObject({ model: 'gpt-6-sol', max_completion_tokens: 1000 });
+    expect(sentBody).not.toHaveProperty('max_tokens');
+    expect(sentBody).not.toHaveProperty('temperature');
+  });
+
+  it('keeps a failed tool result visible to the model through the real SDK', async () => {
+    server = await startRealSdkServer([{ body: completionBody('The lookup failed.') }]);
+
+    await makeLLM('gpt-test').call({
+      jsonMode: false,
+      tools: [
+        {
+          name: 'get_weather',
+          description: 'Get the weather for a city.',
+          parameters: { type: 'object', properties: { city: { type: 'string' } } },
+        },
+      ],
+      history: [
+        { role: 'user', content: 'Weather in Oslo?' },
+        {
+          role: 'assistant',
+          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'Oslo' } }],
+        },
+        {
+          role: 'tool',
+          toolResults: [{ toolCallId: 'call_1', content: 'service down', isError: true }],
+        },
+      ],
+      userContent: 'What happened?',
+    });
+
+    const sentBody = at(server.requests, 0).body as {
+      messages: Array<Record<string, unknown>>;
+    };
+    const toolMessage = sentBody.messages.find((m) => m.role === 'tool');
+
+    expect(toolMessage).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_1',
+      content: expect.stringMatching(/^Error: .*service down/),
+    });
+  });
+
   it('surfaces a real OpenAI SDK error (429) through VernLLM retry handling', async () => {
     server = await startRealSdkServer([
       {

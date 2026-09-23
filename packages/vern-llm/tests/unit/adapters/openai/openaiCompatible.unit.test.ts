@@ -141,7 +141,229 @@ describe('fromOpenAICompatible and its aliases', () => {
     ]);
   });
 
-  it('strips is_error from tool messages for OpenAI-compatible providers', async () => {
+  it('leaves successful tool message content unchanged', async () => {
+    const create = vi.fn(async () => ({ choices: [{ message: { content: 'ok' } }] }));
+    const adapted = fromOpenAICompatible({ chat: { completions: { create } } });
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        max_tokens: 10,
+        messages: [{ role: 'tool', tool_call_id: 'call_1', content: 'fine', is_error: false }],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [{ role: 'tool', tool_call_id: 'call_1', content: 'fine' }],
+      }),
+      expect.anything(),
+    );
+  });
+
+  describe('json_object keyword', () => {
+    function makeAdapted() {
+      const create = vi.fn(async () => ({ choices: [{ message: { content: '{}' } }] }));
+      return { create, adapted: fromOpenAICompatible({ chat: { completions: { create } } }) };
+    }
+
+    it('prepends a JSON instruction when no message mentions json', async () => {
+      const { create, adapted } = makeAdapted();
+
+      await adapted.chat.completions.create(
+        {
+          model: 'gpt-4o',
+          max_tokens: 10,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: 'You are helpful.' },
+            { role: 'user', content: 'List three colors.' },
+          ],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: [
+            { role: 'system', content: 'Respond with a valid JSON object.' },
+            { role: 'system', content: 'You are helpful.' },
+            { role: 'user', content: 'List three colors.' },
+          ],
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('leaves messages untouched when a text part already mentions JSON', async () => {
+      const { create, adapted } = makeAdapted();
+      const messages = [
+        {
+          role: 'user' as const,
+          content: [{ type: 'text' as const, text: 'Reply as Json please.' }],
+        },
+      ];
+
+      await adapted.chat.completions.create(
+        { model: 'gpt-4o', max_tokens: 10, response_format: { type: 'json_object' }, messages },
+        { signal: new AbortController().signal },
+      );
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'Reply as Json please.' }] }],
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('ignores json appearing only inside image base64 data', async () => {
+      const { create, adapted } = makeAdapted();
+
+      await adapted.chat.completions.create(
+        {
+          model: 'gpt-4o',
+          max_tokens: 10,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Describe this.' },
+                { type: 'image', mimeType: 'image/png', data: 'aGVsbG8json' },
+              ],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sent = (create.mock.calls[0] as unknown as [{ messages: unknown[] }])[0];
+      expect(sent.messages[0]).toEqual({
+        role: 'system',
+        content: 'Respond with a valid JSON object.',
+      });
+    });
+
+    it('does not add an instruction for json_schema or plain text', async () => {
+      const { create, adapted } = makeAdapted();
+
+      await adapted.chat.completions.create(
+        { model: 'gpt-4o', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      );
+      await adapted.chat.completions.create(
+        {
+          model: 'gpt-4o',
+          max_tokens: 10,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'S', schema: { type: 'object' } },
+          },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      for (const call of create.mock.calls as unknown as [{ messages: unknown[] }][]) {
+        expect(call[0].messages).toEqual([{ role: 'user', content: 'hi' }]);
+      }
+    });
+  });
+
+  describe('reasoning model params', () => {
+    function makeAdapted() {
+      const create = vi.fn(async () => ({ choices: [{ message: { content: 'ok' } }] }));
+      return { create, adapted: fromOpenAICompatible({ chat: { completions: { create } } }) };
+    }
+
+    it.each([
+      'o1',
+      'o3',
+      'o3-mini',
+      'o4-mini-2025-04-16',
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5.2-pro',
+      'gpt-5.6-sol',
+      'gpt-6-sol',
+      'gpt-6-astra',
+      'gpt-10',
+    ])('sends max_completion_tokens and no temperature for %s', async (model) => {
+      const { create, adapted } = makeAdapted();
+
+      await adapted.chat.completions.create(
+        {
+          model,
+          temperature: 0.2,
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+
+      const sent = (create.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+      expect(sent.max_completion_tokens).toBe(1000);
+      expect(sent).not.toHaveProperty('max_tokens');
+      expect(sent).not.toHaveProperty('temperature');
+    });
+
+    it.each([
+      'gpt-4o',
+      'gpt-4.1-mini',
+      'gpt-3.5-turbo',
+      'gpt-5.2-chat-latest',
+      'openai/o3',
+      'openai/gpt-6-sol',
+      'llama-3.3-70b',
+      'omni-x',
+    ])('leaves max_tokens and temperature alone for %s', async (model) => {
+      const { create, adapted } = makeAdapted();
+
+      await adapted.chat.completions.create(
+        { model, temperature: 0.2, max_tokens: 1000, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      );
+
+      const sent = (create.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+      expect(sent).toMatchObject({ max_tokens: 1000, temperature: 0.2 });
+      expect(sent).not.toHaveProperty('max_completion_tokens');
+    });
+
+    it('rewrites the streaming request the same way', async () => {
+      const create = vi.fn(async () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { choices: [{ delta: { content: 'ok' } }] };
+        },
+      }));
+      const adapted = fromOpenAICompatible({ chat: { completions: { create } } });
+
+      for await (const _chunk of adapted.chat.completions.createStream!(
+        {
+          model: 'o3',
+          temperature: 0.2,
+          max_tokens: 50,
+          response_format: { type: 'json_object' },
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      )) {
+        // drain
+      }
+
+      const sent = (create.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+      expect(sent).toMatchObject({ max_completion_tokens: 50, stream: true });
+      expect(sent).not.toHaveProperty('max_tokens');
+      expect(sent).not.toHaveProperty('temperature');
+      expect((sent.messages as unknown[])[0]).toEqual({
+        role: 'system',
+        content: 'Respond with a valid JSON object.',
+      });
+    });
+  });
+
+  it('strips is_error and keeps the failure in the tool message content', async () => {
     const create = vi.fn(async () => ({
       choices: [{ message: { content: 'ok' } }],
     }));
@@ -177,7 +399,7 @@ describe('fromOpenAICompatible and its aliases', () => {
           {
             role: 'tool',
             tool_call_id: 'call_1',
-            content: 'failed',
+            content: 'Error: failed',
           },
         ],
       }),

@@ -101,7 +101,8 @@ if (first.type === 'tool_calls') {
 <Callout type="warn">
   If a tool execution fails, set `isError: true` on the corresponding `ToolResult`. `fromAnthropic`
   maps it onto `tool_result.is_error`, and `fromBedrock` maps it onto `toolResult.status: 'error'`.
-  Gemini has no equivalent wire concept and ignores it silently.
+  OpenAI compatible adapters prefix the content with `Error: `. Gemini has no equivalent wire
+  concept and ignores it silently.
 </Callout>
 
 ## 4. Continue the conversation
