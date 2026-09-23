@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, jsonResponse } from '../../helpers.js';
 
-import type { CircuitBreakerAdapter } from '../../src/circuitBreaker.js';
-import type { Logger } from '../../src/logger.js';
+import type { CircuitBreakerAdapter } from '../../../src/circuitBreaker.js';
+import type { Logger } from '../../../src/logger.js';
 
 function logger() {
   return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies Logger;

@@ -381,9 +381,11 @@ describe('middleware workflow integration', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it('addTools duplicate check fires against a real request reaching the fallback target, naming the offending middleware', async () => {
+  it('addTools duplicate check stops the chain on the first target, naming the offending middleware', async () => {
     const { client: primaryClient } = createMockClient([new FakeApiError('down', 500)]);
-    const { client: fallbackClient } = createMockClient([textResponse('unused')]);
+    const { client: fallbackClient, calls: fallbackCalls } = createMockClient([
+      textResponse('unused'),
+    ]);
 
     const mwA: VernLLMMiddleware = {
       name: 'tool-a',
@@ -417,11 +419,13 @@ describe('middleware workflow integration', () => {
       .call({ userContent: 'hi', jsonMode: false })
       .catch((error: unknown) => error);
 
-    expect(outcome).toBeInstanceOf(FallbackExhaustedError);
-    const fallbackError = outcome as FallbackExhaustedError;
-    expect(fallbackError.attempts.some((attempt) => attempt.error.message.includes('tool-b'))).toBe(
-      true,
-    );
+    // Caller input is rejected the same way on every target, so the
+    // chain stops instead of repeating it on the fallback.
+    expect(outcome).toBeInstanceOf(LLMError);
+    expect(outcome).not.toBeInstanceOf(FallbackExhaustedError);
+    expect(outcome).toMatchObject({ type: 'invalid_params', code: 'duplicate_tool_names' });
+    expect((outcome as LLMError).message).toContain('tool-b');
+    expect(fallbackCalls).toHaveLength(0);
   });
 
   it('a slow enabled() predicate times out per middlewareTimeoutMs and the middleware is treated as disabled, without failing the whole call', async () => {

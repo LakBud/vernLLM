@@ -134,6 +134,11 @@ export const defaultFallbackOn: FallbackOn = (error) => {
 
   if (error.code && TOOL_CONTRACT_CODES.has(error.code)) return 'stop';
 
+  // Caller input is rejected locally before any provider sees it, so every
+  // target would reject it the same way. `unsupported_capability` is the
+  // exception: it's one adapter's limit, and another target may support it.
+  if (error.type === 'invalid_params' && error.code !== 'unsupported_capability') return 'stop';
+
   return 'next';
 };
 

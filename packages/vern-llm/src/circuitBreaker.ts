@@ -79,7 +79,11 @@ export interface ExponentialBackoffOptions {
   maxMs?: number;
 }
 
-/** Not exported. Applies full jitter so several instances don't reopen in lockstep. */
+/**
+ * Not exported. Jitters only the growth above `baseCooldownMs`, so several
+ * instances don't reopen in lockstep but none ever cools down for less
+ * than the configured base.
+ */
 function buildCooldownBackoff(
   option: ExponentialBackoffOptions | CooldownBackoff | undefined,
 ): CooldownBackoff | undefined {
@@ -89,7 +93,9 @@ function buildCooldownBackoff(
   const { multiplier, maxMs = Infinity } = option;
   return (reopenCount, baseCooldownMs) => {
     const exp = Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
-    return fullJitter(exp);
+    // A `maxMs` below the base lowers the floor with it, so the cap still holds.
+    const floor = Math.min(baseCooldownMs, exp);
+    return floor + fullJitter(exp - floor);
   };
 }
 
@@ -398,6 +404,10 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     // Stale trial permit: ignore, don't settle a trial it wasn't part of.
     if (bucket.state === 'half-open') return;
 
+    // A call admitted before the circuit opened can finish after it. Only
+    // a half-open trial may close an open circuit, never a late straggler.
+    if (bucket.state === 'open') return;
+
     bucket.consecutiveFailures = 0;
     this.tripping.onSuccess(this.trippingKeyFor(model));
     bucket.trial = null;
@@ -425,6 +435,10 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     // Stale trial permit: ignore, don't fall through to the closed-state counter below.
     if (bucket.state === 'half-open') return;
 
+    // A late failure from a call admitted before the circuit opened would
+    // otherwise re-trip it, restamping `openedAt` and extending the cooldown.
+    if (bucket.state === 'open') return;
+
     bucket.consecutiveFailures += 1;
     attributeFailure(bucket, code);
 
@@ -451,9 +465,20 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     bucket.trial.slotsRemaining += 1;
   }
 
-  /** With `isolateByModel` off, `model` is ignored and the shared circuit's state is returned. */
+  /**
+   * With `isolateByModel` off, `model` is ignored and the shared circuit's
+   * state is returned. An open circuit whose cooldown has elapsed reports
+   * `'half-open'`, since the next call will be admitted as a trial. Read
+   * only: the real transition, and its `onStateChange`, still happens on
+   * that next call.
+   */
   getState(model?: string): CircuitState {
-    return this.lookupBucket(model)?.state ?? 'closed';
+    const bucket = this.lookupBucket(model);
+    if (!bucket) return 'closed';
+    if (bucket.state === 'open' && Date.now() - bucket.openedAt >= bucket.cooldownMsForOpen) {
+      return 'half-open';
+    }
+    return bucket.state;
   }
 
   /** Failure counts by `LLMErrorCode` for `model`'s bucket. Returned as a plain object copy. */

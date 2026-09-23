@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 
-import { LLMError } from '../../src/types/errors.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { at, createMockClient, jsonResponse } from '../helpers.js';
+import { LLMError } from '../../../src/types/errors.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { at, createMockClient, jsonResponse } from '../../helpers.js';
 
 describe('VernLLM.call, Zod schema validation', () => {
   const Schema = z.object({ name: z.string(), skills: z.array(z.string()) });

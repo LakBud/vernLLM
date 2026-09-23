@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { LLMError, type CallResult } from '../../src/types/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse, textResponse, FakeApiError, at } from '../helpers.js';
+import { LLMError, type CallResult } from '../../../src/types/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, jsonResponse, textResponse, FakeApiError, at } from '../../helpers.js';
 
 describe('VernLLM.call: happy paths', () => {
   it('returns parsed JSON by default', async () => {
@@ -1177,12 +1177,17 @@ describe('VernLLM.call, abort during wrap vs breaker trial slot', () => {
     };
 
     const { client, create } = createMockClient([new Error('boom'), jsonResponse({ ok: true })]);
+    const transitions: string[] = [];
 
     const llm = new VernLLM({
       client,
       model: 'm',
       maxRetries: 0,
-      circuitBreaker: { threshold: 1, cooldownMs: 0 },
+      circuitBreaker: {
+        threshold: 1,
+        cooldownMs: 0,
+        onStateChange: (from, to) => transitions.push(`${from}->${to}`),
+      },
       middleware: [abortDuringWrap],
     });
 
@@ -1192,7 +1197,7 @@ describe('VernLLM.call, abort during wrap vs breaker trial slot', () => {
     await expect(llm.call({ systemPrompt: 's', userContent: 'u' })).rejects.toMatchObject({
       type: 'unknown',
     });
-    expect(llm.getCircuitState()).toBe('open');
+    expect(transitions).toEqual(['closed->open']);
 
     // 2) A second call whose signal is aborted by the `wrap` middleware,
     // before `assertBreakerClosed` is ever reached. It must fail with
@@ -1202,7 +1207,8 @@ describe('VernLLM.call, abort during wrap vs breaker trial slot', () => {
       llm.call({ systemPrompt: 's', userContent: 'u', signal: controller.signal }),
     ).rejects.toMatchObject({ type: 'aborted' });
     expect(create).toHaveBeenCalledTimes(1);
-    expect(llm.getCircuitState()).toBe('open');
+    // No open->half-open transition means no trial slot was claimed.
+    expect(transitions).toEqual(['closed->open']);
 
     // 3) A genuine, non-aborted call still gets to be the real half-open
     // trial (not rejected as 'circuit_trial_in_flight') and closes the

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse, toolCallResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, jsonResponse, toolCallResponse } from '../../helpers.js';
 
 describe('VernLLM workflow, circuit breaker isolateByModel', () => {
   it('a failing model does not block calls to a different, healthy model on the same instance', async () => {

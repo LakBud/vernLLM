@@ -46,7 +46,7 @@ try {
   </Card>
   <Card title="api">
     The provider returned an HTTP error with a status code. Retried unless the status is in
-    `nonRetryableStatus` (default `400, 401, 403, 404, 422`).
+    `nonRetryableStatus` (default `400, 401, 402, 403, 404, 413, 422`).
   </Card>
   <Card title="network">
     The request never reached the provider at all: DNS resolution failing, the connection being
@@ -436,7 +436,7 @@ since `type: 'fallback_exhausted'` by itself says nothing about whether retrying
 - `error.code` is `'retry_budget_exhausted'` because a configured `retryBudget` decided this
   target has already had too many retries recently; further retrying against it is refused until
   the trailing window's ratio drops. See [Retry Budget](/docs/core/retry-budget).
-- `error.status` is in `nonRetryableStatus` (default `[400, 401, 403, 404, 422]`)
+- `error.status` is in `nonRetryableStatus` (default `[400, 401, 402, 403, 404, 413, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to
 `maxRetries`. If the failed attempt's error carries a `Retry-After` header (delta seconds or

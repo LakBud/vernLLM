@@ -580,6 +580,22 @@ describe('VernLLM, fallback', () => {
       );
     });
 
+    it('returns "stop" for invalid_params, which every target rejects the same way', () => {
+      const plain = new LLMError('m', 'invalid_params');
+      const dupNames = new LLMError('m', 'invalid_params', { code: 'duplicate_tool_names' });
+      const threw = new LLMError('m', 'invalid_params', { code: 'middleware_threw' });
+
+      expect(defaultFallbackOn(plain, { isLastTarget: false })).toBe('stop');
+      expect(defaultFallbackOn(dupNames, { isLastTarget: false })).toBe('stop');
+      expect(defaultFallbackOn(threw, { isLastTarget: false })).toBe('stop');
+    });
+
+    it('returns "next" for unsupported_capability, since another target may support it', () => {
+      const unsupported = new LLMError('m', 'invalid_params', { code: 'unsupported_capability' });
+
+      expect(defaultFallbackOn(unsupported, { isLastTarget: false })).toBe('next');
+    });
+
     it('returns "stop" for tool-contract error codes', () => {
       const unknownTool = new LLMError('m', 'validation', { code: 'unknown_tool' });
       const dup = new LLMError('m', 'validation', { code: 'duplicate_tool_call_id' });

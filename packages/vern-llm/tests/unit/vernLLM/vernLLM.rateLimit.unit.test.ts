@@ -1,16 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { LLMError } from '../../src/types/errors.js';
-import { VernLLM } from '../../src/vernLLM.js';
+import { LLMError } from '../../../src/types/errors.js';
+import { VernLLM } from '../../../src/vernLLM.js';
 import {
   createMockClient,
   createMockStreamingClient,
   drain,
   jsonResponse,
   textResponse,
-} from './../helpers.js';
+} from './../../helpers.js';
 
-import type { VernLLMEvent, WireStreamChunk } from '../../src/types/index.js';
+import type { VernLLMEvent, WireStreamChunk } from '../../../src/types/index.js';
 
 describe('VernLLM, rateLimit option', () => {
   it('no rateLimit configured means zero behavioural change', async () => {

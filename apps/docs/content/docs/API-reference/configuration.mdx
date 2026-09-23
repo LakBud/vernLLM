@@ -17,7 +17,7 @@ const llm = new VernLLM({
   chunkIdleTimeoutMs: 30_000,
   baseDelayMs: 500,
   defaultMaxTokens: 1000,
-  nonRetryableStatus: [400, 401, 403, 404, 422],
+  nonRetryableStatus: [400, 401, 402, 403, 404, 413, 422],
   circuitBreaker: true,
   rateLimit: { requestsPerMinute: 500, tokensPerMinute: 200_000, maxConcurrent: 20 },
   fallback: { client: anthropicClient, model: 'claude-sonnet-5', circuitBreaker: true },
@@ -61,14 +61,14 @@ pipelines.
 
 ## Retry & timeout
 
-| Option               | Default                     | Notes                                                                                                                                                                                                                                |
-| -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `maxRetries`         | `1`                         | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                             |
-| `timeoutMs`          | `25000`                     | Per-attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, this bounds opening the stream and its first chunk; see `chunkIdleTimeoutMs`.                                   |
-| `chunkIdleTimeoutMs` | `30000`                     | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).                       |
-| `baseDelayMs`        | `500`                       | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. A `Retry-After` header overrides the computed delay when present.                                                                          |
-| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | HTTP status codes that fail immediately instead of retrying.                                                                                                                                                                         |
-| `detectSoftFailure`  | none                        | `(result, meta) => LLMErrorCode \| undefined`. Reclassifies a response that parsed and validated fine as a failure. `undefined` leaves it a success. See [Soft Failure Detection](/docs/core/error-handling#soft-failure-detection). |
+| Option               | Default                               | Notes                                                                                                                                                                                                                                |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxRetries`         | `1`                                   | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                             |
+| `timeoutMs`          | `25000`                               | Per-attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, this bounds opening the stream and its first chunk; see `chunkIdleTimeoutMs`.                                   |
+| `chunkIdleTimeoutMs` | `30000`                               | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).                       |
+| `baseDelayMs`        | `500`                                 | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. A `Retry-After` header overrides the computed delay when present.                                                                          |
+| `nonRetryableStatus` | `[400, 401, 402, 403, 404, 413, 422]` | HTTP status codes that fail immediately instead of retrying.                                                                                                                                                                         |
+| `detectSoftFailure`  | none                                  | `(result, meta) => LLMErrorCode \| undefined`. Reclassifies a response that parsed and validated fine as a failure. `undefined` leaves it a success. See [Soft Failure Detection](/docs/core/error-handling#soft-failure-detection). |
 
 ## Request defaults
 

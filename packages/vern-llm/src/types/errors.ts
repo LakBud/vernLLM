@@ -131,6 +131,8 @@ function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): b
   if (code && NON_RETRYABLE_TOOL_CONTRACT_CODES.has(code)) return false;
   if (code && LOCAL_RATE_LIMIT_CODES.has(code)) return false;
   if (code && NON_RETRYABLE_MIDDLEWARE_TIMEOUT_CODES.has(code)) return false;
+  // Resending the same oversized body can only be rejected again.
+  if (code === 'payload_too_large') return false;
   return true;
 }
 
@@ -145,15 +147,38 @@ function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): b
 const NON_BREAKER_TYPES: ReadonlySet<LLMErrorType> = new Set(['quota_exceeded']);
 
 /**
+ * 4xx statuses that still say something about the provider rather than
+ * the request: a request timeout, a too-early rejection, and a provider
+ * rate limit. Every other 4xx is about one caller's request or account,
+ * so letting it count would let one bad caller open the circuit for
+ * everyone sharing it.
+ */
+const PROVIDER_SIDE_CLIENT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429]);
+
+function isCallerSideStatus(status: number | undefined): boolean {
+  return (
+    status !== undefined &&
+    status >= 400 &&
+    status < 500 &&
+    !PROVIDER_SIDE_CLIENT_STATUSES.has(status)
+  );
+}
+
+/**
  * Shared "should this failure count toward the circuit breaker" rule
  * behind `LLMError.countsTowardBreaker`. Always defers to
  * `computeRetryable` first, so anything already excluded from retry is
  * also excluded from the breaker; `NON_BREAKER_TYPES` only narrows
  * further.
  */
-function computeCountsTowardBreaker(type: LLMErrorType, code: LLMErrorCode | undefined): boolean {
+function computeCountsTowardBreaker(
+  type: LLMErrorType,
+  code: LLMErrorCode | undefined,
+  status: number | undefined,
+): boolean {
   if (!computeRetryable(type, code)) return false;
   if (NON_BREAKER_TYPES.has(type)) return false;
+  if (isCallerSideStatus(status)) return false;
   return true;
 }
 
@@ -469,7 +494,7 @@ export class LLMError extends Error {
    * `invalid_params`/`aborted` types (the caller's own input, the model's
    * own response, or intentional cancellation, none of which are the
    * provider being unhealthy), the tool contract codes, the local
-   * rate limit codes, and the middleware timeout code.
+   * rate limit codes, the middleware timeout code, and `payload_too_large`.
    * Subclasses (see `FallbackExhaustedError`) may override this when `type`
    * alone carries no retry signal.
    */
@@ -482,10 +507,12 @@ export class LLMError extends Error {
    * failure threshold. Not the same question as `retryable`:
    * `quota_exceeded` is retryable but says nothing about provider
    * health, so it's excluded here even though `retryable` is true for
-   * it. Always false whenever `retryable` is false.
+   * it. Same for any 4xx `status` other than 408, 425, and 429, since
+   * those describe one caller's request, not the provider. Always false
+   * whenever `retryable` is false.
    */
   get countsTowardBreaker(): boolean {
-    return computeCountsTowardBreaker(this.type, this.code);
+    return computeCountsTowardBreaker(this.type, this.code, this.status);
   }
 
   /**

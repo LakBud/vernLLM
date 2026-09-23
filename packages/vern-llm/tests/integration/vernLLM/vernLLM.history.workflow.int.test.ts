@@ -6,9 +6,9 @@ import {
   fromFetch,
   fromGemini,
   fromOpenAICompatible,
-} from '../../src/adapters/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { at } from '../helpers.js';
+} from '../../../src/adapters/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { at } from '../../helpers.js';
 
 describe('VernLLM + adapter integration: conversation history', () => {
   describe('OpenAI-compatible', () => {

@@ -88,12 +88,12 @@ on their own too. Pass `maxRetries: 0` to the client so VernLLM is the only retr
 
 ## Fallback and routing
 
-| Tool                    | Approach                                                                                                                                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | Ordered `fallback` targets you declare. `fallbackOn` decides `'next'` or `'stop'`. By default it stops on parse, validation, abort, and quota errors, and moves on for provider faults. Never reorders. |
-| **AI SDK + AI Gateway** | Gateway options: `models` fallback list, provider `order` and `only`, `sort` by cost, first token time, or throughput, and BYOK keys tried in order.                                                    |
-| **LiteLLM**             | Router `fallbacks`, plus context window and content policy fallbacks, up to 5 by default. Routing strategies include shuffle, least busy, latency, and cost.                                            |
-| **Portkey**             | Gateway config with `fallback`, `loadbalance` (weights), `conditional`, and `single` modes, with status codes that trigger a fallback.                                                                  |
+| Tool                    | Approach                                                                                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **VernLLM**             | Ordered `fallback` targets you declare. `fallbackOn` decides `'next'` or `'stop'`. By default it stops on parse, validation, abort, quota, and invalid-params errors, and moves on for provider faults. Never reorders. |
+| **AI SDK + AI Gateway** | Gateway options: `models` fallback list, provider `order` and `only`, `sort` by cost, first token time, or throughput, and BYOK keys tried in order.                                                                    |
+| **LiteLLM**             | Router `fallbacks`, plus context window and content policy fallbacks, up to 5 by default. Routing strategies include shuffle, least busy, latency, and cost.                                                            |
+| **Portkey**             | Gateway config with `fallback`, `loadbalance` (weights), `conditional`, and `single` modes, with status codes that trigger a fallback.                                                                                  |
 
 In VernLLM the order is the whole policy. When every target fails you get a
 `FallbackExhaustedError` with each target's attempts, and `meta` tells you which target answered. The

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { LLMError, type WireStreamChunk } from '../../src/index.js';
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockStreamingClient, drain, scriptedIteratorWithReturn } from '../helpers.js';
+import { LLMError, type WireStreamChunk } from '../../../src/index.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockStreamingClient, drain, scriptedIteratorWithReturn } from '../../helpers.js';
 
 const weatherTool = {
   name: 'get_weather',

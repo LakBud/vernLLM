@@ -63,7 +63,7 @@ When no explicit timing is present, the computed backoff itself is not one singl
 
 - The signal has already aborted
 - `error.type` is `parse` or `validation`, since these are deterministic response processing failures that a retry will not fix
-- `error.status` is in `nonRetryableStatus` (default `400, 401, 403, 404, 422`)
+- `error.status` is in `nonRetryableStatus` (default `400, 401, 402, 403, 404, 413, 422`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to `maxRetries`.
 
@@ -136,11 +136,11 @@ try {
 
 ## Options reference
 
-| Option               | Default                     | Notes                                                                                                                    |
-| -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `maxRetries`         | `1`                         | Retries after the first attempt. `maxRetries: 3` means up to 4 attempts.                                                 |
-| `baseDelayMs`        | `500`                       | Base for exponential backoff. Actual delay grows per attempt with jitter, and is overridden by an honored `Retry-After`. |
-| `nonRetryableStatus` | `[400, 401, 403, 404, 422]` | Status codes that fail immediately instead of retrying.                                                                  |
+| Option               | Default                               | Notes                                                                                                                    |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `maxRetries`         | `1`                                   | Retries after the first attempt. `maxRetries: 3` means up to 4 attempts.                                                 |
+| `baseDelayMs`        | `500`                                 | Base for exponential backoff. Actual delay grows per attempt with jitter, and is overridden by an honored `Retry-After`. |
+| `nonRetryableStatus` | `[400, 401, 402, 403, 404, 413, 422]` | Status codes that fail immediately instead of retrying.                                                                  |
 
 See [Configuration](/docs/API-reference/configuration) for every option alongside timeout and circuit breaker settings.
 

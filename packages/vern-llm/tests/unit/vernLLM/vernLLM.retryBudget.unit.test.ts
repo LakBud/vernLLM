@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, jsonResponse } from '../../helpers.js';
 
 describe('VernLLM.getRetryBudgetState (unit)', () => {
   it('is undefined by default (opt-in), same as getFailureBreakdown', () => {

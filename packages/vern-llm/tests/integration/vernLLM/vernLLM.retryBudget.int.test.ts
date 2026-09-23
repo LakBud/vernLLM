@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { VernLLM } from '../../src/vernLLM.js';
-import { createMockClient, FakeApiError, jsonResponse } from '../helpers.js';
+import { VernLLM } from '../../../src/vernLLM.js';
+import { createMockClient, FakeApiError, jsonResponse } from '../../helpers.js';
 
 /**
  * A retry budget caps how much of a target's recent traffic is allowed

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { LLMError } from '../../src/types/errors.js';
+import { LLMError } from '../../../src/types/errors.js';
 
 describe('LLMError.toJSON', () => {
   it('does not throw when `cause` is circular, since cause is never included', () => {
