@@ -110,7 +110,7 @@ const llm = new VernLLM({ client: openai, model: 'gpt-4o-mini' });
 await llm.call({
   systemPrompt: '...',
   userContent: '...',
-  model: 'o3',
+  model: 'gpt-6-sol',
   reasoningEffort: 'high', // passed through as `reasoning_effort` for supported models
 });
 ```

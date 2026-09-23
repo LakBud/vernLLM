@@ -33,8 +33,8 @@ const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_AP
 
 const llm = new VernLLM({
   client: openai,
-  model: 'gpt-4o',
-  fallback: { client: anthropic, model: 'claude-sonnet-5', circuitBreaker: true },
+  model: 'gpt-6-sol',
+  fallback: { client: anthropic, model: 'claude-opus-5-5', circuitBreaker: true },
   rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000, maxConcurrent: 20 },
   retryBudget: { windowMs: 60_000, minCalls: 20, retryRatio: 0.2 },
   maxRetries: 3,

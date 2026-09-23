@@ -93,11 +93,21 @@ const llm = new VernLLM({
 ## Tool calling
 
 `tools`, `tool_choice`, and `tool_calls` already match the OpenAI Chat Completions shape, so this
-adapter passes them through unchanged. The one normalization it applies is stripping
-`is_error` from outgoing `tool` messages, since that field has no OpenAI-compatible equivalent
-(`fromAnthropic` and `fromBedrock` honor it natively, mapping it to each provider's own
-error-result field). See [Tool Calling](/docs/core/tool-calling) for the full
-reference.
+adapter passes them through unchanged. OpenAI has no `is_error` field, so a failed tool result is
+sent with its content prefixed by `Error: ` instead. See [Tool Calling](/docs/core/tool-calling)
+for the full reference.
+
+## JSON mode
+
+OpenAI rejects `json_object` unless a message mentions "json". When none does, the adapter
+prepends a short system instruction asking for a JSON object.
+
+## Reasoning models
+
+For OpenAI reasoning models (the o-series and GPT 5 onward, such as `gpt-6-sol`), `max_tokens` is
+sent as `max_completion_tokens` and `temperature` is dropped, since those models reject both.
+`-chat` models are not reasoning models and are left unchanged. Only bare model ids match, so a
+gateway id such as `openai/gpt-6-sol` is sent as is.
 
 ## Streaming
 

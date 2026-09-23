@@ -837,9 +837,9 @@ describe('fromBedrock, tools', () => {
               status: 'success',
             },
           },
+          { text: 'thanks, what about tomorrow?' },
         ],
       },
-      { role: 'user', content: [{ text: 'thanks, what about tomorrow?' }] },
     ]);
   });
 
@@ -981,6 +981,80 @@ describe('fromBedrock, tools', () => {
         },
       ],
     });
+  });
+
+  it('merges a tool result and a following user turn so roles strictly alternate', async () => {
+    const { client, converse } = makeFakeBedrockClient('ok');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        tools: [weatherTool],
+        messages: [
+          { role: 'user', content: 'Weather in New York?' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: JSON.stringify({ city: 'New York' }) },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'call_1', content: JSON.stringify({ tempC: 21 }) },
+          { role: 'user', content: 'Answer in Fahrenheit.' },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const sentMessages = converse.mock.calls[0]![0].messages;
+
+    expect(sentMessages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(sentMessages.at(-1)).toEqual({
+      role: 'user',
+      content: [
+        {
+          toolResult: {
+            toolUseId: 'call_1',
+            content: [{ text: JSON.stringify({ tempC: 21 }) }],
+            status: 'success',
+          },
+        },
+        { text: 'Answer in Fahrenheit.' },
+      ],
+    });
+  });
+
+  it('merges consecutive plain user and assistant turns', async () => {
+    const { client, converse } = makeFakeBedrockClient('ok');
+    const adapted = fromBedrock(client);
+
+    await adapted.chat.completions.create(
+      {
+        model: 'm',
+        temperature: 0.2,
+        max_tokens: 10,
+        messages: [
+          { role: 'user', content: 'a' },
+          { role: 'user', content: 'b' },
+          { role: 'assistant', content: 'c' },
+          { role: 'assistant', content: 'd' },
+          { role: 'user', content: 'e' },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(converse.mock.calls[0]![0].messages).toEqual([
+      { role: 'user', content: [{ text: 'a' }, { text: 'b' }] },
+      { role: 'assistant', content: [{ text: 'c' }, { text: 'd' }] },
+      { role: 'user', content: [{ text: 'e' }] },
+    ]);
   });
 
   it('rejects assistant tool_calls with non-empty invalid JSON arguments', async () => {

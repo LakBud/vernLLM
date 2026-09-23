@@ -530,7 +530,7 @@ function buildBedrockRequest(
 
   const request: BedrockRequest = {
     modelId: params.model,
-    messages: mergeConsecutiveToolResults(conversationMessages.map((m) => toBedrockMessage(m))),
+    messages: mergeConsecutiveSameRole(conversationMessages.map((m) => toBedrockMessage(m))),
     system: systemMessage?.content ? [{ text: systemMessage.content }] : undefined,
     inferenceConfig: {
       ...(temperature !== undefined ? { temperature } : {}),
@@ -1161,31 +1161,26 @@ function toBedrockMessage(
 }
 
 /**
- * Converse expects the results of everything the model asked for in one
- * turn to arrive together as multiple `toolResult` content blocks on a
- * single `'user'` message, not as separate consecutive `'user'` messages.
- * The per-wire-message mapping above produces one `'user'` message per
- * VernLLM wire tool message, so when an assistant turn requested more than
- * one tool, this merges the resulting run of toolResult-only `'user'`
- * messages back into one.
+ * Converse requires strictly alternating `'user'`/`'assistant'` roles. The
+ * per-wire-message mapping above emits one Converse message per VernLLM wire
+ * message, and since tool results travel as `'user'` messages, a tool turn
+ * followed by a user follow-up (or several tool results from one assistant
+ * turn) produces consecutive same-role messages. This merges every such run
+ * into one message, keeping block order, so the parallel toolResult blocks
+ * and any follow-up text arrive together on a single `'user'` turn.
  */
-function mergeConsecutiveToolResults(
+function mergeConsecutiveSameRole(
   messages: { role: 'user' | 'assistant'; content: BedrockContentBlock[] }[],
 ): { role: 'user' | 'assistant'; content: BedrockContentBlock[] }[] {
-  const isToolResultOnly = (
-    m: (typeof messages)[number],
-  ): m is { role: 'user'; content: BedrockContentBlock[] } =>
-    m.role === 'user' && m.content.length > 0 && m.content.every((b) => 'toolResult' in b);
-
   const merged: (typeof messages)[number][] = [];
 
   for (const m of messages) {
     const prev = merged.at(-1);
 
-    if (isToolResultOnly(m) && prev && isToolResultOnly(prev)) {
+    if (prev && prev.role === m.role) {
       prev.content.push(...m.content);
     } else {
-      merged.push(m);
+      merged.push({ role: m.role, content: [...m.content] });
     }
   }
 

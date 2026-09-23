@@ -292,6 +292,59 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
     },
   );
 
+  it('sends strictly alternating roles for a tool loop continued with a new user message', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          output: { message: { role: 'assistant', content: [{ text: 'It is 70F in New York.' }] } },
+          stopReason: 'end_turn',
+          usage: { inputTokens: 40, outputTokens: 8, totalTokens: 48 },
+        },
+      },
+    ]);
+
+    const llm = new VernLLM({
+      client: fromBedrock(wrapBedrockClient(makeClient())),
+      model: 'anthropic.claude-test',
+    });
+
+    const result = await llm.call({
+      systemPrompt: 'You are a weather assistant.',
+      jsonMode: false,
+      tools: [
+        {
+          name: 'get_weather',
+          description: 'Get the weather for a city.',
+          parameters: { type: 'object', properties: { city: { type: 'string' } } },
+        },
+      ],
+      history: [
+        { role: 'user', content: 'Weather in New York?' },
+        {
+          role: 'assistant',
+          toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }],
+        },
+        { role: 'tool', toolResults: [{ toolCallId: 'call_1', content: { tempC: 21 } }] },
+      ],
+      userContent: 'Answer in Fahrenheit.',
+    });
+
+    expect(result).toMatchObject({ content: 'It is 70F in New York.' });
+
+    const sentBody = at(server.requests, 0).body as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+
+    // The audited bug sent user, assistant, user, user here, which Converse rejects.
+    expect(sentBody.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(sentBody.messages.at(-1)?.content).toEqual([
+      {
+        toolResult: expect.objectContaining({ toolUseId: 'call_1', status: 'success' }),
+      },
+      { text: 'Answer in Fahrenheit.' },
+    ]);
+  });
+
   it('surfaces a real Bedrock SDK error (429/ThrottlingException) to the caller with the correct status', async () => {
     server = await startRealSdkServer([
       {
