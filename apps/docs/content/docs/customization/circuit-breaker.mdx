@@ -289,7 +289,7 @@ interface TrippingPolicy {
   /** Returns true if this failure should open the circuit for `key`. */
   onFailure(key: string): boolean;
   reset(key: string): void;
-  /** Called when `key`'s bucket is discarded (closed and idle, under isolateByModel). Optional. */
+  /** Called when `key`'s circuit is reset closed, under isolateByModel. Not on a plain success. Optional. */
   forget?(key: string): void;
 }
 ```
@@ -353,15 +353,15 @@ const llm = new VernLLM({
       const failuresByKey = new Map<string, number>();
       const threshold = 5;
       return {
-        onSuccess: (key) => failuresByKey.set(key, 0),
+        onSuccess: (key) => failuresByKey.delete(key),
         onFailure: (key) => {
           const next = (failuresByKey.get(key) ?? 0) + 1;
           failuresByKey.set(key, next);
           return next >= threshold;
         },
         reset: (key) => failuresByKey.set(key, 0),
-        // Optional: drops that model's entry once its bucket goes idle,
-        // so the map doesn't grow forever across many distinct models.
+        // Optional: drops that model's entry when its circuit is reset
+        // closed, via close() or a passed half-open trial.
         forget: (key) => failuresByKey.delete(key),
       };
     })(),
