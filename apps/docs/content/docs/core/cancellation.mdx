@@ -60,6 +60,8 @@ const result = await llm.call({
 
 Once `deadlineMs` elapses, VernLLM throws `LLMError('aborted', { code: 'deadline_exceeded' })`, even mid retry or mid fallback. If your own `signal` fires first instead, the error still has type `aborted` but no `deadline_exceeded` code, so the two causes stay distinguishable.
 
+Pass `Infinity`, or omit `deadlineMs`, for no deadline.
+
 A deadline only bounds getting to a final result: choosing a target, retrying, and opening a stream. Once a stream has actually opened, `deadlineMs` no longer applies to it: `timeoutMs` only bounds opening the stream and receiving its first chunk, and every gap after that is bounded separately by `chunkIdleTimeoutMs`. Neither option, nor `deadlineMs`, imposes a total time limit on the rest of an already-opened stream. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout) for the full contract.
 
 ## Cached calls and cancellation
@@ -67,6 +69,8 @@ A deadline only bounds getting to a final result: choosing a target, retrying, a
 `cachedCall()` also accepts a caller-provided `signal`.
 
 Each coalesced caller has its own signal and cancellation lifecycle. Aborting one coalesced caller does not cancel the shared in-flight operation for other callers.
+
+This covers the top level `signal`, `call.signal`, and `call.deadlineMs`. Each only ends that caller's wait, and takes effect right away. The shared provider request is aborted once every coalesced caller has left.
 
 ```ts title="cached-abort.ts"
 const controller = new AbortController();

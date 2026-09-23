@@ -117,8 +117,8 @@ export interface LLMRequestShape<
    * every fallback target. Unlike timeoutMs, which resets on each attempt,
    * this is a single clock starting when call is invoked. The call is
    * aborted once this elapses, even mid retry or mid fallback, the same
-   * way an aborted signal is today. Omit for no overall deadline, only
-   * the existing per attempt timeoutMs applies.
+   * way an aborted signal is today. Omit (or pass Infinity) for no
+   * overall deadline, only the existing per attempt timeoutMs applies.
    *
    * Only bounds getting to a final result: choosing a target, retrying,
    * and opening a stream. It does not extend to the time spent reading a

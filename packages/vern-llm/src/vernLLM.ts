@@ -517,11 +517,14 @@ export class VernLLM {
    * `tool_calls` decision, not just final answers; use a short `ttl` or a
    * separate `cacheKey` if a tool's result shouldn't be reused across calls.
    *
+   * A coalesced caller's own abort, deadline, or `call.signal` only ends
+   * that caller's wait. The shared provider request is aborted once every
+   * caller waiting on it has left.
+   *
    * @param params `cacheKey`, `ttl`, optional
    * `reserveUsage`/`refundUsage`/`signal`, plus `call`, the `CallParams`
-   * to pass through to `this.call(...)`. The top-level `signal` governs
-   * the cached operation and its usage hooks only; to also abort the
-   * underlying provider request, set `signal` inside `call`.
+   * to pass through to `this.call(...)`. The top-level `signal`,
+   * `call.signal`, and `call.deadlineMs` all end this caller's wait.
    * @returns The cached value on a hit, or the freshly-called result on a miss.
    */
   async cachedCall<T, const Tools extends readonly ToolDefinition[] = ToolDefinition[]>(
@@ -618,14 +621,37 @@ export class VernLLM {
       this.cachedCallMeta.set(resolvedCacheKey, metaHolder);
     }
 
+    // The shared call writes into this holder, and it can outlive the
+    // owner when the owner aborts. Keep the holder until the shared call
+    // settles, so a joiner arriving after the owner left still gets meta.
     const releaseMetaHolder = () => {
-      if (ownsMetaHolder) this.cachedCallMeta.delete(resolvedCacheKey);
+      if (!ownsMetaHolder) return;
+
+      const deleteHolder = () => this.cachedCallMeta.delete(resolvedCacheKey);
+      const shared = this.cacheOrchestrator.inFlightFor(resolvedCacheKey);
+
+      if (shared) void shared.then(deleteHolder, deleteHolder);
+      else deleteHolder();
     };
 
     const callerMeta = restCallParams.meta;
 
-    const callWrapped = (params: CallParams<T>) => {
-      const innerParams = { ...params, meta: metaHolder };
+    // This caller's own abort: top-level signal, call.signal, and
+    // call.deadlineMs. It ends only this caller's wait. The shared call
+    // gets the shared signal instead, so one caller leaving never cancels
+    // work another caller is still waiting on.
+    const callerSignals = [cacheParams.signal, restCallParams.signal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    );
+    const { signal: participantSignal, timer: deadlineTimer } = setupDeadline(
+      restCallParams.deadlineMs,
+      callerSignals.length > 1 ? AbortSignal.any(callerSignals) : callerSignals[0],
+    );
+    const participantCacheParams = { ...cacheParams, signal: participantSignal };
+
+    const callWrapped = (params: CallParams<T>, sharedSignal: AbortSignal) => {
+      const { deadlineMs: _deadlineMs, ...sharedParams } = params;
+      const innerParams = { ...sharedParams, signal: sharedSignal, meta: metaHolder };
       this.cachedCallInnerParams.set(innerParams, middlewareState);
       return this.call(innerParams).finally(() => {
         // `this.call()` writes into `metaHolder`, the internal holder
@@ -643,7 +669,11 @@ export class VernLLM {
     };
 
     if (restCallParams.stream) {
-      const streamParams = { ...restCallParams, requestId } as StreamEnabledCallParams<T>;
+      const streamParams = {
+        ...restCallParams,
+        requestId,
+        signal: participantSignal,
+      } as StreamEnabledCallParams<T>;
 
       let wrapped: CallResult;
 
@@ -656,8 +686,9 @@ export class VernLLM {
           async () => {
             const value = await this.cacheOrchestrator.runCachedStream(
               {
-                ...cacheParams,
-                openStream: () => callWrapped(streamParams) as Promise<StreamCallResult<unknown>>,
+                ...participantCacheParams,
+                openStream: (sharedSignal) =>
+                  callWrapped(streamParams, sharedSignal) as Promise<StreamCallResult<unknown>>,
               },
               Boolean(restCallParams.tools),
             );
@@ -672,7 +703,10 @@ export class VernLLM {
       } catch (error) {
         // No stream result exists yet, so nothing is left joinable.
         releaseMetaHolder();
-        throw error;
+        throw stampDeadlineCode(error, participantSignal);
+      } finally {
+        // Matches call(): deadlineMs only bounds opening the stream.
+        clearTimeout(deadlineTimer);
       }
 
       const streamResult = wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;
@@ -702,7 +736,11 @@ export class VernLLM {
       return streamResult;
     }
 
-    const paramsWithId = { ...restCallParams, requestId } as CallParams<T>;
+    const paramsWithId = {
+      ...restCallParams,
+      requestId,
+      signal: participantSignal,
+    } as CallParams<T>;
 
     try {
       const wrapped = await runOperation(
@@ -712,8 +750,8 @@ export class VernLLM {
         middlewareState,
         async () => {
           const value = await this.runCached({
-            ...cacheParams,
-            fn: () => callWrapped(paramsWithId),
+            ...participantCacheParams,
+            fn: (sharedSignal) => callWrapped(paramsWithId, sharedSignal),
           });
 
           return { value, meta: metaHolder.current };
@@ -733,9 +771,12 @@ export class VernLLM {
       if (callerMeta) callerMeta.current = metaHolder.current;
 
       return wrapped.value as T | CallWithToolsResult<T>;
+    } catch (error) {
+      throw stampDeadlineCode(error, participantSignal);
     } finally {
       // See the matching comment in the streaming branch above.
       releaseMetaHolder();
+      clearTimeout(deadlineTimer);
     }
   }
 

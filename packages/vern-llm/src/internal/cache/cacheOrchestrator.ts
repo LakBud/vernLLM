@@ -4,8 +4,15 @@ import {
 } from '../execution/utils/response/usage.utils.js';
 import { createInFlightRegistry } from './utils/inFlightRegistry.utils.js';
 import { buildReplayChunks, buildReplayChunksFromPromise } from './utils/replay.utils.js';
+import {
+  abortableChunks,
+  createSharedAbort,
+  raceAbort,
+  type SharedAbort,
+} from './utils/sharedAbort.utils.js';
 
 import type { Logger } from '../../logger.js';
+import type { LLMError } from '../../types/errors.js';
 import type { CacheAdapter, StreamChunk, UsageHooks } from '../../types/index.js';
 import type { InternalCacheParams, InternalCacheStreamParams } from './utils/cache.utils.js';
 
@@ -20,6 +27,8 @@ import type { InternalCacheParams, InternalCacheStreamParams } from './utils/cac
  */
 export class CacheOrchestrator {
   private readonly inFlight = createInFlightRegistry<unknown>();
+  /** The shared abort owned by each in-flight promise's participants. */
+  private readonly sharedAborts = new WeakMap<Promise<unknown>, SharedAbort>();
 
   constructor(
     private readonly cache: CacheAdapter<unknown>,
@@ -88,29 +97,57 @@ export class CacheOrchestrator {
     return { resolvedParams, cached: await this.getCached(resolvedKey) };
   }
 
+  /** The shared in-flight promise for `key`, if any, so callers can wait for it to settle. */
+  inFlightFor(key: string): Promise<unknown> | undefined {
+    return this.inFlight.get(key);
+  }
+
+  /**
+   * Returns the in-flight entry for `key` a new caller can still join, or
+   * `undefined`. An entry whose shared signal already fired is doomed, so
+   * it's skipped and the caller starts fresh work instead.
+   */
+  private joinable<T>(key: string): { promise: Promise<T>; shared: SharedAbort } | undefined {
+    const promise = this.inFlight.get(key) as Promise<T> | undefined;
+    if (!promise) return undefined;
+
+    const shared = this.sharedAborts.get(promise);
+    if (!shared || shared.signal.aborted) return undefined;
+
+    return { promise, shared };
+  }
+
   /**
    * Waits on another call's already in-flight promise instead of
-   * starting a new one, reserving usage as a coalesced spend. Shared by
-   * `runCached` and `runCachedStream`, which otherwise duplicated this
-   * exact `withReservedUsage` call.
+   * starting a new one, reserving usage as a coalesced spend. This
+   * caller's own `signal` ends only its own wait; the shared work keeps
+   * running while any other participant remains.
    */
   private joinInFlight<T, P extends UsageHooks & { signal?: AbortSignal }>(
     params: P,
     existing: Promise<T>,
+    shared: SharedAbort,
   ): Promise<T> {
-    return withReservedUsage(
+    const release = shared.join();
+
+    const result = withReservedUsage(
       params,
       true,
-      () => existing,
+      () => raceAbort(existing, params.signal),
       params.signal,
       (logMessage, error) => this.logRefundError(logMessage, error),
     );
+
+    void result.then(release, release);
+
+    return result;
   }
 
   /**
    * Internal cache primitive around caller-supplied logic. Concurrent misses
    * for the same `cacheKey` share a single in-flight call, avoiding cache
-   * stampedes.
+   * stampedes. The shared call is only aborted once every caller waiting
+   * on it has left.
    *
    * Backs the public `VernLLM.cachedCall()`, which always composes this
    * with `call()` so cached results get the same retry/timeout/
@@ -126,43 +163,111 @@ export class CacheOrchestrator {
 
     if (cached.hit) return cached.value as T;
 
-    const existing = this.inFlight.get(resolvedParams.cacheKey) as Promise<T> | undefined;
+    const existing = this.joinable<T>(resolvedParams.cacheKey);
 
     if (existing) {
-      return this.joinInFlight(resolvedParams, existing);
+      return this.joinInFlight(resolvedParams, existing.promise, existing.shared);
     }
 
     return this.registerTrigger(resolvedParams);
   }
 
+  /**
+   * Creates the shared deferred work for a miss and registers it
+   * synchronously, so a concurrent caller always sees it in time to join.
+   * `start` runs the work at most once. `fail` rejects it without running,
+   * for a trigger that failed before starting and left nobody behind.
+   */
+  private createShared<V>(key: string, run: (signal: AbortSignal) => Promise<V>) {
+    const shared = createSharedAbort();
+    let resolveShared!: (value: V) => void;
+    let rejectShared!: (error: unknown) => void;
+
+    const promise = new Promise<V>((resolve, reject) => {
+      resolveShared = resolve;
+      rejectShared = reject;
+    });
+
+    void promise.then(shared.settle, shared.settle);
+    this.sharedAborts.set(promise, shared);
+    this.inFlight.track(key, promise);
+
+    let started = false;
+
+    // Called exactly once: by the trigger, or by `onTriggerFailed` when
+    // the trigger failed before calling it.
+    const start = (): Promise<V> => {
+      started = true;
+      const running = run(shared.signal);
+      running.then(resolveShared, rejectShared);
+      return running;
+    };
+
+    /**
+     * Called when the trigger failed. If it never started the work, the
+     * work starts anyway for any participant still waiting on an abort,
+     * otherwise the shared promise fails with the trigger's error.
+     */
+    const onTriggerFailed = (error: unknown) => {
+      if (started) return;
+
+      // Before `start`, the trigger can only fail in usage reservation or
+      // an abort check, and both throw an LLMError.
+      if ((error as LLMError).type === 'aborted' && shared.participants > 0) {
+        // `start` already routes a rejection into the shared promise.
+        void start();
+        return;
+      }
+
+      rejectShared(error);
+    };
+
+    return { shared, promise, start, onTriggerFailed };
+  }
+
   /** Starts the shared fn() call for a cache miss and tracks it in the in-flight registry until it settles. */
   private registerTrigger<T>(params: InternalCacheParams<T>): Promise<T> {
+    const { shared, promise, start, onTriggerFailed } = this.createShared<T>(
+      params.cacheKey,
+      (signal) => this.runAndCache(params, signal),
+    );
+    const release = shared.join();
+
     const resultPromise = withReservedUsage(
       params,
       false,
-      () => this.runAndCache(params),
+      () => raceAbort(start(), params.signal),
       params.signal,
       (logMessage, error) => this.logRefundError(logMessage, error),
     );
 
-    this.inFlight.track(params.cacheKey, resultPromise);
+    void resultPromise.then(release, (error: unknown) => {
+      release();
+      onTriggerFailed(error);
+    });
+
+    // Observed so a shared rejection nobody else awaits stays quiet.
+    promise.catch(() => {});
 
     return resultPromise;
   }
 
   /** Runs `fn` and writes its result to the cache. */
-  private async runAndCache<T>(params: InternalCacheParams<T>): Promise<T> {
-    const result = await params.fn();
+  private async runAndCache<T>(params: InternalCacheParams<T>, signal: AbortSignal): Promise<T> {
+    const result = await params.fn(signal);
+    await this.writeCache(params.cacheKey, result, params.ttl);
+    return result;
+  }
 
+  /** Writes to the cache, logging instead of throwing on adapter failure. */
+  private async writeCache(key: string, value: unknown, ttl: number): Promise<void> {
     try {
-      await this.cache.set(params.cacheKey, result, params.ttl);
+      await this.cache.set(key, value, ttl);
     } catch (error) {
       this.logger.warn(
         `[VernLLM] cache write failed: ${error instanceof Error ? error.message : 'unknown'}`,
       );
     }
-
-    return result;
   }
 
   /**
@@ -196,10 +301,10 @@ export class CacheOrchestrator {
       return { chunks: buildReplayChunks(value, hasTools), finalResult: Promise.resolve(value) };
     }
 
-    const existing = this.inFlight.get(resolvedParams.cacheKey) as Promise<T> | undefined;
+    const existing = this.joinable<T>(resolvedParams.cacheKey);
 
     if (existing) {
-      const finalResult = this.joinInFlight(resolvedParams, existing);
+      const finalResult = this.joinInFlight(resolvedParams, existing.promise, existing.shared);
 
       // Mirror the no-op catch in withReservedUsageForStream: buildReplayChunksFromPromise
       // doesn't await this promise until `chunks` is iterated, so a caller that only reads
@@ -215,73 +320,63 @@ export class CacheOrchestrator {
 
   /**
    * Opens the shared stream for a cache miss and tracks its settled value
-   * in the in-flight registry until it resolves or rejects. Writes to the cache
-   * on success only, matching `runAndCache`.
+   * in the in-flight registry until it resolves or rejects. Writes to the
+   * cache on success only, matching `runAndCache`.
    *
-   * Registers the in-flight promise synchronously, before anything async
-   * runs, so a concurrent `cachedCall` for the same key always sees it in
-   * time to join instead of triggering its own stream. Settlement is
-   * wired onto the whole `withReservedUsageForStream` call rather than a
-   * line inside its callback, so any failure point (reserving usage,
-   * opening the stream, or the stream itself) reliably settles the
-   * in-flight entry instead of leaving it stuck.
+   * The stream runs under the shared signal, so it keeps going for any
+   * joiner after the trigger aborts. The trigger's own `chunks` and
+   * `finalResult` stop at the trigger's own signal.
    */
   private registerStreamTrigger<T>(
     params: InternalCacheStreamParams<T>,
   ): Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }> {
-    let resolveInFlight!: (value: T) => void;
-    let rejectInFlight!: (error: unknown) => void;
+    type Opened = { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> };
 
-    const inFlightResult = new Promise<T>((resolve, reject) => {
-      resolveInFlight = resolve;
-      rejectInFlight = reject;
-    });
+    let openedStream: Promise<Opened> | undefined;
 
-    this.inFlight.track(params.cacheKey, inFlightResult);
+    const openShared = (signal: AbortSignal): Promise<Opened> => {
+      openedStream ??= params.openStream(signal).then((opened) => ({
+        chunks: opened.chunks,
+        finalResult: opened.finalResult.then(async (value) => {
+          // Failed calls aren't cached, matching `runAndCache`.
+          await this.writeCache(params.cacheKey, value, params.ttl);
+          return value;
+        }),
+      }));
+
+      return openedStream;
+    };
+
+    const { shared, promise, start, onTriggerFailed } = this.createShared<T>(
+      params.cacheKey,
+      async (signal) => (await openShared(signal)).finalResult,
+    );
+    const release = shared.join();
+
+    promise.catch(() => {});
 
     const streamPromise = withReservedUsageForStream(
       params,
       async () => {
-        const opened = await params.openStream();
+        void start().catch(() => {});
+        const opened = await raceAbort(openShared(shared.signal), params.signal);
+        const finalResult = raceAbort(opened.finalResult, params.signal);
+        finalResult.catch(() => {});
 
-        const trackedResult: Promise<T> = opened.finalResult.then(
-          async (value) => {
-            try {
-              await this.cache.set(params.cacheKey, value, params.ttl);
-            } catch (error) {
-              this.logger.warn(
-                `[VernLLM] cache write failed: ${error instanceof Error ? error.message : 'unknown'}`,
-              );
-            }
-
-            return value;
-          },
-          (error: unknown) => {
-            // Failed calls aren't cached, matching `runAndCache`, which
-            // only calls `cache.set` after `fn()` succeeds. Rethrown
-            // unchanged so both the refund logic attached downstream and
-            // `inFlightResult` see the real failure.
-            throw error;
-          },
-        );
-
-        return { chunks: opened.chunks, finalResult: trackedResult };
+        return { chunks: abortableChunks(opened.chunks, params.signal), finalResult };
       },
       params.signal,
       (logMessage, error) => this.logRefundError(logMessage, error),
     );
 
-    // Settles `inFlightResult` (registered above) based on `streamPromise`'s
-    // own outcome, not a line inside its callback. See this function's
-    // docs for why.
-    streamPromise.then(
-      (opened) => {
-        opened.finalResult.then(resolveInFlight, rejectInFlight);
-      },
-      (error: unknown) => {
-        rejectInFlight(error);
-      },
-    );
+    const onFailed = (error: unknown) => {
+      release();
+      onTriggerFailed(error);
+    };
+
+    streamPromise.then((opened) => {
+      opened.finalResult.then(release, onFailed);
+    }, onFailed);
 
     return streamPromise;
   }

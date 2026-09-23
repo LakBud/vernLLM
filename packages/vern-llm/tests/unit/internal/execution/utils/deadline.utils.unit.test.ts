@@ -146,3 +146,13 @@ describe('stampDeadlineCode', () => {
     expect(result).toBe(error);
   });
 });
+
+describe('setupDeadline, out of range values', () => {
+  it.each([Infinity, Number.NaN, 2 ** 31])('treats %s as no deadline', async (deadlineMs) => {
+    const { signal, timer } = setupDeadline(deadlineMs, undefined);
+
+    expect(timer).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(signal?.aborted ?? false).toBe(false);
+  });
+});
