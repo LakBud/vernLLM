@@ -9,7 +9,7 @@ import {
 import { FallbackExhaustedError } from '../../../src/types/fallback.js';
 import { createMiddlewareStateBag, type VernLLMMiddleware } from '../../../src/types/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from '../../helpers.js';
+import { createMockClient, jsonResponse } from './../../helpers.js';
 
 describe('CircuitBreaker (unit)', () => {
   it('recordSuccess is a no-op when no bucket exists yet for the model (isolateByModel)', () => {
@@ -1116,7 +1116,7 @@ describe('VernLLM, circuit breaker integration', () => {
       client,
       model: 'm',
       maxRetries: 0,
-      circuitBreaker: { threshold: 1, cooldownMs: 1 },
+      circuitBreaker: { threshold: 1, cooldownMs: 1000 },
       middleware: [slowWrap],
     });
 
@@ -1125,7 +1125,7 @@ describe('VernLLM, circuit breaker integration', () => {
     expect(llm.getCircuitState()).toBe('open');
 
     // Wait past cooldown so the circuit is eligible for a half-open trial.
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
 
     // Start a trial call and abort it while `wrap` is still delaying, i.e.
     // before `assertBreakerClosed` (inside `coreOperation`) has run at all.
