@@ -33,21 +33,6 @@ export interface BackpressureChannel<T> {
   iterable: AsyncIterable<T>;
 }
 
-const DETACH = Symbol('vern-llm-channel-detach');
-
-type DetachableIterable<T> = AsyncIterable<T> & { [DETACH]?: () => void };
-
-/**
- * Detaches a channel's consumer, the same as its iterator's `return()`: the
- * producer stops waiting on this reader and buffered items are kept. For a
- * wrapper whose own early exit doesn't reach the channel's `return()`, so an
- * abandoned reader can't stall the producer. A no op for any iterable a
- * channel didn't create.
- */
-export function detachChunks<T>(iterable: AsyncIterable<T>): void {
-  (iterable as DetachableIterable<T>)[DETACH]?.();
-}
-
 /**
  * A push based, bounded-buffer async channel: `push`/`finish`/`fail`
  * drive it from a producer that runs independently of whether anyone is
@@ -57,7 +42,7 @@ export function detachChunks<T>(iterable: AsyncIterable<T>): void {
  *
  * Once a consumer starts reading, a full buffer holds the producer back
  * instead of evicting, so a slow reader never loses items. Eviction only
- * applies while nobody has started reading, so an ignored channel can't
+ * applies while no reader is active, so an ignored channel can't
  * stall the producer or grow without bound.
  *
  * Generic over the item type on purpose: `buildStreamResult` is the only
@@ -69,7 +54,10 @@ export function createBackpressureChannel<T>(
   const { capacity, logger, label } = options;
 
   const buffered: T[] = [];
+  // `owner` ties a pull to the iterator that made it, so one reader's
+  // `return()` only settles its own pull.
   const pending: Array<{
+    owner: object;
     resolve: (result: IteratorResult<T>) => void;
     reject: (error: unknown) => void;
   }> = [];
@@ -77,9 +65,10 @@ export function createBackpressureChannel<T>(
   let failed = false;
   let failure: unknown;
   let hasLoggedEviction = false;
-  // True while a consumer is pulling. A full buffer only holds the
-  // producer back then; otherwise the eviction path below applies.
-  let reading = false;
+  // Iterators that have pulled and not returned. A full buffer only holds
+  // the producer back while there is one; otherwise the eviction path
+  // below applies, so a reader that left can't stall the producer.
+  let activeReaders = 0;
   let spaceWaiters: Array<() => void> = [];
 
   function releaseProducer(): void {
@@ -87,19 +76,6 @@ export function createBackpressureChannel<T>(
 
     spaceWaiters = [];
     for (const resolve of waiters) resolve();
-  }
-
-  // The consumer stopped pulling for now. Buffered items are kept, so a
-  // later loop continues where this one left off, and the producer goes
-  // back to evicting instead of waiting on a reader that may never return.
-  function detach(): void {
-    reading = false;
-
-    for (const waiter of pending.splice(0)) {
-      waiter.resolve({ done: true, value: undefined });
-    }
-
-    releaseProducer();
   }
 
   function push(value: T): Promise<void> | undefined {
@@ -112,7 +88,7 @@ export function createBackpressureChannel<T>(
 
     buffered.push(value);
 
-    if (reading) {
+    if (activeReaders > 0) {
       if (buffered.length < capacity) return undefined;
 
       return new Promise((resolve) => {
@@ -172,11 +148,17 @@ export function createBackpressureChannel<T>(
     }
   }
 
-  const iterable: DetachableIterable<T> = {
+  const iterable: AsyncIterable<T> = {
     [Symbol.asyncIterator]() {
+      const owner = {};
+      let active = false;
+
       return {
         next(): Promise<IteratorResult<T>> {
-          reading = true;
+          if (!active) {
+            active = true;
+            activeReaders++;
+          }
 
           if (buffered.length) {
             const value = buffered.shift() as T;
@@ -193,19 +175,29 @@ export function createBackpressureChannel<T>(
           }
 
           return new Promise((resolve, reject) => {
-            pending.push({ resolve, reject });
+            pending.push({ owner, resolve, reject });
           });
         },
-        // A `break` out of `for await` detaches the consumer rather than
-        // cancelling the producer, since `finalResult` still settles from it.
+        // A `break` out of `for await` detaches this reader rather than
+        // cancelling the producer, since `finalResult` still settles from
+        // it. Buffered items are kept, so a later loop continues from here.
         return(): Promise<IteratorResult<T>> {
-          detach();
+          if (active) {
+            active = false;
+            activeReaders--;
+          }
+
+          for (let i = pending.length - 1; i >= 0; i--) {
+            if (pending[i]!.owner !== owner) continue;
+            pending.splice(i, 1)[0]!.resolve({ done: true, value: undefined });
+          }
+
+          if (activeReaders === 0) releaseProducer();
 
           return Promise.resolve({ done: true, value: undefined });
         },
       };
     },
-    [DETACH]: detach,
   };
 
   return { push, finish, fail, iterable };

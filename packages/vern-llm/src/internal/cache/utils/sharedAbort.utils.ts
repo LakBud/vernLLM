@@ -1,5 +1,4 @@
 import { LLMError } from '../../../types/errors.js';
-import { detachChunks } from '../../execution/utils/stream/chunkBuffer.utils.js';
 
 import type { StreamChunk } from '../../../types/stream.js';
 
@@ -107,7 +106,10 @@ export function abortableChunks(
           yield next.value;
         }
       } finally {
-        detachChunks(chunks);
+        // An async generator's own early exit doesn't close the iterator it
+        // reads from, so close it here. On a stream channel that detaches
+        // this reader instead of cancelling the stream.
+        void Promise.resolve(iterator.return?.()).catch(() => {});
       }
     },
   };

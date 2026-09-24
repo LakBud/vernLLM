@@ -132,6 +132,24 @@ describe('abortableChunks', () => {
     for (let i = 0; i < 50; i++) expect(channel.push(chunk)).toBeUndefined();
   });
 
+  it('ignores a rejecting return() on the source when the caller breaks', async () => {
+    const chunks: AsyncIterable<StreamChunk> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => ({ done: false as const, value: chunk }),
+          return: async () => {
+            throw new Error('close failed');
+          },
+        };
+      },
+    };
+
+    for await (const _ of abortableChunks(chunks, undefined)) break;
+
+    // Let the swallowed rejection settle; an unhandled one would fail the run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
   it('relays every chunk when the signal never fires', async () => {
     const out: StreamChunk[] = [];
     for await (const c of abortableChunks(source([chunk, chunk]), new AbortController().signal)) {

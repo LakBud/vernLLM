@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  createBackpressureChannel,
-  detachChunks,
-} from '../../../../../../src/internal/execution/utils/stream/chunkBuffer.utils.js';
+import { createBackpressureChannel } from '../../../../../../src/internal/execution/utils/stream/chunkBuffer.utils.js';
 
 function testLogger() {
   return { warn: vi.fn() };
@@ -324,22 +321,54 @@ describe('createBackpressureChannel, early return', () => {
     await expect(pending).resolves.toEqual({ done: true, value: undefined });
   });
 
-  it('detachChunks releases a waiting producer and ignores foreign iterables', async () => {
+  it('only settles the returning reader, leaving other readers active', async () => {
     const channel = createBackpressureChannel<number>({
       capacity: 1,
       logger: testLogger(),
       label: 'item',
     });
-    const iterator = channel.iterable[Symbol.asyncIterator]();
-    const first = iterator.next();
+    const a = channel.iterable[Symbol.asyncIterator]();
+    const b = channel.iterable[Symbol.asyncIterator]();
+    const aPending = a.next();
+    const bPending = b.next();
+
+    await a.return?.();
+    await expect(aPending).resolves.toEqual({ done: true, value: undefined });
+
+    channel.push(1);
+    await expect(bPending).resolves.toEqual({ done: false, value: 1 });
+
+    // B is still reading, so a full buffer still holds the producer back.
+    channel.push(2);
+    expect(channel.push(3)).toBeInstanceOf(Promise);
+  });
+
+  it('releases the producer once the last active reader returns', async () => {
+    const channel = createBackpressureChannel<number>({
+      capacity: 1,
+      logger: testLogger(),
+      label: 'item',
+    });
+    const a = channel.iterable[Symbol.asyncIterator]();
+    const b = channel.iterable[Symbol.asyncIterator]();
+    const aFirst = a.next();
     channel.push(0);
-    await first;
-    const space = channel.push(1);
+    await aFirst;
+    const bFirst = b.next();
+    channel.push(1);
+    await bFirst;
+    const space = channel.push(2);
 
-    detachChunks(channel.iterable);
-    detachChunks((async function* () {})());
+    await a.return?.();
+    await a.return?.();
+    let released = false;
+    void space?.then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(released).toBe(false);
 
+    await b.return?.();
     await expect(space).resolves.toBeUndefined();
-    await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
   });
 });
