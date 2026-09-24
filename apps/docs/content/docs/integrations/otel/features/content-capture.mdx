@@ -55,9 +55,10 @@ span, not the call span.
 
 ## Length limits
 
-`maxLength` is the budget for one attribute, shared by everything going into it. Input messages
-spend it on the newest messages first, since a long history is read for what was asked last. A cut
-is marked with `…[truncated]` and never splits a surrogate pair, so an emoji stays whole.
+`maxLength` caps the whole attribute, JSON included. Input messages spend it on the newest messages
+first, and older ones that no longer fit are dropped whole. A cut is marked with `…[truncated]`,
+counted inside the limit, and never splits a surrogate pair. An attribute whose structure alone
+does not fit is left out.
 
 `Infinity` is valid and useful when you want the full content, but it can push very large attributes
 into your exporter and backend retention settings, so prefer a finite cap unless you intentionally

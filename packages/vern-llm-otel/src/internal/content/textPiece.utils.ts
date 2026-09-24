@@ -11,7 +11,8 @@ function createBudget(maxLength: number) {
   let remaining = maxLength;
 
   return {
-    take(text: string): string {
+    /** `undefined` once the allowance is spent, so older pieces are left out, not marked. */
+    take(text: string): string | undefined {
       if (text.length <= remaining) {
         remaining -= text.length;
         return text;
@@ -21,6 +22,9 @@ function createBudget(maxLength: number) {
       remaining = 0;
       return cut;
     },
+    exhausted(): boolean {
+      return remaining <= 0;
+    },
   };
 }
 
@@ -29,22 +33,36 @@ function createBudget(maxLength: number) {
  * a redactor that throws or returns something other than a string never lets the original
  * text through.
  */
+export interface TextPiece {
+  (text: string): string | undefined;
+  /** True once nothing more fits, so a caller can stop walking older content. */
+  exhausted(): boolean;
+}
+
 export function createTextPiece(
   capture: ResolvedCapture,
   guard: Guard,
-): (text: string) => string | undefined {
-  const budget = createBudget(capture.maxLength);
+  maxLength: number = capture.maxLength,
+  redacted: Map<string, unknown> = new Map(),
+): TextPiece {
+  const budget = createBudget(maxLength);
   const { redact } = capture;
 
-  return (text) => {
+  const piece = (text: string): string | undefined => {
     let value = text;
 
     if (redact) {
-      const redacted = guard<unknown>('captureContent.redact', () => redact(text), undefined);
-      if (typeof redacted !== 'string') return undefined;
-      value = redacted;
+      // Shared across rebuilds of one attribute, so the redactor runs once per piece of text.
+      let result = redacted.get(text);
+      if (!redacted.has(text)) {
+        result = guard<unknown>('captureContent.redact', () => redact(text), undefined);
+        redacted.set(text, result);
+      }
+      if (typeof result !== 'string') return undefined;
+      value = result;
     }
 
     return budget.take(value);
   };
+  return Object.assign(piece, { exhausted: () => budget.exhausted() });
 }

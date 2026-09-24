@@ -1,5 +1,5 @@
-import { isNonEmpty, stringify, toArguments } from './json.utils.js';
-import { createTextPiece } from './textPiece.utils.js';
+import { isNonEmpty, stringify, stringifyWithinRedacted, toArguments } from './json.utils.js';
+import { createTextPiece, type TextPiece } from './textPiece.utils.js';
 
 import type { InputMessage, Part, ResolvedCapture, TextPart } from '../../types/index.js';
 import type { Guard } from '../guard.utils.js';
@@ -16,7 +16,7 @@ export interface CapturedInput {
 
 function toInputMessage(
   message: Exclude<WireMessage, { role: 'system' }>,
-  piece: (text: string) => string | undefined,
+  piece: TextPiece,
 ): InputMessage {
   const parts: Part[] = [];
   const addText = (text: string): void => {
@@ -92,28 +92,38 @@ export function serializeInput(
   const captured: CapturedInput = {};
 
   if (capture.systemInstructions) {
-    const piece = createTextPiece(capture, guard);
-    const parts: TextPart[] = [];
+    const json = stringifyWithinRedacted(capture.maxLength, (budget, redacted) => {
+      const piece = createTextPiece(capture, guard, budget, redacted);
+      const parts: TextPart[] = [];
 
-    for (const message of request.messages) {
-      if (message.role !== 'system') continue;
-      const value = piece(message.content);
-      if (isNonEmpty(value)) parts.push({ type: 'text', content: value });
-    }
+      for (const message of request.messages) {
+        if (message.role !== 'system') continue;
+        const value = piece(message.content);
+        if (isNonEmpty(value)) parts.push({ type: 'text', content: value });
+      }
 
-    if (parts.length > 0) captured.systemInstructions = stringify(parts);
+      return parts.length > 0 ? parts : undefined;
+    });
+    if (json !== undefined) captured.systemInstructions = json;
   }
 
   if (capture.input) {
-    const piece = createTextPiece(capture, guard);
-    const messages: InputMessage[] = [];
+    const json = stringifyWithinRedacted(capture.maxLength, (budget, redacted) => {
+      const piece = createTextPiece(capture, guard, budget, redacted);
+      const messages: InputMessage[] = [];
 
-    for (let index = request.messages.length - 1; index >= 0; index--) {
-      const message = request.messages[index]!;
-      if (message.role !== 'system') messages.push(toInputMessage(message, piece));
-    }
+      // Newest first, and stops once the allowance is spent, so older messages are dropped
+      // whole rather than kept as empty or marker only entries.
+      for (let index = request.messages.length - 1; index >= 0; index--) {
+        const message = request.messages[index]!;
+        if (message.role === 'system') continue;
+        if (piece.exhausted()) break;
+        messages.push(toInputMessage(message, piece));
+      }
 
-    if (messages.length > 0) captured.inputMessages = stringify(messages.reverse());
+      return messages.length > 0 ? messages.reverse() : undefined;
+    });
+    if (json !== undefined) captured.inputMessages = json;
   }
 
   if (capture.toolDefinitions && request.tools && request.tools.length > 0) {

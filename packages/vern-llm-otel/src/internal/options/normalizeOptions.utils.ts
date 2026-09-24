@@ -1,6 +1,6 @@
 import { normalizeCapture } from './captureOptions.utils.js';
 import { normalizeExceptions } from './exceptionOptions.utils.js';
-import { normalizeProviderNames } from './providerNames.utils.js';
+import { normalizeProviderNames, resolveProviderName } from './providerNames.utils.js';
 import { optionalBoolean, optionalFunction } from './validate.utils.js';
 
 import type { OtelMiddlewareOptions, ResolvedConfig } from '../../types/index.js';
@@ -48,9 +48,9 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
   // Entries are left for the core to validate, so its own error names the bad ref.
   const runsAfter = [...(opts.runsAfter ?? [])];
 
-  // Capture has to see the request after redaction, so it takes the last transform slot whatever
-  // `runsAfter` says. A ref that fails to resolve is only dropped with a warning by the core, and
-  // a lower default would then run capture before the very middleware it was meant to follow.
+  // Capture has to see the request after redaction, so it asks for the last transform slot
+  // whatever `runsAfter` says. A higher priority elsewhere can still win it, so the tracker also
+  // checks the real order per attempt and skips input capture when anything runs after it.
   // Priority does not affect where the call span sits, since the core orders `outermost` entries
   // by registration. Without capture there is no ordering need, so the value is just low.
   const capturesContent = capture !== undefined && capture.anyGroup;
@@ -70,6 +70,7 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
     priority: opts.priority ?? defaultPriority,
     runsAfter,
     capture,
-    providerName: (label) => providerNames.get(label) ?? label,
+    providerName: (label, model) => resolveProviderName(providerNames, label, model),
+    targetName: (label) => providerNames.get(label) ?? label,
   };
 }

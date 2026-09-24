@@ -12,10 +12,16 @@ calls behave normally and record nothing.
 
 You can also pass `tracer` and `meter` explicitly, which skips the global lookup.
 
-## Every provider shows as `primary`
+## A provider shows as `_OTHER` or the wrong vendor
 
-`gen_ai.provider.name` falls back to the target label when it is not mapped. Add
+Unmapped targets are inferred from the model id, and `_OTHER` is used when that fails. Gateways and
+proxies need an explicit mapping. Add
 [`providerNames`](/docs/integrations/otel/configuration#providernames).
+
+## Input messages are missing with capture on
+
+Another transform runs after `otelMiddleware`, so input capture is skipped and
+`vernllm.content.skipped_reason` is `not_last_transform`. Raise its `priority` or add `runsAfter`.
 
 ## Two inference spans, or doubled token counts
 

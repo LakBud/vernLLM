@@ -120,13 +120,15 @@ describe('serializeOutput', () => {
 
   it('applies redact and the length limit', () => {
     const { capture, guard } = setup({
-      maxLength: 8,
+      maxLength: 150,
       redact: (text) => text.replaceAll('SECRET', '***'),
     });
-    const out = serializeOutput('SECRET and more text', capture, guard);
+    const out = serializeOutput(`SECRET and ${'more text '.repeat(20)}`, capture, guard);
 
     expect(out).not.toContain('SECRET');
-    expect(out).toContain(`*** and ${TRUNCATION_MARKER}`);
+    expect(out).toContain('*** and more');
+    expect(out).toContain(TRUNCATION_MARKER);
+    expect(out!.length).toBeLessThanOrEqual(150);
   });
 
   it('drops the text when the redactor throws', () => {

@@ -199,7 +199,7 @@ describe('CallTracker driven directly', () => {
   });
 
   describe('a signal that never came', () => {
-    it('closes an attempt as a failure when the next one starts without it', () => {
+    it('closes an attempt with an unknown outcome when the next one starts without it', () => {
       const { start } = setup();
       const tracker = start();
 
@@ -208,8 +208,10 @@ describe('CallTracker driven directly', () => {
       tracker.finish({ kind: 'result', result: { value: 'ok', meta: undefined } });
 
       const [, first, second] = spans();
-      expect(first!.status.code).toBe(SpanStatusCode.ERROR);
-      expect(first!.attributes['error.type']).toBe('_OTHER');
+      // Neither a success nor an error: nothing said how it ended.
+      expect(first!.status.code).toBe(SpanStatusCode.UNSET);
+      expect(first!.attributes['vernllm.attempt.outcome']).toBe('unknown');
+      expect(first!.attributes['error.type']).toBeUndefined();
       expect(second!.status.code).toBe(SpanStatusCode.OK);
       expect(trace.openSpans()).toEqual([]);
     });

@@ -23,6 +23,8 @@ import type { ResolvedConfig } from '../../types/index.js';
 import type { Guard } from '../guard.utils.js';
 import type { TokenUsage, VernLLMEvent } from 'vern-llm';
 
+export const NORMALIZED_MODEL_CACHE_LIMIT = 1024;
+
 export interface Metrics {
   /** The only recording path. Never throws. */
   record(key: MetricKey, value: number, attributes: Attributes, context?: Context): void;
@@ -32,7 +34,7 @@ export interface Metrics {
 
 type ConfigSlice = Pick<
   ResolvedConfig,
-  'meter' | 'metrics' | 'genAiConventions' | 'normalizeModel' | 'providerName'
+  'meter' | 'metrics' | 'genAiConventions' | 'normalizeModel' | 'providerName' | 'targetName'
 >;
 
 type Instrument = Histogram | Counter;
@@ -74,6 +76,8 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
 
   // Models come from requests, so they are the one unbounded attribute. The normalizer bounds
   // it, and a throwing or empty answer keeps the raw model rather than losing the measurement.
+  // Bounded, since distinct model strings are unbounded. A Map iterates in insertion order, so
+  // the first key is the oldest, and a hit is moved to the end to keep hot models resident.
   const normalizedModelCache = new Map<string, string>();
   const withNormalizedModels = (attributes: Attributes): Attributes => {
     const { normalizeModel } = config;
@@ -86,6 +90,8 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
 
       const cached = normalizedModelCache.get(model);
       if (cached !== undefined) {
+        normalizedModelCache.delete(model);
+        normalizedModelCache.set(model, cached);
         result[key] = cached;
         continue;
       }
@@ -96,6 +102,10 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
         model,
       );
       const next = isNonEmptyString(normalized) ? normalized : model;
+      if (normalizedModelCache.size >= NORMALIZED_MODEL_CACHE_LIMIT) {
+        const oldest = normalizedModelCache.keys().next().value;
+        if (oldest !== undefined) normalizedModelCache.delete(oldest);
+      }
       normalizedModelCache.set(model, next);
       result[key] = next;
     }
@@ -125,7 +135,7 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
   // A missing label or model is left out rather than recorded as an empty value.
   const targetAttributes = (label: string | undefined, model: string | undefined): Attributes => {
     const attrs: Attributes = {};
-    if (isNonEmptyString(label)) attrs[VERNLLM_ATTR.provider] = config.providerName(label);
+    if (isNonEmptyString(label)) attrs[VERNLLM_ATTR.provider] = config.targetName(label);
     if (isNonEmptyString(model)) attrs[VERNLLM_ATTR.model] = model;
     return attrs;
   };
@@ -134,7 +144,7 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
   const recordTokens = (usage: TokenUsage, context: Context | undefined): void => {
     const base: Attributes = { [ATTR.operationName]: OPERATION_CHAT };
     if (isNonEmptyString(usage.provider)) {
-      base[ATTR.providerName] = config.providerName(usage.provider);
+      base[ATTR.providerName] = config.providerName(usage.provider, usage.model ?? '');
     }
     if (isNonEmptyString(usage.model)) base[ATTR.requestModel] = usage.model;
 
@@ -174,8 +184,8 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
           'fallbackCount',
           1,
           {
-            [VERNLLM_ATTR.fallbackFrom]: config.providerName(event.from),
-            [VERNLLM_ATTR.fallbackTo]: config.providerName(event.to),
+            [VERNLLM_ATTR.fallbackFrom]: config.targetName(event.from),
+            [VERNLLM_ATTR.fallbackTo]: config.targetName(event.to),
           },
           context,
         );

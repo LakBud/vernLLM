@@ -222,42 +222,59 @@ describe('serializeInput', () => {
   });
 
   describe('length budget', () => {
-    it('spends the allowance on the newest messages first', () => {
-      const { capture, guard } = setup({ maxLength: 20 });
+    it('keeps each whole attribute, JSON included, within the limit', () => {
+      const { capture, guard } = setup({ maxLength: 120 });
       const out = serializeInput(
         request([
-          { role: 'user', content: 'a'.repeat(20) },
-          { role: 'user', content: 'b'.repeat(10) },
+          { role: 'system', content: 's'.repeat(300) },
+          { role: 'user', content: 'a'.repeat(300) },
+          { role: 'user', content: 'b'.repeat(300) },
         ]),
         capture,
         guard,
       );
 
-      const contents = (json(out.inputMessages) as { parts: { content: string }[] }[]).map(
-        (message) => message.parts[0]!.content,
-      );
-      expect(contents).toEqual(['a'.repeat(10) + TRUNCATION_MARKER, 'b'.repeat(10)]);
+      expect(out.inputMessages!.length).toBeLessThanOrEqual(120);
+      expect(out.systemInstructions!.length).toBeLessThanOrEqual(120);
+      expect(out.inputMessages).toContain(TRUNCATION_MARKER);
     });
 
-    it('leaves later pieces as a bare marker once the allowance is spent', () => {
-      const { capture, guard } = setup({ maxLength: 5 });
+    it('spends the allowance on the newest messages first and drops older ones whole', () => {
+      const { capture, guard } = setup({ maxLength: 80 });
       const out = serializeInput(
         request([
           { role: 'user', content: 'older' },
-          { role: 'user', content: 'newer' },
+          { role: 'user', content: 'n'.repeat(200) },
         ]),
         capture,
         guard,
       );
 
-      const contents = (json(out.inputMessages) as { parts: { content: string }[] }[]).map(
-        (message) => message.parts[0]!.content,
+      const messages = json(out.inputMessages) as { parts: { content: string }[] }[];
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.parts[0]!.content.startsWith('n')).toBe(true);
+      expect(out.inputMessages).not.toContain('older');
+    });
+
+    it('never emits a marker with nothing before it', () => {
+      const { capture, guard } = setup({ maxLength: 60 });
+      const out = serializeInput(
+        request([
+          { role: 'user', content: 'x'.repeat(100) },
+          { role: 'user', content: 'y'.repeat(100) },
+        ]),
+        capture,
+        guard,
       );
-      expect(contents).toEqual([TRUNCATION_MARKER, 'newer']);
+
+      const parts = (json(out.inputMessages) as { parts: { content: string }[] }[]).flatMap(
+        (message) => message.parts.map((part) => part.content),
+      );
+      expect(parts).not.toContain(TRUNCATION_MARKER);
     });
 
     it('gives each attribute its own allowance', () => {
-      const { capture, guard } = setup({ maxLength: 4 });
+      const { capture, guard } = setup({ maxLength: 60 });
       const out = serializeInput(
         request([
           { role: 'system', content: 'abcd' },
@@ -272,31 +289,30 @@ describe('serializeInput', () => {
     });
 
     it('shares one allowance across several system messages', () => {
-      const { capture, guard } = setup({ maxLength: 6 });
+      const { capture, guard } = setup({ maxLength: 110 });
       const out = serializeInput(
         request([
-          { role: 'system', content: 'abcd' },
-          { role: 'system', content: 'efgh' },
+          { role: 'system', content: 'a'.repeat(30) },
+          { role: 'system', content: 'b'.repeat(30) },
         ]),
         capture,
         guard,
       );
 
-      expect(json(out.systemInstructions)).toEqual([
-        { type: 'text', content: 'abcd' },
-        { type: 'text', content: `ef${TRUNCATION_MARKER}` },
-      ]);
+      const parts = json(out.systemInstructions) as { content: string }[];
+      expect(out.systemInstructions!.length).toBeLessThanOrEqual(110);
+      expect(parts[0]!.content).toBe('a'.repeat(30));
+      expect(parts.length).toBeLessThanOrEqual(2);
     });
 
     it('applies to tool call arguments, which then stay a string', () => {
-      const { capture, guard } = setup({ maxLength: 6 });
+      const { capture, guard } = setup({ maxLength: 110 });
+      const args = JSON.stringify({ city: 'Oslo', notes: 'z'.repeat(200) });
       const out = serializeInput(
         request([
           {
             role: 'assistant',
-            tool_calls: [
-              { id: 'c', type: 'function', function: { name: 'f', arguments: '{"city":"Oslo"}' } },
-            ],
+            tool_calls: [{ id: 'c', type: 'function', function: { name: 'f', arguments: args } }],
           },
         ]),
         capture,
@@ -304,7 +320,16 @@ describe('serializeInput', () => {
       );
 
       const [message] = json(out.inputMessages) as { parts: { arguments: unknown }[] }[];
-      expect(message!.parts[0]!.arguments).toBe(`{"city${TRUNCATION_MARKER}`);
+      expect(typeof message!.parts[0]!.arguments).toBe('string');
+      expect(message!.parts[0]!.arguments).toContain(TRUNCATION_MARKER);
+      expect(out.inputMessages!.length).toBeLessThanOrEqual(110);
+    });
+
+    it('leaves the attribute out when not even its structure fits', () => {
+      const { capture, guard } = setup({ maxLength: 5 });
+      const out = serializeInput(request([{ role: 'user', content: 'hello' }]), capture, guard);
+
+      expect(out.inputMessages).toBeUndefined();
     });
 
     it('does not truncate at all for an infinite limit', () => {
@@ -328,7 +353,7 @@ describe('serializeInput', () => {
         (message) => message.parts.map((part) => part.content),
       );
 
-      expect(parts.join('').replaceAll(TRUNCATION_MARKER, '').length).toBeLessThanOrEqual(1000);
+      expect(out.inputMessages!.length).toBeLessThanOrEqual(1000);
       expect(parts.at(-1)).toContain('message 499');
     });
   });
@@ -400,12 +425,12 @@ describe('serializeInput', () => {
     });
 
     it('runs before truncation, so the limit applies to what is actually recorded', () => {
-      const { capture, guard } = setup({ maxLength: 10, redact: () => 'X'.repeat(50) });
+      const { capture, guard } = setup({ maxLength: 80, redact: () => 'X'.repeat(500) });
       const out = serializeInput(request([{ role: 'user', content: 'hi' }]), capture, guard);
 
-      expect(json(out.inputMessages)).toEqual([
-        { role: 'user', parts: [{ type: 'text', content: 'X'.repeat(10) + TRUNCATION_MARKER }] },
-      ]);
+      const [message] = json(out.inputMessages) as { parts: { content: string }[] }[];
+      expect(message!.parts[0]!.content).toMatch(/^X+…\[truncated\]$/);
+      expect(out.inputMessages!.length).toBeLessThanOrEqual(80);
     });
 
     it('drops a piece whose redactor throws, and never leaks the original', () => {

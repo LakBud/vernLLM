@@ -37,8 +37,9 @@ otelMiddleware({
 });
 ```
 
-An unmapped label is used as is, which works but makes backends group by `primary` instead of by
-provider. Values must be non empty strings. Any string is accepted, and these well known values
+An unmapped label is inferred from the model id (`gpt-4o` is `openai`, `claude-*` is `anthropic`),
+and `_OTHER` is used when that fails. Map gateways and proxies explicitly. `vernllm.*` attributes keep
+the label. Values must be non empty strings. Any string is accepted, and these well known values
 autocomplete:
 
 `openai`, `anthropic`, `aws.bedrock`, `azure.ai.openai`, `azure.ai.inference`, `gcp.gemini`,
@@ -87,7 +88,8 @@ their priorities, so register `otelMiddleware()` first for its call span to be t
 | On              | `1000`             | Capture runs after other transforms, so it sees the request as sent, redaction included. |
 
 `runsAfter` does not change the default. A ref that fails to resolve is only dropped with a warning,
-so a lower default would run capture before the middleware it meant to follow.
+so a lower default would run capture before the middleware it meant to follow. If any transform
+still runs later, input capture is skipped for that attempt and a warning is logged once.
 
 See [Content Capture](/docs/integrations/otel/features/content-capture#ordering).
 

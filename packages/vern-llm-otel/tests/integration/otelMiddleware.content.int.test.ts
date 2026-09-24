@@ -97,6 +97,32 @@ describe('content capture end to end', () => {
     expect(callSpans()[0]!.attributes['vernllm.content.captured']).toBe(true);
   });
 
+  it('skips input capture and warns once when another transform runs after it', async () => {
+    const client = createMockClient([textResponse('a', USAGE), textResponse('b', USAGE)]).client;
+    const redactor: VernLLMMiddleware = {
+      name: 'late-redactor',
+      priority: 5000,
+      transform: () => ({}),
+    };
+    const llm = new VernLLM({
+      ...BASE,
+      client,
+      middleware: [otel({ captureContent: true }), redactor],
+    });
+
+    await llm.call({ userContent: 'SECRET', jsonMode: false });
+    await llm.call({ userContent: 'SECRET', jsonMode: false });
+
+    for (const attempt of attemptSpans()) {
+      expect(attempt.attributes['gen_ai.input.messages']).toBeUndefined();
+      expect(attempt.attributes['vernllm.content.skipped_reason']).toBe('not_last_transform');
+    }
+    const warnings = errorLog.mock.calls.filter(([message]) =>
+      String(message).includes('captureContent'),
+    );
+    expect(warnings).toHaveLength(1);
+  });
+
   it('records what each attempt actually sent, and output only for the one that answered', async () => {
     const client = createMockClient([
       new FakeApiError('down', 500),

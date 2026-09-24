@@ -1,6 +1,6 @@
 import { isToolCallResult } from 'vern-llm';
 
-import { isNonEmpty, stringify, toArguments } from './json.utils.js';
+import { isNonEmpty, stringify, stringifyWithinRedacted, toArguments } from './json.utils.js';
 import { createTextPiece } from './textPiece.utils.js';
 
 import type { Part, ResolvedCapture } from '../../types/index.js';
@@ -27,35 +27,37 @@ export function serializeOutput(
   capture: ResolvedCapture,
   guard: Guard,
 ): string | undefined {
-  const piece = createTextPiece(capture, guard);
-  const parts: Part[] = [];
-  const answer = unwrapContent(value);
-  let finishReason = 'stop';
+  return stringifyWithinRedacted(capture.maxLength, (budget, redacted) => {
+    const piece = createTextPiece(capture, guard, budget, redacted);
+    const parts: Part[] = [];
+    const answer = unwrapContent(value);
+    let finishReason = 'stop';
 
-  const addText = (text: string): void => {
-    const cut = piece(text);
-    if (isNonEmpty(cut)) parts.push({ type: 'text', content: cut });
-  };
+    const addText = (text: string): void => {
+      const cut = piece(text);
+      if (isNonEmpty(cut)) parts.push({ type: 'text', content: cut });
+    };
 
-  if (isToolCallResult(answer)) {
-    finishReason = 'tool_call';
-    if (typeof answer.content === 'string') addText(answer.content);
+    if (isToolCallResult(answer)) {
+      finishReason = 'tool_call';
+      if (typeof answer.content === 'string') addText(answer.content);
 
-    for (const call of answer.toolCalls) {
-      const raw = stringify(call.arguments);
-      const cut = raw === undefined ? undefined : piece(raw);
-      parts.push({
-        type: 'tool_call',
-        id: call.id,
-        name: call.name,
-        ...(cut === undefined ? {} : { arguments: toArguments(cut) }),
-      });
+      for (const call of answer.toolCalls) {
+        const raw = stringify(call.arguments);
+        const cut = raw === undefined ? undefined : piece(raw);
+        parts.push({
+          type: 'tool_call',
+          id: call.id,
+          name: call.name,
+          ...(cut === undefined ? {} : { arguments: toArguments(cut) }),
+        });
+      }
+    } else {
+      const text = typeof answer === 'string' ? answer : stringify(answer);
+      if (text === undefined) parts.push({ type: 'text', content: UNSERIALIZABLE_OUTPUT });
+      else addText(text);
     }
-  } else {
-    const text = typeof answer === 'string' ? answer : stringify(answer);
-    if (text === undefined) parts.push({ type: 'text', content: UNSERIALIZABLE_OUTPUT });
-    else addText(text);
-  }
 
-  return stringify([{ role: 'assistant', parts, finish_reason: finishReason }]);
+    return [{ role: 'assistant', parts, finish_reason: finishReason }];
+  });
 }

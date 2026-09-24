@@ -20,13 +20,14 @@ describe('createTextPiece', () => {
   });
 
   it('spends one shared budget across every piece it produces', () => {
-    const { piece } = setup({ maxLength: 8 });
+    const { piece } = setup({ maxLength: 5 + TRUNCATION_MARKER.length + 3 });
 
     expect(piece('abcde')).toBe('abcde');
-    // Three characters are left, so the next piece is cut to fit.
-    expect(piece('fghijk')).toBe(`fgh${TRUNCATION_MARKER}`);
-    // Nothing is left after that, and later pieces are reduced to the marker alone.
-    expect(piece('lmn')).toBe(TRUNCATION_MARKER);
+    // Room for three characters plus the marker is left, so the next piece is cut to fit.
+    expect(piece('fghijklmnopqrstuvwxyz')).toBe(`fgh${TRUNCATION_MARKER}`);
+    expect(piece.exhausted()).toBe(true);
+    // Nothing is left after that, so later pieces are left out.
+    expect(piece('lmn')).toBeUndefined();
   });
 
   it('never truncates with an infinite budget', () => {
