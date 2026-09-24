@@ -165,6 +165,7 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
     const prefix = uniquePrefix('rl');
     // A ghost took the first ticket and will never come back.
     const queueKey = `${prefix}:queue`;
+    const ghostCreatedAt = Date.now();
     await redis.eval(QUEUE_SCRIPT, 1, queueKey, 'enter', 'ghost', 1000, `${prefix}:wake`);
     await waitForRedisValue(
       () => redis.hget(queueKey, 'w:ghost'),
@@ -196,7 +197,7 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
     const got = await limiter.acquire(1);
 
     // It waited out the ghost's 1000ms lease rather than being stuck behind it.
-    expect(got.waitedMs).toBeGreaterThan(700);
+    expect(Date.now() - ghostCreatedAt).toBeGreaterThan(900);
     expect(got.waitedMs).toBeLessThan(3000);
   });
 
@@ -249,6 +250,7 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
   });
 
   it('a large request at the head is not starved by later small ones', async ({
+    redis,
     makeLimiter,
     newConnection,
   }) => {
@@ -266,7 +268,14 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
     const big = make(shared)
       .acquire(300)
       .then(() => order.push('big'));
-    await sleep(100);
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count > 0,
+      {
+        timeoutMs: 1000,
+        intervalMs: 10,
+      },
+    );
     const smalls = [1, 2, 3].map((n) =>
       make(shared)
         .acquire(10)
