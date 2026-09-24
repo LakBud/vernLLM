@@ -141,11 +141,12 @@ settle. If you only care about the final value and never plan to render live out
 never touch `chunks` at all and just `await finalResult`.
 
 <Callout>
-  Chunks emitted before you start iterating are not lost. They're buffered internally for the
-  duration of one stream, so starting to read `chunks` a little late still sees everything from the
-  beginning. That backlog is capped, an unusually large response whose `chunks` is never read at all
-  has its oldest buffered chunks evicted once the backlog grows large. Ordinary consumption, even
-  started somewhat late, stays far under that limit.
+  Chunks emitted before you start iterating are buffered, so reading `chunks` a little late still
+  sees everything. Once you are reading, a slow reader pauses the stream instead of losing chunks,
+  and that pause never counts toward `chunkIdleTimeoutMs`. Only a `chunks` that is never read at all
+  has its oldest chunks evicted once the backlog grows large, and the same applies after a `break`.
+  If you pull chunks by hand with `next()`, call `return()` when you stop, or the paused stream
+  waits for you. Aborting the call ends that wait either way.
 </Callout>
 
 ## Tool calling while streaming
@@ -204,7 +205,8 @@ stream rather than the whole response:
 <Cards>
   <Card title="Failure before the first chunk">
     Treated like any other transient failure, retried per the configured backoff policy, same as a
-    non-streaming request that fails before receiving a response.
+    non-streaming request that fails before receiving a response. A rate-limit hint read from the
+    response headers is not a chunk, so it doesn't count as the stream having opened.
   </Card>
   <Card title="Failure after at least one chunk">
     Not retried. Once chunks have started arriving, the caller may already be rendering them, so

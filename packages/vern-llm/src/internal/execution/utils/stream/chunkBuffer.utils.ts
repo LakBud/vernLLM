@@ -19,8 +19,12 @@ export interface BackpressureChannelOptions {
 
 /** A push/pull async channel with a bounded buffer, returned by `createBackpressureChannel`. */
 export interface BackpressureChannel<T> {
-  /** Delivers `value` to a waiting puller, or buffers it. */
-  push(value: T): void;
+  /**
+   * Delivers `value` to a waiting puller, or buffers it. Returns a promise
+   * when a consumer is reading and the buffer is full; the producer should
+   * await it before pushing more. Returns `undefined` otherwise.
+   */
+  push(value: T): Promise<void> | undefined;
   /** Marks the channel done. Every future pull resolves `{ done: true }`. */
   finish(): void;
   /** Marks the channel failed. Every future pull rejects with `error`. */
@@ -36,6 +40,11 @@ export interface BackpressureChannel<T> {
  * iterating yet", is what caps memory, since the producer can outrace
  * the caller starting iteration.
  *
+ * Once a consumer starts reading, a full buffer holds the producer back
+ * instead of evicting, so a slow reader never loses items. Eviction only
+ * applies while no reader is active, so an ignored channel can't
+ * stall the producer or grow without bound.
+ *
  * Generic over the item type on purpose: `buildStreamResult` is the only
  * caller today, but nothing here depends on `StreamChunk`.
  */
@@ -45,7 +54,10 @@ export function createBackpressureChannel<T>(
   const { capacity, logger, label } = options;
 
   const buffered: T[] = [];
+  // `owner` ties a pull to the iterator that made it, so one reader's
+  // `return()` only settles its own pull.
   const pending: Array<{
+    owner: object;
     resolve: (result: IteratorResult<T>) => void;
     reject: (error: unknown) => void;
   }> = [];
@@ -53,16 +65,36 @@ export function createBackpressureChannel<T>(
   let failed = false;
   let failure: unknown;
   let hasLoggedEviction = false;
+  // Iterators that have pulled and not returned. A full buffer only holds
+  // the producer back while there is one; otherwise the eviction path
+  // below applies, so a reader that left can't stall the producer.
+  let activeReaders = 0;
+  let spaceWaiters: Array<() => void> = [];
 
-  function push(value: T): void {
+  function releaseProducer(): void {
+    const waiters = spaceWaiters;
+
+    spaceWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  function push(value: T): Promise<void> | undefined {
     const waiter = pending.shift();
 
     if (waiter) {
       waiter.resolve({ done: false, value });
-      return;
+      return undefined;
     }
 
     buffered.push(value);
+
+    if (activeReaders > 0) {
+      if (buffered.length < capacity) return undefined;
+
+      return new Promise((resolve) => {
+        spaceWaiters.push(resolve);
+      });
+    }
 
     if (buffered.length > capacity * 2) {
       // Nothing else surfaces this: without a log, a caller that never
@@ -98,6 +130,7 @@ export function createBackpressureChannel<T>(
 
   function finish(): void {
     done = true;
+    releaseProducer();
 
     for (const waiter of pending.splice(0)) {
       waiter.resolve({ done: true, value: undefined });
@@ -108,6 +141,7 @@ export function createBackpressureChannel<T>(
     done = true;
     failed = true;
     failure = error;
+    releaseProducer();
 
     for (const waiter of pending.splice(0)) {
       waiter.reject(error);
@@ -116,10 +150,22 @@ export function createBackpressureChannel<T>(
 
   const iterable: AsyncIterable<T> = {
     [Symbol.asyncIterator]() {
+      const owner = {};
+      let active = false;
+
       return {
         next(): Promise<IteratorResult<T>> {
+          if (!active) {
+            active = true;
+            activeReaders++;
+          }
+
           if (buffered.length) {
-            return Promise.resolve({ done: false, value: buffered.shift() as T });
+            const value = buffered.shift() as T;
+
+            if (buffered.length < capacity) releaseProducer();
+
+            return Promise.resolve({ done: false, value });
           }
 
           if (done) {
@@ -129,8 +175,26 @@ export function createBackpressureChannel<T>(
           }
 
           return new Promise((resolve, reject) => {
-            pending.push({ resolve, reject });
+            pending.push({ owner, resolve, reject });
           });
+        },
+        // A `break` out of `for await` detaches this reader rather than
+        // cancelling the producer, since `finalResult` still settles from
+        // it. Buffered items are kept, so a later loop continues from here.
+        return(): Promise<IteratorResult<T>> {
+          if (active) {
+            active = false;
+            activeReaders--;
+          }
+
+          for (let i = pending.length - 1; i >= 0; i--) {
+            if (pending[i]!.owner !== owner) continue;
+            pending.splice(i, 1)[0]!.resolve({ done: true, value: undefined });
+          }
+
+          if (activeReaders === 0) releaseProducer();
+
+          return Promise.resolve({ done: true, value: undefined });
         },
       };
     },

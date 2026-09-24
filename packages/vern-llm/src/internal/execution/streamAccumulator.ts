@@ -89,6 +89,26 @@ async function closeIterator(
   streamController.abort();
 }
 
+/** Resolves once `space` does or any of `signals` aborts, whichever comes first. */
+function untilSpaceOrAbort(
+  space: Promise<void>,
+  signals: Array<AbortSignal | undefined>,
+): Promise<void> {
+  const active = signals.filter((s): s is AbortSignal => s !== undefined);
+
+  if (active.some((s) => s.aborted)) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const done = () => {
+      for (const s of active) s.removeEventListener('abort', done);
+      resolve();
+    };
+
+    for (const s of active) s.addEventListener('abort', done, { once: true });
+    void space.then(done);
+  });
+}
+
 /**
  * The streaming accumulator: wraps the raw `WireStreamChunk` iterator in
  * an async generator that yields translated `StreamChunk`s to the caller
@@ -134,7 +154,10 @@ export function buildStreamResult<T>(
   // Push-based, not a pulled generator, so the pump always drives
   // `finalResult` to completion even if `chunks` is never read. Buffer
   // size (not "has anyone started iterating yet") is what caps memory,
-  // since the pump can outrace the caller starting iteration.
+  // since the pump can outrace the caller starting iteration. Once the
+  // caller is reading, a full buffer pauses the pump instead. A caller that
+  // stops early is detached: the pump keeps running for `finalResult` and
+  // its remaining chunks are dropped.
   const MAX_BUFFERED_CHUNKS = 10_000;
   const channel = createBackpressureChannel<StreamChunk>({
     capacity: MAX_BUFFERED_CHUNKS,
@@ -157,6 +180,7 @@ export function buildStreamResult<T>(
 
       while (!result.done) {
         const wireChunk = result.value;
+        let space: Promise<void> | undefined;
 
         if (wireChunk.type === 'ping') {
           // No content to accumulate or push. Just resolving here
@@ -167,13 +191,18 @@ export function buildStreamResult<T>(
           onRateLimitHint?.(wireChunk.hint);
         } else if (wireChunk.type === 'text-delta') {
           textAcc += wireChunk.delta;
-          push({ type: 'text-delta', delta: wireChunk.delta });
+          space = push({ type: 'text-delta', delta: wireChunk.delta });
         } else if (wireChunk.type === 'tool_call_delta') {
-          push(toolCalls.apply(wireChunk));
+          space = push(toolCalls.apply(wireChunk));
         } else if (wireChunk.type === 'usage') {
           usage = toTokenUsage(wireChunk.usage, { requestId, model, providerName, isFallback });
-          push({ type: 'usage', usage });
+          space = push({ type: 'usage', usage });
         }
+
+        // Waiting here, not inside `withChunkIdleTimeout`, so a slow reader
+        // never counts as the provider going idle. An abort ends the wait, so
+        // the `next()` below surfaces it even if nobody reads again.
+        if (space) await untilSpaceOrAbort(space, [streamController.signal, signal]);
 
         result = await withChunkIdleTimeout(
           () => iterator.next(),

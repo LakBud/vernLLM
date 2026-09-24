@@ -87,22 +87,29 @@ export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal | undefine
 /**
  * Relays `chunks` until `signal` fires, then throws an `aborted` LLMError
  * from this caller's iteration. The underlying stream is left running for
- * any other participant.
+ * any other participant: stopping early, whether by abort or a `break`,
+ * detaches this caller instead of cancelling the shared stream, and a
+ * detached reader no longer holds the stream back.
  */
 export function abortableChunks(
   chunks: AsyncIterable<StreamChunk>,
   signal: AbortSignal | undefined,
 ): AsyncIterable<StreamChunk> {
-  if (!signal) return chunks;
-
   return {
     async *[Symbol.asyncIterator]() {
       const iterator = chunks[Symbol.asyncIterator]();
 
-      while (true) {
-        const next = await raceAbort(iterator.next(), signal);
-        if (next.done) return;
-        yield next.value;
+      try {
+        while (true) {
+          const next = await raceAbort(iterator.next(), signal);
+          if (next.done) return;
+          yield next.value;
+        }
+      } finally {
+        // An async generator's own early exit doesn't close the iterator it
+        // reads from, so close it here. On a stream channel that detaches
+        // this reader instead of cancelling the stream.
+        void Promise.resolve(iterator.return?.()).catch(() => {});
       }
     },
   };

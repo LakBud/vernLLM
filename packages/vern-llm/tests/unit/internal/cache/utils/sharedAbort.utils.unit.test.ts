@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   abortableChunks,
   createSharedAbort,
   raceAbort,
 } from '../../../../../src/internal/cache/utils/sharedAbort.utils.js';
+import { createBackpressureChannel } from '../../../../../src/internal/execution/utils/stream/chunkBuffer.utils.js';
 import { isLLMError } from '../../../../../src/types/errors.js';
 
 import type { StreamChunk } from '../../../../../src/types/index.js';
@@ -110,9 +111,43 @@ describe('abortableChunks', () => {
     };
   }
 
-  it('returns the iterable unchanged without a signal', () => {
-    const chunks = source([chunk]);
-    expect(abortableChunks(chunks, undefined)).toBe(chunks);
+  it('relays every chunk without a signal', async () => {
+    const out: StreamChunk[] = [];
+    for await (const c of abortableChunks(source([chunk, chunk]), undefined)) out.push(c);
+    expect(out).toEqual([chunk, chunk]);
+  });
+
+  it('detaches the source when the caller breaks out early', async () => {
+    const channel = createBackpressureChannel<StreamChunk>({
+      capacity: 10,
+      logger: { warn: vi.fn() },
+      label: 'test',
+    });
+    channel.push(chunk);
+    channel.push(chunk);
+
+    for await (const _ of abortableChunks(channel.iterable, undefined)) break;
+
+    // Detached: the producer is never held back after the caller left.
+    for (let i = 0; i < 50; i++) expect(channel.push(chunk)).toBeUndefined();
+  });
+
+  it('ignores a rejecting return() on the source when the caller breaks', async () => {
+    const chunks: AsyncIterable<StreamChunk> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => ({ done: false as const, value: chunk }),
+          return: async () => {
+            throw new Error('close failed');
+          },
+        };
+      },
+    };
+
+    for await (const _ of abortableChunks(chunks, undefined)) break;
+
+    // Let the swallowed rejection settle; an unhandled one would fail the run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it('relays every chunk when the signal never fires', async () => {

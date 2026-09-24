@@ -220,3 +220,76 @@ describe('parseSseStream', () => {
     expect(events).toEqual([{ a: 1 }, SSE_PING]);
   });
 });
+
+describe('parseSseStream, large frames', () => {
+  async function collect(source: AsyncIterable<string>): Promise<unknown[]> {
+    const out: unknown[] = [];
+    for await (const event of parseSseStream(source)) out.push(event);
+    return out;
+  }
+
+  async function* pieces(text: string, size: number): AsyncGenerator<string> {
+    for (let i = 0; i < text.length; i += size) yield text.slice(i, i + size);
+  }
+
+  it('parses a megabyte frame split into tiny chunks in linear time', async () => {
+    const payload = 'x'.repeat(1_000_000);
+    const text = `data: ${JSON.stringify({ payload })}\n\n`;
+
+    const started = performance.now();
+    const events = await collect(pieces(text, 64));
+    const elapsed = performance.now() - started;
+
+    expect(events).toEqual([{ payload }]);
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it('finds a blank line boundary split across chunks', async () => {
+    const events = await collect(
+      (async function* () {
+        yield 'data: {"a":1}\n';
+        yield '\ndata: {"b":2}\r';
+        yield '\n\r';
+        yield '\n';
+      })(),
+    );
+
+    expect(events).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it('treats a CR held at stream end as a line ending', async () => {
+    const events = await collect(
+      (async function* () {
+        yield 'data: {"a":1}\r';
+        yield '\r';
+      })(),
+    );
+
+    expect(events).toEqual([{ a: 1 }]);
+  });
+
+  it('parses several frames that arrive in one chunk', async () => {
+    const events = await collect(
+      (async function* () {
+        yield 'data: {"a":1}\n\ndata: {"b":2}\n\ndata: [DONE]\n\ndata: {"c":3}\n\n';
+      })(),
+    );
+
+    expect(events).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+});
+
+describe('parseSseStream, frame boundary at a chunk edge', () => {
+  it('keeps framing right when a chunk ends exactly on a boundary', async () => {
+    const events: unknown[] = [];
+    const source = (async function* () {
+      yield 'data: {"a":1}\n';
+      yield 'id: 1\n\n';
+      yield '\ndata: {"b":2}\n\n';
+    })();
+
+    for await (const event of parseSseStream(source)) events.push(event);
+
+    expect(events).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+});

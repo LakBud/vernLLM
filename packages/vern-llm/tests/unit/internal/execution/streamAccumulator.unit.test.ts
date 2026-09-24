@@ -556,3 +556,115 @@ describe('buildStreamResult, unread-backlog eviction', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeded cap'));
   });
 });
+
+describe('buildStreamResult, slow reader and early exit', () => {
+  it('delivers every chunk to a slow reader instead of evicting', async () => {
+    const total = 25_000;
+    const wire: WireStreamChunk[] = Array.from({ length: total - 1 }, (_, i) => ({
+      type: 'text-delta',
+      delta: String(i + 1),
+    }));
+    const logger = testLogger();
+    const { chunks, finalResult } = buildStreamResult(
+      scriptedIterator(wire),
+      { done: false, value: { type: 'text-delta', delta: '0' } },
+      baseOptions({ logger, finalize: () => 'done' }),
+    );
+
+    let count = 0;
+    for await (const _ of chunks) {
+      count++;
+      // Falls far behind once reading has started.
+      if (count === 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(count).toBe(total);
+    expect(logger.warn).not.toHaveBeenCalled();
+    await expect(finalResult).resolves.toBe('done');
+  });
+
+  it('keeps the stream running for finalResult after the reader breaks out', async () => {
+    const wire: WireStreamChunk[] = Array.from({ length: 30_000 }, () => ({
+      type: 'text-delta',
+      delta: 'x',
+    }));
+    const iterator = scriptedIterator(wire);
+    const options = baseOptions();
+    const { chunks, finalResult } = buildStreamResult(
+      iterator,
+      { done: false, value: { type: 'text-delta', delta: 'x' } },
+      options,
+    );
+
+    for await (const _ of chunks) break;
+
+    // Would stall at the buffer cap if the detached reader still held the pump back.
+    await expect(finalResult).resolves.toBe('x'.repeat(30_001));
+    expect(options.streamController.signal.aborted).toBe(false);
+    expect(iterator.returnCalls).toBe(0);
+  });
+
+  it('settles finalResult when aborted while paused on a reader that stopped', async () => {
+    const external = new AbortController();
+    let index = 0;
+    const iterator: AsyncIterator<WireStreamChunk> = {
+      async next() {
+        if (external.signal.aborted) throw new Error('transport aborted');
+        return { done: false, value: { type: 'text-delta', delta: String(index++) } };
+      },
+    };
+    const options = { ...baseOptions(), signal: external.signal };
+    const { chunks, finalResult } = buildStreamResult(
+      iterator,
+      { done: false, value: { type: 'text-delta', delta: 'x' } },
+      options,
+    );
+
+    await chunks[Symbol.asyncIterator]().next();
+    // Let the pump fill the buffer and wait for space that never comes.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    external.abort();
+
+    await expect(finalResult).rejects.toMatchObject({ type: 'aborted' });
+  });
+
+  it('does not wait for space when a signal is already aborted', async () => {
+    const wire: WireStreamChunk[] = Array.from({ length: 20_000 }, () => ({
+      type: 'text-delta',
+      delta: 'x',
+    }));
+    const options = baseOptions({ finalize: () => 'done' });
+    // A transport that ignores the abort still reaches the end, since the pump never waits.
+    options.streamController.abort();
+    const { chunks, finalResult } = buildStreamResult(
+      scriptedIterator(wire),
+      { done: false, value: { type: 'text-delta', delta: 'x' } },
+      options,
+    );
+
+    await chunks[Symbol.asyncIterator]().next();
+
+    await expect(finalResult).resolves.toBe('done');
+  });
+
+  it('releases a pump waiting for space when the reader leaves', async () => {
+    const wire: WireStreamChunk[] = Array.from({ length: 20_000 }, () => ({
+      type: 'text-delta',
+      delta: 'x',
+    }));
+    const options = baseOptions({ finalize: () => 'done' });
+    const { chunks, finalResult } = buildStreamResult(
+      scriptedIterator(wire),
+      { done: false, value: { type: 'text-delta', delta: 'x' } },
+      options,
+    );
+    const reader = chunks[Symbol.asyncIterator]();
+
+    await reader.next();
+    // Let the pump fill the buffer and wait for space.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await reader.return?.();
+
+    await expect(finalResult).resolves.toBe('done');
+  });
+});
