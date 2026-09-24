@@ -103,8 +103,11 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
       );
       const next = isNonEmptyString(normalized) ? normalized : model;
       if (normalizedModelCache.size >= NORMALIZED_MODEL_CACHE_LIMIT) {
-        const oldest = normalizedModelCache.keys().next().value;
-        if (oldest !== undefined) normalizedModelCache.delete(oldest);
+        // The cache is full here, so there is always a first key to evict.
+        for (const oldest of normalizedModelCache.keys()) {
+          normalizedModelCache.delete(oldest);
+          break;
+        }
       }
       normalizedModelCache.set(model, next);
       result[key] = next;
@@ -144,7 +147,7 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
   const recordTokens = (usage: TokenUsage, context: Context | undefined): void => {
     const base: Attributes = { [ATTR.operationName]: OPERATION_CHAT };
     if (isNonEmptyString(usage.provider)) {
-      base[ATTR.providerName] = config.providerName(usage.provider, usage.model ?? '');
+      base[ATTR.providerName] = config.providerName(usage.provider, usage.model);
     }
     if (isNonEmptyString(usage.model)) base[ATTR.requestModel] = usage.model;
 
