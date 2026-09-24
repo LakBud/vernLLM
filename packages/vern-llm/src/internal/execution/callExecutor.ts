@@ -557,7 +557,16 @@ export class CallExecutor {
               const streamIterator = createStream(request, { signal: attemptSignal })[
                 Symbol.asyncIterator
               ]();
-              const firstResult = await streamIterator.next();
+              let firstResult = await streamIterator.next();
+
+              // A rate-limit hint is read off the response headers, not the
+              // body, so it can arrive before any real content. It must not
+              // count as the stream having opened, or a failure on the first
+              // real chunk would skip retries and fallback.
+              while (!firstResult.done && firstResult.value.type === 'rate_limit_hint') {
+                this.limiter?.reactToRateLimitHint(firstResult.value.hint);
+                firstResult = await streamIterator.next();
+              }
 
               return { iterator: streamIterator, first: firstResult };
             },

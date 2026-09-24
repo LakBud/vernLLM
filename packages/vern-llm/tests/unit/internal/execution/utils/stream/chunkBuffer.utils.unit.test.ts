@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBackpressureChannel } from '../../../../../../src/internal/execution/utils/stream/chunkBuffer.utils.js';
+import {
+  createBackpressureChannel,
+  detachChunks,
+} from '../../../../../../src/internal/execution/utils/stream/chunkBuffer.utils.js';
 
 function testLogger() {
   return { warn: vi.fn() };
@@ -206,4 +209,137 @@ describe('createBackpressureChannel, terminal error propagation', () => {
       await expect(iterator.next()).rejects.toBe(falsyError);
     },
   );
+});
+
+describe('createBackpressureChannel, backpressure once reading', () => {
+  it('holds the producer instead of evicting when a reader falls behind', async () => {
+    const logger = testLogger();
+    const channel = createBackpressureChannel<number>({ capacity: 3, logger, label: 'item' });
+    const iterator = channel.iterable[Symbol.asyncIterator]();
+
+    const first = iterator.next();
+    expect(channel.push(0)).toBeUndefined();
+    await first;
+
+    expect(channel.push(1)).toBeUndefined();
+    expect(channel.push(2)).toBeUndefined();
+    const space = channel.push(3);
+    expect(space).toBeInstanceOf(Promise);
+
+    let released = false;
+    void space?.then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(released).toBe(false);
+
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
+    await Promise.resolve();
+    expect(released).toBe(true);
+
+    const values = await drain(channel.iterable, 2);
+    expect(values).toEqual([2, 3]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('releases a held producer when the channel finishes or fails', async () => {
+    const channel = createBackpressureChannel<number>({
+      capacity: 1,
+      logger: testLogger(),
+      label: 'item',
+    });
+    const iterator = channel.iterable[Symbol.asyncIterator]();
+    const first = iterator.next();
+    channel.push(0);
+    await first;
+
+    const space = channel.push(1);
+    channel.fail(new Error('boom'));
+    await expect(space).resolves.toBeUndefined();
+
+    const other = createBackpressureChannel<number>({
+      capacity: 1,
+      logger: testLogger(),
+      label: 'item',
+    });
+    const otherIterator = other.iterable[Symbol.asyncIterator]();
+    const otherFirst = otherIterator.next();
+    other.push(0);
+    await otherFirst;
+    const otherSpace = other.push(1);
+    other.finish();
+    await expect(otherSpace).resolves.toBeUndefined();
+  });
+});
+
+describe('createBackpressureChannel, early return', () => {
+  it('detaches on return: keeps buffered items and releases the producer', async () => {
+    const channel = createBackpressureChannel<number>({
+      capacity: 1,
+      logger: testLogger(),
+      label: 'item',
+    });
+    const iterator = channel.iterable[Symbol.asyncIterator]();
+    const first = iterator.next();
+    channel.push(0);
+    await first;
+    const space = channel.push(1);
+
+    await expect(iterator.return?.()).resolves.toEqual({ done: true, value: undefined });
+
+    await expect(space).resolves.toBeUndefined();
+    // Back to the unread path: pushes never wait, and old items are evicted past 2x.
+    expect(channel.push(2)).toBeUndefined();
+    const values = await drain(channel.iterable, 2);
+    expect(values).toEqual([1, 2]);
+  });
+
+  it('lets a later loop continue where a broken loop stopped', async () => {
+    const channel = createBackpressureChannel<number>({
+      capacity: 10,
+      logger: testLogger(),
+      label: 'item',
+    });
+    for (let i = 0; i < 3; i++) channel.push(i);
+    channel.finish();
+
+    for await (const _ of channel.iterable) break;
+    const rest: number[] = [];
+    for await (const value of channel.iterable) rest.push(value);
+
+    expect(rest).toEqual([1, 2]);
+  });
+
+  it('settles a pending pull with done when returned', async () => {
+    const channel = createBackpressureChannel<number>({
+      capacity: 1,
+      logger: testLogger(),
+      label: 'item',
+    });
+    const iterator = channel.iterable[Symbol.asyncIterator]();
+    const pending = iterator.next();
+
+    await iterator.return?.();
+
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  it('detachChunks releases a waiting producer and ignores foreign iterables', async () => {
+    const channel = createBackpressureChannel<number>({
+      capacity: 1,
+      logger: testLogger(),
+      label: 'item',
+    });
+    const iterator = channel.iterable[Symbol.asyncIterator]();
+    const first = iterator.next();
+    channel.push(0);
+    await first;
+    const space = channel.push(1);
+
+    detachChunks(channel.iterable);
+    detachChunks((async function* () {})());
+
+    await expect(space).resolves.toBeUndefined();
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
+  });
 });

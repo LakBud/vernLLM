@@ -782,3 +782,41 @@ describe('VernLLM.cachedCall, stream: true, call.meta out-parameter', () => {
     expect(hitMeta.current).toBeUndefined();
   });
 });
+
+describe('VernLLM.cachedCall, stream: true, trigger breaks out early', () => {
+  it('keeps the shared stream running for a joiner and caches the result', async () => {
+    let releaseTail!: () => void;
+    const tail = new Promise<void>((resolve) => {
+      releaseTail = resolve;
+    });
+    const { client, createStream } = createMockStreamingClient([
+      () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', delta: 'a' } as WireStreamChunk;
+          await tail;
+          yield { type: 'text-delta', delta: 'b' } as WireStreamChunk;
+        },
+      }),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+    const params = {
+      cacheKey: 'k',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false as const, stream: true as const },
+    };
+
+    const trigger = await llm.cachedCall(params);
+    const joiner = await llm.cachedCall(params);
+
+    for await (const _ of trigger.chunks) break;
+    releaseTail();
+
+    await expect(joiner.finalResult).resolves.toBe('ab');
+    await expect(trigger.finalResult).resolves.toBe('ab');
+    expect(createStream).toHaveBeenCalledTimes(1);
+
+    const hit = await llm.cachedCall(params);
+    await expect(hit.finalResult).resolves.toBe('ab');
+    expect(createStream).toHaveBeenCalledTimes(1);
+  });
+});

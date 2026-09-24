@@ -35,7 +35,7 @@ export async function* parseSseStream(
   // JSON string and either corrupt it unnoticeably or, worse, still parse
   // as syntactically valid JSON with silently-wrong content.
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  let buffer = '';
+  const framer = createFrameSplitter();
 
   for await (const chunk of source) {
     let text: string;
@@ -46,71 +46,117 @@ export async function* parseSseStream(
       throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', { cause });
     }
 
-    // Normalized against the whole buffer, not just the newly-arrived
-    // chunk: a `\r\n` delimiter can straddle a chunk boundary (one chunk
-    // ending in `\r`, the next starting with `\n`), and normalizing only
-    // the new text would miss that split pair. A bare trailing `\r` (not
-    // followed by anything yet) is left as-is for the same reason; it's
-    // converted once either more text or end-of-stream resolves whether
-    // it was standalone or the start of a split `\r\n`.
-    buffer = (buffer + text).replace(/\r\n/g, '\n').replace(/\r(?!$)/g, '\n');
-
-    let boundary = buffer.indexOf('\n\n');
-
-    while (boundary !== -1) {
-      const frame = buffer.slice(0, boundary);
-
-      buffer = buffer.slice(boundary + 2);
-
+    for (const frame of framer.push(text)) {
       const event = parseSseFrame(frame);
 
       if (event === DONE) return;
       if (event !== NO_DATA) yield event;
-
-      boundary = buffer.indexOf('\n\n');
     }
   }
 
   // Flush any bytes TextDecoder held back mid-decode, so a truncated
   // multi-byte char surfaces as a parse error instead of silently
   // vanishing (and possibly leaving behind valid-looking, wrong JSON).
+  let tail: string;
+
   try {
-    buffer += decoder.decode();
+    tail = decoder.decode();
   } catch (cause) {
     throw new LLMError('Invalid UTF-8 in SSE stream', 'parse', { cause });
   }
 
-  // The stream has ended, so a trailing `\r` still held back above (it
-  // could have been the start of a split `\r\n` pair) can only be a bare
-  // CR line ending now. Normalize it and re-check for any frame boundary
-  // it just completed.
-  buffer = buffer.replace(/\r$/, '\n');
+  const { frames, trailing } = framer.end(tail);
 
-  let boundary = buffer.indexOf('\n\n');
-
-  while (boundary !== -1) {
-    const frame = buffer.slice(0, boundary);
-
-    buffer = buffer.slice(boundary + 2);
-
+  for (const frame of frames) {
     const event = parseSseFrame(frame);
 
     if (event === DONE) return;
     if (event !== NO_DATA) yield event;
-
-    boundary = buffer.indexOf('\n\n');
   }
 
   // Flush a final frame that arrived without a trailing blank line: some
   // servers close the connection right after the last `data:` line instead
   // of sending one more `\n\n` first.
-  const trailing = buffer.trim();
+  const rest = trailing.trim();
 
-  if (trailing) {
-    const event = parseSseFrame(trailing);
+  if (rest) {
+    const event = parseSseFrame(rest);
 
     if (event !== DONE && event !== NO_DATA) yield event;
   }
+}
+
+/**
+ * Splits normalized SSE text into complete frames. Only newly arrived text
+ * is normalized and scanned, and an incomplete frame is kept as a list of
+ * pieces joined once when it completes, so a large frame spread over many
+ * transport chunks costs linear time instead of rescanning the whole
+ * buffer on every chunk.
+ */
+function createFrameSplitter() {
+  let parts: string[] = [];
+  // Whether the incomplete frame ends in `\n`, so a `\n` at the start of
+  // the next text completes a blank line boundary across the two pieces.
+  let endsWithLf = false;
+  // A trailing `\r` is held back until more text arrives, since it may be
+  // the first half of a `\r\n` pair split across two transport chunks.
+  let heldCr = false;
+
+  function split(raw: string): string[] {
+    let text = heldCr ? `\r${raw}` : raw;
+
+    heldCr = text.endsWith('\r');
+    if (heldCr) text = text.slice(0, -1);
+
+    text = text.replace(/\r\n?/g, '\n');
+
+    const frames: string[] = [];
+    let pos = 0;
+
+    if (endsWithLf && text.startsWith('\n')) {
+      frames.push(parts.join('').slice(0, -1));
+      parts = [];
+      endsWithLf = false;
+      pos = 1;
+    }
+
+    let boundary = text.indexOf('\n\n', pos);
+
+    while (boundary !== -1) {
+      parts.push(text.slice(pos, boundary));
+      frames.push(parts.join(''));
+      parts = [];
+      pos = boundary + 2;
+      boundary = text.indexOf('\n\n', pos);
+    }
+
+    const rest = text.slice(pos);
+
+    if (rest) {
+      parts.push(rest);
+      endsWithLf = rest.endsWith('\n');
+    } else if (pos > 0) {
+      // A boundary emptied `parts`, so nothing is left to end in `\n`.
+      endsWithLf = false;
+    }
+
+    return frames;
+  }
+
+  return {
+    push: split,
+    /** The stream ended, so a held `\r` can only be a bare CR line ending now. */
+    end(tail: string): { frames: string[]; trailing: string } {
+      const frames = split(tail);
+
+      if (heldCr) {
+        heldCr = false;
+        frames.push(...split('\n'));
+      }
+
+      return { frames, trailing: parts.join('') };
+    },
+  };
 }
 
 const DONE = Symbol('sse-stream-done');
