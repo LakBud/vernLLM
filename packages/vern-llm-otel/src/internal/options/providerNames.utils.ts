@@ -33,6 +33,8 @@ const MODEL_PATTERNS: readonly [RegExp, GenAiProviderName][] = [
     /^(?:[a-z]{2,4}\.)?(?:anthropic|amazon|meta|mistral|cohere|ai21|deepseek|qwen|writer)\.[\w.-]+-v\d/i,
     'aws.bedrock',
   ],
+  // Vertex AI publishes Claude with an `@version` suffix, the Claude API does not.
+  [/^claude[\w.-]*@/i, 'gcp.vertex_ai'],
   [/^claude/i, 'anthropic'],
   [/^(?:gpt|chatgpt|o\d|text-embedding|dall-e|whisper|tts)/i, 'openai'],
   [/^(?:models\/)?gemini/i, 'gcp.gemini'],

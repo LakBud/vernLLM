@@ -76,8 +76,8 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
 
   // Models come from requests, so they are the one unbounded attribute. The normalizer bounds
   // it, and a throwing or empty answer keeps the raw model rather than losing the measurement.
-  // Bounded, since distinct model strings are unbounded. A Map iterates in insertion order, so
-  // the first key is the oldest, and a hit is moved to the end to keep hot models resident.
+  // The cache is capped for the same reason: a Map iterates in insertion order, so the first
+  // key is the least recently used, and a hit moves its key to the end.
   const normalizedModelCache = new Map<string, string>();
   const withNormalizedModels = (attributes: Attributes): Attributes => {
     const { normalizeModel } = config;

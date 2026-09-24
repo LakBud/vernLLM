@@ -28,17 +28,17 @@ function createBudget(maxLength: number) {
   };
 }
 
-/**
- * Redacts and then budgets one piece of text. `undefined` means the piece must be left out:
- * a redactor that throws or returns something other than a string never lets the original
- * text through.
- */
 export interface TextPiece {
   (text: string): string | undefined;
   /** True once nothing more fits, so a caller can stop walking older content. */
   exhausted(): boolean;
 }
 
+/**
+ * Redacts and then budgets one piece of text. `undefined` means the piece must be left out:
+ * a redactor that throws or returns something other than a string never lets the original
+ * text through.
+ */
 export function createTextPiece(
   capture: ResolvedCapture,
   guard: Guard,

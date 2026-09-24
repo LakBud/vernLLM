@@ -27,10 +27,15 @@ export function serializeOutput(
   capture: ResolvedCapture,
   guard: Guard,
 ): string | undefined {
+  // Worked out once, since the builder below can run several times while fitting.
+  const answer = unwrapContent(value);
+  const toolCall = isToolCallResult(answer);
+  const plainText = toolCall ? undefined : typeof answer === 'string' ? answer : stringify(answer);
+  const toolArguments = toolCall ? answer.toolCalls.map((call) => stringify(call.arguments)) : [];
+
   return stringifyWithinRedacted(capture.maxLength, (budget, redacted) => {
     const piece = createTextPiece(capture, guard, budget, redacted);
     const parts: Part[] = [];
-    const answer = unwrapContent(value);
     let finishReason = 'stop';
 
     const addText = (text: string): void => {
@@ -38,12 +43,12 @@ export function serializeOutput(
       if (isNonEmpty(cut)) parts.push({ type: 'text', content: cut });
     };
 
-    if (isToolCallResult(answer)) {
+    if (toolCall) {
       finishReason = 'tool_call';
       if (typeof answer.content === 'string') addText(answer.content);
 
-      for (const call of answer.toolCalls) {
-        const raw = stringify(call.arguments);
+      for (const [index, call] of answer.toolCalls.entries()) {
+        const raw = toolArguments[index];
         const cut = raw === undefined ? undefined : piece(raw);
         parts.push({
           type: 'tool_call',
@@ -53,9 +58,8 @@ export function serializeOutput(
         });
       }
     } else {
-      const text = typeof answer === 'string' ? answer : stringify(answer);
-      if (text === undefined) parts.push({ type: 'text', content: UNSERIALIZABLE_OUTPUT });
-      else addText(text);
+      if (plainText === undefined) parts.push({ type: 'text', content: UNSERIALIZABLE_OUTPUT });
+      else addText(plainText);
     }
 
     return [{ role: 'assistant', parts, finish_reason: finishReason }];

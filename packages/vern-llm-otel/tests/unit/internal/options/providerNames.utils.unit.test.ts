@@ -62,6 +62,7 @@ describe('inferProviderName', () => {
     ['gpt-4o-mini', 'openai'],
     ['o3-mini', 'openai'],
     ['claude-opus-4-1', 'anthropic'],
+    ['claude-3-5-sonnet-v2@20241022', 'gcp.vertex_ai'],
     ['gemini-2.5-pro', 'gcp.gemini'],
     ['models/gemini-2.0-flash', 'gcp.gemini'],
     ['mistral-large-latest', 'mistral_ai'],

@@ -15,6 +15,8 @@ export interface Guard {
   <T>(operation: string, fn: () => T, fallback: T): T;
   /** Logs a failure in the same shape without running anything, for misuse detected by the caller. */
   report(operation: string, error: unknown): void;
+  /** Logs a configuration warning, not a failure. */
+  warn(message: string): void;
 }
 
 export function createGuard(option: LoggerOption | undefined): Guard {
@@ -44,5 +46,13 @@ export function createGuard(option: LoggerOption | undefined): Guard {
   }) as Guard;
 
   guard.report = report;
+  guard.warn = (message) => {
+    if (!logger) return;
+    try {
+      logger.warn(`[VernLLM] otel: ${message}`);
+    } catch {
+      // Same as `report`: a throwing logger must not break a call.
+    }
+  };
   return guard;
 }

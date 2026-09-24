@@ -150,4 +150,31 @@ describe('createGuard', () => {
       expect(spy).not.toHaveBeenCalled();
     });
   });
+
+  describe('warn', () => {
+    it('logs at warn level, never as a failure', () => {
+      const logger = recordingLogger();
+      createGuard(logger).warn('check your order');
+
+      expect(logger.warn).toHaveBeenCalledWith('[VernLLM] otel: check your order');
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('survives a logger that throws', () => {
+      const logger = {
+        ...recordingLogger(),
+        warn: () => {
+          throw new Error('logger down');
+        },
+      };
+
+      expect(() => createGuard(logger).warn('x')).not.toThrow();
+    });
+
+    it('does nothing when silent', () => {
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      createGuard('silent').warn('x');
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
 });

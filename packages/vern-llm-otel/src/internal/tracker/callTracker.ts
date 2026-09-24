@@ -194,8 +194,9 @@ export class CallTracker {
       if (this.isLastTransform(ctx)) {
         guard('captureInput', () => content.captureInput(span, request), undefined);
       } else {
-        // Another transform, possibly a redactor, still runs after this one, so the request
-        // seen here is not what gets sent. Fails closed instead of recording it.
+        // Another middleware sorts after this one, and it may be a redactor, so the request
+        // seen here may not be what gets sent. Fails closed instead of recording it. The core
+        // does not say which entries have a `transform`, so an entry without one also counts.
         this.safely('markContentSkipped', () =>
           span.setAttribute(VERNLLM_ATTR.contentSkippedReason, CONTENT_SKIPPED_NOT_LAST),
         );
@@ -545,12 +546,9 @@ const captureOrderWarned = new WeakSet<TrackerDeps>();
 function warnCaptureOrderOnce(deps: TrackerDeps): void {
   if (captureOrderWarned.has(deps)) return;
   captureOrderWarned.add(deps);
-  deps.guard.report(
-    'captureContent',
-    new Error(
-      `input capture skipped: another middleware transform runs after "${deps.config.name}". ` +
-        'Give this entry a higher priority or runsAfter so it sees the request as sent.',
-    ),
+  deps.guard.warn(
+    `input capture skipped: middleware sorted after "${deps.config.name}" may change the ` +
+      'request. Give this entry a higher priority, or runsAfter the others, so it runs last.',
   );
 }
 

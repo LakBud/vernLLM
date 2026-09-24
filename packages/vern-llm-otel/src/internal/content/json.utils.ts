@@ -34,6 +34,9 @@ export function stringifyWithin(
   if (first === undefined || first.length <= maxLength) return first;
 
   // The text can never use more than the whole overflowing JSON, so that bounds the search.
+  // Bisection assumes a bigger budget never gives shorter JSON. Cut tool arguments break that
+  // slightly, since they become a string instead of an object, so the result can be a little
+  // smaller than possible. It is never over the limit, since only fitting JSON is kept.
   let low = 0;
   let high = Math.min(maxLength, first.length) - 1;
   let best: string | undefined;
