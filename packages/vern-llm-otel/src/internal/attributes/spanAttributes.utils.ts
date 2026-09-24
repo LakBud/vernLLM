@@ -35,6 +35,18 @@ export function outputTypeOf(request: Pick<WireCallRequest, 'response_format'>):
 }
 
 /**
+ * The Anthropic and Bedrock adapters leave `temperature` off the wire whenever thinking is on,
+ * because Claude rejects the two together. Recording it then would report a value never sent.
+ */
+function dropsTemperature(input: AttemptStartInput): boolean {
+  const thinking =
+    isNonEmptyString(input.request.reasoning_effort) || isCount(input.request.budget_tokens);
+  if (!thinking) return false;
+  if (input.provider === 'anthropic') return true;
+  return input.provider === 'aws.bedrock' && /anthropic|claude/i.test(input.model);
+}
+
+/**
  * Attributes for an attempt span at creation. The first three `gen_ai` ones are what a sampler
  * can act on, so they are always present when GenAI conventions are on.
  */
@@ -51,7 +63,8 @@ export function attemptStartAttributes(
     if (isCount(input.request.max_tokens)) attrs[ATTR.requestMaxTokens] = input.request.max_tokens;
     if (
       typeof input.request.temperature === 'number' &&
-      Number.isFinite(input.request.temperature)
+      Number.isFinite(input.request.temperature) &&
+      !dropsTemperature(input)
     ) {
       attrs[ATTR.requestTemperature] = input.request.temperature;
     }

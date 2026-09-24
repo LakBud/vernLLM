@@ -55,6 +55,8 @@ export const VERNLLM_ATTR = {
   requestBudgetTokens: 'vernllm.request.budget_tokens',
   rateLimitWaitMs: 'vernllm.rate_limit.wait_ms',
   usageFailed: 'vernllm.usage.failed',
+  attemptOutcome: 'vernllm.attempt.outcome',
+  contentSkippedReason: 'vernllm.content.skipped_reason',
   // Metric only attributes.
   provider: 'vernllm.provider',
   model: 'vernllm.model',
@@ -132,6 +134,9 @@ export const CALL_OUTCOME = {
   coalesced: 'coalesced',
   shortCircuit: 'short_circuit',
 } as const;
+
+/** An attempt closed without any signal saying how it ended. */
+export const ATTEMPT_OUTCOME_UNKNOWN = 'unknown';
 
 export const UNIT_TOKEN = '{token}';
 export const UNIT_SECOND = 's';

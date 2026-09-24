@@ -10,7 +10,10 @@ export interface OtelMiddlewareOptions {
   tracer?: Tracer;
   /** Default: the global meter for this package's instrumentation scope. */
   meter?: Meter;
-  /** Maps a VernLLM target label (`primary`, `fallback[0]`, or a `name`) to `gen_ai.provider.name`. */
+  /**
+   * Maps a VernLLM target label (`primary`, `fallback[0]`, or a `name`) to `gen_ai.provider.name`.
+   * Unmapped targets are inferred from the model id, and `_OTHER` is used when that fails.
+   */
   providerNames?: Readonly<Record<string, GenAiProviderName>>;
   /** Default true. `false` disables every instrument. */
   metrics?: boolean;
@@ -43,7 +46,8 @@ export interface OtelMiddlewareOptions {
   name?: string;
   /**
    * Transform order only. Default 1000 when content capture is on, so capture runs after other
-   * transforms and sees the request as sent. Otherwise default -1000. It does not decide where
+   * transforms and sees the request as sent. If another transform still runs later, input
+   * capture is skipped for that attempt and a warning is logged once. Otherwise default -1000. It does not decide where
    * the call span sits: the entry wraps as `outermost`, so that follows registration order,
    * and registering it first keeps its call span outside every other middleware.
    */

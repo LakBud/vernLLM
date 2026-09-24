@@ -294,24 +294,31 @@ describe('options that change what is emitted', () => {
   });
 
   describe('providerNames', () => {
-    it('falls back to the raw target label when nothing is mapped', async () => {
+    it('infers the provider from the model when nothing is mapped, never using the label', async () => {
       await busyCall({});
 
       const providers = spans()
         .filter((span) => span.name.startsWith('chat '))
         .map((span) => span.attributes['gen_ai.provider.name']);
 
-      expect(providers).toEqual(['primary', 'primary', 'fallback[0]']);
+      expect(providers).toEqual(['openai', 'openai', 'anthropic']);
+    });
+
+    it('uses _OTHER for a model it cannot place', async () => {
+      await busyCall({}, 'llama3:8b');
+
+      const attempt = spans().find((span) => span.name === 'chat llama3:8b');
+      expect(attempt?.attributes['gen_ai.provider.name']).toBe('_OTHER');
     });
 
     it('maps each target it knows and leaves the rest', async () => {
-      await busyCall({ providerNames: { primary: 'openai' } });
+      await busyCall({ providerNames: { primary: 'azure.ai.openai' } });
 
       const providers = spans()
         .filter((span) => span.name.startsWith('chat '))
         .map((span) => span.attributes['gen_ai.provider.name']);
 
-      expect(providers).toEqual(['openai', 'openai', 'fallback[0]']);
+      expect(providers).toEqual(['azure.ai.openai', 'azure.ai.openai', 'anthropic']);
       // The raw label is still available next to the mapped name.
       expect(spans()[1]!.attributes['vernllm.target']).toBe('primary');
     });

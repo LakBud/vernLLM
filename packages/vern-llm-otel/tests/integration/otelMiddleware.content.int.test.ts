@@ -37,13 +37,15 @@ describe('content capture end to end', () => {
   let trace: TraceHarness;
   let meter: MetricHarness;
   let errorLog: ReturnType<typeof vi.fn<Logger['error']>>;
+  let warnLog: ReturnType<typeof vi.fn<Logger['warn']>>;
   let logger: Logger;
 
   beforeEach(() => {
     trace = createTraceHarness();
     meter = createMetricHarness();
     errorLog = vi.fn<Logger['error']>();
-    logger = { debug: () => {}, warn: () => {}, error: errorLog };
+    warnLog = vi.fn<Logger['warn']>();
+    logger = { debug: () => {}, warn: warnLog, error: errorLog };
   });
 
   afterEach(async () => {
@@ -95,6 +97,34 @@ describe('content capture end to end', () => {
 
     expect(hasContent(callSpans()[0]!)).toEqual([]);
     expect(callSpans()[0]!.attributes['vernllm.content.captured']).toBe(true);
+  });
+
+  it('skips input capture and warns once when another transform runs after it', async () => {
+    const client = createMockClient([textResponse('a', USAGE), textResponse('b', USAGE)]).client;
+    const redactor: VernLLMMiddleware = {
+      name: 'late-redactor',
+      priority: 5000,
+      transform: () => ({}),
+    };
+    const llm = new VernLLM({
+      ...BASE,
+      client,
+      middleware: [otel({ captureContent: true }), redactor],
+    });
+
+    await llm.call({ userContent: 'SECRET', jsonMode: false });
+    await llm.call({ userContent: 'SECRET', jsonMode: false });
+
+    for (const attempt of attemptSpans()) {
+      expect(attempt.attributes['gen_ai.input.messages']).toBeUndefined();
+      expect(attempt.attributes['vernllm.content.skipped_reason']).toBe('not_last_transform');
+    }
+    const warnings = warnLog.mock.calls.filter(([message]) =>
+      String(message).includes('input capture skipped'),
+    );
+    expect(warnings).toHaveLength(1);
+    // A configuration warning, not a failure.
+    expect(errorLog).not.toHaveBeenCalled();
   });
 
   it('records what each attempt actually sent, and output only for the one that answered', async () => {

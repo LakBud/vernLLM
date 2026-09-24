@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createGuard } from '../../../../src/internal/guard.utils.js';
 import { CATALOG, type MetricKey } from '../../../../src/internal/metrics/catalog.js';
-import { createMetrics } from '../../../../src/internal/metrics/metrics.utils.js';
+import {
+  createMetrics,
+  NORMALIZED_MODEL_CACHE_LIMIT,
+} from '../../../../src/internal/metrics/metrics.utils.js';
 import { normalizeOptions } from '../../../../src/internal/options/normalizeOptions.utils.js';
 import {
   createMetricHarness,
@@ -211,6 +214,22 @@ describe('normalizeModel', () => {
     expect(pointsOf(collected.get('vernllm.retry.count'))[0]?.attributes).toEqual({
       'vernllm.model': 'ft',
     });
+  });
+
+  it('keeps its cache bounded however many models it sees', async () => {
+    const normalizeModel = vi.fn((model: string) => model.split(':')[0]!);
+    const { metrics } = setup({ normalizeModel });
+
+    const limit = NORMALIZED_MODEL_CACHE_LIMIT;
+    for (let index = 0; index <= limit; index++) {
+      metrics.record('retryCount', 1, { 'vernllm.model': `ft:${index}` });
+    }
+    // The first model was evicted when the limit was passed, so it is normalized again.
+    metrics.record('retryCount', 1, { 'vernllm.model': 'ft:0' });
+    // A recent one is still cached.
+    metrics.record('retryCount', 1, { 'vernllm.model': `ft:${limit}` });
+
+    expect(normalizeModel).toHaveBeenCalledTimes(limit + 2);
   });
 
   it('keeps the raw model and logs when the normalizer throws', async () => {

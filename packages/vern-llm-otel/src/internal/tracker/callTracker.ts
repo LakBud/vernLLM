@@ -34,6 +34,7 @@ import {
   statusMessageOf,
 } from '../errors/errorMapping.utils.js';
 import {
+  ATTEMPT_OUTCOME_UNKNOWN,
   ATTR,
   CALL_OUTCOME,
   EVENT_ATTR,
@@ -144,13 +145,15 @@ export class CallTracker {
   startAttempt(ctx: AttemptContext, request: Readonly<WireCallRequest>): void {
     if (this.ended) return;
 
-    // A new attempt while one is still open means a closing signal was missed.
-    this.closeAttempt({ error: undefined });
+    // A new attempt while one is still open means a closing signal was missed, so how that
+    // attempt ended is unknown. It is closed without a status or a duration measurement rather
+    // than being reported as a success.
+    this.abandonAttempt();
     this.attemptCount++;
 
     const { config, guard } = this.deps;
     const genAi = config.genAiConventions;
-    const provider = config.providerName(ctx.requestedProvider);
+    const provider = config.providerName(ctx.requestedProvider, ctx.requestedModel);
 
     const span = guard<Span | undefined>(
       'startAttemptSpan',
@@ -188,8 +191,24 @@ export class CallTracker {
 
     if (span && this.captureContent && this.deps.content) {
       const { content } = this.deps;
-      guard('captureInput', () => content.captureInput(span, request), undefined);
+      if (this.isLastTransform(ctx)) {
+        guard('captureInput', () => content.captureInput(span, request), undefined);
+      } else {
+        // Another middleware sorts after this one, and it may be a redactor, so the request
+        // seen here may not be what gets sent. Fails closed instead of recording it. The core
+        // does not say which entries have a `transform`, so an entry without one also counts.
+        this.safely('markContentSkipped', () =>
+          span.setAttribute(VERNLLM_ATTR.contentSkippedReason, CONTENT_SKIPPED_NOT_LAST),
+        );
+        warnCaptureOrderOnce(this.deps);
+      }
     }
+  }
+
+  /** `registeredMiddlewareNames` is in transform order, so the last name runs last. */
+  private isLastTransform(ctx: AttemptContext): boolean {
+    const names = ctx.registeredMiddlewareNames;
+    return names.length > 0 && names[names.length - 1] === this.deps.config.name;
   }
 
   /** Span work for one event. Metrics are recorded separately, before this runs. */
@@ -424,6 +443,19 @@ export class CallTracker {
     });
   }
 
+  /** Ends an attempt whose outcome was never observed, see `startAttempt`. */
+  private abandonAttempt(): void {
+    const attempt = this.current;
+    if (!attempt) return;
+
+    attempt.settled = true;
+    this.current = undefined;
+    this.safely('abandonAttempt', () =>
+      attempt.span?.setAttribute(VERNLLM_ATTR.attemptOutcome, ATTEMPT_OUTCOME_UNKNOWN),
+    );
+    attempt.span?.end();
+  }
+
   /** The single place an attempt ends. */
   private closeAttempt(failure: Failure | undefined): void {
     const attempt = this.current;
@@ -506,6 +538,18 @@ export class CallTracker {
       span.end();
     }
   }
+}
+
+const CONTENT_SKIPPED_NOT_LAST = 'not_last_transform';
+const captureOrderWarned = new WeakSet<TrackerDeps>();
+
+function warnCaptureOrderOnce(deps: TrackerDeps): void {
+  if (captureOrderWarned.has(deps)) return;
+  captureOrderWarned.add(deps);
+  deps.guard.warn(
+    `input capture skipped: middleware sorted after "${deps.config.name}" may change the ` +
+      'request. Give this entry a higher priority, or runsAfter the others, so it runs last.',
+  );
 }
 
 function outcomeOf(reason: ReturnType<typeof noAttemptReasonOf>): string {

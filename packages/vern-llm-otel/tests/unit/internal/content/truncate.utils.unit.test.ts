@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { TRUNCATION_MARKER, truncate } from '../../../../src/internal/content/truncate.utils.js';
 
+const M = TRUNCATION_MARKER.length;
+
 describe('truncate', () => {
   it('returns text that fits untouched, with no marker', () => {
     expect(truncate('hello', 5)).toBe('hello');
@@ -10,31 +12,33 @@ describe('truncate', () => {
     expect(truncate('', 0)).toBe('');
   });
 
-  it('cuts to the limit and marks it', () => {
-    expect(truncate('abcdef', 3)).toBe(`abc${TRUNCATION_MARKER}`);
+  it('keeps the marker inside the limit', () => {
+    const cut = truncate('abcdefghijklmnopqrstuvwxyz', M + 3);
+
+    expect(cut).toBe(`abc${TRUNCATION_MARKER}`);
+    expect(cut!.length).toBe(M + 3);
   });
 
-  it('leaves only the marker when nothing is allowed', () => {
-    expect(truncate('abc', 0)).toBe(TRUNCATION_MARKER);
+  it('leaves the piece out when nothing fits next to the marker', () => {
+    expect(truncate('abcdefghijklmnopqrstuvwxyz', 0)).toBeUndefined();
+    expect(truncate('abcdefghijklmnopqrstuvwxyz', M)).toBeUndefined();
   });
 
   it('never splits a surrogate pair', () => {
     // Each emoji is two UTF-16 units, so a cut at 3 would land between the halves of the second.
-    const cut = truncate('😀😀😀', 3);
+    const cut = truncate('😀😀😀😀😀😀😀😀😀😀', M + 3);
 
     expect(cut).toBe(`😀${TRUNCATION_MARKER}`);
-    expect(cut.startsWith('\ud83d\ude00')).toBe(true);
-    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(cut.replace(TRUNCATION_MARKER, ''))).toBe(
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(cut!.replace(TRUNCATION_MARKER, ''))).toBe(
       false,
     );
   });
 
   it('keeps a whole pair when the cut falls after it', () => {
-    expect(truncate('😀😀😀', 4)).toBe(`😀😀${TRUNCATION_MARKER}`);
+    expect(truncate('😀😀😀😀😀😀😀😀😀😀', M + 4)).toBe(`😀😀${TRUNCATION_MARKER}`);
   });
 
-  it('drops the only pair when a limit of 1 would split it', () => {
-    expect(truncate('😀', 0)).toBe(TRUNCATION_MARKER);
-    expect(truncate('😀😀', 1)).toBe(TRUNCATION_MARKER);
+  it('leaves the piece out when a limit of one unit would split the only pair', () => {
+    expect(truncate('😀😀😀😀😀😀😀😀😀😀', M + 1)).toBeUndefined();
   });
 });

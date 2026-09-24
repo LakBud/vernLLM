@@ -28,6 +28,46 @@ function attemptInput(overrides: Partial<AttemptStartInput> = {}): AttemptStartI
 }
 
 describe('attemptStartAttributes', () => {
+  describe('temperature with thinking on', () => {
+    const thinking = (provider: string, model: string, extra = {}) =>
+      attemptStartAttributes(
+        attemptInput({
+          provider,
+          model,
+          request: { max_tokens: 512, temperature: 0.2, budget_tokens: 2048, ...extra },
+        }),
+        true,
+      )['gen_ai.request.temperature'];
+
+    it('is left out for Anthropic, which drops it from the wire', () => {
+      expect(thinking('anthropic', 'claude-sonnet-4-5')).toBeUndefined();
+      expect(
+        thinking('anthropic', 'claude-sonnet-4-5', {
+          budget_tokens: undefined,
+          reasoning_effort: 'low',
+        }),
+      ).toBeUndefined();
+    });
+
+    it('is left out for Claude on Bedrock', () => {
+      expect(thinking('aws.bedrock', 'anthropic.claude-3-7-sonnet-20250219-v1:0')).toBeUndefined();
+    });
+
+    it('is kept where the provider still sends it', () => {
+      expect(thinking('openai', 'o3')).toBe(0.2);
+      expect(thinking('aws.bedrock', 'amazon.nova-pro-v1:0')).toBe(0.2);
+    });
+
+    it('is kept for Anthropic without thinking', () => {
+      expect(
+        attemptStartAttributes(
+          attemptInput({ provider: 'anthropic', model: 'claude-sonnet-4-5' }),
+          true,
+        )['gen_ai.request.temperature'],
+      ).toBe(0.2);
+    });
+  });
+
   it('sets the sampling relevant and request attributes', () => {
     expect(attemptStartAttributes(attemptInput(), true)).toEqual({
       'gen_ai.operation.name': 'chat',

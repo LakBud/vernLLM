@@ -36,6 +36,8 @@ export interface ResolvedConfig {
   runsAfter: (MiddlewareRef | RequiredMiddlewareRef)[];
   /** `undefined` when content capture is off. */
   capture: ResolvedCapture | undefined;
-  /** Mapped `gen_ai.provider.name`, falling back to the raw target label. */
-  providerName(label: string): string;
+  /** `gen_ai.provider.name`: the mapped label, else inferred from the model, else `_OTHER`. */
+  providerName(label: string, model: string): string;
+  /** `vernllm.*` provider value: the mapped label, else the label itself. */
+  targetName(label: string): string;
 }
