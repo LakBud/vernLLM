@@ -76,4 +76,47 @@ describe('redactResponseBody', () => {
     expect(error.message).toBe('Request failed (400): [REDACTED]');
     expect(error.stack).toBeUndefined();
   });
+
+  it('removes every line of a multi-line body from the stack and keeps the frames', () => {
+    const error = errorWithResponseBody(
+      'Request failed (400)',
+      'line one sk-a\nline two sk-b\nline three',
+    );
+
+    // Something read the stack first (a logger, a debugger), so V8 has
+    // already formatted it with the raw body in it.
+    expect(error.stack).toContain('line two sk-b');
+
+    redactResponseBody(error, (text) => text.replace(/sk-\w+/g, '[REDACTED]'));
+
+    expect(error.stack).not.toContain('sk-a');
+    expect(error.stack).not.toContain('sk-b');
+    expect(error.stack?.startsWith(`Error: ${error.message}`)).toBe(true);
+    expect(error.stack).toMatch(/\n\s+at /);
+  });
+
+  it('removes every line of a multi-line body from the stack when redact throws', () => {
+    const error = errorWithResponseBody('Request failed (400)', 'first sk-a\nsecond sk-b');
+    expect(error.stack).toContain('second sk-b');
+
+    redactResponseBody(error, () => {
+      throw new Error('redact bug');
+    });
+
+    expect(error.stack).not.toContain('sk-a');
+    expect(error.stack).not.toContain('second');
+    expect(error.stack?.split('\n')[0]).toBe(
+      'Error: Request failed (400): [response body withheld: redact threw]',
+    );
+    expect(error.stack).toMatch(/\n\s+at /);
+  });
+
+  it('drops a stack that was rewritten elsewhere rather than risk keeping body text', () => {
+    const error = errorWithResponseBody('Request failed (400)', 'sk-secret\nmore');
+    error.stack = 'CustomPrefix sk-secret\nmore\n    at somewhere';
+
+    redactResponseBody(error, () => '[REDACTED]');
+
+    expect(error.stack).toBe('Error: Request failed (400): [REDACTED]');
+  });
 });

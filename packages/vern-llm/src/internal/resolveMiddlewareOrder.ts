@@ -51,6 +51,25 @@ export function middlewareLabels(ordered: readonly VernLLMMiddleware[]): readonl
 }
 
 /**
+ * Throws if two ordered entries publish the same label. Separate from
+ * `assertNoDuplicateLabels`, which guards the ordering graph's ids: a
+ * middleware named `"[1]"` and an unnamed one landing at position 1 have
+ * different graph ids but would publish the same label, so logs, events,
+ * and `registeredMiddlewareNames` couldn't tell them apart.
+ */
+function assertNoDuplicatePublishedLabels(labels: readonly string[]): void {
+  const seen = new Set<string>();
+  for (const label of labels) {
+    if (seen.has(label)) {
+      throw new Error(
+        `middleware has a duplicate label "${label}"; a name can't match an unnamed middleware's bracketed position`,
+      );
+    }
+    seen.add(label);
+  }
+}
+
+/**
  * A middleware's resolved position in the graph: its id, its entry, its
  * original array index (the tie break once `priority` is also equal),
  * and the ids of every entry that must come after it. Built once per
@@ -346,9 +365,11 @@ export function buildMiddlewarePipeline(
   logger?: Logger,
 ): MiddlewarePipeline {
   const transformOrder = resolveMiddlewareOrder(entries, logger);
+  const names = middlewareLabels(transformOrder);
+  assertNoDuplicatePublishedLabels(names);
   return {
     transformOrder,
     wrapOrder: applyPositionOverride(transformOrder, entries),
-    names: middlewareLabels(transformOrder),
+    names,
   };
 }

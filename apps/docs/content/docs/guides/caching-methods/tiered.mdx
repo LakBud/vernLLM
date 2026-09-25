@@ -56,9 +56,10 @@ const cache = new TieredCacheAdapter(
 );
 ```
 
-L1 never outlives L2. A write uses the smaller of `l1Ttl` and `ttl` for L1, and a promotion of a key
-this process wrote is capped at the time L2 has left. A promoted key another process wrote keeps
-`l1Ttl` (60s by default), since L2 doesn't report its remaining lifetime.
+A write uses the smaller of `l1Ttl` and `ttl` for L1, and a promotion of a key this process wrote is
+capped at the time L2 has left. A promoted key another process wrote keeps `l1Ttl` (60s by default),
+since L2 doesn't report its remaining lifetime. An L1 hit never checks L2, so a key deleted or
+evicted in L2 from outside this adapter stays in L1 until its L1 ttl runs out.
 
 <Callout>
   `TieredCacheAdapter` forwards `resolveKey` to whichever tier implements it, preferring L1 since

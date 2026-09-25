@@ -400,7 +400,8 @@ priority-only setup keeps its exact current order regardless of which band anyth
 Every `transform`/`wrap`/`onEvent` hook's `ctx` carries `registeredMiddlewareNames`: every
 registered middleware's resolved label (`name`, or its bracketed `transformOrder` position such as
 `[0]` if unnamed, the same label logs and the `'middleware'` event use),
-frozen, in `transformOrder`. Lets a middleware make an informed call, like skipping a duplicate
+frozen, in `transformOrder`. Labels are unique: a `name` that matches another entry's `[i]` label
+throws at construction. Lets a middleware make an informed call, like skipping a duplicate
 action when it detects another known middleware by name already handles it, without needing to
 know anything else about that middleware's own configuration:
 

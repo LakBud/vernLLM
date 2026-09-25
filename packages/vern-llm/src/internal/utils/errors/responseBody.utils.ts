@@ -40,14 +40,20 @@ export function redactResponseBody(error: unknown, redact: (text: string) => str
     redacted = '[response body withheld: redact threw]';
   }
 
+  // Read before the message changes: V8 formats `stack` lazily on first
+  // access, from whatever the message is at that moment.
+  const rawStack = error.stack;
+  const rawHeader = `${error.name}: ${error.message}`;
+
   error.message = `${pending.prefix}: ${redacted}`;
 
-  // The stack's first line copies the message as it was when the error
-  // was built, so it would still carry the raw body.
-  if (typeof error.stack === 'string') {
-    const firstLineEnd = error.stack.indexOf('\n');
-    error.stack =
-      `${error.name}: ${error.message}` +
-      (firstLineEnd === -1 ? '' : error.stack.slice(firstLineEnd));
+  // The stack starts with the message as it was when the error was built,
+  // and a body with newlines spans several lines of it. Replace exactly
+  // that header so no part of the raw body survives, keeping the frames.
+  // A stack that doesn't start with it (rewritten elsewhere) is dropped to
+  // its header rather than risk keeping body text.
+  if (typeof rawStack === 'string') {
+    const frames = rawStack.startsWith(rawHeader) ? rawStack.slice(rawHeader.length) : '';
+    error.stack = `${error.name}: ${error.message}${frames}`;
   }
 }

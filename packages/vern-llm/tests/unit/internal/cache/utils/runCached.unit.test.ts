@@ -77,13 +77,85 @@ describe('InMemoryCacheAdapter', () => {
     expect(await cache.get('k')).toEqual({ hit: true, value: { items: ['a'] } });
   });
 
-  it('keeps a value it cannot copy by reference instead of refusing to cache it', async () => {
+  it('does not store a value holding a function, instead of sharing it by reference', async () => {
     const cache = new InMemoryCacheAdapter<{ fn: () => number }>();
-    const value = { fn: () => 1 };
+
+    await cache.set('k', { fn: () => 1 }, 60);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('never hands back a class instance stripped of its prototype', async () => {
+    class Money {
+      constructor(readonly cents: number) {}
+      format(): string {
+        return `$${(this.cents / 100).toFixed(2)}`;
+      }
+    }
+    const cache = new InMemoryCacheAdapter<{ total: Money }>();
+
+    await cache.set('k', { total: new Money(250) }, 60);
+    const result = await cache.get('k');
+
+    // Not cached at all, rather than a hit whose `total.format` is missing.
+    expect(result).toEqual({ hit: false, value: null });
+  });
+
+  it('drops the older value when a key is rewritten with a value it cannot copy', async () => {
+    const cache = new InMemoryCacheAdapter<unknown>();
+
+    await cache.set('k', { ok: true }, 60);
+    await cache.set('k', { fn: () => 1 }, 60);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('copies built-ins structuredClone recreates with their own type', async () => {
+    const cache = new InMemoryCacheAdapter<unknown>();
+    const value = {
+      at: new Date(0),
+      pattern: /a+/g,
+      tags: new Set(['x']),
+      counts: new Map([['a', 1]]),
+      bytes: new Uint8Array([1, 2]),
+      bare: Object.assign(Object.create(null) as object, { n: 1 }),
+      list: [1, 'two', null, undefined, 3n],
+    };
+
+    await cache.set('k', value, 60);
+    const { hit, value: copy } = await cache.get('k');
+
+    expect(hit).toBe(true);
+    expect(copy).toEqual(value);
+    expect(copy).not.toBe(value);
+    expect((copy as typeof value).at).toBeInstanceOf(Date);
+    expect((copy as typeof value).counts).toBeInstanceOf(Map);
+  });
+
+  it('copies a value with a cycle', async () => {
+    const cache = new InMemoryCacheAdapter<Record<string, unknown>>();
+    const value: Record<string, unknown> = { name: 'loop' };
+    value.self = value;
+
+    await cache.set('k', value, 60);
+    const copy = (await cache.get('k')).value!;
+
+    expect(copy.self).toBe(copy);
+  });
+
+  it.each([
+    ['a symbol value', { s: Symbol('x') }],
+    ['a symbol key', { [Symbol('x')]: 1 }],
+    ['an accessor', Object.defineProperty({}, 'v', { get: () => 1, enumerable: true })],
+    ['a class instance inside a Map', { m: new Map([['k', new (class Box {})()]]) }],
+    ['a class instance as a Map key', { m: new Map([[new (class Key {})(), 1]]) }],
+    ['a function inside a Set', { s: new Set([() => 1]) }],
+  ])('does not store a value holding %s', async (_, value) => {
+    const cache = new InMemoryCacheAdapter<unknown>();
 
     await cache.set('k', value, 60);
 
-    expect((await cache.get('k')).value).toBe(value);
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
   });
 
   it.each([
@@ -404,6 +476,74 @@ describe('TieredCacheAdapter expiry', () => {
     const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
     expect(tracked.has('short')).toBe(false);
     expect(tracked.has('long')).toBe(true);
+  });
+
+  it("treats an L2 hit on a key whose tracked write expired as another process's entry", async () => {
+    vi.useFakeTimers();
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const setSpy = vi.spyOn(l1, 'set');
+    const cache = new TieredCacheAdapter(l1, l2, 30);
+
+    await cache.set('k', 'mine', 5);
+    vi.advanceTimersByTime(6_000);
+    // Another process rewrote the key in L2 after this process's write expired.
+    await l2.set('k', 'theirs', 3600);
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: 'theirs' });
+    expect(setSpy).toHaveBeenLastCalledWith('k', 'theirs', 30);
+
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+    expect(tracked.has('k')).toBe(false);
+  });
+
+  it('prunes by expiry, not write order, and never lets a stale record remove a newer one', async () => {
+    vi.useFakeTimers();
+    const noop = { get: async () => ({ hit: false, value: null }), set: async () => {} };
+    const cache = new TieredCacheAdapter<number>(noop, noop);
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+
+    await cache.set('long', 1, 3600); // written first, expires last
+    await cache.set('short', 2, 1);
+    await cache.set('rewritten', 3, 1);
+    await cache.set('rewritten', 4, 3600); // its old 1s record is now stale
+
+    vi.advanceTimersByTime(1_001);
+    await cache.set('trigger', 5, 3600);
+
+    expect(tracked.has('short')).toBe(false);
+    expect(tracked.has('long')).toBe(true);
+    expect(tracked.has('rewritten')).toBe(true);
+  });
+
+  it('prunes exactly the expired records across many mixed ttls, step by step', async () => {
+    vi.useFakeTimers();
+    const noop = { get: async () => ({ hit: false, value: null }), set: async () => {} };
+    const cache = new TieredCacheAdapter<number>(noop, noop);
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+    const start = Date.now();
+
+    // A fixed, shuffled spread of ttls from 1s to 40s.
+    const ttls = Array.from({ length: 40 }, (_, i) => ((i * 17) % 40) + 1);
+    for (const [i, ttl] of ttls.entries()) await cache.set(`k${i}`, i, ttl);
+
+    for (const elapsed of [5, 12, 25, 39]) {
+      vi.setSystemTime(start + elapsed * 1_000 + 1);
+      await cache.set('probe', 0, 3600);
+
+      const expected = ttls.flatMap((ttl, i) => (ttl > elapsed ? [`k${i}`] : []));
+      expect([...tracked.keys()].filter((k) => k !== 'probe').sort()).toEqual(expected.sort());
+    }
+  });
+
+  it('keeps the expiry heap bounded when the same keys are rewritten over and over', async () => {
+    const noop = { get: async () => ({ hit: false, value: null }), set: async () => {} };
+    const cache = new TieredCacheAdapter<number>(noop, noop);
+
+    for (let i = 0; i < 5_000; i++) await cache.set(`k${i % 10}`, i, 3600);
+
+    const heap = (cache as unknown as { expiryHeap: unknown[] }).expiryHeap;
+    expect(heap.length).toBeLessThanOrEqual(2 * 10 + 64 + 1);
   });
 
   it('bounds the number of tracked expiries', async () => {

@@ -235,6 +235,21 @@ describe('buildMiddlewarePipeline', () => {
     expect(Object.isFrozen(pipeline.names)).toBe(true);
   });
 
+  it("throws when a name matches an unnamed entry's published bracketed label", () => {
+    // Graph ids differ ("[1]" vs "1"), but both would publish as "[1]".
+    const middleware = [mw({ name: '[1]', priority: 0 }), mw({ priority: 1 })];
+
+    expect(() => buildMiddlewarePipeline(middleware)).toThrow(
+      'middleware has a duplicate label "[1]"',
+    );
+  });
+
+  it('allows a bracketed name that no unnamed entry lands on', () => {
+    const middleware = [mw({ name: '[5]', priority: 0 }), mw({ priority: 1 })];
+
+    expect(buildMiddlewarePipeline(middleware).names).toEqual(['[5]', '[1]']);
+  });
+
   it('labels an unnamed entry by its bracketed transformOrder position, same as logs and events', () => {
     const middleware = [mw({ priority: 1 }), mw({ name: 'named', priority: 0 })];
     const pipeline = buildMiddlewarePipeline(middleware);

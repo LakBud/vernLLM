@@ -36,7 +36,8 @@ const result = await llm.cachedCall({
 
 A missing or NaN `ttl` caches nothing and logs a warning. A `ttl` of 0 or less also caches nothing.
 `InMemoryCacheAdapter` copies values on write and on read, so mutating a result never changes the
-cached one.
+cached one. A value it can't copy faithfully, such as a class instance or a function anywhere inside
+it, isn't cached.
 
 ## Eviction
 
@@ -191,8 +192,10 @@ adapter that implements `resolveKey`) in either position:
 const cache = new TieredCacheAdapter(new NormalizedCacheAdapter(), new UpstashCacheAdapter());
 ```
 
-An L1 entry never outlives the L2 entry this process wrote. A value promoted from L2 that another
-process wrote keeps `l1Ttl` (60s by default), since L2 doesn't report how long it has left.
+An L1 entry's ttl is capped at the L2 expiry this process tracked when it wrote the key. A value
+promoted from L2 that another process wrote keeps `l1Ttl` (60s by default), since L2 doesn't report
+how long it has left. An L1 hit never checks L2, so deleting or evicting a key in L2 from outside
+this adapter doesn't remove it from L1 until its L1 ttl runs out.
 
 <Callout>
   If both L1 and L2 implement `resolveKey`, L1's is used, since it's checked first in `get()` and

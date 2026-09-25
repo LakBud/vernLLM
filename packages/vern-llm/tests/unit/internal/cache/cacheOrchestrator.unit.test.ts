@@ -217,21 +217,21 @@ describe('CacheOrchestrator.runCached, joinInFlight/registerTrigger', () => {
     ['missing', undefined],
     ['NaN', Number.NaN],
   ])(
-    'warns that nothing is cached for a %s ttl and still lets the adapter drop the key',
+    'warns and never hands a %s ttl to the adapter, so no adapter can keep it forever',
     async (_, ttl) => {
       const logger = silentLogger();
-      const cache = new InMemoryCacheAdapter();
+      const set = vi.fn(async () => {});
+      const cache = { get: async () => ({ hit: false, value: null }), set };
       const orchestrator = new CacheOrchestrator(cache, logger);
 
-      await cache.set('k', 'stale', 60);
       const result = await orchestrator.runCached({
-        cacheKey: 'k-miss',
+        cacheKey: 'k',
         ttl: ttl as number,
         fn: async () => 'fresh',
       });
 
       expect(result).toBe('fresh');
-      expect(await cache.get('k-miss')).toEqual({ hit: false, value: null });
+      expect(set).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith(
         `[VernLLM] cachedCall ttl must be a number of seconds, got ${String(ttl)}. Nothing is cached.`,
       );

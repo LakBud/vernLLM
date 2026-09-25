@@ -61,17 +61,59 @@ function isLiveTtl(ttl: number): boolean {
 }
 
 /**
- * Copies a value so the caller and the store never share one object. A
- * value `structuredClone` can't copy (a function, for one) is kept by
- * reference, since refusing to cache it would be a bigger surprise than
- * the sharing.
+ * Whether `structuredClone` returns a faithful copy of `value`: plain
+ * objects and arrays, primitives, and the built-ins it recreates with
+ * their own type (Date, RegExp, Map, Set, binary data), all the way down.
+ * A class instance would come back as a plain object without its
+ * methods, and a function or symbol can't be cloned at all, so either
+ * anywhere in the value makes it unsafe to copy.
  */
-function cloneValue<T>(value: T): T {
-  try {
-    return structuredClone(value);
-  } catch {
-    return value;
+function isFaithfullyCloneable(value: unknown, seen = new Set<object>()): boolean {
+  if (value === null) return true;
+
+  const type = typeof value;
+  if (type === 'function' || type === 'symbol') return false;
+  if (type !== 'object') return true;
+
+  const object = value as object;
+  if (seen.has(object)) return true;
+  seen.add(object);
+
+  if (
+    object instanceof Date ||
+    object instanceof RegExp ||
+    object instanceof ArrayBuffer ||
+    ArrayBuffer.isView(object)
+  ) {
+    return true;
   }
+
+  if (object instanceof Map) {
+    for (const [key, item] of object) {
+      if (!isFaithfullyCloneable(key, seen) || !isFaithfullyCloneable(item, seen)) return false;
+    }
+    return true;
+  }
+
+  if (object instanceof Set) {
+    for (const item of object) {
+      if (!isFaithfullyCloneable(item, seen)) return false;
+    }
+    return true;
+  }
+
+  const prototype = Object.getPrototypeOf(object);
+  if (!Array.isArray(object) && prototype !== Object.prototype && prototype !== null) return false;
+
+  // Symbol keys and accessors are dropped or flattened by structuredClone.
+  if (Object.getOwnPropertySymbols(object).length > 0) return false;
+
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(object))) {
+    if (!('value' in descriptor)) return false;
+    if (!isFaithfullyCloneable(descriptor.value, seen)) return false;
+  }
+
+  return true;
 }
 
 /**
@@ -79,9 +121,12 @@ function cloneValue<T>(value: T): T {
  * Not shared across processes, swap in Redis/Upstash/etc for production.
  *
  * Values are copied on `set` and on every `get`, so mutating a result
- * never changes what the next hit returns. A `ttl` that is missing, NaN,
- * zero, or negative stores nothing and drops any existing entry for the
- * key, since an entry that can't expire would be served forever.
+ * never changes what the next hit returns. A value that can't be copied
+ * faithfully (a class instance, a function, anywhere inside it) is not
+ * stored, and drops any existing entry for the key, since the store would
+ * otherwise have to share it or hand back a copy without its methods. A
+ * `ttl` that is missing, NaN, zero, or negative is treated the same way,
+ * since an entry that can't expire would be served forever.
  */
 export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
   private store = new Map<string, { value: T; expiresAt: number }>();
@@ -105,20 +150,21 @@ export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
     }
 
     this.eviction.onAccess(this.store, key);
-    return { hit: true, value: cloneValue(entry.value) };
+    // Only faithfully cloneable values are ever stored, see `set`.
+    return { hit: true, value: structuredClone(entry.value) };
   }
 
   async set(key: string, value: T, ttl: number): Promise<void> {
     this.cleanupExpiredEntries();
 
-    if (!isLiveTtl(ttl)) {
+    if (!isLiveTtl(ttl) || !isFaithfullyCloneable(value)) {
       // The caller asked to replace this key, so an older value must not survive.
       this.store.delete(key);
       return;
     }
 
     this.store.set(key, {
-      value: cloneValue(value),
+      value: structuredClone(value),
       expiresAt: Date.now() + ttl * 1000,
     });
     this.eviction.onInsert(this.store, key);
@@ -195,8 +241,16 @@ const MAX_TRACKED_EXPIRIES = 10_000;
  * (60s by default).
  */
 export class TieredCacheAdapter<T = unknown> implements CacheAdapter<T> {
-  /** L2 expiry (epoch ms) per key this adapter wrote. */
+  /** L2 expiry (epoch ms) per key this adapter wrote, oldest write first. */
   private readonly l2ExpiresAt = new Map<string, number>();
+
+  /**
+   * The same expiries as a min-heap, soonest first, so a write only visits
+   * records that have actually expired. Entries go stale when their key is
+   * rewritten, deleted, or capped out, and are skipped when popped: a heap
+   * entry only counts while the map still holds that exact expiry.
+   */
+  private expiryHeap: Array<{ key: string; expiresAt: number }> = [];
 
   constructor(
     private readonly l1: CacheAdapter<T>,
@@ -249,15 +303,21 @@ export class TieredCacheAdapter<T = unknown> implements CacheAdapter<T> {
 
     if (expiresAt === undefined) return fallback;
 
+    // L2 still served a key whose tracked write has expired, so another
+    // process rewrote it since. The record describes an entry that no
+    // longer exists; treat the hit like any other external entry.
+    if (expiresAt <= Date.now()) {
+      this.l2ExpiresAt.delete(key);
+      return fallback;
+    }
+
     return Math.min(fallback, (expiresAt - Date.now()) / 1000);
   }
 
   private trackExpiry(key: string, ttl: number): void {
     const now = Date.now();
 
-    for (const [trackedKey, expiresAt] of this.l2ExpiresAt) {
-      if (now >= expiresAt) this.l2ExpiresAt.delete(trackedKey);
-    }
+    this.pruneExpired(now);
 
     // Reinserted so the map's order stays oldest write first for the cap below.
     this.l2ExpiresAt.delete(key);
@@ -265,7 +325,9 @@ export class TieredCacheAdapter<T = unknown> implements CacheAdapter<T> {
     // A ttl that isn't a number stays untracked, so promotion falls back to l1Ttl.
     if (typeof ttl !== 'number' || Number.isNaN(ttl)) return;
 
-    this.l2ExpiresAt.set(key, now + ttl * 1000);
+    const expiresAt = now + ttl * 1000;
+    this.l2ExpiresAt.set(key, expiresAt);
+    heapPush(this.expiryHeap, { key, expiresAt });
 
     while (this.l2ExpiresAt.size > MAX_TRACKED_EXPIRIES) {
       const oldest = this.l2ExpiresAt.keys().next().value;
@@ -273,5 +335,61 @@ export class TieredCacheAdapter<T = unknown> implements CacheAdapter<T> {
       if (oldest === undefined) break;
       this.l2ExpiresAt.delete(oldest);
     }
+
+    // Stale heap entries (rewrites, deletes, capped keys) would otherwise
+    // pile up for keys that never expire soon. Rebuilding from the map is
+    // O(n) and only runs once the heap holds twice what it needs.
+    if (this.expiryHeap.length > 2 * this.l2ExpiresAt.size + 64) {
+      this.expiryHeap = [];
+      for (const [trackedKey, trackedExpiry] of this.l2ExpiresAt) {
+        heapPush(this.expiryHeap, { key: trackedKey, expiresAt: trackedExpiry });
+      }
+    }
+  }
+
+  /** Drops every tracked record that has expired, visiting only those. */
+  private pruneExpired(now: number): void {
+    while (this.expiryHeap.length > 0 && this.expiryHeap[0]!.expiresAt <= now) {
+      const { key, expiresAt } = heapPop(this.expiryHeap)!;
+      if (this.l2ExpiresAt.get(key) === expiresAt) this.l2ExpiresAt.delete(key);
+    }
+  }
+}
+
+type ExpiryRecord = { key: string; expiresAt: number };
+
+/** Adds `record` to a min-heap ordered by `expiresAt`. */
+function heapPush(heap: ExpiryRecord[], record: ExpiryRecord): void {
+  heap.push(record);
+  let index = heap.length - 1;
+
+  while (index > 0) {
+    const parent = (index - 1) >> 1;
+    if (heap[parent]!.expiresAt <= heap[index]!.expiresAt) break;
+    [heap[parent], heap[index]] = [heap[index]!, heap[parent]!];
+    index = parent;
+  }
+}
+
+/** Removes and returns the soonest record of a min-heap ordered by `expiresAt`. */
+function heapPop(heap: ExpiryRecord[]): ExpiryRecord | undefined {
+  const top = heap[0];
+  const last = heap.pop();
+  if (top === undefined || last === undefined || heap.length === 0) return top;
+
+  heap[0] = last;
+  let index = 0;
+
+  for (;;) {
+    const left = 2 * index + 1;
+    const right = left + 1;
+    let smallest = index;
+
+    if (left < heap.length && heap[left]!.expiresAt < heap[smallest]!.expiresAt) smallest = left;
+    if (right < heap.length && heap[right]!.expiresAt < heap[smallest]!.expiresAt) smallest = right;
+    if (smallest === index) return top;
+
+    [heap[smallest], heap[index]] = [heap[index]!, heap[smallest]!];
+    index = smallest;
   }
 }
