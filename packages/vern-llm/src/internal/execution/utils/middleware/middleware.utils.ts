@@ -8,6 +8,7 @@ import {
   type WireCallRequest,
   type WireCallRequestPatch,
 } from '../../../../types/index.js';
+import { middlewareLabel } from '../../../resolveMiddlewareOrder.js';
 import { logHookError } from '../../../utils/logger.utils.js';
 import { normalizeError } from '../errors.utils.js';
 
@@ -17,8 +18,37 @@ import type { Logger } from '../../../../logger.js';
 export const DEFAULT_MIDDLEWARE_TIMEOUT_MS = 5000;
 
 /** `middleware.name`, or its array position if unnamed. Used in log lines and the `'middleware'` event. */
-export function middlewareLabel(middleware: VernLLMMiddleware, index: number): string {
-  return middleware.name ?? `[${index}]`;
+export { middlewareLabel };
+
+/** Each middleware's `ctx.own`, per logical call (keyed by that call's state bag). */
+const ownStores = new WeakMap<
+  MiddlewareStateBag,
+  Map<VernLLMMiddleware, Record<string, unknown>>
+>();
+
+/**
+ * `ctx` as `entry` should see it, with `own` set to that middleware's
+ * scratch object for this logical call. The same object comes back for
+ * every hook of the same call, so a value written in `wrap` is still
+ * there in `transform` and `onEvent`. Keyed by the state bag, so it is
+ * collected with the call.
+ */
+export function withOwn<C extends MiddlewareContext>(ctx: C, entry: VernLLMMiddleware): C {
+  let store = ownStores.get(ctx.state);
+
+  if (!store) {
+    store = new Map();
+    ownStores.set(ctx.state, store);
+  }
+
+  let own = store.get(entry);
+
+  if (!own) {
+    own = {};
+    store.set(entry, own);
+  }
+
+  return { ...ctx, own };
 }
 
 /**
@@ -87,7 +117,7 @@ export async function resolveEnabled(
   const timeoutMs = middleware.timeoutMs ?? middlewareTimeoutMs;
 
   try {
-    return await raceTimeout(async () => enabled(ctx), timeoutMs, label);
+    return await raceTimeout(async () => enabled(withOwn(ctx, middleware)), timeoutMs, label);
   } catch (error) {
     logger.error(
       `[VernLLM] middleware "${label}".enabled threw or timed out, treating as disabled`,
@@ -345,7 +375,11 @@ export async function runTransform(
   const timeoutMs = middleware.timeoutMs ?? middlewareTimeoutMs;
 
   try {
-    return await raceTimeout(async () => middleware.transform!(request, ctx), timeoutMs, label);
+    return await raceTimeout(
+      async () => middleware.transform!(request, withOwn(ctx, middleware)),
+      timeoutMs,
+      label,
+    );
   } catch (error) {
     throw reclassifyMiddlewareThrow(error, label, ctx.signal);
   }
@@ -408,7 +442,7 @@ function invokeOnEvent(
   logger: Logger,
 ): void {
   try {
-    void Promise.resolve(entry.onEvent!(event, { ...ctx, own: {} })).catch((error: unknown) => {
+    void Promise.resolve(entry.onEvent!(event, withOwn(ctx, entry))).catch((error: unknown) => {
       logHookError(logger, `middleware "${label}".onEvent`, error);
     });
   } catch (error) {

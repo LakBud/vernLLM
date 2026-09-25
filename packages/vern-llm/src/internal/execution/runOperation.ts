@@ -3,6 +3,7 @@ import {
   reclassifyMiddlewareThrow,
   middlewareLabel,
   resolveEnabled,
+  withOwn,
 } from './utils/middleware/middleware.utils.js';
 import { createOnceAsync } from './utils/once.utils.js';
 
@@ -143,7 +144,7 @@ export async function runOperation(
       const onceNext = createOnceAsync(inner);
 
       try {
-        const result = await middleware.wrap(request, onceNext.call, ctx);
+        const result = await middleware.wrap(request, onceNext.call, withOwn(ctx, middleware));
 
         if (!onceNext.wasCalled()) {
           emitEvent(

@@ -32,7 +32,8 @@ export interface RateLimitOptions {
   maxQueueSize?: number;
   /**
    * Pre-flight token estimate for `tokensPerMinute`. Defaults to a
-   * chars/4 heuristic over message content plus `max_tokens`.
+   * chars/4 heuristic over message text, a flat amount per image, plus
+   * `max_tokens`.
    */
   estimateTokens?: (request: WireRequest) => number;
   /**
@@ -92,22 +93,59 @@ export interface RateLimitAcquireResult {
   reason?: RateLimitReason;
 }
 
-/** Default `estimateTokens`: chars/4 over every message's content, plus the requested `max_tokens`. */
-export function defaultEstimateTokens(request: WireRequest): number {
-  const messagesChars = request.messages.reduce((sum, message) => {
-    const content = (message as { content?: unknown }).content;
+/**
+ * Tokens reserved per image by `defaultEstimateTokens`. Providers bill an
+ * image by its pixel dimensions, not its base64 size, and a large image
+ * lands around 1,100 to 1,600 tokens on every supported provider. The top
+ * of that range errs toward over reserving, which `release` reconciles
+ * against real usage anyway.
+ */
+const IMAGE_TOKEN_ESTIMATE = 1_600;
 
-    if (typeof content === 'string') return sum + content.length;
-    if (content === undefined || content === null) return sum;
+/** Counts text chars and images in one message's content, so base64 image data is never read as text. */
+function measureContent(content: unknown): { chars: number; images: number } {
+  if (typeof content === 'string') return { chars: content.length, images: 0 };
+  if (content === undefined || content === null) return { chars: 0, images: 0 };
 
-    try {
-      return sum + JSON.stringify(content).length;
-    } catch {
-      return sum;
+  if (Array.isArray(content)) {
+    let chars = 0;
+    let images = 0;
+
+    for (const block of content as Array<{ type?: unknown; text?: unknown }>) {
+      if (block?.type === 'image') images += 1;
+      else if (block?.type === 'text' && typeof block.text === 'string') chars += block.text.length;
+      else chars += safeJsonLength(block);
     }
-  }, 0);
 
-  return Math.ceil(messagesChars / 4) + (request.max_tokens ?? 0);
+    return { chars, images };
+  }
+
+  return { chars: safeJsonLength(content), images: 0 };
+}
+
+function safeJsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Default `estimateTokens`: chars/4 over every message's text, plus
+ * `IMAGE_TOKEN_ESTIMATE` per image, plus the requested `max_tokens`.
+ */
+export function defaultEstimateTokens(request: WireRequest): number {
+  let chars = 0;
+  let images = 0;
+
+  for (const message of request.messages) {
+    const measured = measureContent((message as { content?: unknown }).content);
+    chars += measured.chars;
+    images += measured.images;
+  }
+
+  return Math.ceil(chars / 4) + images * IMAGE_TOKEN_ESTIMATE + (request.max_tokens ?? 0);
 }
 
 /**
@@ -203,6 +241,14 @@ function buildPerMinuteBucket(capacityPerMinute: number | undefined): TokenBucke
  */
 const MAX_WAKE_DELAY_MS = 2_147_483_647;
 
+/**
+ * Minimum gap between two AIMD shrinks: one full refill of the per minute
+ * requests bucket. A burst of 429s from calls already in flight all
+ * describe the same overload, so shrinking once per response would drive
+ * the ceiling to `minCapacity` from a single spike.
+ */
+const AIMD_SHRINK_WINDOW_MS = 60_000;
+
 /** One caller waiting for capacity, queued FIFO. */
 interface Waiter {
   estimatedTokens: number;
@@ -263,6 +309,9 @@ export class RateLimiter implements RateLimiterAdapter {
    * for a concurrency block, which only clears via `release`.
    */
   private wakeTimer?: ReturnType<typeof setTimeout>;
+
+  /** When AIMD last shrank the ceiling, see `AIMD_SHRINK_WINDOW_MS`. */
+  private lastShrinkAt?: number;
 
   constructor(options: RateLimitOptions) {
     this.requests = buildPerMinuteBucket(options.requestsPerMinute);
@@ -562,9 +611,25 @@ export class RateLimiter implements RateLimiterAdapter {
    * AIMD's multiplicative-decrease half. Called on a real 429, and,
    * where an adapter can produce a hint, proactively via
    * `reactToRateLimitHint`. Never throws or blocks a call itself, only
-   * adjusts the ceiling as a side effect.
+   * adjusts the ceiling as a side effect. Shrinks at most once per
+   * `AIMD_SHRINK_WINDOW_MS`, later signals in the same window are ignored.
    */
   signalRateLimit(): void {
+    if (!this.aimd || !this.requests) return;
+
+    const now = Date.now();
+
+    // A clock that moved backwards reads as a new window, so a skewed
+    // `lastShrinkAt` can never block shrinking for longer than one window.
+    if (
+      this.lastShrinkAt !== undefined &&
+      now >= this.lastShrinkAt &&
+      now - this.lastShrinkAt < AIMD_SHRINK_WINDOW_MS
+    ) {
+      return;
+    }
+
+    this.lastShrinkAt = now;
     this.resizeRequestsCeiling((aimd, current) =>
       Math.max(current * aimd.decreaseFactor, aimd.minCapacity),
     );

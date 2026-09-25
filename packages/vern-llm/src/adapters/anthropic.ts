@@ -113,6 +113,7 @@ export interface AnthropicClient {
       options: { signal: AbortSignal },
     ): Promise<{
       content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
+      stop_reason?: string | null;
       usage?: {
         input_tokens?: number;
         output_tokens?: number;
@@ -610,6 +611,7 @@ export function fromAnthropic(
             choices: [
               {
                 message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
+                ...(response.stop_reason === 'max_tokens' ? { finish_reason: 'length' } : {}),
               },
             ],
             usage: {

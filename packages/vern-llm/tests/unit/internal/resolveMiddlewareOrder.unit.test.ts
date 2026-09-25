@@ -235,11 +235,11 @@ describe('buildMiddlewarePipeline', () => {
     expect(Object.isFrozen(pipeline.names)).toBe(true);
   });
 
-  it('falls back to a bracket-free string index for an unnamed entry', () => {
+  it('labels an unnamed entry by its bracketed transformOrder position, same as logs and events', () => {
     const middleware = [mw({ priority: 1 }), mw({ name: 'named', priority: 0 })];
     const pipeline = buildMiddlewarePipeline(middleware);
 
-    expect(pipeline.names).toEqual(['named', '1']);
+    expect(pipeline.names).toEqual(['named', '[1]']);
   });
 
   describe('position (wrapOrder only)', () => {

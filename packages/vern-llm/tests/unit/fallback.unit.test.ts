@@ -715,3 +715,91 @@ describe('metaRef', () => {
     });
   });
 });
+
+describe('VernLLM, fallback with a per call model override', () => {
+  it('sends the override to the primary only and each fallback its own model', async () => {
+    const { client: primaryClient, calls: primaryCalls } = createMockClient([
+      new FakeApiError('down', 503),
+    ]);
+    const { client: fallbackClient, calls: fallbackCalls } = createMockClient([
+      jsonResponse({ ok: true }),
+    ]);
+    const events: VernLLMEvent[] = [];
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      maxRetries: 0,
+      fallback: { client: fallbackClient, model: 'claude-fallback' },
+      onEvent: (event) => events.push(event),
+    });
+
+    const meta: { current?: CallMeta } = {};
+    await expect(llm.call({ userContent: 'u', model: 'gpt-4o-mini', meta })).resolves.toEqual({
+      ok: true,
+    });
+
+    expect(primaryCalls[0]?.model).toBe('gpt-4o-mini');
+    expect(fallbackCalls[0]?.model).toBe('claude-fallback');
+    expect(meta.current).toMatchObject({ model: 'claude-fallback', usedFallback: true });
+  });
+
+  it('records the model each target actually ran in FallbackExhaustedError', async () => {
+    const { client: primaryClient } = createMockClient([new FakeApiError('down', 503)]);
+    const { client: fallbackClient } = createMockClient([new FakeApiError('down', 503)]);
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      maxRetries: 0,
+      fallback: { client: fallbackClient, model: 'claude-fallback' },
+    });
+
+    const error = await llm.call({ userContent: 'u', model: 'gpt-4o-mini' }).catch((e) => e);
+
+    expect(isFallbackExhaustedError(error)).toBe(true);
+    expect((error as FallbackExhaustedError).attempts.map((a) => a.model)).toEqual([
+      'gpt-4o-mini',
+      'claude-fallback',
+    ]);
+  });
+
+  it('streams from a fallback with its own model too', async () => {
+    const { client: primaryClient } = createMockClient([new FakeApiError('down', 503)]);
+    const fallbackCreateStream = vi.fn(async function* (params: { model: string }) {
+      yield { type: 'text-delta' as const, delta: params.model };
+    });
+    const fallbackClient = {
+      chat: {
+        completions: {
+          create: vi.fn(),
+          createStream: fallbackCreateStream,
+        },
+      },
+    };
+    // The primary only needs to fail the open.
+    (primaryClient.chat.completions as { createStream?: unknown }).createStream = () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          throw new FakeApiError('down', 503);
+        },
+      }),
+    });
+
+    const llm = new VernLLM({
+      client: primaryClient,
+      model: 'primary-model',
+      maxRetries: 0,
+      fallback: { client: fallbackClient as never, model: 'claude-fallback' },
+    });
+
+    const { finalResult } = await llm.call({
+      userContent: 'u',
+      model: 'gpt-4o-mini',
+      stream: true,
+      jsonMode: false,
+    });
+
+    await expect(finalResult).resolves.toBe('claude-fallback');
+  });
+});

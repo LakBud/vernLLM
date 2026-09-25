@@ -10,7 +10,8 @@ description: Plug in a real tokenizer for rate limiting
 </Callout>
 
 `tokensPerMinute` needs a token count before a request is sent, before the real usage is known. By
-default VernLLM uses a rough `chars / 4` heuristic plus the requested `max_tokens`, and
+default VernLLM uses a rough `chars / 4` heuristic over text, 1,600 tokens per image, plus the
+requested `max_tokens`, and
 self-corrects by reconciling against the real reported usage after each call.
 
 Pass `estimateTokens` to use a real tokenizer instead:

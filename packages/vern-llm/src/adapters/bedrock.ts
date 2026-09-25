@@ -148,6 +148,7 @@ export interface BedrockConverseClient {
         }>;
       };
     };
+    stopReason?: string;
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
   }>;
 
@@ -945,6 +946,7 @@ export function fromBedrock(
             choices: [
               {
                 message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
+                ...(response.stopReason === 'max_tokens' ? { finish_reason: 'length' } : {}),
               },
             ],
             usage: {

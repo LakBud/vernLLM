@@ -9,12 +9,12 @@ tool calling, and caching keeps working exactly as it does today, just delivered
 instead of as a single resolved value.
 
 <Callout type="info">
-  VernLLM's streaming preserves the same guarantees as non-streaming `call()`. Retries cover
-  connection failures before the first chunk arrives; a stream that fails partway through does not
-  retry, since replaying it would duplicate output the caller may have already rendered. See [What
-  gets retried](#what-gets-retried) below. Unlike non-streaming `call()`, where `timeoutMs` bounds
-  the whole response, streaming only uses it to bound opening the stream and its first chunk; every
-  gap after that is bounded separately by `chunkIdleTimeoutMs`, see [Per-chunk idle
+  VernLLM's streaming preserves the same guarantees as non-streaming `call()`. Retries and fallback
+  cover failures before the first content chunk arrives; a stream that fails partway through does
+  not retry, since replaying it would duplicate output the caller may have already rendered. See
+  [What gets retried](#what-gets-retried) below. Unlike non-streaming `call()`, where `timeoutMs`
+  bounds the whole response, streaming only uses it to bound opening the stream and its first chunk;
+  every gap after that is bounded separately by `chunkIdleTimeoutMs`, see [Per-chunk idle
   timeout](#per-chunk-idle-timeout) below.
 </Callout>
 
@@ -203,12 +203,13 @@ Streaming keeps the same retry policy as non-streaming `call()`, applied around 
 stream rather than the whole response:
 
 <Cards>
-  <Card title="Failure before the first chunk">
-    Treated like any other transient failure, retried per the configured backoff policy, same as a
-    non-streaming request that fails before receiving a response. A rate-limit hint read from the
-    response headers is not a chunk, so it doesn't count as the stream having opened.
+  <Card title="Failure before the first content chunk">
+    Treated like any other transient failure: retried per the configured backoff policy, then falls
+    back to the next target. This holds even after a keep-alive ping has opened the stream, so
+    `chunks` and `finalResult` quietly follow whichever attempt produces content. A stream that ends
+    with only pings is an empty response and is retried too.
   </Card>
-  <Card title="Failure after at least one chunk">
+  <Card title="Failure after content">
     Not retried. Once chunks have started arriving, the caller may already be rendering them, so
     VernLLM surfaces the error on `finalResult` rather than silently retrying and producing
     duplicate or inconsistent output.
@@ -275,6 +276,10 @@ documented `ping` events during extended thinking, or an SSE comment line used a
 `fromAnthropic` and `fromFetch` (for the default SSE framing) both recognize these and reset the
 idle-timeout clock on them. They carry no content, so nothing is surfaced to `chunks` or
 `finalResult`.
+
+A ping counts as the stream opening, so `call()` resolves on it and a long thinking phase stays
+outside `timeoutMs`. Until the first content chunk, a failure still retries and falls back, and
+`meta.current` is updated in place if a different target ends up answering.
 
 ## Caching a streaming call
 

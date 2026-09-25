@@ -1,6 +1,6 @@
 import { LLMError, type LLMRequestSnapshot, type RetryAttempt } from '../../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../../types/middleware.js';
-import { idFor } from '../../../resolveMiddlewareOrder.js';
+import { middlewareLabels } from '../../../resolveMiddlewareOrder.js';
 import { createBreakerGateway, type BreakerGateway } from '../../circuitBreakerContext.js';
 import { describeError, extractStatus, normalizeError } from '../errors.utils.js';
 import { emitEvent } from '../middleware/middleware.utils.js';
@@ -108,7 +108,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     providerName,
     isFallback,
     supportsJsonObjectMode,
-    registeredMiddlewareNames: Object.freeze(middleware.map(idFor)),
+    registeredMiddlewareNames: middlewareLabels(middleware),
   });
 
   // Set only when `budget.assertAvailable()` is what actually stopped a

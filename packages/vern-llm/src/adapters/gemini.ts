@@ -108,6 +108,7 @@ export interface GeminiClient {
           functionCall?: { id?: string; name?: string; args?: unknown };
         }>;
       };
+      finishReason?: string;
     }>;
     usageMetadata?: {
       promptTokenCount?: number;
@@ -599,6 +600,9 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
             choices: [
               {
                 message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
+                ...(response.candidates?.[0]?.finishReason === 'MAX_TOKENS'
+                  ? { finish_reason: 'length' }
+                  : {}),
               },
             ],
             usage: {

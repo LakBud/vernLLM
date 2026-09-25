@@ -136,7 +136,10 @@ export interface LLMRequestShape<
    */
   chunkIdleTimeoutMs?: number;
 
-  /** Overrides the instance model for this call. */
+  /**
+   * Overrides the instance model for this call. Applies to the primary
+   * target only, fallback targets always run their own configured model.
+   */
   model?: string;
 
   /**

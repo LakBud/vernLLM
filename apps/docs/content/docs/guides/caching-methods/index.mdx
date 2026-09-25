@@ -16,8 +16,8 @@ increasing order of what they can catch and what they cost:
 
 <Cards>
   <Card title="Normalized Caching" href="/docs/guides/caching-methods/normalized">
-    Match keys that differ only in case, whitespace, or punctuation, using the built-in
-    `NormalizedCacheAdapter`, no external dependencies or network calls.
+    Match keys that differ only in outer whitespace, line endings, or Unicode form, using the
+    built-in `NormalizedCacheAdapter`, no external dependencies or network calls.
   </Card>
   <Card title="Tiered Caching" href="/docs/guides/caching-methods/tiered">
     Combine a fast local cache with a shared backing store using `TieredCacheAdapter`, this one's
@@ -32,7 +32,7 @@ increasing order of what they can catch and what they cost:
 
 ## Picking one
 
-- **Only formatting varies** (case, punctuation, whitespace) between otherwise-identical prompts →
+- **Only formatting varies** (outer whitespace, line endings) between otherwise-identical prompts →
   `NormalizedCacheAdapter`. Free, no dependencies, start here.
 - **Wording or phrasing varies**, not just formatting ("capital of France" vs "what's France's
   capital city") → semantic caching. Costs an embedding call per lookup; see the tradeoffs in that

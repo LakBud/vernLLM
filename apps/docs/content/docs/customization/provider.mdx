@@ -91,6 +91,9 @@ interface LLMClient {
 }
 ```
 
+Set `finish_reason: 'length'` on a choice when the provider stopped at `max_tokens`. Output that then
+fails to parse becomes a retryable `response_truncated` error.
+
 This is what `fromFetch`, `fromAnthropic`, `fromGemini`, and `fromBedrock` each compile down to
 internally. Implementing it directly is more work than `fromFetch`, but avoids the intermediate
 `mapRequest`/`mapResponse` translation if your SDK already speaks something close to this shape.

@@ -5,8 +5,9 @@ import {
   type CircuitBreakerStateChangeHandler,
 } from '../../../circuitBreaker.js';
 import { LLMError } from '../../../types/errors.js';
+import { createMiddlewareStateBag } from '../../../types/middleware.js';
 import { emitEvent } from '../../execution/utils/middleware/middleware.utils.js';
-import { idFor } from '../../resolveMiddlewareOrder.js';
+import { middlewareLabels } from '../../resolveMiddlewareOrder.js';
 import { callHookSafely } from './../logger.utils.js';
 import { makeEventReporter, reportRejection } from './circuitBreaker.utils.js';
 
@@ -130,32 +131,34 @@ function wrapOnStateChange(
       consecutiveFailures,
     };
 
-    // `context` is absent only when someone calls the breaker or adapter
-    // directly, bypassing `VernLLM`.
-    if (context) {
-      const ctx: AttemptContext = {
-        stage: 'attempt',
-        requestId: context.requestId,
-        requestedProvider: providerName,
-        requestedModel: model ?? defaultModel,
-        isFallbackAttempt: isFallback,
-        // Most call sites (recordSuccess/recordFailure after a real
-        // dispatch) now thread a real 1 based attempt number through
-        // `context.attempt`. Falls back to `1` only for the sites
-        // that genuinely have none, like `assertClosed`'s
-        // pre-dispatch check, which runs before any attempt exists.
-        attempt: context.attempt ?? 1,
-        capabilities: { supportsJsonObjectMode },
-        signal: context.signal,
-        state: context.state,
-        own: {},
-        registeredMiddlewareNames: middleware.map(idFor),
-      };
+    // `context` is absent when the breaker changes state outside any call:
+    // called directly, or (for a shared adapter) a change another process
+    // made. Middleware still need to see it, so it gets a fresh call
+    // identity of its own, like a manual `openCircuit()`.
+    const callContext = context ?? {
+      requestId: globalThis.crypto.randomUUID(),
+      state: createMiddlewareStateBag(),
+    };
 
-      emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, logger);
-    } else {
-      reportEvent(event);
-    }
+    const ctx: AttemptContext = {
+      stage: 'attempt',
+      requestId: callContext.requestId,
+      requestedProvider: providerName,
+      requestedModel: model ?? defaultModel,
+      isFallbackAttempt: isFallback,
+      // Most call sites (recordSuccess/recordFailure after a real
+      // dispatch) thread a real 1 based attempt number through
+      // `context.attempt`. Falls back to `1` for the sites that have
+      // none, like `assertClosed`'s pre-dispatch check.
+      attempt: callContext.attempt ?? 1,
+      capabilities: { supportsJsonObjectMode },
+      signal: callContext.signal,
+      state: callContext.state,
+      own: {},
+      registeredMiddlewareNames: middlewareLabels(middleware),
+    };
+
+    emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, logger);
 
     // A caller supplied onStateChange would otherwise be silently
     // discarded, since this wrapper replaces it. Chain it instead, same

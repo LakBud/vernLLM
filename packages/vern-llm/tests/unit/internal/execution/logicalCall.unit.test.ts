@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   executeLogicalCall,
   executeLogicalStreamCall,
+  modelForTarget,
+  paramsForTarget,
   runFallbackChain,
   type LogicalCallDependencies,
 } from '../../../../src/internal/execution/logicalCall.js';
@@ -97,7 +99,13 @@ describe('runFallbackChain', () => {
       },
     );
 
-    expect(outcome).toEqual({ result: 'ok', executor: primary, index: 0, attemptCount: 1 });
+    expect(outcome).toEqual({
+      result: 'ok',
+      executor: primary,
+      index: 0,
+      attemptCount: 1,
+      model: 'default-model',
+    });
     expect(fallbackOn).not.toHaveBeenCalled();
   });
 
@@ -418,5 +426,86 @@ describe('executeLogicalStreamCall', () => {
     );
 
     expect(params.meta?.current).toEqual(outcome.meta);
+  });
+});
+
+describe('runFallbackChain, per call model override', () => {
+  it('checks and releases the primary breaker with the override and each fallback with its own model', async () => {
+    const primaryCheck = vi.fn();
+    const primaryRelease = vi.fn();
+    const fallbackCheck = vi.fn();
+    const primary = fakeExecutor({
+      providerName: 'primary',
+      model: 'primary-model',
+      assertBreakerClosed: primaryCheck,
+      releaseBreakerTrial: primaryRelease,
+    });
+    const fallback = fakeExecutor({
+      providerName: 'fallback',
+      model: 'fallback-model',
+      assertBreakerClosed: fallbackCheck,
+    });
+
+    const outcome = await runFallbackChain(
+      dependencies([primary, fallback]),
+      { model: 'override-model', signal: undefined },
+      'req-1',
+      state,
+      async (executor) => {
+        if (executor === primary) throw new LLMError('down', 'api', { status: 503 });
+        return 'ok';
+      },
+    );
+
+    expect(primaryCheck.mock.calls[0]?.[0]).toBe('override-model');
+    expect(primaryRelease.mock.calls[0]?.[0]).toBe('override-model');
+    expect(fallbackCheck.mock.calls[0]?.[0]).toBeUndefined();
+    expect(outcome.model).toBe('fallback-model');
+  });
+
+  it('passes the target index to attempt so callers can pick per target params', async () => {
+    const seen: number[] = [];
+    const primary = fakeExecutor({ providerName: 'primary' });
+    const fallback = fakeExecutor({ providerName: 'fallback' });
+
+    await runFallbackChain(
+      dependencies([primary, fallback]),
+      { model: undefined, signal: undefined },
+      'req-1',
+      state,
+      async (_executor, _onAttempt, targetIndex) => {
+        seen.push(targetIndex);
+        if (targetIndex === 0) throw new LLMError('down', 'api', { status: 503 });
+        return 'ok';
+      },
+    );
+
+    expect(seen).toEqual([0, 1]);
+  });
+});
+
+describe('modelForTarget and paramsForTarget', () => {
+  it('keep the override for the primary only', () => {
+    expect(modelForTarget({ model: 'm' }, 0)).toBe('m');
+    expect(modelForTarget({ model: 'm' }, 1)).toBeUndefined();
+    expect(modelForTarget({ model: undefined }, 0)).toBeUndefined();
+  });
+
+  it('returns the same params object when nothing needs to change', () => {
+    const withOverride = { model: 'm', userContent: 'u' };
+    const withoutOverride = { model: undefined, userContent: 'u' };
+
+    expect(paramsForTarget(withOverride, 0)).toBe(withOverride);
+    expect(paramsForTarget(withoutOverride, 2)).toBe(withoutOverride);
+  });
+
+  it('drops the override for a fallback without touching the caller params', () => {
+    const signal = new AbortController().signal;
+    const params = { model: 'm', userContent: 'u', signal };
+
+    const forFallback = paramsForTarget(params, 1);
+
+    expect(forFallback).toEqual({ model: undefined, userContent: 'u', signal });
+    expect(params.model).toBe('m');
   });
 });

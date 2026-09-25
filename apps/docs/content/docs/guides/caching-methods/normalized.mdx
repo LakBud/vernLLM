@@ -1,12 +1,11 @@
 ---
 title: Normalized Caching
-description: Matching keys that differ only in case, whitespace, or punctuation
+description: Matching keys that differ only in formatting that cannot change meaning
 ---
 
-A lot of "these should be the same cache entry" cases aren't semantic at all, they're just
-formatting differences. `"What is 2+2?"`, `"what is 2+2"`, and `"  WHAT IS 2+2?  "` mean the same
-thing and differ only in case, punctuation, and whitespace. `NormalizedCacheAdapter` handles this
-class of duplicate for free, with no embedding calls and no external dependencies.
+Some duplicate keys differ only in formatting that can't change a prompt's meaning.
+`"What is 2+2?"` and `"  What is 2+2?\n"` are the same prompt. `NormalizedCacheAdapter` matches
+these for free, with no embedding calls and no external dependencies.
 
 ## Usage
 
@@ -32,30 +31,17 @@ operate on.
 
 ## What it normalizes
 
-The default normalization is intentionally simple:
-
 ```ts
-key
-  .toLowerCase()
-  .trim()
-  .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-  .replace(/\s+/g, ' ')
-  .trim();
+key.normalize('NFC').replace(/\r\n?/g, '\n').trim();
 ```
 
-Lowercases, trims leading/trailing whitespace, replaces punctuation with a space, and collapses
-repeated whitespace into single spaces (with a final trim to clean up any edge space left behind
-by that replacement). This catches formatting noise but nothing more; `"2+2"` and `"2 + 2"` both
-normalize to `"2 2"`, since punctuation is replaced with a space rather than deleted outright, so
-stripping `+` never collapses adjacent characters together the way outright deletion would.
-Normalization is a text transform, not a parser; it doesn't understand what the text means, so
-`"2+2"` and `"four"` still normalize differently even though they mean the same thing.
+Unicode composition, line endings, and leading or trailing whitespace. Nothing else, so two keys
+only share an entry when they are the same prompt. Case, punctuation, and inner whitespace all
+stay, since `"2+2"` and `"2-2"` need different answers and indentation matters in code.
 
 <Callout type="warn">
-  If your inputs vary in more than surface formatting, different word choice, different phrasing,
-  different language, normalization won't catch it. That's the line between this and semantic
-  caching: normalization handles "same words, different formatting"; semantic caching handles
-  "different words, same meaning."
+  Different wording, phrasing, or case is a different key here. To match prompts by meaning, use
+  [Semantic Caching](/docs/guides/caching-methods/semantic).
 </Callout>
 
 ## Wrapping a different inner adapter
@@ -70,10 +56,9 @@ const cache = new NormalizedCacheAdapter(new UpstashCacheAdapter());
 
 ## Custom normalization
 
-The shipped normalization is deliberately generic. If your domain needs something different,
-stemming, stripping filler words, normalizing numbers written as words vs digits, write your own
-adapter with a custom `resolveKey` rather than trying to configure `NormalizedCacheAdapter`
-further:
+The shipped normalization only drops what can't change meaning. If your domain can safely ignore
+more, such as case or filler words, write your own adapter with a custom `resolveKey`. Test it
+against prompts that must stay apart:
 
 ```ts title="custom-normalized-adapter.ts"
 import type { CacheAdapter } from 'vern-llm';
@@ -82,15 +67,11 @@ class DomainNormalizedAdapter<T> implements CacheAdapter<T> {
   constructor(private inner: CacheAdapter<T>) {}
 
   private normalize(key: string): string {
-    return (
-      key
-        .toLowerCase()
-        .replace(/\b(please|could you|can you)\b/g, '') // strip filler phrases
-        .replace(/[^\w\s]/g, ' ') // replace punctuation with a space, not delete, so adjacent
-        // characters/digits don't get glued together (e.g. "2+2" vs "2 + 2")
-        .trim()
-        .replace(/\s+/g, ' ')
-    );
+    return key
+      .toLowerCase()
+      .replace(/\b(please|could you|can you)\b/g, '') // strip filler phrases
+      .trim()
+      .replace(/\s+/g, ' ');
   }
 
   async resolveKey(key: string) {

@@ -213,6 +213,40 @@ describe('CacheOrchestrator.runCached, joinInFlight/registerTrigger', () => {
     );
   });
 
+  it.each([
+    ['missing', undefined],
+    ['NaN', Number.NaN],
+  ])(
+    'warns that nothing is cached for a %s ttl and still lets the adapter drop the key',
+    async (_, ttl) => {
+      const logger = silentLogger();
+      const cache = new InMemoryCacheAdapter();
+      const orchestrator = new CacheOrchestrator(cache, logger);
+
+      await cache.set('k', 'stale', 60);
+      const result = await orchestrator.runCached({
+        cacheKey: 'k-miss',
+        ttl: ttl as number,
+        fn: async () => 'fresh',
+      });
+
+      expect(result).toBe('fresh');
+      expect(await cache.get('k-miss')).toEqual({ hit: false, value: null });
+      expect(logger.warn).toHaveBeenCalledWith(
+        `[VernLLM] cachedCall ttl must be a number of seconds, got ${String(ttl)}. Nothing is cached.`,
+      );
+    },
+  );
+
+  it('does not warn for a zero ttl, a deliberate way to skip caching', async () => {
+    const logger = silentLogger();
+    const orchestrator = new CacheOrchestrator(new InMemoryCacheAdapter(), logger);
+
+    await orchestrator.runCached({ cacheKey: 'k', ttl: 0, fn: async () => 'fresh' });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it('registerTrigger logs a refund error, instead of throwing, when fn() itself rejects and refundUsage throws', async () => {
     const logger = silentLogger();
     const cache = new InMemoryCacheAdapter();

@@ -185,7 +185,7 @@ debuggable without adding logging to each one by hand:
 {
   kind: 'middleware',
   requestId: string,
-  middleware: string, // this entry's `name`, or its array position if unnamed
+  middleware: string, // this entry's `name`, or `[i]`, its transformOrder position, if unnamed
   hook: 'transform' | 'wrap_short_circuit' | 'enabled_skip',
   patchedFields?: string[], // for 'transform' only
 }
@@ -196,10 +196,10 @@ always fire.
 
 <Callout type="info">
   `ctx` passed to `onEvent` describes whichever target and attempt actually produced that event, not
-  the primary target `wrap`'s own `ctx` is limited to. A `'circuit_state'` event from a manual
-  `openCircuit()`/`closeCircuit()` call is the one exception: since there's no logical call behind
-  it, it gets a fresh `ctx` of its own instead. See [Circuit
-  Breaker](/docs/core/circuit-breaker#checking-and-controlling-state-manually).
+  the primary target `wrap`'s own `ctx` is limited to. A `'circuit_state'` event with no logical
+  call behind it (a manual `openCircuit()`/`closeCircuit()`, a breaker driven directly, or a shared
+  adapter reporting another process's change) still reaches `onEvent`, with a fresh `ctx` of its
+  own. See [Circuit Breaker](/docs/core/circuit-breaker#checking-and-controlling-state-manually).
 </Callout>
 
 <Callout type="info">
@@ -241,7 +241,9 @@ purpose. `ctx.state` is created once per logical call and threaded into every `t
 that call triggers.
 
 `ctx.own` is a plain `Record<string, unknown>`, pre-namespaced to that one middleware, for scratch
-state it doesn't share with anyone else.
+state it doesn't share with anyone else. It is the same object for every hook of one logical call,
+retries included, so a value set in `wrap` is there in `transform` and `onEvent`. The next call
+starts empty.
 
 <Callout type="info">
   See [Middleware](/docs/customization/middleware) for `createStateKey`, `createMiddleware`, and
@@ -396,7 +398,8 @@ priority-only setup keeps its exact current order regardless of which band anyth
 ### `ctx.registeredMiddlewareNames`
 
 Every `transform`/`wrap`/`onEvent` hook's `ctx` carries `registeredMiddlewareNames`: every
-registered middleware's resolved label (`name`, or its position in `transformOrder` if unnamed),
+registered middleware's resolved label (`name`, or its bracketed `transformOrder` position such as
+`[0]` if unnamed, the same label logs and the `'middleware'` event use),
 frozen, in `transformOrder`. Lets a middleware make an informed call, like skipping a duplicate
 action when it detects another known middleware by name already handles it, without needing to
 know anything else about that middleware's own configuration:

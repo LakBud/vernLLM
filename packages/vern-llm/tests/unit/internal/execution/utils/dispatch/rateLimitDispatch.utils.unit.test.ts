@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { acquireRateLimit } from '../../../../../../src/internal/execution/utils/dispatch/rateLimitDispatch.utils.js';
+import {
+  acquireRateLimit,
+  isLimiterFailure,
+} from '../../../../../../src/internal/execution/utils/dispatch/rateLimitDispatch.utils.js';
+import { LLMError } from '../../../../../../src/types/errors.js';
 
 import type { RateLimiter, WireRequest } from '../../../../../../src/rateLimit.js';
 
@@ -81,5 +85,56 @@ describe('acquireRateLimit', () => {
 
     expect(limiter.estimate).toHaveBeenCalledExactlyOnceWith(request);
     expect(limiter.acquire).toHaveBeenCalledExactlyOnceWith(42, controller.signal);
+  });
+
+  it('normalizes a raw acquire failure to an LLMError marked as a limiter failure', async () => {
+    const raw = new Error('connect ECONNREFUSED 127.0.0.1:6379');
+    const limiter = {
+      estimate: vi.fn(() => 42),
+      acquire: vi.fn(async () => {
+        throw raw;
+      }),
+    } as unknown as RateLimiter;
+
+    const error = await acquireRateLimit(limiter, request, undefined, vi.fn()).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).cause).toBe(raw);
+    expect(isLimiterFailure(error as LLMError)).toBe(true);
+  });
+
+  it('marks an LLMError the limiter threw without replacing it', async () => {
+    const thrown = new LLMError('queue full', 'rate_limited', { code: 'rate_limit_queue_full' });
+    const limiter = {
+      estimate: vi.fn(() => 42),
+      acquire: vi.fn(async () => {
+        throw thrown;
+      }),
+    } as unknown as RateLimiter;
+
+    await expect(acquireRateLimit(limiter, request, undefined, vi.fn())).rejects.toBe(thrown);
+    expect(isLimiterFailure(thrown)).toBe(true);
+  });
+
+  it('marks a failure from estimate too', async () => {
+    const limiter = {
+      estimate: vi.fn(() => {
+        throw new Error('estimator broke');
+      }),
+      acquire: vi.fn(),
+    } as unknown as RateLimiter;
+
+    const error = await acquireRateLimit(limiter, request, undefined, vi.fn()).catch(
+      (e: unknown) => e,
+    );
+
+    expect(isLimiterFailure(error as LLMError)).toBe(true);
+    expect(limiter.acquire).not.toHaveBeenCalled();
+  });
+
+  it('does not mark errors it never saw', () => {
+    expect(isLimiterFailure(new LLMError('down', 'api', { status: 503 }))).toBe(false);
   });
 });

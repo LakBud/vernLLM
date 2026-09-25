@@ -8,6 +8,7 @@ import {
   runPrepare,
   type PreparableBreaker,
 } from '../utils/circuit-breaker/prepareBreaker.utils.js';
+import { redactResponseBody } from '../utils/errors/responseBody.utils.js';
 import { readRateLimitHint } from '../utils/rate-limit/rateLimitHint.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
@@ -16,10 +17,16 @@ import { buildStreamResult } from './streamAccumulator.js';
 import { createUsageReporter, type UsageReporter } from './usageReporter.js';
 import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
 import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
-import { extractStatus } from './utils/errors.utils.js';
+import { isLimiterFailure } from './utils/dispatch/rateLimitDispatch.utils.js';
+import { extractStatus, normalizeError } from './utils/errors.utils.js';
 import { DEFAULT_MIDDLEWARE_TIMEOUT_MS, emitEvent } from './utils/middleware/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
-import { withTimeout } from './utils/retry/retry.utils.js';
+import { toTokenUsage } from './utils/response/usage.utils.js';
+import {
+  normalizeMaxRetries,
+  withChunkIdleTimeout,
+  withTimeout,
+} from './utils/retry/retry.utils.js';
 
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import type { Logger } from '../../logger.js';
@@ -35,6 +42,7 @@ import type {
   VernLLMEvent,
   VernLLMMiddleware,
   WireCallRequest,
+  WireStreamChunk,
 } from '../../types/index.js';
 
 export type { OnRequest };
@@ -104,7 +112,7 @@ export class CallExecutor {
     readonly model: string,
     options: CallExecutorOptions,
   ) {
-    this.maxRetries = options.maxRetries;
+    this.maxRetries = normalizeMaxRetries(options.maxRetries);
     this.timeoutMs = options.timeoutMs;
     this.chunkIdleTimeoutMs = options.chunkIdleTimeoutMs;
     this.baseDelayMs = options.baseDelayMs;
@@ -112,6 +120,12 @@ export class CallExecutor {
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
     this.redact = options.redact;
+
+    if (this.maxRetries !== options.maxRetries) {
+      this.logger.warn(
+        `[VernLLM] ${providerName}: maxRetries must be a non-negative whole number, got ${String(options.maxRetries)}. Using ${this.maxRetries}.`,
+      );
+    }
 
     this.reportEvent = makeEventReporter(options.onEvent, this.logger, {
       onUsage: options.onUsage,
@@ -297,18 +311,34 @@ export class CallExecutor {
   }
 
   /** Streaming counterpart to `run`. Mirrors the old streaming branch of `VernLLM.call`. */
+  /**
+   * `onOpened` fires the first time any attempt's stream opens, which a
+   * keep-alive ping already counts as. The attempt itself only succeeds
+   * once the first content chunk arrives, so a failure before that is
+   * retried here and can fall back, while the caller already holds the
+   * stream. See `executeLogicalStreamCall`.
+   */
   async runStream<T>(
     params: CallParams<T>,
     requestId: string,
     onAttempt?: () => void,
     state?: MiddlewareStateBag,
+    onOpened?: () => void,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
     return runAttemptLoop({
       fn: (attempt, onRequest, resolvedState, gateway) =>
-        this.executeStreamCall(params, requestId, attempt, onRequest, resolvedState, gateway),
+        this.executeStreamCall(
+          params,
+          requestId,
+          attempt,
+          onRequest,
+          resolvedState,
+          gateway,
+          onOpened,
+        ),
       requestId,
       model: params.model ?? this.model,
       providerName: this.providerName,
@@ -384,6 +414,7 @@ export class CallExecutor {
           params.signal,
         );
       } catch (error) {
+        this.redactProviderError(error);
         this.reactToRateLimitError(error);
         throw error;
       }
@@ -402,6 +433,7 @@ export class CallExecutor {
       // normalized and its usage failure reported.
       const rawContent = response.choices?.[0]?.message?.content;
       const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
+      const truncated = response.choices?.[0]?.finish_reason === 'length';
 
       let finalized: T | CallWithToolsResult<T>;
 
@@ -426,6 +458,7 @@ export class CallExecutor {
             isFallback: this.isFallback,
             model,
           },
+          truncated,
         );
       } catch (error) {
         // Still reconcile real token usage and give the concurrency slot
@@ -458,9 +491,88 @@ export class CallExecutor {
   }
 
   /**
+   * Reads past pings and rate limit hints until the first content chunk
+   * (text or a tool call delta) or the end of the stream. A usage chunk
+   * seen on the way is kept and replayed ahead of that content, so
+   * nothing but pings and hints is dropped. On failure the stream is
+   * closed, and usage already reported is handed to `onFailedUsage`,
+   * before the error is rethrown.
+   */
+  private async readUntilContent(
+    iterator: AsyncIterator<WireStreamChunk>,
+    first: IteratorResult<WireStreamChunk>,
+    chunkIdleTimeoutMs: number | undefined,
+    streamController: AbortController,
+    onFailedUsage: (
+      usage: Extract<WireStreamChunk, { type: 'usage' }>['usage'],
+      error: unknown,
+    ) => void,
+  ): Promise<{ head: IteratorResult<WireStreamChunk>; rest: AsyncIterator<WireStreamChunk> }> {
+    const held: WireStreamChunk[] = [];
+    let current = first;
+
+    try {
+      while (!current.done && !isContentChunk(current.value)) {
+        const chunk = current.value;
+
+        if (chunk.type === 'rate_limit_hint') {
+          this.limiter?.reactToRateLimitHint(chunk.hint);
+        } else if (chunk.type !== 'ping') {
+          held.push(chunk);
+        }
+
+        current = await withChunkIdleTimeout(
+          () => iterator.next(),
+          chunkIdleTimeoutMs,
+          () => streamController.abort(),
+          this.logger,
+        );
+      }
+    } catch (error) {
+      // Not awaited: after an idle timeout the adapter's generator can
+      // still be suspended in its own await, and `return()` on a running
+      // generator waits for that to settle. The abort is what tears the
+      // transport down; `return()` only asks nicely.
+      streamController.abort();
+      void Promise.resolve()
+        .then(() => iterator.return?.())
+        .catch(() => {});
+      this.reactToRateLimitError(error);
+
+      const lastUsage = [...held].reverse().find((chunk) => chunk.type === 'usage');
+      if (lastUsage?.type === 'usage') onFailedUsage(lastUsage.usage, error);
+
+      throw error;
+    }
+
+    if (current.done || held.length === 0) return { head: current, rest: iterator };
+
+    // Replays the held chunks, then the content chunk, then the live stream.
+    const queue: WireStreamChunk[] = [...held.slice(1), current.value];
+    const rest: AsyncIterator<WireStreamChunk> = {
+      next: () => {
+        const queued = queue.shift();
+        return queued ? Promise.resolve({ done: false, value: queued }) : iterator.next();
+      },
+      return: async () => iterator.return?.() ?? { done: true, value: undefined },
+    };
+
+    return { head: { done: false, value: held[0]! }, rest };
+  }
+
+  /**
    * AIMD's reactive path: shrinks the ceiling on a real 429,
    * adapter-agnostic, independent of `supportsWithResponse`.
    */
+  /**
+   * Runs `redact` over a provider response body an adapter embedded in
+   * its error, before that message becomes `LLMError.message` or is
+   * logged. See `errorWithResponseBody`.
+   */
+  private redactProviderError(error: unknown): void {
+    if (this.redact) redactResponseBody(error, this.redact);
+  }
+
   private reactToRateLimitError(error: unknown): void {
     if (!this.limiter) return;
     if (extractStatus(error) !== 429) return;
@@ -492,6 +604,7 @@ export class CallExecutor {
     onRequest: OnRequest | undefined,
     middlewareState: MiddlewareStateBag | undefined,
     gateway: BreakerGateway,
+    onOpened?: () => void,
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
@@ -574,17 +687,56 @@ export class CallExecutor {
             combinedExternal,
           );
         } catch (error) {
+          this.redactProviderError(error);
           this.reactToRateLimitError(error);
           throw error;
         }
       })();
 
-      // An immediately-exhausted stream (no chunks at all) is the streaming
+      // A ping counts as the stream opening, so a model's thinking phase
+      // (which can far outlast `timeoutMs`) only needs pings to stay open.
+      if (!first.done) onOpened?.();
+
+      // Until the first content chunk, nothing has reached the caller, so a
+      // failure here is still an ordinary attempt failure: thrown back to
+      // the retry loop, and past it to fallback. The idle timeout, which
+      // every ping resets, is what bounds this wait.
+      const chunkIdleTimeoutMs = params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs;
+      const { head, rest } = await this.readUntilContent(
+        iterator,
+        first,
+        chunkIdleTimeoutMs,
+        streamController,
+        (wireUsage, error) => {
+          const usage = toTokenUsage(wireUsage, {
+            requestId,
+            model,
+            providerName: this.providerName,
+            isFallback: this.isFallback,
+          });
+          const normalized = normalizeError(error, params.signal);
+
+          if (normalized.type !== 'aborted') {
+            this.usageReporter.reportFailure(
+              usage,
+              normalized,
+              attempt,
+              gateway.buildAttemptContext(attempt, params.signal, state),
+              true,
+            );
+          }
+
+          release?.(this.usageReporter.actualTokensFor(usage));
+          release = undefined;
+        },
+      );
+
+      // An exhausted stream with no content at all is the streaming
       // equivalent of `executeCall`'s empty-response check: surface the same
       // `LLMError('Empty LLM response', 'api')` so retry behaves identically
       // whether the empty result came from a non-streaming or streaming
       // attempt.
-      if (first.done) {
+      if (head.done) {
         throw new LLMError('Empty LLM response', 'api');
       }
 
@@ -596,12 +748,12 @@ export class CallExecutor {
       // handed off.
       const releaseAtOpen = release;
 
-      const result = buildStreamResult(iterator, first, {
+      const result = buildStreamResult(rest, head, {
         requestId,
         model,
         providerName: this.providerName,
         isFallback: this.isFallback,
-        chunkIdleTimeoutMs: params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs,
+        chunkIdleTimeoutMs,
         streamController,
         logger: this.logger,
         signal: params.signal,
@@ -732,9 +884,15 @@ export class CallExecutor {
    * excluded: it's a caller/account level limit, not a signal about
    * provider health, even though it's still retryable. This defers
    * directly to `LLMError.countsTowardBreaker`, which captures both
-   * exclusions.
+   * exclusions. Anything the limiter threw is excluded too, even a raw
+   * store failure, since no provider request was made.
    */
   private countsTowardBreaker(error: LLMError): boolean {
-    return error.countsTowardBreaker;
+    return error.countsTowardBreaker && !isLimiterFailure(error);
   }
+}
+
+/** Text or a tool call delta: the first chunk that reaches the caller as content. */
+function isContentChunk(chunk: WireStreamChunk): boolean {
+  return chunk.type === 'text-delta' || chunk.type === 'tool_call_delta';
 }

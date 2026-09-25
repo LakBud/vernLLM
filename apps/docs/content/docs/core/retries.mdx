@@ -14,6 +14,9 @@ const llm = new VernLLM({
 
 Every `call()` retries transient failures automatically. `maxRetries` defaults to `1` (2 attempts total), so this is active even if you never touch the option.
 
+A negative or NaN `maxRetries` means no retries, so the call still makes one attempt, and a warning is
+logged. A fraction rounds down.
+
 ## Backoff and jitter
 
 Each retry waits longer than the last, and the exact wait is randomized within a range rather than fixed:
@@ -62,7 +65,7 @@ When no explicit timing is present, the computed backoff itself is not one singl
 `shouldRetry` skips a retry when any of these are true:
 
 - The signal has already aborted
-- `error.type` is `parse` or `validation`, since these are deterministic response processing failures that a retry will not fix
+- `error.type` is `parse` or `validation`, since these are deterministic response processing failures that a retry will not fix. The exception is `response_truncated`: output cut off at `max_tokens` is retried, since a resend can finish in time
 - `error.status` is in `nonRetryableStatus` (default `400, 401, 402, 403, 404, 413, 422`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to `maxRetries`.

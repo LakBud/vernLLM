@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { fromFetch } from '../../../../src/adapters/index.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
 import { at } from '../../../helpers.js';
 
 type FetchResponse = {
@@ -485,5 +486,65 @@ describe('fromFetch', () => {
     const init = at(fetchMock.mock.calls, 0)[1] as RequestInit;
     expect(JSON.parse(init.body as string)).toEqual({ hello: 'world' });
     expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+  });
+});
+
+describe('fromFetch error bodies with VernLLM redact', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('passes the response body in a failed request error through redact', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        headers: { get: () => null },
+        text: async () => '{"error":"bad key sk-live-123"}',
+      })),
+    );
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: () => ({ content: 'unused' }),
+    });
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      redact: (text) => text.replace(/sk-[\w-]+/g, '[REDACTED]'),
+    });
+
+    const error = await llm.call({ userContent: 'hi', jsonMode: false }).catch((e) => e);
+
+    expect(error.message).toContain('[REDACTED]');
+    expect(error.message).not.toContain('sk-live-123');
+    expect(String(error.cause?.message)).not.toContain('sk-live-123');
+  });
+
+  it('keeps the raw body when no redact is configured', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        headers: { get: () => null },
+        text: async () => 'plain body',
+      })),
+    );
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: () => ({ content: 'unused' }),
+    });
+
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+    const error = await llm.call({ userContent: 'hi', jsonMode: false }).catch((e) => e);
+
+    expect(error.message).toContain('plain body');
   });
 });

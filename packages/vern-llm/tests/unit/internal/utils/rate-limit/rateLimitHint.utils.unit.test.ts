@@ -81,6 +81,23 @@ describe('parseOpenAIRateLimitHeaders', () => {
     expect(hint.resetAfterMs).toBeUndefined();
   });
 
+  it.each(['', '   '])(
+    'treats a blank limit/remaining header (%j) as absent, not as 0 remaining',
+    (blank) => {
+      const hint = parseOpenAIRateLimitHeaders(
+        headers({ 'x-ratelimit-remaining-requests': blank, 'x-ratelimit-limit-requests': blank }),
+      );
+
+      expect(hint.remainingRequests).toBeUndefined();
+      expect(hint.limitRequests).toBeUndefined();
+    },
+  );
+
+  it('still reads a real 0 remaining as 0', () => {
+    const hint = parseOpenAIRateLimitHeaders(headers({ 'x-ratelimit-remaining-requests': '0' }));
+    expect(hint.remainingRequests).toBe(0);
+  });
+
   it('treats a non-numeric limit/remaining value as absent rather than NaN', () => {
     const hint = parseOpenAIRateLimitHeaders(
       headers({ 'x-ratelimit-remaining-requests': 'not-a-number' }),
@@ -119,6 +136,26 @@ describe('parseAnthropicRateLimitHeaders', () => {
     expect(hint.limitRequests).toBeUndefined();
     expect(hint.remainingRequests).toBeUndefined();
     expect(hint.resetAfterMs).toBeUndefined();
+  });
+});
+
+describe('blank Anthropic headers', () => {
+  it('treats a blank remaining header as absent', () => {
+    const hint = parseAnthropicRateLimitHeaders(
+      headers({ 'anthropic-ratelimit-requests-remaining': '' }),
+    );
+    expect(hint.remainingRequests).toBeUndefined();
+  });
+
+  it('returns undefined from parseAnyRateLimitHeaders when every header is blank', () => {
+    expect(
+      parseAnyRateLimitHeaders(
+        headers({
+          'x-ratelimit-remaining-requests': '',
+          'anthropic-ratelimit-requests-remaining': '',
+        }),
+      ),
+    ).toBeUndefined();
   });
 });
 

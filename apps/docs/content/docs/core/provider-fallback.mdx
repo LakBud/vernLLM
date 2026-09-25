@@ -73,7 +73,8 @@ interface FallbackTarget {
 ```
 
 `fallback` accepts either a single `FallbackTarget` or an array. Each target needs its own `client`
-and `model`, everything else is optional. Retry and timeout knobs left unset inherit the parent
+and `model`, everything else is optional. A per call `model` override applies to the primary only,
+since it names a model on the primary's provider. Fallback targets always run their own `model`. Retry and timeout knobs left unset inherit the parent
 instance's own resolved value, so a target only needs to specify what's actually different about it:
 
 ```ts title="provider-fallback-partial-override.ts"

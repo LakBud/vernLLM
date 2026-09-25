@@ -22,6 +22,45 @@ describe('buildCircuitBreaker', () => {
     ).toBeUndefined();
   });
 
+  it('fans a transition with no call context out to middleware onEvent too, with a fresh identity', () => {
+    const logger = fakeLogger();
+    const onEvent = vi.fn();
+    const middlewareOnEvent = vi.fn();
+
+    const breaker = buildCircuitBreaker(
+      true,
+      'openai',
+      'gpt-4o',
+      onEvent,
+      logger,
+      [{ name: 'observer', onEvent: middlewareOnEvent }],
+      5000,
+      false,
+      true,
+    ) as CircuitBreaker;
+
+    breaker.open();
+    breaker.close();
+
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(middlewareOnEvent).toHaveBeenCalledTimes(2);
+
+    const [event, ctx] = middlewareOnEvent.mock.calls[0]!;
+    expect(event).toMatchObject({ kind: 'circuit_state', provider: 'openai', to: 'open' });
+    expect(ctx).toMatchObject({
+      stage: 'attempt',
+      requestedProvider: 'openai',
+      requestedModel: 'gpt-4o',
+      attempt: 1,
+      registeredMiddlewareNames: ['observer'],
+    });
+    expect(typeof ctx.requestId).toBe('string');
+    // Two unrelated transitions never share an identity or state.
+    const secondCtx = middlewareOnEvent.mock.calls[1]![1];
+    expect(secondCtx.requestId).not.toBe(ctx.requestId);
+    expect(secondCtx.state).not.toBe(ctx.state);
+  });
+
   it('reports the state-change event directly (no middleware context) when the breaker is driven without a call context, e.g. manual open()', () => {
     const logger = fakeLogger();
     const onEvent = vi.fn();
@@ -38,8 +77,7 @@ describe('buildCircuitBreaker', () => {
       true,
     ) as CircuitBreaker;
 
-    // No context passed: exercises the `else reportEvent(event)` branch,
-    // not the `emitEvent` middleware-context path.
+    // No context passed, so a fresh identity stands in for the call.
     breaker.open();
 
     expect(onEvent).toHaveBeenCalledWith(

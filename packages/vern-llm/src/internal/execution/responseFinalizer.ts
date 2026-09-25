@@ -43,6 +43,10 @@ export interface FinalizeResponseDeps {
  * inside the same `try` shaping errors already throw from, so it flows
  * through the exact same catch/normalize/report path as any other
  * failure, retryable or not, with no separate handling to keep in sync.
+ *
+ * `truncated` is set when the provider stopped at `max_tokens`. A parse
+ * failure on such a response is reported as `response_truncated`, which
+ * is retryable, instead of a plain parse error.
  */
 export function finalizeResponse<T>(
   rawContent: string | null | undefined,
@@ -54,6 +58,7 @@ export function finalizeResponse<T>(
   attempt: number,
   state: MiddlewareStateBag,
   deps: FinalizeResponseDeps,
+  truncated = false,
 ): T | CallWithToolsResult<T> {
   const { gateway, usageReporter, logger, redactText, parseJson, detectSoftFailure } = deps;
 
@@ -105,7 +110,7 @@ export function finalizeResponse<T>(
     // real LLMError, so normalizeError hands the same instance back
     // unchanged and it's reported exactly once, right here, same as any
     // other failure.
-    const normalized = normalizeError(error, params.signal);
+    const normalized = asTruncationError(normalizeError(error, params.signal), truncated);
 
     if (usage && normalized.type !== 'aborted') {
       usageReporter.reportFailure(
@@ -118,6 +123,21 @@ export function finalizeResponse<T>(
 
     throw normalized;
   }
+}
+
+/**
+ * Replaces a parse failure on output that was cut off at `max_tokens`
+ * with a `response_truncated` error, keeping the original as `cause`.
+ * Anything else, or a response that wasn't cut off, passes through.
+ */
+function asTruncationError(error: LLMError, truncated: boolean): LLMError {
+  if (!truncated || error.type !== 'parse') return error;
+
+  return new LLMError(
+    `Response was cut off at max_tokens before it could be parsed: ${error.message}`,
+    'parse',
+    { code: 'response_truncated', cause: error },
+  );
 }
 
 /**

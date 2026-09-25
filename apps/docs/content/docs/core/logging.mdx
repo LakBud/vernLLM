@@ -78,7 +78,9 @@ calls (and multiple `VernLLM` instances) stay distinguishable in one log stream:
 | `warn`  | A bare `MiddlewareRef` in `runsAfter`/`runsBefore` doesn't resolve to a registered middleware (dropped, not an error; `requireRef(...)` throws instead) | `[VernLLM] middleware "logging" references unknown ref "auth" in runsAfter/runsBefore, ignoring it` |
 | `warn`  | A cache adapter's `set` throws (swallowed)                                                                                                              | `[VernLLM] cache write failed: <message>`                                                           |
 | `warn`  | A cache adapter's `delete` throws (swallowed)                                                                                                           | `[VernLLM] cache delete failed: <message>`                                                          |
+| `warn`  | `cachedCall` gets a missing or NaN `ttl` (nothing is cached)                                                                                            | `[VernLLM] cachedCall ttl must be a number of seconds, got NaN. Nothing is cached.`                 |
 | `warn`  | `model` was passed but has no effect (`isolateByModel` off)                                                                                             | ``[VernLLM] call: `model: 'x'` has no effect here...``                                              |
+| `warn`  | `maxRetries` is negative, NaN, or a fraction (clamped)                                                                                                  | `[VernLLM] primary: maxRetries must be a non-negative whole number, got -1. Using 0.`               |
 | `warn`  | A `CircuitBreakerAdapter` instance is shared across more than one target (logged once per adapter, not once per additional target)                      | `[VernLLM] circuitBreaker: this adapter instance is already wired to another target...`             |
 | `warn`  | A `CircuitBreakerAdapter`'s `prepare` rejects or takes longer than `prepareTimeoutMs` (the call carries on with the adapter's local state)              | `[VernLLM] circuitBreaker.prepare failed, continuing with the adapter's local state: <message>`     |
 | `warn`  | `detectSoftFailure` itself throws (treated as no soft failure)                                                                                          | `[VernLLM] detectSoftFailure threw and was ignored, treated as no soft failure: <message>\n<stack>` |
@@ -138,13 +140,16 @@ const llm = new VernLLM({
 });
 ```
 
-`redact` is applied at exactly two call sites internally, both debug-level:
+`redact` is applied at these call sites internally:
 
 - The success path: the response content is passed through `redact` (or, for a tool-call-only
   turn with no text, a placeholder like `[2 tool call(s)]` is, since there's no text to redact)
   before being truncated to 800 characters and logged.
 - The failure paths: the stringified provider error is passed through `redact`, for both a normal
   call failure and a stream-open failure.
+- A `fromFetch` error: the response body embedded in its message is passed through `redact` as
+  soon as the call fails, so it never reaches `LLMError.message`, `cause`, or any log unredacted. If
+  `redact` throws, the body is withheld.
 
 These are the one place an app has no other way to intercept: they're direct `logger.debug` calls,
 not something routed through a callback. Everything else that could carry the same content,

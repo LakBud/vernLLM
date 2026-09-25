@@ -81,3 +81,71 @@ describe('VernLLM workflow integration', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('VernLLM retry clamping and truncated output', () => {
+  it.each([-1, Number.NaN])(
+    'still calls the provider once when maxRetries is %s, and warns',
+    async (maxRetries) => {
+      const { client, create } = createMockClient([jsonResponse({ answer: 'hello' })]);
+      const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const llm = new VernLLM({ client, model: 'test-model', maxRetries, logger });
+
+      await expect(llm.call({ userContent: 'hello' })).resolves.toEqual({ answer: 'hello' });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        `[VernLLM] primary: maxRetries must be a non-negative whole number, got ${String(maxRetries)}. Using 0.`,
+      );
+    },
+  );
+
+  it('retries JSON that was cut off at max_tokens and returns the complete retry', async () => {
+    const { client, create } = createMockClient([
+      { choices: [{ message: { content: '{"answer": "hel' }, finish_reason: 'length' }] },
+      jsonResponse({ answer: 'hello' }),
+    ]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 1,
+      baseDelayMs: 1,
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+    });
+
+    await expect(llm.call({ userContent: 'hello' })).resolves.toEqual({ answer: 'hello' });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces response_truncated without opening the circuit once retries run out', async () => {
+    const truncated = {
+      choices: [{ message: { content: '{"answer": "hel' }, finish_reason: 'length' }],
+    };
+    const { client } = createMockClient([truncated, truncated]);
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 1,
+      baseDelayMs: 1,
+      circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+    });
+
+    await expect(llm.call({ userContent: 'hello' })).rejects.toMatchObject({
+      type: 'parse',
+      code: 'response_truncated',
+    });
+    expect(llm.getCircuitStates()[0]?.state).toBe('closed');
+  });
+
+  it('does not retry invalid JSON from a response that finished normally', async () => {
+    const { client, create } = createMockClient([
+      { choices: [{ message: { content: '{"answer": oops}' }, finish_reason: 'stop' }] },
+    ]);
+
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 2, baseDelayMs: 1 });
+
+    await expect(llm.call({ userContent: 'hello' })).rejects.toMatchObject({ type: 'parse' });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});
