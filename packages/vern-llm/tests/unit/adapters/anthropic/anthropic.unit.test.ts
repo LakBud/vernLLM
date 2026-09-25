@@ -1244,3 +1244,37 @@ describe('fromAnthropic, native structured output', () => {
     });
   });
 });
+
+describe('fromAnthropic, stop reason', () => {
+  const request = {
+    model: 'claude-x',
+    max_tokens: 10,
+    messages: [{ role: 'user' as const, content: 'hi' }],
+  };
+
+  it('reports finish_reason length when Anthropic stopped at max_tokens', async () => {
+    const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+      content: [{ type: 'text', text: '{"a":' }],
+      stop_reason: 'max_tokens',
+    }));
+
+    const result = await fromAnthropic({ messages: { create } }).chat.completions.create(request, {
+      signal: new AbortController().signal,
+    });
+
+    expect(result.choices?.[0]?.finish_reason).toBe('length');
+  });
+
+  it('leaves finish_reason out for any other stop reason', async () => {
+    const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+      content: [{ type: 'text', text: 'done' }],
+      stop_reason: 'end_turn',
+    }));
+
+    const result = await fromAnthropic({ messages: { create } }).chat.completions.create(request, {
+      signal: new AbortController().signal,
+    });
+
+    expect(result.choices?.[0]).not.toHaveProperty('finish_reason');
+  });
+});

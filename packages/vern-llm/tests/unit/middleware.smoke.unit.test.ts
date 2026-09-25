@@ -726,6 +726,108 @@ describe('middleware smoke test', () => {
     expect(observedOwn).toEqual([undefined]);
   });
 
+  it('ctx.own persists across enabled, wrap, transform, and onEvent within one call', async () => {
+    const { client } = createMockClient([
+      {
+        choices: [{ message: { content: 'hi' } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ]);
+    const seen: Record<string, unknown> = {};
+
+    const mw: VernLLMMiddleware = {
+      name: 'tracker',
+      enabled: (ctx) => {
+        ctx.own.fromEnabled = ctx.stage;
+        return true;
+      },
+      wrap: async (_request, next, ctx) => {
+        ctx.own.fromWrap = 'wrap';
+        const result = await next();
+        seen.afterNext = { ...ctx.own };
+        return result;
+      },
+      transform: (_request, ctx) => {
+        seen.inTransform = { ...ctx.own };
+        ctx.own.fromTransform = 'transform';
+        return {};
+      },
+      onEvent: (event, ctx) => {
+        if (event.kind === 'usage') seen.inOnEvent = { ...ctx.own };
+      },
+    };
+
+    const llm = new VernLLM({ client, model: 'gpt-4o', middleware: [mw] });
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(seen.inTransform).toMatchObject({ fromWrap: 'wrap', fromEnabled: 'attempt' });
+    expect(seen.inOnEvent).toMatchObject({ fromWrap: 'wrap', fromTransform: 'transform' });
+    expect(seen.afterNext).toMatchObject({ fromWrap: 'wrap', fromTransform: 'transform' });
+  });
+
+  it('ctx.own persists across retries of one call but starts empty for the next call', async () => {
+    const { client } = createMockClient([
+      Object.assign(new Error('boom'), { status: 503 }),
+      textResponse('first'),
+      textResponse('second'),
+    ]);
+    const countsPerCall: unknown[] = [];
+
+    const mw: VernLLMMiddleware = {
+      name: 'counter',
+      transform: (_request, ctx) => {
+        ctx.own.attempts = ((ctx.own.attempts as number | undefined) ?? 0) + 1;
+        return {};
+      },
+      wrap: async (_request, next, ctx) => {
+        const result = await next();
+        countsPerCall.push(ctx.own.attempts);
+        return result;
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      maxRetries: 1,
+      baseDelayMs: 1,
+      middleware: [mw],
+    });
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(countsPerCall).toEqual([2, 1]);
+  });
+
+  it('labels an unnamed middleware the same in registeredMiddlewareNames and the middleware event', async () => {
+    const { client } = createMockClient([textResponse('hi')]);
+    const events: VernLLMEvent[] = [];
+    let names: readonly string[] = [];
+
+    const unnamed: VernLLMMiddleware = { transform: () => ({ temperature: 0.1 }) };
+    const observer: VernLLMMiddleware = {
+      name: 'observer',
+      transform: (_request, ctx) => {
+        names = ctx.registeredMiddlewareNames;
+        return {};
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [unnamed, observer],
+      onEvent: (event) => events.push(event),
+    });
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    const middlewareEvent = events.find((e) => e.kind === 'middleware' && e.hook === 'transform');
+    expect(names).toEqual(['[0]', 'observer']);
+    expect(middlewareEvent).toMatchObject({ middleware: '[0]' });
+  });
+
   it('wrap itself is never bounded by middlewareTimeoutMs, only transform/enabled are', async () => {
     const { client } = createMockClient([textResponse('hi')]);
 

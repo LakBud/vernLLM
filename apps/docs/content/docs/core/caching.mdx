@@ -34,6 +34,11 @@ const result = await llm.cachedCall({
   worth double-checking if you're copying a value across.
 </Callout>
 
+A missing or NaN `ttl` caches nothing and logs a warning. A `ttl` of 0 or less also caches nothing.
+`InMemoryCacheAdapter` copies values on write and on read, so mutating a result never changes the
+cached one. A value it can't copy faithfully, such as a class instance or a function anywhere inside
+it, isn't cached.
+
 ## Eviction
 
 Once `maxSize` is exceeded, `InMemoryCacheAdapter` evicts an entry to make room. Two policies:
@@ -128,7 +133,7 @@ as-is, exactly like before.
 
 ### `NormalizedCacheAdapter`
 
-Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys with lowercase, trim, punctuation-to-space replacement, and whitespace collapsing. Normalization is applied by `normalize()` across `get`, `set`, `delete`, and `resolveKey`. No external dependencies or network calls.
+Wraps another adapter (defaults to `InMemoryCacheAdapter`) and normalizes keys across `get`, `set`, `delete`, and `resolveKey`. It only drops what can't change meaning: Unicode composition, line endings, and outer whitespace. Case and punctuation stay, so `"2+2"` and `"2-2"` never share an answer.
 
 ```ts title="normalized-cache.ts"
 import { NormalizedCacheAdapter } from 'vern-llm';
@@ -141,12 +146,12 @@ const llm = new VernLLM({
 
 // These two calls share one cache entry:
 await llm.cachedCall({
-  cacheKey: '  What is the capital of France?  ',
+  cacheKey: '  What is the capital of France?\n',
   ttl: 3600,
   call: { userContent: q1 },
 });
 await llm.cachedCall({
-  cacheKey: 'what is the capital of france',
+  cacheKey: 'What is the capital of France?',
   ttl: 3600,
   call: { userContent: q2 },
 });
@@ -186,6 +191,11 @@ adapter that implements `resolveKey`) in either position:
 // L1 normalizes; TieredCacheAdapter forwards L1's resolveKey automatically
 const cache = new TieredCacheAdapter(new NormalizedCacheAdapter(), new UpstashCacheAdapter());
 ```
+
+An L1 entry's ttl is capped at the L2 expiry this process tracked when it wrote the key. A value
+promoted from L2 that another process wrote keeps `l1Ttl` (60s by default), since L2 doesn't report
+how long it has left. An L1 hit never checks L2, so deleting or evicting a key in L2 from outside
+this adapter doesn't remove it from L1 until its L1 ttl runs out.
 
 <Callout>
   If both L1 and L2 implement `resolveKey`, L1's is used, since it's checked first in `get()` and

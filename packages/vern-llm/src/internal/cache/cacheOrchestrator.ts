@@ -261,6 +261,16 @@ export class CacheOrchestrator {
 
   /** Writes to the cache, logging instead of throwing on adapter failure. */
   private async writeCache(key: string, value: unknown, ttl: number): Promise<void> {
+    // Never handed to the adapter: a custom one could turn a NaN expiry into
+    // an entry that is never evicted. The warning is the only sign the
+    // caller gets that nothing is being cached.
+    if (typeof ttl !== 'number' || Number.isNaN(ttl)) {
+      this.logger.warn(
+        `[VernLLM] cachedCall ttl must be a number of seconds, got ${String(ttl)}. Nothing is cached.`,
+      );
+      return;
+    }
+
     try {
       await this.cache.set(key, value, ttl);
     } catch (error) {

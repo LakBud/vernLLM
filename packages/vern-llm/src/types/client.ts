@@ -107,6 +107,14 @@ export interface LLMClient {
       ): Promise<{
         choices?: Array<{
           message?: { content?: string | null; tool_calls?: WireToolCall[] };
+          /**
+           * Why generation stopped, in OpenAI's vocabulary. Only `'length'`
+           * (cut off at `max_tokens`) is read: output that then fails to
+           * parse becomes a retryable `response_truncated` error instead
+           * of a plain parse error. Optional, adapters that can't tell
+           * leave it out.
+           */
+          finish_reason?: string | null;
         }>;
         usage?: {
           prompt_tokens?: number;

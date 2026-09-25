@@ -54,3 +54,20 @@ describe('LLMError.countsTowardBreaker', () => {
     expect(err.countsTowardBreaker).toBe(false);
   });
 });
+
+describe('response_truncated', () => {
+  it('is retryable even though its type is parse', () => {
+    const err = new LLMError('cut off', 'parse', { code: 'response_truncated' });
+    expect(err.retryable).toBe(true);
+    expect(err.toSnapshot().retryable).toBe(true);
+  });
+
+  it('never counts toward the breaker, since the provider answered fine', () => {
+    const err = new LLMError('cut off', 'parse', { code: 'response_truncated' });
+    expect(err.countsTowardBreaker).toBe(false);
+  });
+
+  it('leaves a plain parse error non retryable', () => {
+    expect(new LLMError('bad json', 'parse').retryable).toBe(false);
+  });
+});

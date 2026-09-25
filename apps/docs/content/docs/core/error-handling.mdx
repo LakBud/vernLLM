@@ -168,6 +168,12 @@ The currently defined connectivity code is:
 | ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `connection_failed` | `network`  | The request never reached the provider: a transport-level failure such as DNS resolution failing, the connection being refused, or the connection resetting mid-request. Detected via known libuv error codes or `fetch`'s own transport-failure wording, not just the absence of a status. |
 
+The currently defined parsing code is:
+
+| Code                 | Error type | Meaning                                                                                                                                                         |
+| -------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `response_truncated` | `parse`    | The provider stopped at `max_tokens` and the output couldn't be parsed. Retryable, and never counts toward the breaker. The original parse error is on `cause`. |
+
 The currently defined fallback code is:
 
 | Code                 | Error type           | Meaning                                                                                                              |
@@ -402,7 +408,8 @@ if (isLLMError(err) && !err.retryable) {
 
 It is `false` when:
 
-- `type` is `'parse'`, `'validation'`, `'invalid_params'`, or `'aborted'`
+- `type` is `'parse'`, `'validation'`, `'invalid_params'`, or `'aborted'`, except `code:
+'response_truncated'`, which is retryable
 - `code` is one of the tool contract codes (`unknown_tool`, `duplicate_tool_call_id`,
   `tool_choice_none_violated`, `unexpected_tool_calls`)
 - `code` is one of the local rate limit codes (`rate_limit_queue_full`,
@@ -425,7 +432,8 @@ since `type: 'fallback_exhausted'` by itself says nothing about whether retrying
 
 - The signal has already aborted, or `error.type` is `'aborted'`
 - `error.type` is `'parse'`, `'validation'`, or `'invalid_params'` because these are deterministic
-  input or response processing failures rather than transient provider faults
+  input or response processing failures rather than transient provider faults. `response_truncated`
+  is the exception and is retried
 - `error.code` is `'unknown_tool'`, `'duplicate_tool_call_id'`, `'tool_choice_none_violated'`, or
   `'unexpected_tool_calls'` because these are deterministic tool contract failures
 - `error.code` is `'rate_limit_queue_full'` or `'rate_limit_queue_timeout'` because the wait

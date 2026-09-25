@@ -8,6 +8,7 @@ import { emitEvent } from '../../../../../../src/internal/execution/utils/middle
 import {
   extractRetryAfterMs,
   getBackoffDelay,
+  normalizeMaxRetries,
   recoverDelay,
   retryWithBackoff,
   shouldRetry,
@@ -876,5 +877,56 @@ describe('retryWithBackoff', () => {
     external.abort();
 
     await expect(result).rejects.toBe(boom);
+  });
+});
+
+describe('normalizeMaxRetries', () => {
+  it.each([
+    [2, 2],
+    [0, 0],
+    [2.9, 2],
+    [-1, 0],
+    [-Infinity, 0],
+    [Number.NaN, 0],
+    [Infinity, Infinity],
+    [undefined as unknown as number, 0],
+    ['3' as unknown as number, 0],
+  ])('maps %s to %s', (input, expected) => {
+    expect(normalizeMaxRetries(input)).toBe(expected);
+  });
+});
+
+describe('retryWithBackoff with an invalid maxRetries', () => {
+  it.each([-1, Number.NaN])(
+    'still makes one attempt for maxRetries %s instead of none',
+    async (maxRetries) => {
+      const fn = vi.fn(async () => {
+        throw new Error('provider down');
+      });
+
+      await expect(
+        retryWithBackoff({
+          normalizeError,
+          fn,
+          maxRetries,
+          shouldRetryAttempt: () => true,
+          recoverDelayForAttempt: vi.fn(async () => {}),
+        }),
+      ).rejects.toThrow('provider down');
+
+      expect(fn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('returns the result of that single attempt', async () => {
+    const result = await retryWithBackoff({
+      normalizeError,
+      fn: async () => 'ok',
+      maxRetries: Number.NaN,
+      shouldRetryAttempt: () => true,
+      recoverDelayForAttempt: vi.fn(async () => {}),
+    });
+
+    expect(result).toBe('ok');
   });
 });

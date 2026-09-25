@@ -1028,3 +1028,26 @@ describe('fromGemini, accepting the full top-level client', () => {
     }
   });
 });
+
+describe('fromGemini, finish reason', () => {
+  const request = {
+    model: 'gemini-x',
+    max_tokens: 10,
+    messages: [{ role: 'user' as const, content: 'hi' }],
+  };
+
+  it.each([
+    ['MAX_TOKENS', 'length'],
+    ['STOP', undefined],
+  ])('maps finishReason %s to finish_reason %s', async (finishReason, expected) => {
+    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+      candidates: [{ content: { parts: [{ text: 'x' }] }, finishReason }],
+    }));
+
+    const result = await fromGemini({ generateContent }).chat.completions.create(request, {
+      signal: new AbortController().signal,
+    });
+
+    expect(result.choices?.[0]?.finish_reason).toBe(expected);
+  });
+});

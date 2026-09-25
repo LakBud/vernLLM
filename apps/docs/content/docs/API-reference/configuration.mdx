@@ -97,7 +97,7 @@ entry, or `'lru'`, removing the least recently used entry. See
 [Eviction](/docs/core/caching#eviction).
 
 Two additional built-in adapters compose on top of any `CacheAdapter`: `NormalizedCacheAdapter`
-(normalizes keys before matching, including case, whitespace, and punctuation) and
+(normalizes Unicode, line endings, and outer whitespace before matching) and
 `TieredCacheAdapter` (checks a fast local adapter first, falling back to a shared one). See [Caching](/docs/core/caching) for usage.
 
 | Option  | Default                      | Notes                                                                                                                                                                                                                                                  |

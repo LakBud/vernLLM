@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { fromFetch } from '../../../../src/adapters/index.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, fakeReadableStream } from '../../../helpers.js';
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
@@ -410,6 +411,49 @@ describe('fromFetch().chat.completions.createStream', () => {
 
     expect(err.status).toBe(500);
     expect(err.message).toContain('Fetch adapter stream request failed (500):');
+  });
+
+  it('passes a failed stream open body through VernLLM redact', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        headers: new Headers(),
+        text: async () => 'token sk-live-456 is invalid',
+      })),
+    );
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: (json: unknown) => ({ content: String(json) }),
+      mapStreamEvent: () => undefined,
+    });
+
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      maxRetries: 0,
+      redact: (text) => text.replace(/sk-[\w-]+/g, '[REDACTED]'),
+    });
+
+    const error = await (async () => {
+      try {
+        const { finalResult } = await llm.call({
+          userContent: 'hi',
+          jsonMode: false,
+          stream: true,
+        });
+        await finalResult;
+      } catch (e) {
+        return e as Error;
+      }
+      throw new Error('expected the stream to fail');
+    })();
+
+    expect(error.message).toContain('[REDACTED]');
+    expect(error.message).not.toContain('sk-live-456');
   });
 
   it('omits body and Content-Type for GET requests, matching create()', async () => {

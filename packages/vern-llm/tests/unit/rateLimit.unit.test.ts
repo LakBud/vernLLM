@@ -43,6 +43,94 @@ describe('defaultEstimateTokens', () => {
     expect(defaultEstimateTokens(req)).toBe(100);
   });
 
+  it('counts an image as a flat estimate instead of reading its base64 as text', () => {
+    // About 750KB of base64, which chars/4 alone would read as ~187k tokens.
+    const data = 'A'.repeat(750_000);
+    const req = request({
+      max_tokens: 0,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'describe this' },
+            { type: 'image', data, mimeType: 'image/png' },
+          ],
+        },
+      ],
+    });
+
+    // 'describe this' is 13 chars -> ceil(13/4) = 4, plus one image at 1600.
+    expect(defaultEstimateTokens(req)).toBe(4 + 1_600);
+  });
+
+  it('measures a non-array, non-string content value by its JSON length', () => {
+    const req = request({
+      max_tokens: 0,
+      messages: [{ role: 'user', content: { note: 'hi' } as never }],
+    });
+
+    // '{"note":"hi"}' is 13 chars -> ceil(13/4) = 4.
+    expect(defaultEstimateTokens(req)).toBe(4);
+  });
+
+  it('counts an unserializable block as zero chars instead of throwing', () => {
+    const circular: Record<string, unknown> = { type: 'custom' };
+    circular.self = circular;
+    const req = request({
+      max_tokens: 0,
+      messages: [{ role: 'user', content: [circular, { type: 'text', text: 'abcd' }] as never }],
+    });
+
+    expect(defaultEstimateTokens(req)).toBe(1);
+  });
+
+  it('counts a block JSON drops entirely (undefined) as zero chars', () => {
+    const req = request({
+      max_tokens: 0,
+      messages: [{ role: 'user', content: [undefined, { type: 'text', text: 'abcd' }] as never }],
+    });
+
+    expect(defaultEstimateTokens(req)).toBe(1);
+  });
+
+  it('measures a text block whose text is not a string by its JSON length', () => {
+    const req = request({
+      max_tokens: 0,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 42 }] as never }],
+    });
+
+    // '{"type":"text","text":42}' is 25 chars -> ceil(25/4) = 7.
+    expect(defaultEstimateTokens(req)).toBe(7);
+  });
+
+  it('adds the flat estimate once per image across messages', () => {
+    const image = { type: 'image' as const, data: 'AAAA', mimeType: 'image/png' };
+    const req = request({
+      max_tokens: 0,
+      messages: [
+        { role: 'user', content: [image, image] },
+        { role: 'user', content: [image] },
+      ],
+    });
+
+    expect(defaultEstimateTokens(req)).toBe(3 * 1_600);
+  });
+
+  it('lets a large image through a tokensPerMinute limit that its base64 size would exceed', async () => {
+    const limiter = new RateLimiter({ tokensPerMinute: 200_000 });
+    const req = request({
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'image', data: 'A'.repeat(1_000_000), mimeType: 'image/jpeg' }],
+        },
+      ],
+    });
+
+    const acquired = await limiter.acquire(limiter.estimate(req));
+    acquired.release();
+  });
+
   it('defaults max_tokens to 0 when the request omits it', () => {
     const req = request({ max_tokens: undefined });
 
@@ -686,9 +774,12 @@ describe('RateLimiter, AIMD', () => {
       aimd: { increaseBy: 0, decreaseFactor: 0.5, minCapacity: 2, maxCapacity: 100 },
     });
 
-    for (let i = 0; i < 10; i++) limiter.signalRateLimit(); // would go toward 0 uncapped
-
-    await vi.advanceTimersByTimeAsync(60_000);
+    // One shrink per window, so each signal lands in its own window:
+    // 10 -> 5 -> 2.5 -> 2 (floored), and would go toward 0 uncapped.
+    for (let i = 0; i < 10; i++) {
+      limiter.signalRateLimit();
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
 
     const held = [];
     for (let i = 0; i < 2; i++) {
@@ -699,6 +790,98 @@ describe('RateLimiter, AIMD', () => {
     expect(await isPending(third)).toBe(true);
 
     for (const h of held) h.release();
+  });
+
+  /** How many acquires succeed right now before one would block. */
+  async function capacityNow(limiter: RateLimiter): Promise<number> {
+    const held = [];
+    for (;;) {
+      const next = limiter.acquire(0);
+      if (await isPending(next)) {
+        for (const h of held) h.release();
+        return held.length;
+      }
+      held.push(await next);
+    }
+  }
+
+  it('shrinks only once for a burst of rate limit signals in the same window', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 16,
+      maxQueueMs: 0,
+      aimd: { increaseBy: 0, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    // Five concurrent 429s describe the same overload.
+    for (let i = 0; i < 5; i++) limiter.signalRateLimit();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await capacityNow(limiter)).toBe(8);
+  });
+
+  it('counts a proactive hint shrink toward the same window as a 429', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 16,
+      maxQueueMs: 0,
+      aimd: {
+        increaseBy: 0,
+        decreaseFactor: 0.5,
+        minCapacity: 1,
+        maxCapacity: 100,
+        proactiveFloor: 5,
+      },
+    });
+
+    limiter.reactToRateLimitHint({ remainingRequests: 2 });
+    limiter.signalRateLimit();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await capacityNow(limiter)).toBe(8);
+  });
+
+  it('shrinks again once a full window has passed since the last shrink', async () => {
+    vi.useFakeTimers();
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 16,
+      maxQueueMs: 0,
+      aimd: { increaseBy: 0, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    limiter.signalRateLimit(); // 16 -> 8
+    await vi.advanceTimersByTimeAsync(59_999);
+    limiter.signalRateLimit(); // same window, ignored
+    await vi.advanceTimersByTimeAsync(1);
+    limiter.signalRateLimit(); // new window, 8 -> 4
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await capacityNow(limiter)).toBe(4);
+  });
+
+  it('treats a clock that moved backwards as a new window instead of blocking shrinks', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T12:00:00Z'));
+
+    const limiter = new RateLimiter({
+      requestsPerMinute: 16,
+      maxQueueMs: 0,
+      aimd: { increaseBy: 0, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+    });
+
+    limiter.signalRateLimit(); // 16 -> 8
+    vi.setSystemTime(new Date('2026-01-01T11:00:00Z'));
+    limiter.signalRateLimit(); // clock went back an hour, 8 -> 4
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await capacityNow(limiter)).toBe(4);
   });
 
   it('signalRateLimit and growOnSuccess are no-ops without aimd configured', async () => {

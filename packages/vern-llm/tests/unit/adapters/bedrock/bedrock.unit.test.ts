@@ -1689,3 +1689,27 @@ describe('fromBedrock, native structured output', () => {
     });
   });
 });
+
+describe('fromBedrock, stop reason', () => {
+  const request = {
+    model: 'anthropic.claude',
+    max_tokens: 10,
+    messages: [{ role: 'user' as const, content: 'hi' }],
+  };
+
+  it.each([
+    ['max_tokens', 'length'],
+    ['end_turn', undefined],
+  ])('maps stopReason %s to finish_reason %s', async (stopReason, expected) => {
+    const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
+      output: { message: { content: [{ text: 'x' }] } },
+      stopReason,
+    }));
+
+    const result = await fromBedrock({ converse }).chat.completions.create(request, {
+      signal: new AbortController().signal,
+    });
+
+    expect(result.choices?.[0]?.finish_reason).toBe(expected);
+  });
+});

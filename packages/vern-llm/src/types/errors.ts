@@ -64,6 +64,7 @@ export type LLMErrorCode =
   // Parsing (parse)
   | 'tool_arguments_parse_failed'
   | 'stream_frame_invalid'
+  | 'response_truncated'
   // Soft failure (api, default; a custom code can also override the type)
   | 'soft_failure_detected';
 
@@ -127,6 +128,9 @@ const NON_RETRYABLE_TYPES: ReadonlySet<LLMErrorType> = new Set([
  * one of them, so it has to be computed the same way in both places.
  */
 function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): boolean {
+  // Output cut off at max_tokens can come back complete on a resend, since
+  // generation varies, unlike a reply that was whole and still malformed.
+  if (code === 'response_truncated') return true;
   if (NON_RETRYABLE_TYPES.has(type)) return false;
   if (code && NON_RETRYABLE_TOOL_CONTRACT_CODES.has(code)) return false;
   if (code && LOCAL_RATE_LIMIT_CODES.has(code)) return false;
@@ -178,6 +182,8 @@ function computeCountsTowardBreaker(
 ): boolean {
   if (!computeRetryable(type, code)) return false;
   if (NON_BREAKER_TYPES.has(type)) return false;
+  // The provider answered fine, the caller's max_tokens was too small.
+  if (code === 'response_truncated') return false;
   if (isCallerSideStatus(status)) return false;
   return true;
 }
@@ -495,6 +501,7 @@ export class LLMError extends Error {
    * own response, or intentional cancellation, none of which are the
    * provider being unhealthy), the tool contract codes, the local
    * rate limit codes, the middleware timeout code, and `payload_too_large`.
+   * `response_truncated` is retryable despite its `parse` type.
    * Subclasses (see `FallbackExhaustedError`) may override this when `type`
    * alone carries no retry signal.
    */

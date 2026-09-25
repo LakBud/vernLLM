@@ -40,6 +40,8 @@ export interface UsageReporter {
    * attempt: `totalTokens` when reported, otherwise the sum of prompt and
    * completion tokens, matching `reportFailure`'s own fallback for a
    * hand-rolled client that reports the parts but omits the total.
+   * `undefined` when there is no usage or it is all zero, so the limiter
+   * keeps its estimate.
    */
   actualTokensFor(usage: TokenUsage | undefined): number | undefined;
   /** Reports token usage for a successful call as a `'usage'` event. `ctx` is this attempt's `AttemptContext`, used to fan the event out to middleware and to `onEvent`/`onUsage`. */
@@ -74,7 +76,13 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
 
   function actualTokensFor(usage: TokenUsage | undefined): number | undefined {
     if (!usage) return undefined;
-    return usage.totalTokens || usage.promptTokens + usage.completionTokens;
+
+    const total = usage.totalTokens || usage.promptTokens + usage.completionTokens;
+
+    // A real request always spends prompt tokens, so an all zero report
+    // means the provider sent no usage. Reconciling against it would
+    // refund the whole estimate for tokens that were actually spent.
+    return total === 0 ? undefined : total;
   }
 
   function reportSuccess(usage: TokenUsage | undefined, ctx: AttemptContext): void {

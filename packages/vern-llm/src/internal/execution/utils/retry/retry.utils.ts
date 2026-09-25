@@ -476,10 +476,21 @@ export interface RetryWithBackoffParams<T> {
   normalizeError: (err: unknown, signal?: AbortSignal) => LLMError;
 }
 
+/**
+ * Turns a configured `maxRetries` into a usable retry count. NaN, a
+ * negative number, or a non-number would otherwise skip the attempt loop
+ * entirely, making no provider call at all, so they mean no retries (one
+ * attempt). A fraction rounds down, and `Infinity` stays, since retrying
+ * until the signal or deadline fires is a deliberate choice.
+ */
+export function normalizeMaxRetries(maxRetries: number): number {
+  if (typeof maxRetries !== 'number' || Number.isNaN(maxRetries) || maxRetries < 0) return 0;
+  return Math.floor(maxRetries);
+}
+
 export async function retryWithBackoff<T>(params: RetryWithBackoffParams<T>): Promise<T> {
   const {
     fn,
-    maxRetries,
     signal,
     onAttempt,
     attempts,
@@ -487,6 +498,7 @@ export async function retryWithBackoff<T>(params: RetryWithBackoffParams<T>): Pr
     recoverDelayForAttempt,
     normalizeError,
   } = params;
+  const maxRetries = normalizeMaxRetries(params.maxRetries);
 
   let lastError: unknown;
   let lastRequestForAttempt: LLMRequestSnapshot | undefined;

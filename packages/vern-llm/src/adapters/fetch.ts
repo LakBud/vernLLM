@@ -1,3 +1,4 @@
+import { errorWithResponseBody } from '../internal/utils/errors/responseBody.utils.js';
 import {
   attachRateLimitHint,
   parseOpenAIRateLimitHeaders,
@@ -196,8 +197,9 @@ async function defaultRequestStreamWithHeaders(
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    const err = new Error(
-      `Fetch adapter stream request failed (${res.status}): ${body.slice(0, 500)}`,
+    const err = errorWithResponseBody(
+      `Fetch adapter stream request failed (${res.status})`,
+      body,
     ) as Error & { status?: number; headers?: ResponseLike['headers'] };
 
     err.status = res.status;
@@ -291,8 +293,9 @@ export function fromFetch(config: FetchAdapterConfig): LLMClient {
 
           if (!res.ok) {
             const responseBody = await res.text().catch(() => '');
-            const err = new Error(
-              `Fetch adapter request failed (${res.status}): ${responseBody.slice(0, 500)}`,
+            const err = errorWithResponseBody(
+              `Fetch adapter request failed (${res.status})`,
+              responseBody,
             ) as Error & { status?: number; headers?: ResponseLike['headers'] };
             err.status = res.status;
             // Attach headers so downstream retry logic (e.g. rate-limit

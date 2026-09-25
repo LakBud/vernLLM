@@ -56,19 +56,167 @@ describe('InMemoryCacheAdapter', () => {
     expect(await cache.get('b')).toEqual({ hit: true, value: 2 });
     expect(await cache.get('c')).toEqual({ hit: true, value: 3 });
   });
+
+  it('returns a copy on every hit, so mutating one result leaves the cache intact', async () => {
+    const cache = new InMemoryCacheAdapter<{ items: string[] }>();
+    await cache.set('k', { items: ['a'] }, 60);
+
+    const first = await cache.get('k');
+    first.value?.items.push('poisoned');
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: { items: ['a'] } });
+  });
+
+  it('stores a copy, so mutating the written value after set leaves the cache intact', async () => {
+    const cache = new InMemoryCacheAdapter<{ items: string[] }>();
+    const value = { items: ['a'] };
+
+    await cache.set('k', value, 60);
+    value.items.push('poisoned');
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: { items: ['a'] } });
+  });
+
+  it('does not store a value holding a function, instead of sharing it by reference', async () => {
+    const cache = new InMemoryCacheAdapter<{ fn: () => number }>();
+
+    await cache.set('k', { fn: () => 1 }, 60);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('never hands back a class instance stripped of its prototype', async () => {
+    class Money {
+      constructor(readonly cents: number) {}
+      format(): string {
+        return `$${(this.cents / 100).toFixed(2)}`;
+      }
+    }
+    const cache = new InMemoryCacheAdapter<{ total: Money }>();
+
+    await cache.set('k', { total: new Money(250) }, 60);
+    const result = await cache.get('k');
+
+    // Not cached at all, rather than a hit whose `total.format` is missing.
+    expect(result).toEqual({ hit: false, value: null });
+  });
+
+  it('drops the older value when a key is rewritten with a value it cannot copy', async () => {
+    const cache = new InMemoryCacheAdapter<unknown>();
+
+    await cache.set('k', { ok: true }, 60);
+    await cache.set('k', { fn: () => 1 }, 60);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('copies built-ins structuredClone recreates with their own type', async () => {
+    const cache = new InMemoryCacheAdapter<unknown>();
+    const value = {
+      at: new Date(0),
+      pattern: /a+/g,
+      tags: new Set(['x']),
+      counts: new Map([['a', 1]]),
+      bytes: new Uint8Array([1, 2]),
+      bare: Object.assign(Object.create(null) as object, { n: 1 }),
+      list: [1, 'two', null, undefined, 3n],
+    };
+
+    await cache.set('k', value, 60);
+    const { hit, value: copy } = await cache.get('k');
+
+    expect(hit).toBe(true);
+    expect(copy).toEqual(value);
+    expect(copy).not.toBe(value);
+    expect((copy as typeof value).at).toBeInstanceOf(Date);
+    expect((copy as typeof value).counts).toBeInstanceOf(Map);
+  });
+
+  it('copies a value with a cycle', async () => {
+    const cache = new InMemoryCacheAdapter<Record<string, unknown>>();
+    const value: Record<string, unknown> = { name: 'loop' };
+    value.self = value;
+
+    await cache.set('k', value, 60);
+    const copy = (await cache.get('k')).value!;
+
+    expect(copy.self).toBe(copy);
+  });
+
+  it.each([
+    ['a symbol value', { s: Symbol('x') }],
+    ['a symbol key', { [Symbol('x')]: 1 }],
+    ['an accessor', Object.defineProperty({}, 'v', { get: () => 1, enumerable: true })],
+    ['a class instance inside a Map', { m: new Map([['k', new (class Box {})()]]) }],
+    ['a class instance as a Map key', { m: new Map([[new (class Key {})(), 1]]) }],
+    ['a function inside a Set', { s: new Set([() => 1]) }],
+  ])('does not store a value holding %s', async (_, value) => {
+    const cache = new InMemoryCacheAdapter<unknown>();
+
+    await cache.set('k', value, 60);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['NaN', Number.NaN],
+    ['zero', 0],
+    ['negative', -5],
+  ])('stores nothing for a %s ttl instead of an entry that never expires', async (_, ttl) => {
+    vi.useFakeTimers();
+    const cache = new InMemoryCacheAdapter<number>();
+
+    await cache.set('k', 1, ttl as number);
+    vi.advanceTimersByTime(365 * 24 * 60 * 60 * 1000);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('drops the older value when a key is rewritten with an invalid ttl', async () => {
+    const cache = new InMemoryCacheAdapter<number>();
+
+    await cache.set('k', 1, 60);
+    await cache.set('k', 2, Number.NaN);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('removes expired entries from the store on the next write', async () => {
+    vi.useFakeTimers();
+    const cache = new InMemoryCacheAdapter<number>();
+
+    await cache.set('old', 1, 1);
+    vi.advanceTimersByTime(1_001);
+    await cache.set('new', 2, 60);
+
+    const store = (cache as unknown as { store: Map<string, unknown> }).store;
+    expect(store.has('old')).toBe(false);
+    expect(store.has('new')).toBe(true);
+  });
+
+  it('keeps an Infinity ttl entry until it is deleted or evicted', async () => {
+    vi.useFakeTimers();
+    const cache = new InMemoryCacheAdapter<number>();
+
+    await cache.set('k', 1, Infinity);
+    vi.advanceTimersByTime(365 * 24 * 60 * 60 * 1000);
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: 1 });
+  });
 });
 
 describe('NormalizedCacheAdapter', () => {
-  it('treats differently-formatted keys as the same entry', async () => {
+  it('treats keys that differ only in outer whitespace as the same entry', async () => {
     const cache = new NormalizedCacheAdapter<string>();
 
-    await cache.set('  What is the Capital of France?  ', 'Paris', 60);
+    await cache.set('  What is the capital of France?  ', 'Paris', 60);
 
-    expect(await cache.get('what is the capital of france')).toEqual({
+    expect(await cache.get('What is the capital of France?')).toEqual({
       hit: true,
       value: 'Paris',
     });
-    expect(await cache.get('  WHAT IS THE CAPITAL OF FRANCE?  ')).toEqual({
+    expect(await cache.get('\n\tWhat is the capital of France?\n')).toEqual({
       hit: true,
       value: 'Paris',
     });
@@ -76,14 +224,14 @@ describe('NormalizedCacheAdapter', () => {
 
   it('resolveKey returns the normalized key', async () => {
     const cache = new NormalizedCacheAdapter<string>();
-    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('hello world');
+    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('Hello,  World!');
   });
 
   it('deletes through to the wrapped adapter using the normalized key', async () => {
     const cache = new NormalizedCacheAdapter<string>();
 
     await cache.set('Hello World', 'v', 60);
-    await cache.delete('  hello   world  ');
+    await cache.delete('  Hello World  ');
 
     expect(await cache.get('Hello World')).toEqual({ hit: false, value: null });
   });
@@ -93,18 +241,38 @@ describe('NormalizedCacheAdapter', () => {
     const setSpy = vi.spyOn(inner, 'set');
     const cache = new NormalizedCacheAdapter<string>(inner);
 
-    await cache.set('Hello World', 'v', 60);
+    await cache.set(' Hello World ', 'v', 60);
 
-    expect(setSpy).toHaveBeenCalledWith('hello world', 'v', 60);
+    expect(setSpy).toHaveBeenCalledWith('Hello World', 'v', 60);
   });
 
-  it('normalizes keys that differ only in punctuation spacing to the same entry', async () => {
+  it('never gives prompts that differ in an operator the same entry', async () => {
     const cache = new NormalizedCacheAdapter<string>();
 
-    await cache.set('2+2', '4', 60);
+    await cache.set('What is 2+2?', '4', 60);
 
-    expect(await cache.get('2 + 2')).toEqual({ hit: true, value: '4' });
-    expect(await cache.resolveKey?.('2+2')).toBe(await cache.resolveKey?.('2 + 2'));
+    expect(await cache.get('What is 2-2?')).toEqual({ hit: false, value: null });
+    expect(await cache.get('What is 2*2?')).toEqual({ hit: false, value: null });
+    expect(await cache.resolveKey?.('2+2')).not.toBe(await cache.resolveKey?.('2-2'));
+  });
+
+  it('keeps case, punctuation, and inner whitespace in the key', async () => {
+    const cache = new NormalizedCacheAdapter<string>();
+
+    expect(await cache.resolveKey?.('Polish')).not.toBe(await cache.resolveKey?.('polish'));
+    expect(await cache.resolveKey?.('done.')).not.toBe(await cache.resolveKey?.('done?'));
+    // Indentation is meaningful in code prompts.
+    expect(await cache.resolveKey?.('if x:\n  y\nz')).not.toBe(
+      await cache.resolveKey?.('if x:\n  y\n  z'),
+    );
+  });
+
+  it('matches keys that differ only in line ending style or Unicode composition', async () => {
+    const cache = new NormalizedCacheAdapter<string>();
+
+    expect(await cache.resolveKey?.('a\r\nb\rc')).toBe('a\nb\nc');
+    // "é" precomposed vs "e" plus a combining acute accent.
+    expect(await cache.resolveKey?.('caf\u00e9')).toBe(await cache.resolveKey?.('cafe\u0301'));
   });
 });
 
@@ -178,7 +346,7 @@ describe('TieredCacheAdapter', () => {
     const l2 = new InMemoryCacheAdapter<string>();
     const cache = new TieredCacheAdapter(l1, l2);
 
-    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('hello world');
+    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('Hello,  World!');
   });
 
   it('falls back to L2 resolveKey when L1 has none', async () => {
@@ -186,7 +354,7 @@ describe('TieredCacheAdapter', () => {
     const l2 = new NormalizedCacheAdapter<string>();
     const cache = new TieredCacheAdapter(l1, l2);
 
-    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('hello world');
+    expect(await cache.resolveKey?.('  Hello,  World!  ')).toBe('Hello,  World!');
   });
 
   it('returns the key unchanged when neither tier implements resolveKey', async () => {
@@ -208,6 +376,188 @@ describe('TieredCacheAdapter', () => {
     const cache = new TieredCacheAdapter(l1, l2);
 
     expect(await cache.resolveKey?.('anything')).toBe('from-l1');
+  });
+});
+
+describe('TieredCacheAdapter expiry', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('caps the L1 ttl at the L2 ttl on set, so L1 never outlives L2', async () => {
+    vi.useFakeTimers();
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2, 60);
+
+    await cache.set('k', 'v', 10);
+    vi.advanceTimersByTime(10_001);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('still uses the shorter l1Ttl when it is below the L2 ttl', async () => {
+    vi.useFakeTimers();
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const setSpy = vi.spyOn(l1, 'set');
+    const cache = new TieredCacheAdapter(l1, l2, 5);
+
+    await cache.set('k', 'v', 60);
+
+    expect(setSpy).toHaveBeenCalledWith('k', 'v', 5);
+  });
+
+  it('caps a promoted L1 entry at the time L2 has left for a key it wrote', async () => {
+    vi.useFakeTimers();
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2, 60);
+
+    await cache.set('k', 'v', 100);
+    vi.advanceTimersByTime(90_000);
+    // L1 expired at 60s, so this read promotes from L2 with 10s left.
+    await l1.delete('k');
+    expect(await cache.get('k')).toEqual({ hit: true, value: 'v' });
+
+    vi.advanceTimersByTime(10_001);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+    expect(await l1.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('promotes an entry another process wrote with l1Ttl, since its L2 expiry is unknown', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const setSpy = vi.spyOn(l1, 'set');
+    const cache = new TieredCacheAdapter(l1, l2, 30);
+
+    await l2.set('k', 'v', 3600);
+    await cache.get('k');
+
+    expect(setSpy).toHaveBeenCalledWith('k', 'v', 30);
+  });
+
+  it('forgets a tracked expiry on delete', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const setSpy = vi.spyOn(l1, 'set');
+    const cache = new TieredCacheAdapter(l1, l2);
+
+    await cache.set('k', 'v', 5);
+    await cache.delete('k');
+    await l2.set('k', 'w', 3600);
+    await cache.get('k');
+
+    expect(setSpy).toHaveBeenLastCalledWith('k', 'w', 60);
+  });
+
+  it('passes a NaN ttl through to both tiers, which then store nothing', async () => {
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const cache = new TieredCacheAdapter(l1, l2, 60);
+
+    await cache.set('k', 'v', Number.NaN);
+
+    expect(await cache.get('k')).toEqual({ hit: false, value: null });
+  });
+
+  it('stops tracking an expiry once it has passed', async () => {
+    vi.useFakeTimers();
+    const cache = new TieredCacheAdapter<number>(
+      new InMemoryCacheAdapter<number>(),
+      new InMemoryCacheAdapter<number>(),
+    );
+
+    await cache.set('short', 1, 1);
+    vi.advanceTimersByTime(1_001);
+    await cache.set('long', 2, 60);
+
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+    expect(tracked.has('short')).toBe(false);
+    expect(tracked.has('long')).toBe(true);
+  });
+
+  it("treats an L2 hit on a key whose tracked write expired as another process's entry", async () => {
+    vi.useFakeTimers();
+    const l1 = new InMemoryCacheAdapter<string>();
+    const l2 = new InMemoryCacheAdapter<string>();
+    const setSpy = vi.spyOn(l1, 'set');
+    const cache = new TieredCacheAdapter(l1, l2, 30);
+
+    await cache.set('k', 'mine', 5);
+    vi.advanceTimersByTime(6_000);
+    // Another process rewrote the key in L2 after this process's write expired.
+    await l2.set('k', 'theirs', 3600);
+
+    expect(await cache.get('k')).toEqual({ hit: true, value: 'theirs' });
+    expect(setSpy).toHaveBeenLastCalledWith('k', 'theirs', 30);
+
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+    expect(tracked.has('k')).toBe(false);
+  });
+
+  it('prunes by expiry, not write order, and never lets a stale record remove a newer one', async () => {
+    vi.useFakeTimers();
+    const noop = { get: async () => ({ hit: false, value: null }), set: async () => {} };
+    const cache = new TieredCacheAdapter<number>(noop, noop);
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+
+    await cache.set('long', 1, 3600); // written first, expires last
+    await cache.set('short', 2, 1);
+    await cache.set('rewritten', 3, 1);
+    await cache.set('rewritten', 4, 3600); // its old 1s record is now stale
+
+    vi.advanceTimersByTime(1_001);
+    await cache.set('trigger', 5, 3600);
+
+    expect(tracked.has('short')).toBe(false);
+    expect(tracked.has('long')).toBe(true);
+    expect(tracked.has('rewritten')).toBe(true);
+  });
+
+  it('prunes exactly the expired records across many mixed ttls, step by step', async () => {
+    vi.useFakeTimers();
+    const noop = { get: async () => ({ hit: false, value: null }), set: async () => {} };
+    const cache = new TieredCacheAdapter<number>(noop, noop);
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+    const start = Date.now();
+
+    // A fixed, shuffled spread of ttls from 1s to 40s.
+    const ttls = Array.from({ length: 40 }, (_, i) => ((i * 17) % 40) + 1);
+    for (const [i, ttl] of ttls.entries()) await cache.set(`k${i}`, i, ttl);
+
+    for (const elapsed of [5, 12, 25, 39]) {
+      vi.setSystemTime(start + elapsed * 1_000 + 1);
+      await cache.set('probe', 0, 3600);
+
+      const expected = ttls.flatMap((ttl, i) => (ttl > elapsed ? [`k${i}`] : []));
+      expect([...tracked.keys()].filter((k) => k !== 'probe').sort()).toEqual(expected.sort());
+    }
+  });
+
+  it('keeps the expiry heap bounded when the same keys are rewritten over and over', async () => {
+    const noop = { get: async () => ({ hit: false, value: null }), set: async () => {} };
+    const cache = new TieredCacheAdapter<number>(noop, noop);
+
+    for (let i = 0; i < 5_000; i++) await cache.set(`k${i % 10}`, i, 3600);
+
+    const heap = (cache as unknown as { expiryHeap: unknown[] }).expiryHeap;
+    expect(heap.length).toBeLessThanOrEqual(2 * 10 + 64 + 1);
+  });
+
+  it('bounds the number of tracked expiries', async () => {
+    const cache = new TieredCacheAdapter<number>(
+      { get: async () => ({ hit: false, value: null }), set: async () => {} },
+      { get: async () => ({ hit: false, value: null }), set: async () => {} },
+    );
+
+    for (let i = 0; i < 10_050; i++) await cache.set(`k${i}`, i, 3600);
+
+    const tracked = (cache as unknown as { l2ExpiresAt: Map<string, number> }).l2ExpiresAt;
+    expect(tracked.size).toBe(10_000);
+    expect(tracked.has('k0')).toBe(false);
+    expect(tracked.has('k10049')).toBe(true);
   });
 });
 

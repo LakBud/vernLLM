@@ -360,3 +360,63 @@ describe('finalizeResponse, detectSoftFailure', () => {
     expect(deps.gateway.recordSuccess).toHaveBeenCalledOnce();
   });
 });
+
+describe('finalizeResponse, output cut off at max_tokens', () => {
+  const run = (rawContent: string, truncated: boolean, deps = baseDeps()) =>
+    finalizeResponse(
+      rawContent,
+      undefined,
+      baseParams({ jsonMode: true }),
+      true,
+      usage,
+      'req-1',
+      0,
+      state,
+      deps,
+      truncated,
+    );
+
+  it('reports truncated JSON as a retryable response_truncated error', () => {
+    const error = (() => {
+      try {
+        run('{"answer": "par', true);
+      } catch (e) {
+        return e as LLMError;
+      }
+      throw new Error('expected finalizeResponse to throw');
+    })();
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect(error.type).toBe('parse');
+    expect(error.code).toBe('response_truncated');
+    expect(error.retryable).toBe(true);
+    expect((error.cause as LLMError).message).toBe('Invalid JSON response');
+  });
+
+  it('reports the truncation error, not the parse error, as the usage failure', () => {
+    const deps = baseDeps();
+
+    expect(() => run('{"answer": "par', true, deps)).toThrow();
+
+    const reported = vi.mocked(deps.usageReporter.reportFailure).mock.calls[0]?.[1];
+    expect(reported?.code).toBe('response_truncated');
+  });
+
+  it('keeps a plain parse error when the response was not cut off', () => {
+    expect(() => run('{"answer": "par', false)).toThrow(
+      expect.objectContaining({ type: 'parse', code: undefined }),
+    );
+  });
+
+  it('still returns output that parses even when it was cut off', () => {
+    expect(run('{"answer": 4}', true)).toEqual({ answer: 4 });
+  });
+
+  it('leaves a non parse failure alone when the response was cut off', () => {
+    const deps = baseDeps();
+
+    expect(() =>
+      finalizeResponse('', undefined, baseParams(), false, usage, 'req-1', 0, state, deps, true),
+    ).toThrow(expect.objectContaining({ code: 'empty_response' }));
+  });
+});

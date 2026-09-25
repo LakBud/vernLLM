@@ -404,7 +404,15 @@ describe('VernLLM.call, stream: true', () => {
         },
       }),
     ]);
-    const llm = new VernLLM({ client, model: 'test-model', onUsage, onUsageFailure });
+    // One attempt: a failure before content is retried, and each retry
+    // would report its own usage failure.
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      onUsage,
+      onUsageFailure,
+    });
 
     const { chunks, finalResult } = await llm.call({
       userContent: 'hi',

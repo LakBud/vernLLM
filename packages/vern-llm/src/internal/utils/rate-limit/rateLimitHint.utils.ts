@@ -32,7 +32,8 @@ function parseGoDuration(value: string): number | undefined {
 function parseIntHeader(headers: HeaderReader, name: string): number | undefined {
   const raw = headers.get(name);
 
-  if (raw === null) return undefined;
+  // `Number('')` is 0, which would read a blank header as "no requests left".
+  if (raw === null || raw.trim() === '') return undefined;
 
   const value = Number(raw);
   return Number.isFinite(value) ? value : undefined;

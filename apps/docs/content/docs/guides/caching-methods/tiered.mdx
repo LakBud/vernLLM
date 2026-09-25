@@ -45,16 +45,21 @@ immediately visible to both a local `get()` and any other process reading L2 dir
 ## Controlling L1's TTL separately
 
 By default, `TieredCacheAdapter` uses the same `ttl` for both tiers. Pass a third constructor
-argument to give L1 a shorter lifetime than L2, useful when L1 is memory-constrained and you'd
+argument to cap L1's lifetime, useful when L1 is memory-constrained and you'd
 rather it churn faster than the shared store:
 
 ```ts
 const cache = new TieredCacheAdapter(
   new InMemoryCacheAdapter(),
   new UpstashCacheAdapter(),
-  60, // L1 entries expire after 60s regardless of the ttl passed to cachedCall
+  60, // L1 entries expire after at most 60s
 );
 ```
+
+A write uses the smaller of `l1Ttl` and `ttl` for L1, and a promotion of a key this process wrote is
+capped at the time L2 has left. A promoted key another process wrote keeps `l1Ttl` (60s by default),
+since L2 doesn't report its remaining lifetime. An L1 hit never checks L2, so a key deleted or
+evicted in L2 from outside this adapter stays in L1 until its L1 ttl runs out.
 
 <Callout>
   `TieredCacheAdapter` forwards `resolveKey` to whichever tier implements it, preferring L1 since

@@ -611,18 +611,26 @@ describe('VernLLM.call, abort during backoff wait', () => {
     const { client, create } = createMockClient([new Error('fail 1'), new Error('fail 2')]);
     const llm = new VernLLM({ client, model: 'm', maxRetries: 2, baseDelayMs: 10_000 });
 
-    const promise = llm.call({ systemPrompt: 's', userContent: 'u', signal: controller.signal });
-    const assertion = expect(promise).rejects.toMatchObject({ type: 'aborted' });
+    // Full jitter could otherwise draw a delay under the 5ms below and let
+    // the second attempt fire before the abort. Half the cap is 5s.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
-    // Let the first attempt fail and enter its backoff wait, then abort
-    // instead of waiting out the full 10s delay.
-    await new Promise((r) => setTimeout(r, 5));
-    controller.abort();
+    try {
+      const promise = llm.call({ systemPrompt: 's', userContent: 'u', signal: controller.signal });
+      const assertion = expect(promise).rejects.toMatchObject({ type: 'aborted' });
 
-    await assertion;
-    // Only the first attempt should have reached the client, the wait was
-    // cut short by the abort before a second attempt could fire.
-    expect(create).toHaveBeenCalledTimes(1);
+      // Let the first attempt fail and enter its backoff wait, then abort
+      // instead of waiting out the full delay.
+      await new Promise((r) => setTimeout(r, 5));
+      controller.abort();
+
+      await assertion;
+      // Only the first attempt should have reached the client, the wait was
+      // cut short by the abort before a second attempt could fire.
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      random.mockRestore();
+    }
   });
 });
 

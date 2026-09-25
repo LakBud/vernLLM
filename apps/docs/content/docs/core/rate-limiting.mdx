@@ -100,16 +100,16 @@ An aborted signal on a queued call removes it from the queue immediately and rej
 ## Estimating tokens
 
 `tokensPerMinute` needs a token count before the request is sent, when the real count isn't known
-yet. The default estimate is a `chars / 4` heuristic over every message's content, plus the
-requested `maxTokens`:
+yet. The default estimate is a `chars / 4` heuristic over message text, 1,600 tokens per image, plus
+the requested `maxTokens`:
 
 ```ts title="rate-limiting-default-estimate.ts"
-Math.ceil(messagesChars / 4) + (request.max_tokens ?? 0);
+Math.ceil(textChars / 4) + images * 1_600 + (request.max_tokens ?? 0);
 ```
 
-This is intentionally rough. Once the call completes, the estimate is reconciled against the
-provider's real reported usage, so a systematically over- or under-estimating heuristic
-self-corrects over time rather than compounding.
+Image base64 is never read as text, since providers bill images by pixels. This is intentionally
+rough. Once the call completes, the estimate is reconciled against the provider's real reported
+usage. A usage report that is all zero is treated as missing, so the estimate stays.
 
 ### estimateFraction
 
@@ -234,6 +234,9 @@ A local rate-limit error never reached the provider, so it says nothing about th
 health. It does not count toward the circuit breaker's failure threshold, the same treatment tool
 contract errors already get. See [What counts as a failure](/docs/core/circuit-breaker#what-counts-as-a-failure).
 
+The same holds for any error a limiter throws, including a custom limiter whose store is down. It
+surfaces as an `LLMError` but never counts toward the breaker.
+
 ## Provider 429s
 
 `rateLimit` is a local, proactive control. It does not change how an actual provider 429 is
@@ -275,8 +278,11 @@ a rate-limit signal, bounded to `[minCapacity, maxCapacity]`. Requires `requests
 set; ignored otherwise.
 
 **Reactive**, on a real 429, works for every adapter with no configuration beyond `aimd` itself:
-the ceiling shrinks by `decreaseFactor` unconditionally, before the retry/`Retry-After` handling
-above runs.
+the ceiling shrinks by `decreaseFactor` before the retry/`Retry-After` handling above runs.
+
+The ceiling shrinks at most once per 60 seconds, counting 429s and proactive hints together. A burst
+of 429s from calls already in flight describes one overload, so it shrinks once. A blank rate limit
+header is treated as missing, not as 0 remaining.
 
 **Proactive**, before a 429 happens, needs `proactiveFloor` plus, for two of the four built-in
 adapters, an explicit opt-in:
@@ -463,16 +469,16 @@ each target's capacity separate.
 
 ## Options reference
 
-| Option              | Default                | Notes                                                                                               |
-| ------------------- | ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `requestsPerMinute` | unlimited              | Max requests dispatched per minute, as a continuously refilling budget.                             |
-| `tokensPerMinute`   | unlimited              | Max estimated + reconciled tokens per minute. See [Estimating tokens](#estimating-tokens).          |
-| `maxConcurrent`     | unlimited              | Max requests in flight at once. Freed on completion, not on a timer.                                |
-| `maxQueueMs`        | `30000`                | Max time a call may sit queued. Pass `0` to wait indefinitely.                                      |
-| `maxQueueSize`      | `0`                    | Max queued calls before new ones fail immediately instead of queueing. Pass `0` for unbounded.      |
-| `estimateTokens`    | chars/4 + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes. |
-| `estimateFraction`  | `1`                    | Scales the estimate down before it's reserved. See [estimateFraction](#estimatefraction).           |
-| `aimd`              | unset (fixed ceiling)  | Grows/shrinks `requestsPerMinute`'s ceiling instead of keeping it fixed. See [AIMD](#aimd).         |
+| Option              | Default                         | Notes                                                                                               |
+| ------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `requestsPerMinute` | unlimited                       | Max requests dispatched per minute, as a continuously refilling budget.                             |
+| `tokensPerMinute`   | unlimited                       | Max estimated + reconciled tokens per minute. See [Estimating tokens](#estimating-tokens).          |
+| `maxConcurrent`     | unlimited                       | Max requests in flight at once. Freed on completion, not on a timer.                                |
+| `maxQueueMs`        | `30000`                         | Max time a call may sit queued. Pass `0` to wait indefinitely.                                      |
+| `maxQueueSize`      | `0`                             | Max queued calls before new ones fail immediately instead of queueing. Pass `0` for unbounded.      |
+| `estimateTokens`    | chars/4 + images + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes. |
+| `estimateFraction`  | `1`                             | Scales the estimate down before it's reserved. See [estimateFraction](#estimatefraction).           |
+| `aimd`              | unset (fixed ceiling)           | Grows/shrinks `requestsPerMinute`'s ceiling instead of keeping it fixed. See [AIMD](#aimd).         |
 
 See [Configuration](/docs/API-reference/configuration#rate-limiting) for how `rateLimit`
 sits alongside every other constructor option.

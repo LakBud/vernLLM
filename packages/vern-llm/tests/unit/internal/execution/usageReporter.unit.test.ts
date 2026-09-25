@@ -165,6 +165,12 @@ describe('createUsageReporter, actualTokensFor', () => {
     const usage = baseUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 0 });
     expect(reporter.actualTokensFor(usage)).toBe(15);
   });
+
+  it('returns undefined for all zero usage, so the limiter keeps its estimate', () => {
+    const reporter = createUsageReporter(baseOptions());
+    const usage = baseUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+    expect(reporter.actualTokensFor(usage)).toBeUndefined();
+  });
 });
 
 // `reportSuccess`/`reportFailure` only build the `'usage'`/`'usage_failure'`
