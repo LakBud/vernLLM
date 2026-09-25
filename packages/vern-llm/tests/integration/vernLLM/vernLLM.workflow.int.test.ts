@@ -58,27 +58,34 @@ describe('VernLLM workflow integration', () => {
       jsonResponse({ answer: 'hello' }),
     ]);
 
-    // A large baseDelayMs means a second attempt, if it happened, would
-    // only fire long after the short deadline below, so a call that
-    // still rejects with deadline_exceeded (rather than eventually
-    // resolving) demonstrates the deadline actually stopped the loop
-    // mid backoff, not merely raced it.
-    const llm = new VernLLM({
-      client,
-      model: 'test-model',
-      maxRetries: 3,
-      baseDelayMs: 60_000,
-    });
+    // Backoff uses full jitter, a random delay between 0 and the cap, so a
+    // large baseDelayMs alone doesn't guarantee a long wait: a draw under
+    // the deadline lets the retry run first. Pinning the draw at half the
+    // cap (5s here) keeps the second attempt far past the short deadline,
+    // so rejecting with deadline_exceeded shows the deadline stopped the
+    // loop mid backoff rather than racing it.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
-    await expect(
-      llm.call({
-        systemPrompt: 'Answer JSON',
-        userContent: 'hello',
-        deadlineMs: 20,
-      }),
-    ).rejects.toMatchObject({ type: 'aborted', code: 'deadline_exceeded' });
+    try {
+      const llm = new VernLLM({
+        client,
+        model: 'test-model',
+        maxRetries: 3,
+        baseDelayMs: 60_000,
+      });
 
-    expect(create).toHaveBeenCalledTimes(1);
+      await expect(
+        llm.call({
+          systemPrompt: 'Answer JSON',
+          userContent: 'hello',
+          deadlineMs: 20,
+        }),
+      ).rejects.toMatchObject({ type: 'aborted', code: 'deadline_exceeded' });
+
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      random.mockRestore();
+    }
   });
 });
 
