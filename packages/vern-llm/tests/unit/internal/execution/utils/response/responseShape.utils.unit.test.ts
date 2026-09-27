@@ -293,6 +293,36 @@ describe('validateToolCallArguments', () => {
     ).toThrow(expect.objectContaining({ type: 'validation' }));
   });
 
+  it('returns each validated call with the schema output as its arguments, without mutating the input', () => {
+    const toolsWithSchema = [
+      {
+        name: 'search',
+        description: 'search the web',
+        parameters: {},
+        argumentsSchema: {
+          safeParse: (data: unknown) => ({
+            success: true as const,
+            data: { ...(data as object), page: 1 },
+          }),
+        },
+      },
+      { name: 'log', description: 'log a line', parameters: {} },
+    ];
+    const input = [
+      { id: 'call_1', name: 'search', arguments: { q: 'cats' } },
+      { id: 'call_2', name: 'log', arguments: { line: 'x' } },
+    ];
+
+    const result = validateToolCallArguments(input, toolsWithSchema);
+
+    expect(result).toEqual([
+      { id: 'call_1', name: 'search', arguments: { q: 'cats', page: 1 } },
+      { id: 'call_2', name: 'log', arguments: { line: 'x' } },
+    ]);
+    expect(input[0]!.arguments).toEqual({ q: 'cats' });
+    expect(result[1]).toBe(input[1]);
+  });
+
   it('does not throw when a tool with no argumentsSchema is called', () => {
     expect(() =>
       validateToolCallArguments(

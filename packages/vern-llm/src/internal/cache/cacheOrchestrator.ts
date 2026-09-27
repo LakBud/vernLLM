@@ -2,6 +2,7 @@ import {
   withReservedUsage,
   withReservedUsageForStream,
 } from '../execution/utils/response/usage.utils.js';
+import { onEarlyExit } from '../execution/utils/stream/earlyExit.utils.js';
 import { createInFlightRegistry } from './utils/inFlightRegistry.utils.js';
 import { buildReplayChunks, buildReplayChunksFromPromise } from './utils/replay.utils.js';
 import {
@@ -365,15 +366,26 @@ export class CacheOrchestrator {
 
     promise.catch(() => {});
 
+    // Stopping `chunks` early leaves the shared stream the same way an
+    // abort does: this trigger's `finalResult` rejects as aborted, and the
+    // stream is cancelled only once no joiner is left waiting on it.
+    const left = new AbortController();
+    const triggerSignal = params.signal
+      ? AbortSignal.any([params.signal, left.signal])
+      : left.signal;
+
     const streamPromise = withReservedUsageForStream(
       params,
       async () => {
         void start().catch(() => {});
         const opened = await raceAbort(openShared(shared.signal), params.signal);
-        const finalResult = raceAbort(opened.finalResult, params.signal);
+        const finalResult = raceAbort(opened.finalResult, triggerSignal);
         finalResult.catch(() => {});
 
-        return { chunks: abortableChunks(opened.chunks, params.signal), finalResult };
+        return {
+          chunks: onEarlyExit(abortableChunks(opened.chunks, params.signal), () => left.abort()),
+          finalResult,
+        };
       },
       params.signal,
       (logMessage, error) => this.logRefundError(logMessage, error),

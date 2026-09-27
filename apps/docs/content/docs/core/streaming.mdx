@@ -135,18 +135,21 @@ const result = await finalResult;
 it more than once, or from two places concurrently, does not replay or fork the sequence, both
 consumers share the same underlying buffered stream and split the chunks between them.
 
-Stopping iteration early (`break`ing out of a `for await`) does not cancel the underlying request
-either. The stream keeps running in the background regardless, since `finalResult` still needs to
-settle. If you only care about the final value and never plan to render live output, it's fine to
-never touch `chunks` at all and just `await finalResult`.
+## Stopping early
+
+Leaving a `for await` over `chunks` before the end cancels the provider stream. That covers a
+`break`, a `return`, an exception in the loop body, and calling `return()` by hand. `finalResult`
+then rejects with `LLMError('aborted')`, and the rate limiter slot is freed. A stream that already
+finished is left alone.
+
+If you only need the final value, never touch `chunks` and just `await finalResult`.
 
 <Callout>
   Chunks emitted before you start iterating are buffered, so reading `chunks` a little late still
   sees everything. Once you are reading, a slow reader pauses the stream instead of losing chunks,
   and that pause never counts toward `chunkIdleTimeoutMs`. Only a `chunks` that is never read at all
-  has its oldest chunks evicted once the backlog grows large, and the same applies after a `break`.
-  If you pull chunks by hand with `next()`, call `return()` when you stop, or the paused stream
-  waits for you. Aborting the call ends that wait either way.
+  has its oldest chunks evicted once the backlog grows large. If you pull chunks by hand with
+  `next()`, call `return()` when you stop, or the paused stream waits for you.
 </Callout>
 
 ## Tool calling while streaming
@@ -318,6 +321,9 @@ in-flight call for the same key:
     once that promise settles.
   </Card>
 </Cards>
+
+Stopping early on a miss ends that caller's own `finalResult` as `aborted`. The shared stream keeps
+running, and is still cached, while another caller waits on it. It is cancelled once none is left.
 
 ```ts title="streaming-cached-call.ts"
 const { chunks, finalResult } = await llm.cachedCall({

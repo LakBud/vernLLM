@@ -52,11 +52,15 @@ export function parseAndValidate<T>(
  * the original single-error, `type: 'validation'` shape rather than being
  * folded into the aggregate, since they're a distinct failure kind from
  * the contract failures above.
+ *
+ * Returns the calls with each validated `arguments` replaced by the
+ * schema's output, so defaults, coercions and transforms reach the
+ * caller the same way `schema` does for content. Calls without a schema
+ * keep their parsed arguments. The input array is left untouched.
  */
-export function validateToolCallArguments(
-  toolCalls: { id: string; name: string; arguments: unknown }[],
-  tools: NonNullable<CallParams<unknown>['tools']>,
-): void {
+export function validateToolCallArguments<
+  Call extends { id: string; name: string; arguments: unknown },
+>(toolCalls: Call[], tools: NonNullable<CallParams<unknown>['tools']>): Call[] {
   const known = new Map(tools.map((tool) => [tool.name, tool]));
   const seenIds = new Set<string>();
   const toolIssues: ToolIssue[] = [];
@@ -92,10 +96,10 @@ export function validateToolCallArguments(
     });
   }
 
-  for (const call of toolCalls) {
+  return toolCalls.map((call) => {
     const definition = known.get(call.name);
 
-    if (!definition?.argumentsSchema) continue;
+    if (!definition?.argumentsSchema) return call;
 
     const result = definition.argumentsSchema.safeParse(call.arguments);
 
@@ -104,7 +108,9 @@ export function validateToolCallArguments(
         issues: result.error,
       });
     }
-  }
+
+    return { ...call, arguments: result.data };
+  });
 }
 
 /** Everything `shapeResponse` needs beyond the raw response itself. */
@@ -192,9 +198,10 @@ export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithTo
       });
     }
 
-    const toolCalls = parseWireToolCalls(wireToolCalls);
-
-    validateToolCallArguments(toolCalls, callParams.tools);
+    const toolCalls = validateToolCallArguments(
+      parseWireToolCalls(wireToolCalls),
+      callParams.tools,
+    );
 
     return { type: 'tool_calls', toolCalls, ...(content ? { content } : {}) };
   }

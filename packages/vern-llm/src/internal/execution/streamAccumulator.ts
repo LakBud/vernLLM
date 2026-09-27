@@ -163,9 +163,9 @@ export function buildStreamResult<T>(
   // `finalResult` to completion even if `chunks` is never read. Buffer
   // size (not "has anyone started iterating yet") is what caps memory,
   // since the pump can outrace the caller starting iteration. Once the
-  // caller is reading, a full buffer pauses the pump instead. A caller that
-  // stops early is detached: the pump keeps running for `finalResult` and
-  // its remaining chunks are dropped.
+  // caller is reading, a full buffer pauses the pump instead. A reader
+  // that stops early is detached here; `call()` then aborts the signal,
+  // which ends the pump and rejects `finalResult` as aborted.
   const MAX_BUFFERED_CHUNKS = 10_000;
   const channel = createBackpressureChannel<StreamChunk>({
     capacity: MAX_BUFFERED_CHUNKS,
@@ -222,6 +222,10 @@ export function buildStreamResult<T>(
         // never counts as the provider going idle. An abort ends the wait, so
         // the `next()` below surfaces it even if nobody reads again.
         if (space) await untilSpaceOrAbort(space, [streamController.signal, signal]);
+
+        // An adapter that ignores the signal would keep yielding, and the
+        // call would still resolve after the caller cancelled it.
+        if (signal?.aborted) throw new LLMError('LLM request aborted', 'aborted');
 
         result = await withChunkIdleTimeout(
           () => iterator.next(),

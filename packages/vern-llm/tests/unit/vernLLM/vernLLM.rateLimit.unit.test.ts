@@ -21,6 +21,23 @@ describe('VernLLM, rateLimit option', () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it('rejects an invalid limit when the instance is built, for the primary and a fallback target alike', () => {
+    const { client } = createMockClient([]);
+
+    expect(
+      () => new VernLLM({ client, model: 'gpt-4o', rateLimit: { requestsPerMinute: -5 } }),
+    ).toThrow(expect.objectContaining({ type: 'invalid_params' }));
+
+    expect(
+      () =>
+        new VernLLM({
+          client,
+          model: 'gpt-4o',
+          fallback: [{ client, model: 'backup', rateLimit: { maxConcurrent: 2.5 } }],
+        }),
+    ).toThrow(expect.objectContaining({ type: 'invalid_params' }));
+  });
+
   it('queues a second concurrent call behind maxConcurrent: 1 and fires a rate_limited event', async () => {
     let resolveFirst!: () => void;
     const gate = new Promise<void>((resolve) => {

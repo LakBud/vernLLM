@@ -7,14 +7,53 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
-## 3.0.0: Streaming, usage, and provider request changes
+## 3.0.0: Streaming, tools, rate limits, usage, and provider request changes
 
-No request that works today is sent differently. What changes is type level, one usage count, and
-requests the provider already rejects. Skip to what applies to you:
+Three changes affect code that works today: a `break` out of `chunks` cancels the stream, tool
+arguments come back as the `argumentsSchema` output, and invalid rate limits throw. The rest is
+type level, one usage count, and requests the provider already rejects. Skip to what applies to
+you:
+[stopping a stream early cancels it](#300-stopping-a-stream-early-cancels-it),
+[tool arguments are the `argumentsSchema` output](#300-tool-arguments-are-the-argumentsschema-output),
+[invalid rate limits throw](#300-invalid-rate-limits-throw),
 [new union members](#300-new-union-members),
 [Anthropic prompt tokens include cache writes](#300-anthropic-prompt-tokens-include-cache-writes),
 [Claude forced `tool_choice`](#300-claude-models-that-reject-a-forced-tool_choice), and
 [GPT-6 tools on Chat Completions](#300-gpt-6-tools-on-chat-completions).
+
+### 3.0.0: Stopping a stream early cancels it
+
+Leaving a `for await` over `chunks` before the end now cancels the provider stream, and
+`finalResult` rejects with `LLMError('aborted')`. Before, the stream ran on and `finalResult`
+resolved. To keep the full result, read to the end, or skip `chunks` and await `finalResult`:
+
+```ts
+// Before: finalResult still resolved after the break
+for await (const chunk of chunks) if (done(chunk)) break;
+const text = await finalResult; // now rejects as aborted
+
+// After: stop rendering, keep reading
+for await (const chunk of chunks) if (!done(chunk)) render(chunk);
+const text = await finalResult;
+```
+
+On a `cachedCall()` miss, only that caller's `finalResult` rejects. The shared stream keeps running
+for anyone else waiting on the same key.
+
+### 3.0.0: Tool arguments are the `argumentsSchema` output
+
+`ToolCall.arguments` is now what `argumentsSchema.safeParse` returns, not the raw parsed JSON.
+Defaults, coercion and transforms now reach you. Tools without `argumentsSchema` are unchanged. If
+you applied the schema again yourself, you can drop that step.
+
+### 3.0.0: Invalid rate limits throw
+
+`RateLimiter`, and `rateLimit` on `VernLLM` and its fallback targets, now throw
+`LLMError('invalid_params')` at construction for limits that used to misbehave silently: a
+negative, `NaN` or `Infinity` limit, a `requestsPerMinute` or `tokensPerMinute` between 0 and 1, a
+fractional `maxConcurrent` or `maxQueueSize`, a `maxQueueMs` past `2147483647`, and `aimd` without
+`requestsPerMinute`. `0` still means unlimited, or no queue timeout. See
+[Rate Limiting](/docs/core/rate-limiting#options-reference) for the accepted ranges.
 
 ### 3.0.0: New union members
 
