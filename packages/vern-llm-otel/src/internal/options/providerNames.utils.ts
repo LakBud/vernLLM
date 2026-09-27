@@ -55,14 +55,19 @@ export function inferProviderName(model: string): string | undefined {
 }
 
 /**
- * `gen_ai.provider.name` for an attempt: the configured mapping for the target label, else a
- * guess from the model, else `_OTHER`. The label itself (`primary`, `fallback[0]`) is never a
- * provider name, so it is not used.
+ * `gen_ai.provider.name` for an attempt: the configured mapping for the target label, else the
+ * provider the adapter names, else a guess from the model, else `_OTHER`. The label itself
+ * (`primary`, `fallback[0]`) is never a provider name, so it is not used.
  */
 export function resolveProviderName(
   names: ReadonlyMap<string, string>,
   label: string,
   model: string,
+  adapterProvider?: string,
 ): string {
-  return names.get(label) ?? inferProviderName(model) ?? UNKNOWN_PROVIDER;
+  const named =
+    typeof adapterProvider === 'string' && adapterProvider.trim() !== ''
+      ? adapterProvider
+      : undefined;
+  return names.get(label) ?? named ?? inferProviderName(model) ?? UNKNOWN_PROVIDER;
 }

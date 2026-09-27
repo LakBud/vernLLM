@@ -99,3 +99,20 @@ export function errorAttributes(error: unknown): Attributes {
   put(attrs, VERNLLM_ATTR.fallbackAttempts, fallbackAttemptCountOf(error));
   return attrs;
 }
+
+// Codes the core and its adapters throw from inside the provider request before anything is
+// sent: a capability the model rejects, or an inner `dispatch` hook that never called `next`.
+const LOCAL_REJECTION_CODES: ReadonlySet<unknown> = new Set([
+  'unsupported_capability',
+  'middleware_threw',
+]);
+
+/** Whether a failed dispatch never reached the provider, so it is not an inference operation. */
+export function isLocalRejection(error: unknown): boolean {
+  return (
+    isLLMErrorLike(error) &&
+    error.type === 'invalid_params' &&
+    LOCAL_REJECTION_CODES.has(error.code) &&
+    httpStatusOf(error) === undefined
+  );
+}

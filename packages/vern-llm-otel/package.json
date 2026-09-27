@@ -90,7 +90,7 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "8.3 KB",
+      "limit": "8.4 KB",
       "ignore": [
         "vern-llm",
         "@opentelemetry/api"
@@ -98,7 +98,7 @@
     },
     {
       "path": "dist/index.cjs",
-      "limit": "8.4 KB",
+      "limit": "8.5 KB",
       "ignore": [
         "vern-llm",
         "@opentelemetry/api"

@@ -22,7 +22,7 @@ plain `Error` at construction, never during a call.
 | `middlewareEvents` | `false`           | Emits VernLLM `middleware` events as `vernllm.middleware` span events on the call span.                                                                 |
 | `logger`           | A `ConsoleLogger` | A `Logger`, or `'silent'`, the same shape as `VernLLMOptions.logger`.                                                                                   |
 | `name`             | `'otel'`          | The middleware entry's name, shown in VernLLM `middleware` events.                                                                                      |
-| `priority`         | `1000` or `-1000` | See [Ordering and event delivery](#ordering-and-event-delivery).                                                                                        |
+| `priority`         | `-1000`           | See [Ordering and event delivery](#ordering-and-event-delivery).                                                                                        |
 | `runsAfter`        | `[]`              | Refs this entry must run after, typically a redaction middleware.                                                                                       |
 
 ## `providerNames`
@@ -37,8 +37,9 @@ otelMiddleware({
 });
 ```
 
-An unmapped label is inferred from the model id (`gpt-4o` is `openai`, `claude-*` is `anthropic`),
-and `_OTHER` is used when that fails. Map gateways and proxies explicitly. `vernllm.*` attributes keep
+An unmapped label uses the provider its adapter names, when it names one, else it is inferred from
+the model id (`gpt-4o` is `openai`, `claude-*` is `anthropic`), and `_OTHER` is used when that
+fails. Map gateways and proxies explicitly. `vernllm.*` attributes keep
 the label. Values must be non empty strings. Any string is accepted, and these well known values
 autocomplete:
 
@@ -80,18 +81,9 @@ The entry wraps as `outermost`, so its call span is outside every middleware tha
 `outermost`. Among several `outermost` entries the one registered first wraps outside, whatever
 their priorities, so register `otelMiddleware()` first for its call span to be the outermost.
 
-`priority` decides only where `transform` runs. The default depends on content capture:
-
-| Content capture | Default `priority` | Effect                                                                                   |
-| --------------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| Off             | `-1000`            | No ordering need, so it transforms early.                                                |
-| On              | `1000`             | Capture runs after other transforms, so it sees the request as sent, redaction included. |
-
-`runsAfter` does not change the default. A ref that fails to resolve is only dropped with a warning,
-so a lower default would run capture before the middleware it meant to follow. If any transform
-still runs later, input capture is skipped for that attempt and a warning is logged once.
-
-See [Content Capture](/docs/integrations/otel/features/content-capture#ordering).
+`priority` only orders `onEvent` delivery, and the default is `-1000`. The entry has no
+`transform`, and captures input from the request as sent, so it needs no transform slot. See
+[Content Capture](/docs/integrations/otel/features/content-capture#ordering).
 
 The returned entry has no `enabled` function, on purpose. A function `enabled` makes the core
 deliver that entry's events asynchronously, and the token attributes rely on the usage event

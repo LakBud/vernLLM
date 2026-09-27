@@ -19,9 +19,9 @@ describe('ResolvedConfig', () => {
     expectTypeOf<ResolvedConfig['exceptions']>().toEqualTypeOf<{ stack: boolean } | undefined>();
   });
 
-  it('maps a target label and model to a provider name that is always a string', () => {
+  it('maps a target label, model, and adapter provider to a name that is always a string', () => {
     expectTypeOf<ResolvedConfig['providerName']>().toEqualTypeOf<
-      (label: string, model: string) => string
+      (label: string, model: string, adapterProvider?: string) => string
     >();
     expectTypeOf<ResolvedConfig['targetName']>().toEqualTypeOf<(label: string) => string>();
   });

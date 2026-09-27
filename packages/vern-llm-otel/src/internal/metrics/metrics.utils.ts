@@ -28,8 +28,11 @@ export const NORMALIZED_MODEL_CACHE_LIMIT = 1024;
 export interface Metrics {
   /** The only recording path. Never throws. */
   record(key: MetricKey, value: number, attributes: Attributes, context?: Context): void;
-  /** Records whatever measurements one VernLLM event carries. Never throws. */
-  recordEvent(event: VernLLMEvent, context?: Context): void;
+  /**
+   * Records whatever measurements one VernLLM event carries. `adapterProvider` is the provider
+   * the answering adapter names, when it names one. Never throws.
+   */
+  recordEvent(event: VernLLMEvent, context?: Context, adapterProvider?: string): void;
 }
 
 type ConfigSlice = Pick<
@@ -144,10 +147,14 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
   };
 
   // Spent tokens are spent, so a failed attempt's usage is counted like a successful one's.
-  const recordTokens = (usage: TokenUsage, context: Context | undefined): void => {
+  const recordTokens = (
+    usage: TokenUsage,
+    context: Context | undefined,
+    adapterProvider: string | undefined,
+  ): void => {
     const base: Attributes = { [ATTR.operationName]: OPERATION_CHAT };
     if (isNonEmptyString(usage.provider)) {
-      base[ATTR.providerName] = config.providerName(usage.provider, usage.model);
+      base[ATTR.providerName] = config.providerName(usage.provider, usage.model, adapterProvider);
     }
     if (isNonEmptyString(usage.model)) base[ATTR.requestModel] = usage.model;
 
@@ -165,7 +172,7 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
     );
   };
 
-  const recordEvent: Metrics['recordEvent'] = (event, context) => {
+  const recordEvent: Metrics['recordEvent'] = (event, context, adapterProvider) => {
     switch (event.kind) {
       case 'retry': {
         const target = targetAttributes(event.provider, event.model);
@@ -217,10 +224,10 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
         );
         return;
       case 'usage':
-        recordTokens(event.usage, context);
+        recordTokens(event.usage, context, adapterProvider);
         return;
       case 'usage_failure':
-        recordTokens(event.usage, context);
+        recordTokens(event.usage, context, adapterProvider);
         record(
           'usageFailureCount',
           1,
@@ -236,7 +243,7 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
   return {
     record,
     // An event is never allowed to fail its handler, whatever shape it arrives in.
-    recordEvent: (event, context) =>
-      guard('recordEvent', () => recordEvent(event, context), undefined),
+    recordEvent: (event, context, adapterProvider) =>
+      guard('recordEvent', () => recordEvent(event, context, adapterProvider), undefined),
   };
 }

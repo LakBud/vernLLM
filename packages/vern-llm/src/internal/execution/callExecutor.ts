@@ -528,7 +528,8 @@ export class CallExecutor {
    * seen on the way is kept and replayed ahead of that content, so
    * nothing but pings and hints is dropped. On failure the stream is
    * closed, and usage already reported is handed to `onFailedUsage`,
-   * before the error is rethrown.
+   * before the error is rethrown. Runs inside `dispatchToProvider`, which
+   * feeds the error to AIMD.
    */
   private async readUntilContent(
     iterator: AsyncIterator<WireStreamChunk>,
@@ -569,7 +570,6 @@ export class CallExecutor {
       void Promise.resolve()
         .then(() => iterator.return?.())
         .catch(() => {});
-      this.reactToRateLimitError(error);
 
       const lastUsage = [...held].reverse().find((chunk) => chunk.type === 'usage');
       if (lastUsage?.type === 'usage') onFailedUsage(lastUsage.usage, error);
@@ -726,13 +726,14 @@ export class CallExecutor {
       : streamController.signal;
 
     try {
+      const chunkIdleTimeoutMs = params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs;
       let opened!: {
-        iterator: AsyncIterator<WireStreamChunk>;
-        first: IteratorResult<WireStreamChunk>;
+        head: IteratorResult<WireStreamChunk>;
+        rest: AsyncIterator<WireStreamChunk>;
       };
 
       await this.dispatchToProvider(dispatch, params.signal, async () => {
-        opened = await withTimeout(
+        const { iterator, first } = await withTimeout(
           async (attemptSignal) => {
             const streamIterator = createStream(request, { signal: attemptSignal })[
               Symbol.asyncIterator
@@ -753,47 +754,53 @@ export class CallExecutor {
           this.timeoutMs,
           combinedExternal,
         );
+
+        // A ping counts as the stream opening, so a model's thinking phase
+        // (which can far outlast `timeoutMs`) only needs pings to stay open.
+        if (!first.done) onOpened?.();
+
+        // Until the first content chunk, nothing has reached the caller, so a
+        // failure here is still an ordinary attempt failure: thrown back to
+        // the retry loop, and past it to fallback. The idle timeout, which
+        // every ping resets, is what bounds this wait. Read inside `dispatch`,
+        // so its hooks see the attempt settle where it succeeds or fails, not
+        // at a keep-alive ping.
+        opened = await this.readUntilContent(
+          iterator,
+          first,
+          chunkIdleTimeoutMs,
+          streamController,
+          (wireUsage, error) => {
+            const usage = toTokenUsage(wireUsage, {
+              requestId,
+              model,
+              providerName: this.providerName,
+              isFallback: this.isFallback,
+            });
+            const normalized = normalizeError(
+              error,
+              params.signal,
+              undefined,
+              this.maxRetryAfterMs,
+            );
+
+            if (normalized.type !== 'aborted') {
+              this.usageReporter.reportFailure(
+                usage,
+                normalized,
+                attempt,
+                gateway.buildAttemptContext(attempt, params.signal, state),
+                true,
+              );
+            }
+
+            release?.(this.usageReporter.actualTokensFor(usage));
+            release = undefined;
+          },
+        );
       });
 
-      const { iterator, first } = opened;
-
-      // A ping counts as the stream opening, so a model's thinking phase
-      // (which can far outlast `timeoutMs`) only needs pings to stay open.
-      if (!first.done) onOpened?.();
-
-      // Until the first content chunk, nothing has reached the caller, so a
-      // failure here is still an ordinary attempt failure: thrown back to
-      // the retry loop, and past it to fallback. The idle timeout, which
-      // every ping resets, is what bounds this wait.
-      const chunkIdleTimeoutMs = params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs;
-      const { head, rest } = await this.readUntilContent(
-        iterator,
-        first,
-        chunkIdleTimeoutMs,
-        streamController,
-        (wireUsage, error) => {
-          const usage = toTokenUsage(wireUsage, {
-            requestId,
-            model,
-            providerName: this.providerName,
-            isFallback: this.isFallback,
-          });
-          const normalized = normalizeError(error, params.signal, undefined, this.maxRetryAfterMs);
-
-          if (normalized.type !== 'aborted') {
-            this.usageReporter.reportFailure(
-              usage,
-              normalized,
-              attempt,
-              gateway.buildAttemptContext(attempt, params.signal, state),
-              true,
-            );
-          }
-
-          release?.(this.usageReporter.actualTokensFor(usage));
-          release = undefined;
-        },
-      );
+      const { head, rest } = opened;
 
       // An exhausted stream with no content at all is the streaming
       // equivalent of `executeCall`'s empty-response check: surface the same

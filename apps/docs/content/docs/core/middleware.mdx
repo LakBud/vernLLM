@@ -154,8 +154,9 @@ dispatch: async (request, next, ctx) => {
 ```
 
 It runs once per attempt, retries included, and nests in `wrap` order, so `position` applies.
-`next()` resolves once the response arrives, or for a stream once it opens, and rejects with the
-attempt's `LLMError`. Calling it twice sends one request.
+`next()` resolves once the response arrives, or for a stream at its first content chunk, and
+rejects with the attempt's `LLMError`. Keep-alive pings don't count, so a stream that fails before
+content rejects it even though `call()` already resolved. Calling it twice sends one request.
 
 `dispatch` observes, it can't change the outcome. A hook that returns or throws without calling
 `next()` fails the attempt with `LLMError('invalid_params')`, code `middleware_threw`, and nothing

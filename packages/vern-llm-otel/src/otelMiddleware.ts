@@ -73,13 +73,17 @@ export function otelMiddleware(options?: OtelMiddlewareOptions): VernLLMMiddlewa
       return result;
     },
 
-    transform: (request, ctx) => {
-      guard('startAttempt', () => ctx.state.get(trackerKey)?.startAttempt(ctx, request), undefined);
-      return {};
+    dispatch: (request, next, ctx) => {
+      const tracker = guard('readTracker', () => ctx.state.get(trackerKey), undefined);
+      return tracker ? tracker.dispatch(ctx, request, next) : next();
     },
 
     onEvent: (event, ctx) => {
-      guard('handleEvent', () => handleEvent(event, ctx.state.get(trackerKey), metrics), undefined);
+      guard(
+        'handleEvent',
+        () => handleEvent(event, ctx, ctx.state.get(trackerKey), metrics),
+        undefined,
+      );
     },
   };
 }

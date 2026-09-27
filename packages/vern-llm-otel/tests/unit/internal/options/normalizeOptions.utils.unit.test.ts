@@ -122,25 +122,15 @@ describe('genAiConventions: false', () => {
 describe('default priority', () => {
   const ref = createMiddlewareRef('redaction');
 
-  it.each<[string, OtelMiddlewareOptions, number]>([
-    ['capture off', {}, -1000],
-    ['capture on, no runsAfter', { captureContent: true }, 1000],
-    ['capture on, empty runsAfter', { captureContent: true, runsAfter: [] }, 1000],
-    // A ref that fails to resolve is only dropped by the core, so runsAfter cannot lower this.
-    ['capture on with runsAfter', { captureContent: true, runsAfter: [ref] }, 1000],
-    [
-      'capture on with a required ref',
-      { captureContent: true, runsAfter: [requireRef(ref)] },
-      1000,
-    ],
-    [
-      'capture object with no enabled group',
-      { captureContent: { input: false, output: false, systemInstructions: false } },
-      -1000,
-    ],
-    ['runsAfter but capture off', { runsAfter: [ref] }, -1000],
-  ])('%s', (_label, options, expected) => {
-    expect(normalizeOptions(options).priority).toBe(expected);
+  // Capture reads the request at dispatch, after every transform, so it never needs a late slot.
+  it.each<[string, OtelMiddlewareOptions]>([
+    ['capture off', {}],
+    ['capture on', { captureContent: true }],
+    ['capture on with runsAfter', { captureContent: true, runsAfter: [ref] }],
+    ['capture on with a required ref', { captureContent: true, runsAfter: [requireRef(ref)] }],
+    ['runsAfter but capture off', { runsAfter: [ref] }],
+  ])('%s', (_label, options) => {
+    expect(normalizeOptions(options).priority).toBe(-1000);
   });
 
   it('an explicit priority always wins, including zero', () => {

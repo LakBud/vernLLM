@@ -395,8 +395,10 @@ export interface VernLLMMiddleware {
    * sees the others' time too.
    *
    * `next()` sends the request and resolves once the response arrives,
-   * or, for a stream, once it opens. It rejects with the attempt's error
-   * as an `LLMError`. Calling it again returns the same promise.
+   * or, for a stream, at its first content chunk. Keep-alive pings don't
+   * count, so a stream that fails before content rejects it. It rejects
+   * with the attempt's error as an `LLMError`. Calling it again returns
+   * the same promise.
    *
    * Observes the request, it can't change its outcome. A hook that
    * throws, or returns, without calling `next()` fails the attempt with

@@ -1,4 +1,4 @@
-import { SpanStatusCode, type Tracer } from '@opentelemetry/api';
+import { SpanStatusCode, trace as otelTrace, type Tracer } from '@opentelemetry/api';
 import {
   LLMError,
   type AttemptContext,
@@ -148,53 +148,75 @@ describe('CallTracker driven directly', () => {
   });
 
   describe('events with no open attempt', () => {
-    it('ignores a rate limit wait, and a usage report, that arrive before any attempt', () => {
+    it('ignores a usage report that arrives before any attempt', () => {
       const { start, errors } = setup();
       const tracker = start();
 
-      expect(() => {
-        tracker.applyEvent(rateLimited(50));
-        tracker.applyEvent(usage());
-      }).not.toThrow();
+      expect(() => tracker.applyEvent(usage())).not.toThrow();
 
       tracker.startAttempt(attemptCtx(), request);
       tracker.finish({ kind: 'error', error: new Error('x') });
 
       const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
-      expect(attempt.attributes).not.toHaveProperty('vernllm.rate_limit.wait_ms');
       expect(attempt.attributes).not.toHaveProperty('gen_ai.usage.input_tokens');
       expect(errors).not.toHaveBeenCalled();
     });
   });
 
+  // The core waits for capacity before it dispatches, so a wait always arrives ahead of the
+  // attempt it belongs to.
   describe('rate limit waits', () => {
+    const waitOf = () =>
+      spans().find((span) => span.name === 'chat gpt-4o')!.attributes['vernllm.rate_limit.wait_ms'];
+
     it.each([0, -5, Number.NaN, Number.POSITIVE_INFINITY])('ignores a wait of %s', (waited) => {
       const { start } = setup();
       const tracker = start();
 
-      tracker.startAttempt(attemptCtx(), request);
       tracker.applyEvent(rateLimited(waited));
+      tracker.startAttempt(attemptCtx(), request);
       tracker.finish({ kind: 'error', error: new Error('x') });
 
-      expect(spans().find((span) => span.name === 'chat gpt-4o')!.attributes).not.toHaveProperty(
-        'vernllm.rate_limit.wait_ms',
-      );
+      expect(waitOf()).toBeUndefined();
     });
 
-    it('adds up several waits on one attempt', () => {
+    it('adds up several waits and puts them on the next attempt', () => {
       const { start } = setup();
       const tracker = start();
 
-      tracker.startAttempt(attemptCtx(), request);
       tracker.applyEvent(rateLimited(25));
       tracker.applyEvent(rateLimited(10));
+      tracker.startAttempt(attemptCtx(), request);
       tracker.finish({ kind: 'error', error: new Error('x') });
 
-      expect(
-        spans().find((span) => span.name === 'chat gpt-4o')!.attributes[
-          'vernllm.rate_limit.wait_ms'
-        ],
-      ).toBe(35);
+      expect(waitOf()).toBe(35);
+    });
+
+    it('gives each wait to one attempt only', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.applyEvent(rateLimited(25));
+      tracker.startAttempt(attemptCtx({ attempt: 1 }), request);
+      tracker.applyEvent(retry());
+      tracker.startAttempt(attemptCtx({ attempt: 2 }), request);
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const [first, second] = spans().filter((span) => span.name === 'chat gpt-4o');
+      expect(first!.attributes['vernllm.rate_limit.wait_ms']).toBe(25);
+      expect(second!.attributes).not.toHaveProperty('vernllm.rate_limit.wait_ms');
+    });
+
+    it('drops a wait whose attempt was never dispatched', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.applyEvent(rateLimited(25));
+      tracker.applyEvent(retry());
+      tracker.startAttempt(attemptCtx({ attempt: 2 }), request);
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      expect(waitOf()).toBeUndefined();
     });
   });
 
@@ -232,7 +254,7 @@ describe('CallTracker driven directly', () => {
       const tracker = start();
 
       tracker.startAttempt(attemptCtx(), request);
-      handleEvent(usage(), tracker, deps.metrics);
+      handleEvent(usage(), undefined, tracker, deps.metrics);
       tracker.finish({ kind: 'result', result: { value: 'ok', meta: undefined } });
 
       expect(spans().map((span) => span.name)).toEqual(['vernllm.call']);
@@ -260,6 +282,115 @@ describe('CallTracker driven directly', () => {
 
       const [point] = pointsOf((await meter.collect()).get('gen_ai.client.operation.duration'));
       expect(point!.attributes['error.type']).toBe('server_error');
+    });
+  });
+
+  describe('dispatch', () => {
+    const localRejection = () =>
+      new LLMError('rejects forced tool choice', 'invalid_params', {
+        code: 'unsupported_capability',
+      });
+
+    it('runs the request inside the attempt span and settles it with the outcome', async () => {
+      const { start } = setup();
+      const tracker = start();
+
+      await expect(
+        tracker.dispatch(attemptCtx(), request, async () => {
+          throw new LLMError('down', 'api', { code: 'server_error', status: 503 });
+        }),
+      ).rejects.toMatchObject({ code: 'server_error' });
+      // The retry that follows finds the attempt already closed and ends nothing twice.
+      tracker.applyEvent(retry());
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
+      expect(attempt.status.code).toBe(SpanStatusCode.ERROR);
+      expect(attempt.attributes['http.response.status_code']).toBe(503);
+      const [point] = pointsOf((await meter.collect()).get('gen_ai.client.operation.duration'));
+      expect((point!.value as { count: number }).count).toBe(1);
+    });
+
+    it('keeps a locally rejected attempt once something already started its span', async () => {
+      const { start } = setup();
+      const tracker = start();
+
+      await expect(
+        tracker.dispatch(attemptCtx(), request, async () => {
+          // Stands in for an instrumentation reading its parent during the request.
+          otelTrace.getSpan(tracker.measurementContext())?.spanContext();
+          throw localRejection();
+        }),
+      ).rejects.toMatchObject({ code: 'unsupported_capability' });
+      tracker.finish({ kind: 'error', error: localRejection() });
+
+      expect(spans().map((span) => span.name)).toContain('chat gpt-4o');
+      expect(spans()[0]!.attributes['vernllm.total_attempts']).toBe(1);
+    });
+
+    it('counts only the attempts that reached the provider', async () => {
+      const { start } = setup();
+      const tracker = start();
+
+      await expect(
+        tracker.dispatch(attemptCtx(), request, async () => {
+          throw localRejection();
+        }),
+      ).rejects.toBeInstanceOf(LLMError);
+      await tracker.dispatch(
+        attemptCtx({ requestedProvider: 'fallback[0]' }),
+        request,
+        async () => {},
+      );
+      tracker.finish({ kind: 'result', result: { value: 'ok', meta: undefined } });
+
+      expect(spans().filter((span) => span.name === 'chat gpt-4o')).toHaveLength(1);
+      expect(spans()[0]!.attributes['vernllm.total_attempts']).toBe(1);
+    });
+
+    it('treats a rejection with a status as a real failure, whatever its code', async () => {
+      const { start } = setup();
+      const tracker = start();
+      const withStatus = new LLMError('rejected upstream', 'invalid_params', {
+        code: 'unsupported_capability',
+        status: 400,
+      });
+
+      await expect(
+        tracker.dispatch(attemptCtx(), request, async () => {
+          throw withStatus;
+        }),
+      ).rejects.toBe(withStatus);
+      tracker.finish({ kind: 'error', error: withStatus });
+
+      expect(spans().find((span) => span.name === 'chat gpt-4o')!.status.code).toBe(
+        SpanStatusCode.ERROR,
+      );
+    });
+
+    it('just sends the request once the call has ended', async () => {
+      const { start } = setup();
+      const tracker = start();
+      tracker.finish({ kind: 'error', error: new Error('ended') });
+      const next = vi.fn(async () => {});
+
+      await tracker.dispatch(attemptCtx(), request, next);
+
+      expect(next).toHaveBeenCalledOnce();
+      expect(spans().map((span) => span.name)).toEqual(['vernllm.call']);
+    });
+
+    it('leaves an attempt alone when the call ended while its request was out', async () => {
+      const { start } = setup();
+      const tracker = start();
+
+      await tracker.dispatch(attemptCtx(), request, async () => {
+        tracker.finish({ kind: 'error', error: new LLMError('aborted', 'aborted') });
+      });
+
+      const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
+      expect(attempt.attributes['error.type']).toBe('aborted');
+      expect(trace.openSpans()).toEqual([]);
     });
   });
 });

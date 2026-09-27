@@ -9,6 +9,7 @@ import {
   fallbackAttemptCountOf,
   httpStatusOf,
   isLLMErrorLike,
+  isLocalRejection,
   lastAttemptErrorOf,
   statusMessageOf,
 } from '../../../../src/internal/errors/errorMapping.utils.js';
@@ -286,6 +287,29 @@ describe('error mapping', () => {
 
     it('never carries an undefined value', () => {
       expect(Object.values(errorAttributes(new LLMError('x', 'timeout')))).not.toContain(undefined);
+    });
+  });
+
+  describe('isLocalRejection', () => {
+    it.each(['unsupported_capability', 'middleware_threw'] as const)(
+      'is true for an invalid_params %s error with no status',
+      (code) => {
+        expect(isLocalRejection(new LLMError('x', 'invalid_params', { code }))).toBe(true);
+      },
+    );
+
+    it.each([
+      [
+        'a status, so the provider answered',
+        new LLMError('x', 'invalid_params', { code: 'unsupported_capability', status: 400 }),
+      ],
+      ['another code', new LLMError('x', 'invalid_params', { code: 'unknown_tool_choice' })],
+      ['no code', new LLMError('x', 'invalid_params')],
+      ['another type', new LLMError('x', 'api', { code: 'unsupported_capability' })],
+      ['a plain error', new Error('unsupported_capability')],
+      ['a non error', 'unsupported_capability'],
+    ])('is false with %s', (_label, error) => {
+      expect(isLocalRejection(error)).toBe(false);
     });
   });
 });

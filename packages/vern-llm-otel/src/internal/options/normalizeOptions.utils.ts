@@ -6,8 +6,9 @@ import { optionalBoolean, optionalFunction } from './validate.utils.js';
 import type { OtelMiddlewareOptions, ResolvedConfig } from '../../types/index.js';
 
 export const DEFAULT_NAME = 'otel';
-const PRIORITY_AFTER_OTHERS = 1000;
-const PRIORITY_OUTERMOST = -1000;
+// Only orders `onEvent` delivery. Input is captured at dispatch, after every transform, so
+// capture needs no transform slot.
+const DEFAULT_PRIORITY = -1000;
 
 export function normalizeOptions(options: OtelMiddlewareOptions | undefined): ResolvedConfig {
   const opts: OtelMiddlewareOptions = options === undefined ? {} : options;
@@ -48,14 +49,6 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
   // Entries are left for the core to validate, so its own error names the bad ref.
   const runsAfter = [...(opts.runsAfter ?? [])];
 
-  // Capture has to see the request after redaction, so it asks for the last transform slot
-  // whatever `runsAfter` says. A higher priority elsewhere can still win it, so the tracker also
-  // checks the real order per attempt and skips input capture when anything runs after it.
-  // Priority does not affect where the call span sits, since the core orders `outermost` entries
-  // by registration. Without capture there is no ordering need, so the value is just low.
-  const capturesContent = capture !== undefined && capture.anyGroup;
-  const defaultPriority = capturesContent ? PRIORITY_AFTER_OTHERS : PRIORITY_OUTERMOST;
-
   return {
     tracer: opts.tracer,
     meter: opts.meter,
@@ -67,10 +60,11 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
     exceptions,
     logger: opts.logger,
     name: opts.name ?? DEFAULT_NAME,
-    priority: opts.priority ?? defaultPriority,
+    priority: opts.priority ?? DEFAULT_PRIORITY,
     runsAfter,
     capture,
-    providerName: (label, model) => resolveProviderName(providerNames, label, model),
+    providerName: (label, model, adapterProvider) =>
+      resolveProviderName(providerNames, label, model, adapterProvider),
     targetName: (label) => providerNames.get(label) ?? label,
   };
 }

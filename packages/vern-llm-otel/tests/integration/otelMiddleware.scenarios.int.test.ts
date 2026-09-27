@@ -427,14 +427,15 @@ const scenarios: Scenario[] = [
       expect(Number(waited[0]!.attributes['vernllm.rate_limit.wait_ms'])).toBeGreaterThan(50);
 
       // Both attempts take about 80ms at the provider, and the second also waits about 80ms for
-      // capacity. Its span covers the wait, but its duration metric leaves it out, so no
-      // recorded duration comes near the 160ms a wait inclusive figure would show.
+      // capacity first. The attempt starts once capacity is granted, so neither its span nor its
+      // duration metric comes near the 160ms a wait inclusive figure would show.
       const seconds = (span: ReadableSpan) => span.duration[0] + span.duration[1] / 1e9;
       const waitedSpanSeconds = seconds(waited[0]!);
-      expect(waitedSpanSeconds).toBeGreaterThan(0.14);
+      expect(waitedSpanSeconds).toBeGreaterThan(0.06);
+      expect(waitedSpanSeconds).toBeLessThan(0.14);
 
       const [point] = pointsOf(metrics.get('gen_ai.client.operation.duration'));
-      expect((point!.value as { max?: number }).max).toBeLessThan(waitedSpanSeconds - 0.025);
+      expect((point!.value as { max?: number }).max).toBeLessThan(0.14);
     },
   },
   {

@@ -1,10 +1,15 @@
-import { createMiddlewareRef, requireRef, type PreDispatchContext } from 'vern-llm';
-import { describe, expect, it } from 'vitest';
+import {
+  createMiddlewareRef,
+  requireRef,
+  type AttemptContext,
+  type PreDispatchContext,
+} from 'vern-llm';
+import { describe, expect, it, vi } from 'vitest';
 
 import { otelMiddleware, otelMiddlewareRef } from '../../src/otelMiddleware.js';
 
 describe('otelMiddleware entry', () => {
-  it('claims the outermost position with the exported ref and the three hooks', () => {
+  it('claims the outermost position with the exported ref and its three hooks', () => {
     const entry = otelMiddleware();
 
     expect(entry.name).toBe('otel');
@@ -13,8 +18,10 @@ describe('otelMiddleware entry', () => {
     expect(entry.priority).toBe(-1000);
     expect(entry.runsAfter).toEqual([]);
     expect(typeof entry.wrap).toBe('function');
-    expect(typeof entry.transform).toBe('function');
+    expect(typeof entry.dispatch).toBe('function');
     expect(typeof entry.onEvent).toBe('function');
+    // No transform, so it never counts as an entry that can change the request.
+    expect(entry.transform).toBeUndefined();
   });
 
   it('is static: it has no enabled, which would make event delivery asynchronous', () => {
@@ -39,11 +46,11 @@ describe('otelMiddleware entry', () => {
     expect(entry.runsAfter).toEqual([redaction, required]);
   });
 
-  it('defaults capture to run after other transforms, with or without runsAfter', () => {
+  it('keeps the same slot with capture on, since capture needs no transform order', () => {
     const redaction = createMiddlewareRef('redaction');
 
-    expect(otelMiddleware({ captureContent: true }).priority).toBe(1000);
-    expect(otelMiddleware({ captureContent: true, runsAfter: [redaction] }).priority).toBe(1000);
+    expect(otelMiddleware({ captureContent: true }).priority).toBe(-1000);
+    expect(otelMiddleware({ captureContent: true, runsAfter: [redaction] }).priority).toBe(-1000);
     expect(otelMiddleware({ captureContent: true }).position).toBe('outermost');
   });
 
@@ -72,6 +79,32 @@ describe('otelMiddleware entry', () => {
     await expect(entry.wrap!({} as never, async () => ({ value: 'ok' }), ctx)).resolves.toEqual({
       value: 'ok',
     });
+  });
+
+  it('sends the request untouched when the call has no tracker', async () => {
+    const entry = otelMiddleware();
+    const ctx = { state: { get: () => undefined, set: () => {} } } as unknown as AttemptContext;
+    const next = vi.fn(async () => {});
+
+    await entry.dispatch!({} as never, next, ctx);
+
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('sends the request when reading the tracker throws', async () => {
+    const entry = otelMiddleware({ logger: 'silent' });
+    const ctx = {
+      state: {
+        get: () => {
+          throw new Error('state broke');
+        },
+      },
+    } as unknown as AttemptContext;
+    const next = vi.fn(async () => {});
+
+    await entry.dispatch!({} as never, next, ctx);
+
+    expect(next).toHaveBeenCalledOnce();
   });
 
   it('gives every instance its own hooks', () => {

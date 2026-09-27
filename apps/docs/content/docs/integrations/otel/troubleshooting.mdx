@@ -14,14 +14,10 @@ You can also pass `tracer` and `meter` explicitly, which skips the global lookup
 
 ## A provider shows as `_OTHER` or the wrong vendor
 
-Unmapped targets are inferred from the model id, and `_OTHER` is used when that fails. Gateways and
+Unmapped targets use the provider their adapter names, else a guess from the model id, and `_OTHER`
+when that fails. Gateways and
 proxies need an explicit mapping. Add
 [`providerNames`](/docs/integrations/otel/configuration#providernames).
-
-## Input messages are missing with capture on
-
-Another transform runs after `otelMiddleware`, so input capture is skipped and
-`vernllm.content.skipped_reason` is `not_last_transform`. Raise its `priority` or add `runsAfter`.
 
 ## Two inference spans, or doubled token counts
 
@@ -64,8 +60,9 @@ and carried on, so the call itself was unaffected. The operation name says where
 | Operation                                                                              | Where                                                          |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `startCall`, `startCallDetails`, `startAttempt`, `startAttemptSpan`, `activateContext` | Starting the call span, an attempt span, or the active context |
+| `readTracker`, `endDispatch`                                                           | Following one attempt's request                                |
 | `handleEvent`, `recordEvent`, `recordMetric`, `createInstrument`                       | Recording an event or a measurement                            |
 | `markUsage`, `markRateLimit`, `markStream`, `markFirstChunk`, `addSpanEvent`           | Writing an attribute or event to a span                        |
-| `settleAttempt`, `settleSpan`, `endCallSpan`, `finish`                                 | Ending a span                                                  |
+| `settleAttempt`, `settleSpan`, `endAttemptSpan`, `endCallSpan`, `finish`               | Ending a span                                                  |
 | `decideCapture`, `captureInput`, `captureOutput`                                       | Content capture                                                |
 | `attributes`, `normalizeModel`, `captureContent.when`, `captureContent.redact`         | One of your callbacks threw                                    |
