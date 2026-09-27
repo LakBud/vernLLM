@@ -115,8 +115,8 @@ delivery, see [Configuration](/docs/integrations/otel/API-reference/configuratio
 
 ## Ordering
 
-Input is captured from the request as it is sent, after every `transform`, so a redaction
-middleware always runs first, whatever its priority.
+Input is captured from the final request after every `transform`. If another transform adds
+sensitive content, place the redaction middleware after that transform.
 
 `runsAfter` with `requireRef` is still worth adding when capture depends on redaction, since it
 makes a missing redaction middleware throw at construction:
