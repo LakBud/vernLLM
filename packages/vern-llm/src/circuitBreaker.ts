@@ -1,5 +1,15 @@
-import { fullJitter } from './internal/execution/utils/retry/retry.utils.js';
 import { RollingRatio } from './internal/rollingRatio.js';
+import {
+  attributeFailure,
+  buildCooldownBackoff,
+  claimsCurrentTrial,
+  keyFor,
+  newBucket,
+  resetBucket,
+  trialPermits,
+  UNLABELED_MODEL,
+  type CircuitBucket,
+} from './internal/utils/circuit-breaker/circuitBucket.utils.js';
 import { validateMinCalls, validateRatio } from './internal/utils/validate.utils.js';
 import { LLMError, type LLMErrorCode } from './types/errors.js';
 
@@ -16,12 +26,8 @@ export interface CircuitBreakerCallContext {
 }
 
 /**
- * Fires after every real state change, never a no-op transition. `model`
- * is the resolved model of whichever call triggered it. With
- * `isolateByModel` off, failures are still counted across every model.
- * Shared by `CircuitBreakerOptions` and `CircuitBreakerAdapter`, so a
- * custom adapter reports state changes the same way the built in
- * `CircuitBreaker` does.
+ * Fires after every real state change. `model` is the triggering call's resolved model. Shared by
+ * the options and the adapter interface, so custom adapters report changes the same way.
  */
 export type CircuitBreakerStateChangeHandler = (
   from: CircuitState,
@@ -54,17 +60,10 @@ export interface CircuitBreakerOptions {
    */
   cooldownBackoff?: ExponentialBackoffOptions | CooldownBackoff;
   /**
-   * Decides when a bucket's failures should open the circuit.
-   * `{ kind: 'consecutive', threshold }` (the default) opens after that
-   * many failures in a row. `{ kind: 'rolling', windowMs, minCalls,
-   * failureRatio }` opens once at least `minCalls` calls have landed in
-   * the trailing `windowMs` and the failure ratio reaches `failureRatio`.
-   * `minCalls` must be a non-negative integer; `failureRatio` must be
-   * finite and within `[0, 1]`. Both are validated at construction,
-   * thrown as `RangeError`. A `TrippingPolicy` covers anything else, one
-   * instance shared across every model automatically under
-   * `isolateByModel`, since it tracks its own state per key rather than
-   * owning one flat counter.
+   * When failures open the circuit. `{ kind: 'consecutive', threshold }` (default) opens after that
+   * many in a row; `{ kind: 'rolling', windowMs, minCalls, failureRatio }` opens once `minCalls`
+   * calls in the window reach `failureRatio`. Invalid values throw `RangeError` at construction. A
+   * custom `TrippingPolicy` is shared across models, keyed per model.
    */
   tripping?: TrippingOption;
 }
@@ -80,34 +79,8 @@ export interface ExponentialBackoffOptions {
 }
 
 /**
- * Not exported. Jitters only the growth above `baseCooldownMs`, so several
- * instances don't reopen in lockstep but none ever cools down for less
- * than the configured base.
- */
-function buildCooldownBackoff(
-  option: ExponentialBackoffOptions | CooldownBackoff | undefined,
-): CooldownBackoff | undefined {
-  if (option === undefined) return undefined;
-  if (typeof option === 'function') return option;
-
-  const { multiplier, maxMs = Infinity } = option;
-  return (reopenCount, baseCooldownMs) => {
-    const exp = Math.min(baseCooldownMs * multiplier ** reopenCount, maxMs);
-    // Only an explicit `maxMs` below the base may lower the floor; a
-    // shrinking `multiplier` must not. The ternary also maps a NaN `exp` to the floor.
-    const floor = Math.min(baseCooldownMs, maxMs);
-    const upper = exp > floor ? exp : floor;
-    return floor + fullJitter(upper - floor);
-  };
-}
-
-/**
- * Decides when a bucket's failures should open the circuit. Keyed by
- * `key` (a resolved model, or the shared bucket's key when
- * `isolateByModel` is off) rather than holding one flat counter, so a
- * single `TrippingPolicy` instance is always safe to share across every
- * bucket: `CircuitBreaker` never needs to clone or construct a fresh one
- * per model, `isolateByModel` isolation falls out of `key` alone.
+ * Decides when failures open the circuit. Keyed by model (or one shared key), so one instance
+ * serves every bucket.
  */
 export interface TrippingPolicy {
   onSuccess(key: string): void;
@@ -115,11 +88,8 @@ export interface TrippingPolicy {
   onFailure(key: string): boolean;
   reset(key: string): void;
   /**
-   * Called when `key`'s circuit is reset closed (manual `close()` or a
-   * passed half-open trial, under `isolateByModel`), so a keyed policy can
-   * release that key's state. Not called on an ordinary success, since
-   * that state may still be needed, e.g. a rolling window.
-   * Optional: omit if there's nothing to release.
+   * Called when `key`'s circuit is reset closed, so a keyed policy can drop that key's state. Not
+   * called on an ordinary success, whose state a rolling window still needs.
    */
   forget?(key: string): void;
 }
@@ -209,20 +179,10 @@ function buildTripping(option: TrippingOption): TrippingPolicy {
 export type CircuitState = 'closed' | 'open' | 'half-open';
 
 /**
- * What VernLLM's dispatch layer needs from a breaker. `CircuitBreaker`
- * implements this; a caller wanting cross process coordination can hand
- * over their own instance instead.
- *
- * `assertClosed`, `recordSuccess`, `recordFailure`, and `onStateChange`
- * are required, mirroring `RateLimiterAdapter`'s four required methods.
- * `onStateChange` is required so `circuit_state` events can't go
- * silently missing; a no-op `() => {}` is fine if you don't care.
- *
- * `getState`, `getFailureBreakdown`, `isolateByModel`, `open`, and
- * `close` are optional. Omitting one makes the matching call a no-op
- * or return `undefined`/`false`, same as no breaker configured.
- * `open`/`close` are optional since they let VernLLM force a
- * transition, control a distributed adapter may not want to grant.
+ * What VernLLM needs from a breaker. Pass your own for cross-process coordination. `onStateChange`
+ * is required so `circuit_state` events can't go missing; `() => {}` is fine. Omitting an optional
+ * member makes that call a no-op, as with no breaker. `open` and `close` are optional, since a
+ * distributed adapter may not allow forced transitions.
  */
 export interface CircuitBreakerAdapter {
   /** Throws when the circuit is open (or half open with no trial slot free) for `model`. */
@@ -250,70 +210,10 @@ export interface CircuitBreakerAdapter {
   /** Receives the instance's `Logger` once, when `VernLLM` wires this adapter in. */
   setLogger?(logger: Logger): void;
   /**
-   * Called after every real state change, never a no-op transition. VernLLM
-   * wraps it the same way it wraps the built in `CircuitBreaker`'s
-   * `onStateChange`: every call still reports a `circuit_state` event
-   * first, then this hook is chained after that, wrapped so a throw here
-   * can't break the call that triggered it.
+   * Called after every real state change, after VernLLM reports its `circuit_state` event. A throw
+   * here is caught and logged.
    */
   onStateChange: CircuitBreakerStateChangeHandler;
-}
-
-/** Mutable state for one circuit, either the single shared one or one model's bucket under `isolateByModel`. */
-interface CircuitBucket {
-  state: CircuitState;
-  /** True consecutive failures since the last success. Reporting only, independent of `tripping`. */
-  consecutiveFailures: number;
-  openedAt: number;
-  /** Non null only while `state` is half-open. */
-  trial: { slotsRemaining: number; successes: number; failures: number } | null;
-  /** Times this bucket has reopened after a failed trial. Feeds `cooldownBackoff`. */
-  reopenCount: number;
-  /** Failure counts by `LLMErrorCode`, `'unknown'` for a missing code. Attribution only. */
-  failuresByReason: Map<LLMErrorCode | 'unknown', number>;
-  /** Cooldown for this open period, sampled once so a jittered value doesn't change mid-cooldown. */
-  cooldownMsForOpen: number;
-  /** Breaker-wide generation this bucket last opened in, 0 if never opened. */
-  openedInGeneration: number;
-}
-
-function newBucket(): CircuitBucket {
-  return {
-    state: 'closed',
-    consecutiveFailures: 0,
-    openedAt: 0,
-    trial: null,
-    reopenCount: 0,
-    failuresByReason: new Map(),
-    cooldownMsForOpen: 0,
-    openedInGeneration: 0,
-  };
-}
-
-/** Key a bucket lookup falls into when the call omitted `model` under `isolateByModel`. Also the `tripping` key for the single shared bucket when `isolateByModel` is off. */
-const UNLABELED_MODEL = '';
-
-/** Resolves the map key for a model, collapsing an omitted `model` to `UNLABELED_MODEL`. Pure, no `this` needed. */
-function keyFor(model: string | undefined): string {
-  return model ?? UNLABELED_MODEL;
-}
-
-/** Maps a call's `state` to the trial object it claimed a slot in, so a stale permit can be told apart from a current one. */
-const trialPermits = new WeakMap<object, object>();
-
-/** True if this outcome's call claimed a permit for `bucket`'s current trial. No `context` always counts, matching pre-permit-tracking behavior. */
-function claimsCurrentTrial(
-  bucket: CircuitBucket,
-  context: CircuitBreakerCallContext | undefined,
-): boolean {
-  if (!context) return true;
-  return trialPermits.get(context.state) === bucket.trial;
-}
-
-/** Records `code` (or `'unknown'` if omitted) against `bucket.failuresByReason`. */
-function attributeFailure(bucket: CircuitBucket, code: LLMErrorCode | undefined): void {
-  const key = code ?? 'unknown';
-  bucket.failuresByReason.set(key, (bucket.failuresByReason.get(key) ?? 0) + 1);
 }
 
 /**
@@ -431,11 +331,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     // a half-open trial may close an open circuit, never a late straggler.
     if (bucket.state === 'open') return;
 
-    bucket.consecutiveFailures = 0;
+    resetBucket(bucket);
     this.tripping.onSuccess(this.trippingKeyFor(model));
-    bucket.trial = null;
-    bucket.reopenCount = 0;
-    bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
     // Drop only the idle bucket. The tripping state stays, since a rolling
@@ -475,11 +372,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   }
 
   /**
-   * Gives back the half-open trial slot `context`'s call claimed, when
-   * that call ended without recording an outcome. No-op without a
-   * `context`, when the bucket isn't half-open, or when the call's permit
-   * is stale or already spent (an outcome was recorded), so calling it
-   * defensively on every failure path is safe.
+   * Gives back the trial slot `context`'s call claimed when it ended without an outcome. Safe to
+   * call on any failure path: a no-op without a live permit.
    */
   releaseTrial(model?: string, context?: CircuitBreakerCallContext): void {
     if (!context) return;
@@ -493,11 +387,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   }
 
   /**
-   * With `isolateByModel` off, `model` is ignored and the shared circuit's
-   * state is returned. An open circuit whose cooldown has elapsed reports
-   * `'half-open'`, since the next call will be admitted as a trial. Read
-   * only: the real transition, and its `onStateChange`, still happens on
-   * that next call.
+   * The current state. Ignores `model` unless isolated by model. An open circuit past its cooldown
+   * reports `'half-open'`, though the real transition waits for the next call.
    */
   getState(model?: string): CircuitState {
     const bucket = this.lookupBucket(model);
@@ -525,11 +416,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   close(model?: string, context?: CircuitBreakerCallContext): void {
     const bucket = this.ensureBucketFor(model);
 
-    bucket.consecutiveFailures = 0;
+    resetBucket(bucket);
     this.tripping.reset(this.trippingKeyFor(model));
-    bucket.trial = null;
-    bucket.reopenCount = 0;
-    bucket.failuresByReason.clear();
     this.transition(bucket, 'closed', model, context);
 
     // transition() may have synchronously re-entered, so re-check state rather than assuming it still holds.
@@ -539,10 +427,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   }
 
   /**
-   * Opens `bucket`: stamps `openedAt`/`cooldownMsForOpen` and transitions
-   * to `open`. Shared by `recordFailure`'s trip, `settleTrialIfComplete`'s
-   * reopen, and the manual `open()`, all of which reach this with
-   * `bucket.trial` already `null`.
+   * Stamps the open time and cooldown, then transitions to open. Callers have already cleared
+   * `trial`.
    */
   private openBucket(
     bucket: CircuitBucket,
@@ -569,10 +455,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   }
 
   /**
-   * True if this call was admitted before `bucket` last opened, so its
-   * outcome belongs to a generation that has already ended. A call with no
-   * `context`, or never admitted by this breaker, always counts, matching
-   * the behavior before generation tracking.
+   * True if this call was admitted before `bucket` last opened, so its outcome belongs to an ended
+   * generation. A call without context always counts.
    */
   private isFromEarlierGeneration(
     bucket: CircuitBucket,
@@ -590,13 +474,8 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
   }
 
   /**
-   * The key `tripping` is called with. Real per-model isolation under
-   * `isolateByModel`, matching `ensureBucketFor`/`lookupBucket`'s own
-   * per-model key. Otherwise one fixed shared key regardless of what
-   * `model` was passed, matching `sharedBucket` being the one and only
-   * bucket in that mode: `model` is never allowed to split tripping state
-   * when `isolateByModel` is off, the same way it never splits which
-   * bucket a call lands in.
+   * The key for `tripping`: per model when isolated by model, otherwise one shared key, matching
+   * which bucket a call lands in.
    */
   private trippingKeyFor(model: string | undefined): string {
     return this.isolateByModel ? keyFor(model) : UNLABELED_MODEL;
@@ -655,13 +534,11 @@ export class CircuitBreaker implements CircuitBreakerAdapter {
     bucket.trial = null;
 
     if (ratio >= this.halfOpenSuccessRatio) {
-      bucket.consecutiveFailures = 0;
+      resetBucket(bucket);
       // Reset rather than record a success, so failures from before the
       // circuit opened can't push a rolling window straight back over
       // its threshold. Same as the manual `close()`.
       this.tripping.reset(this.trippingKeyFor(model));
-      bucket.reopenCount = 0;
-      bucket.failuresByReason.clear();
       this.transition(bucket, 'closed', model, context);
 
       if (this.isolateByModel && bucket.state === 'closed') {

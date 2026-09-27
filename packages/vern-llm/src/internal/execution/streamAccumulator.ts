@@ -1,9 +1,9 @@
 import { LLMError } from '../../types/errors.js';
+import { createDeferred } from '../utils/deferred.utils.js';
 import { normalizeError } from './utils/errors.utils.js';
-import { toTokenUsage } from './utils/response/usage.utils.js';
 import { withChunkIdleTimeout } from './utils/retry/retry.utils.js';
 import { createBackpressureChannel } from './utils/stream/chunkBuffer.utils.js';
-import { createToolCallAccumulator } from './utils/stream/toolCallAccumulator.utils.js';
+import { createStreamAccumulation } from './utils/stream/streamAccumulation.utils.js';
 
 import type { Logger } from '../../logger.js';
 import type {
@@ -34,34 +34,20 @@ export interface StreamAccumulatorOptions<T> {
   /** The target's `maxRetryAfterMs`, forwarded to `normalizeError` so a mid-stream failure gets the same retry cap. */
   maxRetryAfterMs?: number;
   /**
-   * Fires once, synchronously, right after the transport-level loop
-   * finishes successfully, before `finalize` runs. Lets the caller record
-   * circuit-breaker success and release rate-limiter capacity before the
-   * (possibly failing) finalization step.
+   * Fires once when the transport loop ends cleanly, before `finalize`. Success itself is decided
+   * by `finalize`, which can still reject the response.
    */
   onStreamSuccess: (usage: TokenUsage | undefined) => void;
-  /**
-   * Fires once when the transport-level loop itself fails (idle timeout
-   * or a transport error), before this stream's `finalResult` rejects.
-   * `normalized.type === 'timeout'` is the one mid-stream failure that
-   * should trip the breaker: otherwise a provider that hangs after one
-   * chunk would always record a success and never open it.
-   */
+  /** Fires once when the transport loop fails, before `finalResult` rejects. */
   onStreamFailure: (normalized: LLMError, usage: TokenUsage | undefined) => void;
   /**
-   * Fires as soon as a `rate_limit_hint` chunk arrives, as early as
-   * possible in the stream rather than deferred to `onStreamSuccess`/
-   * `finalize`: unlike growing the ceiling (which must wait for a
-   * confirmed success), reacting to a proactive hint is safe and
-   * useful the moment it's known, independent of how this attempt
-   * ultimately finishes.
+   * Fires as soon as a `rate_limit_hint` arrives. Reacting to a hint is safe whatever the attempt's
+   * outcome, unlike growing the ceiling.
    */
   onRateLimitHint?: (hint: ProviderRateLimitHint) => void;
   /**
-   * Produces the final `T | CallWithToolsResult<T>` from the accumulated
-   * text and tool-call deltas once the stream completes. Errors thrown
-   * here are assumed already normalized and usage-failure-reported by the
-   * caller (mirrors `finalizeResponse`'s own contract).
+   * Builds the final result once the stream completes. Its throws are already normalized and
+   * reported, as with `finalizeResponse`.
    */
   finalize: (
     textAcc: string,
@@ -72,16 +58,9 @@ export interface StreamAccumulatorOptions<T> {
 }
 
 /**
- * Best effort cleanup for a processing time throw (as opposed to
- * `iterator.next()` rejecting, which usually means the adapter's own
- * generator already cleaned up). Two independent layers, since neither
- * is guaranteed to reach every SDK on its own: `iterator.return()`
- * forwards standard IteratorClose behavior down through the adapter's
- * `for await...of` to the SDK's own stream, as long as that stream
- * implements `.return()`; `streamController.abort()` closes any SDK
- * that instead honors the AbortSignal threaded through `createStream`
- * for the life of the request. Cleanup failing itself is swallowed,
- * since it isn't the error being reported.
+ * Cleanup after a throw while processing. Both layers run, since SDKs differ: `return()` closes a
+ * stream that supports it, and `abort()` closes one that follows the signal. A cleanup failure is
+ * swallowed.
  */
 async function closeIterator(
   iterator: AsyncIterator<WireStreamChunk>,
@@ -116,18 +95,9 @@ function untilSpaceOrAbort(
 }
 
 /**
- * The streaming accumulator: wraps the raw `WireStreamChunk` iterator in
- * an async generator that yields translated `StreamChunk`s to the caller
- * live, as they arrive, with no per-chunk timeout and no bound on total
- * duration, and accumulates text/tool-call deltas internally so that
- * `finalize` can produce `finalResult` once the stream completes.
- *
- * Two separate try/catches: the iteration loop's catch handles errors
- * the transport itself throws, which aren't normalized yet, so that
- * happens here, alongside the one `onStreamFailure` call for them. The
- * second catch, around `finalize`, does not re-normalize or re-report,
- * since `finalize`'s caller (`finalizeResponse`) already does both
- * internally.
+ * Pumps wire chunks to the caller as they arrive, with no total duration bound, and builds
+ * `finalResult` when the stream ends. Transport errors are normalized and reported here; `finalize`
+ * errors already were.
  */
 export function buildStreamResult<T>(
   iterator: AsyncIterator<WireStreamChunk>,
@@ -148,24 +118,19 @@ export function buildStreamResult<T>(
     onRateLimitHint,
   } = options;
 
-  let resolveFinal!: (value: T | CallWithToolsResult<T>) => void;
-  let rejectFinal!: (error: unknown) => void;
-
-  const finalResult = new Promise<T | CallWithToolsResult<T>>((resolve, reject) => {
-    resolveFinal = resolve;
-    rejectFinal = reject;
-  });
+  const {
+    promise: finalResult,
+    resolve: resolveFinal,
+    reject: rejectFinal,
+  } = createDeferred<T | CallWithToolsResult<T>>();
 
   // Avoid an unhandled-rejection warning for callers that only read `chunks`.
   finalResult.catch(() => {});
 
-  // Push-based, not a pulled generator, so the pump always drives
-  // `finalResult` to completion even if `chunks` is never read. Buffer
-  // size (not "has anyone started iterating yet") is what caps memory,
-  // since the pump can outrace the caller starting iteration. Once the
-  // caller is reading, a full buffer pauses the pump instead. A reader
-  // that stops early is detached here; `call()` then aborts the signal,
-  // which ends the pump and rejects `finalResult` as aborted.
+  // A push channel rather than a pulled generator, so the pump drives `finalResult` to completion
+  // even if `chunks` is never read. The buffer size caps memory before a reader starts; once
+  // reading, a full buffer pauses the pump. A reader that leaves early is detached and `call()`
+  // aborts the stream.
   const MAX_BUFFERED_CHUNKS = 10_000;
   const channel = createBackpressureChannel<StreamChunk>({
     capacity: MAX_BUFFERED_CHUNKS,
@@ -182,11 +147,11 @@ export function buildStreamResult<T>(
   const { push, finish, fail } = channel;
   const chunks = channel.iterable;
 
-  const toolCalls = createToolCallAccumulator();
-
-  let textAcc = '';
-  let usage: TokenUsage | undefined;
-  const thinking: ThinkingBlock[] = [];
+  const accumulation = createStreamAccumulation(
+    { requestId, model, providerName, isFallback },
+    push,
+    onRateLimitHint,
+  );
 
   // Fires immediately, not lazily, so it always drives finalResult to
   // completion regardless of whether the caller reads chunks.
@@ -195,28 +160,7 @@ export function buildStreamResult<T>(
       let result: IteratorResult<WireStreamChunk> = first;
 
       while (!result.done) {
-        const wireChunk = result.value;
-        let space: Promise<void> | undefined;
-
-        if (wireChunk.type === 'ping') {
-          // No content to accumulate or push. Just resolving here
-          // resets the idle-timeout clock on the next .next() call.
-        } else if (wireChunk.type === 'rate_limit_hint') {
-          // No content to accumulate or push. Fired immediately, not
-          // deferred; see this option's own doc comment for why.
-          onRateLimitHint?.(wireChunk.hint);
-        } else if (wireChunk.type === 'text-delta') {
-          textAcc += wireChunk.delta;
-          space = push({ type: 'text-delta', delta: wireChunk.delta });
-        } else if (wireChunk.type === 'tool_call_delta') {
-          space = push(toolCalls.apply(wireChunk));
-        } else if (wireChunk.type === 'thinking_block') {
-          // Kept for the result only: the caller never sees reasoning as a chunk.
-          thinking.push(wireChunk.block);
-        } else if (wireChunk.type === 'usage') {
-          usage = toTokenUsage(wireChunk.usage, { requestId, model, providerName, isFallback });
-          space = push({ type: 'usage', usage });
-        }
+        const space = accumulation.apply(result.value);
 
         // Waiting here, not inside `withChunkIdleTimeout`, so a slow reader
         // never counts as the provider going idle. An abort ends the wait, so
@@ -240,7 +184,7 @@ export function buildStreamResult<T>(
       const normalized = normalizeError(error, signal, undefined, maxRetryAfterMs);
 
       try {
-        options.onStreamFailure(normalized, usage);
+        options.onStreamFailure(normalized, accumulation.usage);
       } catch {
         // A throwing callback must not stop fail/rejectFinal from settling
         // the promises below; the stream failure itself is still reported.
@@ -255,21 +199,15 @@ export function buildStreamResult<T>(
     finish();
 
     try {
-      options.onStreamSuccess(usage);
+      options.onStreamSuccess(accumulation.usage);
     } catch {
       // A throwing callback must not stop finalize/resolveFinal below from
       // running; the stream itself still completed successfully.
     }
 
     try {
-      const wireToolCalls: WireToolCall[] | undefined = toolCalls.toWireToolCalls();
-
-      const finalized = options.finalize(
-        textAcc,
-        wireToolCalls,
-        usage,
-        thinking.length ? thinking : undefined,
-      );
+      const { text, wireToolCalls, usage, thinking } = accumulation.result();
+      const finalized = options.finalize(text, wireToolCalls, usage, thinking);
 
       resolveFinal(finalized);
     } catch (error) {

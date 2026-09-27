@@ -1,3 +1,4 @@
+import { logError } from '../utils/logger.utils.js';
 import {
   emitEvent,
   reclassifyMiddlewareThrow,
@@ -25,10 +26,8 @@ import type { CallExecutor } from './callExecutor.js';
  */
 export interface RunOperationDependencies {
   /**
-   * Every resolved view of middleware composition order, built once at
-   * `VernLLM` construction time by `buildMiddlewarePipeline`. `wrap`
-   * nesting reads `pipeline.wrapOrder`; the `'middleware'` trace event
-   * fan-out and `registeredMiddlewareNames` read `pipeline.transformOrder`/`pipeline.names`.
+   * Middleware order, built once at construction. `wrap` nests by `wrapOrder`; labels and events
+   * use `transformOrder`.
    */
   pipeline: MiddlewarePipeline;
   /** The primary target, used to build the `previewRequest` handed to every `wrap` (and the `primaryProvider`/`primaryModel` its `ctx` carries). */
@@ -41,19 +40,9 @@ export interface RunOperationDependencies {
 }
 
 /**
- * Wraps `coreOperation` (one whole logical call, retries and fallback
- * targets included) in every applicable middleware's `wrap`, composed
- * like nested function calls: lower `priority` is outermost, starts
- * first, finishes last. `previewRequest` is built from the primary
- * target only (before any target is actually chosen), which is exactly
- * why `wrap`'s own `ctx` is a `PreDispatchContext`, not an
- * `AttemptContext`: there is no real target yet to describe.
- *
- * Each middleware's `next()` resolves to `coreOperation`'s own result
- * once every inner middleware (and the real call) has run, or to
- * whatever an inner middleware short-circuited with instead. A `wrap`
- * that never calls `next()` skips `coreOperation`, and everything nested
- * inside it, entirely.
+ * Wraps one whole logical call in every applicable `wrap`, lower priority outermost. `ctx` is a
+ * `PreDispatchContext` with a preview request from the primary, since no target is chosen yet. A
+ * `wrap` that never calls `next()` skips everything inside it.
  */
 export async function runOperation(
   dependencies: RunOperationDependencies,
@@ -62,21 +51,8 @@ export async function runOperation(
   state: MiddlewareStateBag,
   coreOperation: () => Promise<CallResult>,
   /**
-   * `true` when `VernLLM.cachedCall()` is already wrapping this exact
-   * invocation's `params` object in its own outer `runOperation` call,
-   * around the whole cache hit/miss/join operation. Skips wrapping
-   * again here so one logical `cachedCall()` still only ever runs
-   * `wrap` once: without it, a cache miss (which internally calls
-   * `VernLLM.call()` to get the same retry/timeout/breaker guarantees
-   * as a direct call) would run every `wrap` middleware twice for the
-   * one logical operation the caller made.
-   *
-   * Computed by the caller from a marker scoped to this one `params`
-   * object (see `VernLLM`'s own `cachedCallInnerParams`), not from
-   * `requestId`: two concurrent `cachedCall()` invocations can share
-   * the same caller-supplied explicit `requestId`, and a `Set<string>`
-   * keyed by that id would let one invocation's inner-call marker
-   * suppress the *other* invocation's own outer `wrap`.
+   * True when `cachedCall()` already wraps this call, so `wrap` runs once per logical call. Keyed
+   * by the params object, not `requestId`, since concurrent `cachedCall()`s can share one.
    */
   skipWrap = false,
 ): Promise<CallResult> {
@@ -89,12 +65,8 @@ export async function runOperation(
   const primary = dependencies.primaryExecutor;
   const { model, request } = primary.previewRequest(params);
 
-  // `position` can reorder `wrapOrder` relative to `transformOrder`, so an
-  // anonymous entry's positional index in the two arrays can differ. Labels
-  // (and `registeredMiddlewareNames`, via `names`) are always derived from
-  // `transformOrder` position; looking the index up here instead of reusing
-  // `wrapOrder`'s own loop index keeps an unnamed middleware's label
-  // consistent with `names` regardless of any `position` pin.
+  // `position` can reorder `wrapOrder`, so labels come from each entry's `transformOrder` index to
+  // match `registeredMiddlewareNames`.
   const transformIndexByEntry = new Map(transformOrder.map((entry, index) => [entry, index]));
 
   let next: () => Promise<CallResult> = coreOperation;
@@ -167,12 +139,10 @@ export async function runOperation(
           // Rule 3: thrown strictly after next() already resolved
           // successfully. A bug in post-processing can never turn a
           // successful, already-billed call into a false failure.
-          dependencies.logger.error(
+          logError(
+            dependencies.logger,
             `[VernLLM] middleware "${label}".wrap threw after next() resolved; keeping the original result`,
-            {
-              message: error instanceof Error ? error.message : 'unknown',
-              stack: error instanceof Error ? error.stack : undefined,
-            },
+            error,
           );
           return resolvedResult;
         }

@@ -39,24 +39,10 @@ export function parseAndValidate<T>(
 }
 
 /**
- * Checks every `ToolCall` against the `tools` that were offered, catching
- * a hallucinated tool name and a duplicate call id before either reaches
- * the application's dispatch table, then runs each tool's
- * `argumentsSchema`, if present.
- *
- * Contract failures (unknown name, duplicate id) are collected across
- * every call and thrown together as one `type: 'validation'` error with
- * `issues: ToolIssue[]`, since retrying a request that already has these
- * errors cannot help (excluded from retry by `type`) and a caller fixing
- * them wants to see every one, not just the first. Schema failures keep
- * the original single-error, `type: 'validation'` shape rather than being
- * folded into the aggregate, since they're a distinct failure kind from
- * the contract failures above.
- *
- * Returns the calls with each validated `arguments` replaced by the
- * schema's output, so defaults, coercions and transforms reach the
- * caller the same way `schema` does for content. Calls without a schema
- * keep their parsed arguments. The input array is left untouched.
+ * Checks each `ToolCall` against the offered tools, then runs each `argumentsSchema`. Unknown names
+ * and duplicate ids are collected into one `validation` error with every issue, since retrying
+ * can't fix them. A schema failure keeps its own single error. Returns the calls with `arguments`
+ * replaced by the schema output; the input is left untouched.
  */
 export function validateToolCallArguments<
   Call extends { id: string; name: string; arguments: unknown },
@@ -126,15 +112,9 @@ export interface ShapeResponseParams<T> {
 }
 
 /**
- * Shapes a fully-arrived response (content and/or tool_calls, already
- * extracted from the provider's payload) into `T` or a
- * `CallWithToolsResult<T>`. Reused by the streaming path once it has
- * buffered the full text/tool-call deltas, so there's no separate
- * parsing/validation logic for streaming.
- *
- * Throws `LLMError` on an empty response, a tool-contract violation, or a
- * JSON/schema failure. No breaker or usage reporting here, that's
- * `finalizeResponse`'s job, one layer up.
+ * Shapes a complete response into `T` or a `CallWithToolsResult<T>`, for streaming too once the
+ * stream is buffered. Throws on an empty response, a tool contract violation, or a JSON or schema
+ * failure. Reporting happens a layer up.
  */
 export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithToolsResult<T> {
   const {
@@ -184,15 +164,8 @@ export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithTo
     }
 
     if (callParams.toolChoice === 'none') {
-      // `toolChoice: 'none'` is what lets `call()`'s type narrow to
-      // `ContentResult<T>` (see `ToolsDisabledCallParams`). A
-      // nonconforming provider/adapter returning tool_calls anyway
-      // would silently break that guarantee for the caller, so this
-      // is treated as a hard API-contract violation rather than
-      // passed through as a normal tool_calls result. The request
-      // itself is byte-for-byte identical on retry, so this repeats
-      // deterministically like the other tool-contract failures
-      // below: not retryable, and not the provider being unhealthy.
+      // Returning tool calls under `toolChoice: 'none'` would break the `ContentResult<T>` type
+      // guarantee. The same request repeats it, so it is a non-retryable contract violation.
       throw new LLMError("Provider returned tool_calls despite toolChoice: 'none'.", 'validation', {
         code: 'tool_choice_none_violated',
       });

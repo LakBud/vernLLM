@@ -55,3 +55,29 @@ export function onEarlyExit<T>(chunks: AsyncIterable<T>, onExit: () => void): As
     },
   };
 }
+
+/**
+ * Aborts `controller` when the last active reader of `chunks` stops early.
+ * A no-op without a controller (`cachedCall()`'s inner call).
+ */
+export function cancelOnBreak<T, R>(
+  stream: { chunks: AsyncIterable<T>; finalResult: Promise<R> },
+  controller: AbortController | undefined,
+): { chunks: AsyncIterable<T>; finalResult: Promise<R> } {
+  if (!controller) return stream;
+
+  // Once settled there is nothing to cancel, and aborting would only flip
+  // the signal middleware still holds.
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  void stream.finalResult.then(markSettled, markSettled);
+
+  return {
+    chunks: onEarlyExit(stream.chunks, () => {
+      if (!settled) controller.abort();
+    }),
+    finalResult: stream.finalResult,
+  };
+}

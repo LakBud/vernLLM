@@ -2,17 +2,9 @@ import type { StreamChunk } from '../../../types/stream.js';
 import type { UsageHooks } from '../../../types/usage.js';
 
 /**
- * Parameters for the private `fn`-based cache primitive backing the public
- * `cachedCall()`. Lives in `internal/`, not `types/`, so it's structurally
- * separate from the public API surface: `types/index.ts` never touches this
- * directory, so there's no wildcard export to accidentally forward it
- * through. Only `vernLLM.ts` (via `runCached`) uses this.
- *
- * `cacheKey` looks up existing results, `fn` runs only on cache misses, and
- * concurrent misses for the same key are coalesced into a single in-flight
- * operation. `fn` receives the shared signal, which fires only once every
- * coalesced caller has left. `signal` is this caller's own: it ends only
- * this caller's wait.
+ * Parameters for the caching core behind `cachedCall()`. Internal, so it can't leak into the public
+ * types. `fn` runs only on a miss and receives the shared signal, which fires once every coalesced
+ * caller has left; `signal` ends only this caller's wait.
  */
 export interface InternalCacheParams<T> extends UsageHooks {
   cacheKey: string;
@@ -22,10 +14,8 @@ export interface InternalCacheParams<T> extends UsageHooks {
 }
 
 /**
- * Streaming counterpart to `InternalCacheParams`. `openStream` replaces
- * `fn`: instead of a single awaited value, it opens a live stream (same
- * shape `VernLLM.call({ stream: true })` returns). Only `vernLLM.ts` (via
- * `runCachedStream`) uses this.
+ * Streaming counterpart to `InternalCacheParams`: `openStream` opens a live stream instead of
+ * returning one value.
  */
 export interface InternalCacheStreamParams<T> extends UsageHooks {
   cacheKey: string;

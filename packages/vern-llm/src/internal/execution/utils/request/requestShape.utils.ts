@@ -18,10 +18,8 @@ export function serializeAssistantContent(content: AssistantContent): string {
 }
 
 /**
- * Validates `tools`/`toolChoice` shape: rejects an empty `tools` array, a
- * duplicate tool name, a `toolChoice` set without `tools`, and a
- * `toolChoice` naming a tool that isn't in `tools`. Deterministic on its
- * own input; every throw is `invalid_params`.
+ * Rejects an empty `tools`, duplicate names, `toolChoice` without `tools`, and a `toolChoice`
+ * naming an unknown tool, all as `invalid_params`.
  */
 export function validateTools(
   tools: CallParams<unknown>['tools'],
@@ -88,19 +86,10 @@ export interface ResolveJsonModeParams {
 }
 
 /**
- * Resolves whether this call should request and parse JSON output.
- * Defaults `jsonMode` to `false` when `tools` is set (forcing a JSON
- * response format alongside tool calling is unreliable across
- * providers), otherwise `true`. A client that can't honor
- * `response_format: 'json_object'` as a real constraint
- * (`supportsJsonObjectMode: false`, currently `fromAnthropic`/
- * `fromBedrock`) throws on an *explicit* `jsonMode: true` or a `schema`
- * with no `jsonSchema` to satisfy it, since staying silent would be worse
- * than the plain-text fallback; a *default* `jsonMode` with neither is
- * silently downgraded to plain text instead, which is what keeps
- * `llm.call({ userContent })` working out of the box on those two
- * adapters. Throws `invalid_params` if `schema` was provided but the
- * resolved mode ends up not requesting JSON at all.
+ * Whether to request and parse JSON. `jsonMode` defaults to off with `tools`, since forcing JSON
+ * alongside tool calls is unreliable, and on otherwise. Clients without real `json_object` support
+ * throw on an explicit `jsonMode: true` or a `schema` without `jsonSchema`, but quietly fall back
+ * to text for the default. Throws `invalid_params` when `schema` is set but no JSON is requested.
  */
 export function resolveJsonMode(params: ResolveJsonModeParams): boolean {
   const { jsonModeExplicit, hasTools, jsonSchema, hasSchema, supportsJsonObjectMode } = params;
@@ -128,13 +117,8 @@ export function resolveJsonMode(params: ResolveJsonModeParams): boolean {
     );
   }
 
-  // A *default* (unset) `jsonMode` with no `schema` to satisfy, which
-  // resolves to `true` on every plain call with no `tools`, is silently
-  // downgraded to plain text instead of throwing: this is what keeps
-  // `llm.call({ userContent })` working out of the box on
-  // Anthropic/Bedrock exactly as it did before `json_object` support was
-  // removed from those two adapters, for anyone not relying on JSON
-  // output they never actually asked for.
+  // The default `jsonMode` falls back to text on clients without `json_object`, so `llm.call({
+  // userContent })` works everywhere.
   const jsonModeEffective =
     !supportsJsonObjectMode && !jsonSchema && jsonModeExplicit === undefined ? false : jsonMode;
 
@@ -150,12 +134,7 @@ export function resolveJsonMode(params: ResolveJsonModeParams): boolean {
   return useJson;
 }
 
-/**
- * Chooses the response format: a provider-native `jsonSchema` takes
- * priority when supplied (constrains generation directly), otherwise
- * falls back to the looser `json_object` mode when JSON output is
- * requested, or no format at all for plain text responses.
- */
+/** A native `jsonSchema` when given, else `json_object` when JSON is wanted, else no format. */
 export function buildResponseFormat(
   jsonSchema: CallParams<unknown>['jsonSchema'],
   useJson: boolean,
@@ -184,11 +163,8 @@ export function buildWireToolChoice(toolChoice: CallParams<unknown>['toolChoice'
 }
 
 /**
- * Expands one `ConversationTurn` into one or more wire messages. Plain
- * user/assistant turns map 1:1. An assistant turn with `toolCalls` maps
- * to an assistant message carrying wire-shaped `tool_calls`. A `'tool'`
- * turn expands into one wire `tool` message per `toolResult`, since
- * OpenAI-shaped wire format wants one message per tool_call_id.
+ * One turn as wire messages. A tool turn expands to one `tool` message per result, since the wire
+ * format wants one per `tool_call_id`.
  */
 export function turnToWireMessages(turn: ConversationTurn): WireMessage[] {
   if (turn.role === 'tool') {

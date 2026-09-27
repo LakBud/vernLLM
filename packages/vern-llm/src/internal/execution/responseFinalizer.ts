@@ -32,26 +32,11 @@ export interface FinalizeResponseDeps {
 }
 
 /**
- * Shapes a fully-arrived response via `shapeResponse`, then reports the
- * outcome: a breaker success and a usage success on a clean shape, or a
- * usage failure (never a breaker failure, that's decided one layer up
- * once retries are exhausted) on a normalized, non-aborted error.
- * Normalizes and reports usage failure on error itself, so every caller
- * gets identical error handling without duplicating it.
- *
- * A shape that parsed cleanly still passes through `detectSoftFailure`
- * (when configured) before it's reported as a success. A hook that
- * returns an `LLMErrorCode` throws a normal `LLMError` right here,
- * inside the same `try` shaping errors already throw from, so it flows
- * through the exact same catch/normalize/report path as any other
- * failure, retryable or not, with no separate handling to keep in sync.
- *
- * `truncated` is set when the provider stopped at `max_tokens`. A parse
- * failure on such a response is reported as `response_truncated`, which
- * is retryable, instead of a plain parse error.
- *
- * `thinking` is the model's reasoning blocks. Kept only on a tool call
- * result, the one place the caller has to send them back.
+ * Shapes a complete response and reports the outcome: breaker and usage success when clean, a usage
+ * failure otherwise. Breaker failures are decided a layer up, once retries run out.
+ * `detectSoftFailure` runs inside the same `try`, so a soft failure takes the normal failure path.
+ * With `truncated` set, a parse failure becomes the retryable `response_truncated`. `thinking` is
+ * kept only on a tool call result, the one place it must go back.
  */
 export function finalizeResponse<T>(
   rawContent: string | null | undefined,
@@ -98,13 +83,8 @@ export function finalizeResponse<T>(
     );
 
     if (softFailureCode !== undefined) {
-      // `'api'`, not `'validation'`: `'validation'` is excluded from
-      // retry and the breaker at the type level regardless of `code`
-      // (see `computeRetryable`), which would make a soft failure
-      // never retryable no matter what code is returned. `'api'` is
-      // the same type the pre-existing empty-response check already
-      // uses, so retryability and breaker-counting are governed by the
-      // returned code's own exclusion sets, not overridden here.
+      // `'api'`, not `'validation'`, which is never retried whatever the code. The returned code
+      // alone decides retry and breaker counting.
       throw new LLMError('Soft failure detected', 'api', { code: softFailureCode });
     }
 
@@ -113,12 +93,8 @@ export function finalizeResponse<T>(
 
     return result;
   } catch (error) {
-    // Normalized first so onUsageFailure always gets a real LLMError.
-    // Also covers aborted signals: normalizeError returns type
-    // 'aborted' in that case. A soft failure thrown above is already a
-    // real LLMError, so normalizeError hands the same instance back
-    // unchanged and it's reported exactly once, right here, same as any
-    // other failure.
+    // Normalized first so `onUsageFailure` gets an `LLMError`, including for aborts. A soft failure
+    // is already one and is reported once, here.
     const normalized = asTruncationError(normalizeError(error, params.signal), truncated);
 
     if (usage && normalized.type !== 'aborted') {
@@ -160,10 +136,8 @@ function asTruncationError(error: LLMError, truncated: boolean): LLMError {
 }
 
 /**
- * Runs `detectSoftFailure` (if configured) and returns the code it
- * reports, or `undefined` for a real success. A throwing hook is caught,
- * logged, and treated the same as `undefined`: a hook that can't run
- * shouldn't fail every call it's attached to.
+ * Runs `detectSoftFailure` and returns its code. A throwing hook is logged and ignored, so it can't
+ * fail every call.
  */
 function detectSoftFailureSafely<T>(
   detectSoftFailure: DetectSoftFailure | undefined,

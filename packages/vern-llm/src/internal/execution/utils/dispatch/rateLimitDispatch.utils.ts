@@ -11,11 +11,8 @@ import type { LLMError } from '../../../../types/errors.js';
 const limiterFailures = new WeakSet<LLMError>();
 
 /**
- * Whether `error` came from the limiter rather than the provider. Such an
- * error never counts toward the circuit breaker: no provider request was
- * made, so it says nothing about the provider's health. A shared limiter
- * that loses its backing store (Redis, say) would otherwise open a
- * healthy provider's circuit.
+ * Whether `error` came from the limiter. Never counts toward the breaker, since no request was
+ * made; a shared limiter losing its store would otherwise open a healthy provider's circuit.
  */
 export function isLimiterFailure(error: LLMError): boolean {
   return limiterFailures.has(error);
@@ -25,15 +22,9 @@ export function isLimiterFailure(error: LLMError): boolean {
 export type RateLimitedEventReporter = (waitedMs: number, reason: RateLimitReason) => void;
 
 /**
- * Acquires capacity from `limiter` for one attempt, reporting the
- * `'rate_limited'` event through `onRateLimited` when the acquire had to
- * wait. A no-op, returning `{}`, when `limiter` is undefined: the caller
- * doesn't have to branch on whether a limiter is configured.
- *
- * The returned `release`, when present, must run in a `finally` block so
- * a slot is never leaked on a failed attempt (see `RateLimitAcquireResult`).
- * A failure from `estimate` or `acquire` is normalized to an `LLMError`
- * and marked so it never counts toward the breaker, see `isLimiterFailure`.
+ * Acquires capacity for one attempt, reporting `'rate_limited'` when it had to wait. Returns `{}`
+ * without a limiter. Run `release` in a `finally`. A limiter failure is normalized and marked so it
+ * never counts toward the breaker.
  */
 export async function acquireRateLimit(
   limiter: RateLimiterAdapter | undefined,

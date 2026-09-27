@@ -3,23 +3,13 @@ export interface InFlightRegistry<T> {
   /** The promise currently tracked under `key`, if any. */
   get(key: string): Promise<T> | undefined;
   /**
-   * Registers `promise` under `key`, synchronously, before returning.
-   * Once `promise` settles, success or failure, it's removed from the
-   * registry automatically, so a later `get(key)` no longer sees it.
-   * Returns `promise` unchanged, so `track` can wrap a call inline at
-   * its call site.
+   * Registers `promise` under `key` synchronously and removes it once it settles. Returns `promise`
+   * unchanged.
    */
   track(key: string, promise: Promise<T>): Promise<T>;
 }
 
-/**
- * Tracks at most one in-flight promise per key, cleaning itself up once
- * each settles. Pulled out of `CacheOrchestrator`, where this exact
- * "register, then remove on settle, ignore the removal-time rejection"
- * pattern was duplicated between a cache miss's own trigger and a
- * streaming cache miss's trigger. Generic and self contained: nothing
- * here depends on caching.
- */
+/** At most one in-flight promise per key, removed once it settles. */
 export function createInFlightRegistry<T>(): InFlightRegistry<T> {
   const inFlight = new Map<string, Promise<T>>();
 

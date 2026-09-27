@@ -26,24 +26,9 @@ export interface RequestBuilderOptions {
 }
 
 /**
- * Builds the wire request object for one call, applying per-instance
- * defaults (model, max tokens, temperature) and per-call overrides.
- * Owns every check that depends only on the caller's own input shape, not
- * on execution: history alternation, duplicate/empty tool lists,
- * `toolChoice` naming a real tool. All deterministic on the call site's
- * own input and never touch the network, so every throw here is
- * `type: 'invalid_params'`, not `'validation'` (which is reserved for the
- * model/provider's own response failing a contract check). Has no
- * knowledge of retry, timeouts, or the breaker, only
- * the three defaults a `FallbackTarget` can override per-target (see the
- * `defaultMaxTokens`/`defaultTemperature` overrides in the fallback
- * design), which is what keeps it separable from `CallExecutor`.
- *
- * The individual checks and shaping steps (tool validation, JSON-mode
- * resolution, history validation, wire message shaping) live as plain
- * functions in `utils/requestShape.utils.ts`, independently testable
- * without constructing a `RequestBuilder` or a full `CallParams`. This
- * class is just their orchestration plus the per-instance defaults.
+ * Builds the wire request for one call from the target's defaults and the call's overrides. Owns
+ * every check on the caller's own input, so every throw is `invalid_params`; `validation` is kept
+ * for provider responses. The checks themselves live in `requestShape.utils.ts`.
  */
 export class RequestBuilder {
   private readonly model: string;

@@ -3,13 +3,9 @@ import { RollingRatio } from './rollingRatio.js';
 import { validateMinCalls, validateRatio } from './utils/validate.utils.js';
 
 /**
- * Tunables for a `RetryBudget`. `windowMs`/`minCalls` behave the same as
- * `RollingTripping`'s (see `circuitBreaker.ts`): `minCalls` gates the
- * check so a cold start with too little traffic to judge doesn't trip.
- * `retryRatio` is the max fraction of calls in the window allowed to be
- * retries before the budget stops allowing more. `minCalls` must be a
- * non-negative integer; `retryRatio` must be finite and within `[0, 1]`.
- * Both are validated at construction, thrown as `RangeError`.
+ * `windowMs` and `minCalls` work as in `RollingTripping`: `minCalls` keeps a cold start from
+ * tripping. `retryRatio` is the largest share of calls in the window that may be retries. Invalid
+ * values throw `RangeError` at construction.
  */
 export interface RetryBudgetOptions {
   windowMs: number;
@@ -18,12 +14,8 @@ export interface RetryBudgetOptions {
 }
 
 /**
- * Caps how much of a target's recent traffic is allowed to be retries,
- * independent of the circuit breaker. The breaker asks whether the
- * provider is healthy; this asks whether retrying is still worth the
- * capacity it costs, regardless of provider health. Reuses `RollingRatio`,
- * the same primitive `RollingTripping` is built on, rather than a second
- * hand rolled window.
+ * Caps the share of a target's recent traffic that may be retries. The breaker asks whether the
+ * provider is healthy; this asks whether retrying is still worth the capacity it costs.
  */
 export class RetryBudget {
   private readonly ratio: RollingRatio;

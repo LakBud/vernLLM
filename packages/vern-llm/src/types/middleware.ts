@@ -13,47 +13,29 @@ export interface MiddlewareCapabilities {
 }
 
 /**
- * Not exported. Builds the `{ debugName }` shape both `createStateKey`
- * and `createMiddlewareRef` return before each stamps its own brand on
- * it. Only the `debugName` construction is shared; branding happens at
- * each call site since the two brands differ.
+ * The `{ debugName }` shape shared by state keys and middleware refs, before each adds its own
+ * brand.
  */
 function createIdentityToken(debugName: string): { debugName: string } {
   return { debugName };
 }
 
 /**
- * Not exported. Distinguishes `MiddlewareStateKey<T>` from
- * `MiddlewareRef` and from a plain `{ debugName }` object literal at
- * the type level, even though all three have the identical runtime
- * shape. Without this, `MiddlewareStateKey<T>`/`MiddlewareRef` are
- * structurally just `{ debugName: string }`, so TypeScript would treat
- * a state key as a valid middleware ref (or vice versa), and would let
- * anyone hand-write `{ debugName: 'auth' }` in place of a real
- * `createMiddlewareRef` result. Neither is possible once this brand is
- * required: only `createStateKey`, which alone has access to this
- * symbol, can produce a value satisfying `MiddlewareStateKey<T>`.
+ * Brands `MiddlewareStateKey` so a ref, or a hand written `{ debugName }`, can't pass as a state
+ * key. Only `createStateKey` can produce one.
  */
 declare const stateKeyBrand: unique symbol;
 
 /**
- * A typed reference to one slot in `ctx.state`. Create one with
- * `createStateKey`, export it, and import the same reference wherever
- * another middleware needs to read or write the same value. There's no
- * string key anywhere in this path, so a typo becomes a missing import
- * or an undefined variable, a compile error, instead of a silently
- * created new property.
+ * A typed reference to one slot in `ctx.state`. Create it with `createStateKey` and import it
+ * wherever the value is shared, so a typo is a compile error instead of a new property.
  */
 export interface MiddlewareStateKey<T> {
   readonly debugName: string;
   readonly [stateKeyBrand]: true;
 
   /**
-   * Never set at runtime; exists purely so `T` is actually used
-   * somewhere in this interface's shape (a phantom type), which is what
-   * lets `MiddlewareStateBag.get`/`set` infer the right type for a given
-   * key instead of two `MiddlewareStateKey<string>` and
-   * `MiddlewareStateKey<number>` keys being structurally identical.
+   * Never set. Makes keys of different `T` distinct types, so `get` and `set` infer the value type.
    */
   readonly __phantom?: T;
 }
@@ -67,16 +49,8 @@ export function createStateKey<T>(debugName: string): MiddlewareStateKey<T> {
 declare const middlewareRefBrand: unique symbol;
 
 /**
- * A typed reference to one middleware's identity, for `runsAfter`/
- * `runsBefore` to target. Purely an ordering concern: unlike `name`,
- * `ref` is never used as a display label anywhere (`name` still covers
- * that), only as a `runsAfter`/`runsBefore` match target. Create one
- * with `createMiddlewareRef`, export it from the package that owns the
- * middleware, and have any dependent import the same reference instead
- * of typing a matching `name` string. Same reasoning as
- * `MiddlewareStateKey`: a typo becomes a missing import, a compile
- * error, instead of a silently unresolved (or worse, silently
- * colliding) string.
+ * A typed reference to a middleware, used only as a `runsAfter` or `runsBefore` target, never as a
+ * label. Create it with `createMiddlewareRef` and export it, so a typo is a compile error.
  */
 export interface MiddlewareRef {
   readonly debugName: string;
@@ -89,15 +63,8 @@ export function createMiddlewareRef(debugName: string): MiddlewareRef {
 }
 
 /**
- * A `runsAfter`/`runsBefore` entry that escalates an unresolved
- * reference from a warning to a construction-time throw. Wrap a
- * `MiddlewareRef` with `requireRef` when the dependency isn't optional:
- * a bare `MiddlewareRef` in `runsAfter`/`runsBefore` means "order
- * relative to this if it's registered," which is the right default for
- * a dependency a third party may reasonably not have installed. A
- * `RequiredMiddlewareRef` means "this middleware must not run without
- * that dependency having already run". The app should fail to start
- * rather than run with a silently-missing ordering guarantee.
+ * A `runsAfter` or `runsBefore` entry, made with `requireRef`, that throws at construction when the
+ * target isn't registered. A bare ref is optional and only warns.
  */
 export interface RequiredMiddlewareRef {
   readonly ref: MiddlewareRef;
@@ -109,10 +76,7 @@ export function requireRef(ref: MiddlewareRef): RequiredMiddlewareRef {
 }
 
 /**
- * Typed, per-logical-call storage two middleware can deliberately share a
- * value through (a span ID one sets, another reads). Backed by a plain
- * `Map` internally, created once per logical call and never read or
- * written by VernLLM itself.
+ * Typed per call storage that middleware share values through. VernLLM never reads or writes it.
  */
 export interface MiddlewareStateBag {
   get<T>(key: MiddlewareStateKey<T>): T | undefined;
@@ -149,11 +113,8 @@ export interface MiddlewareContextBase {
   own: Record<string, unknown>;
 
   /**
-   * Every registered middleware's resolved label, in `transformOrder`,
-   * frozen. Lets a middleware make an informed call, like skipping a
-   * duplicate action when it detects another known middleware by name
-   * already handles it, without needing to know anything else about
-   * that middleware's own configuration.
+   * Every registered middleware's label, in `transform` order, e.g. to skip work another known
+   * middleware already does.
    */
   registeredMiddlewareNames: readonly string[];
 
@@ -166,10 +127,8 @@ export interface MiddlewareContextBase {
 }
 
 /**
- * The `ctx` `transform` receives, and every attempt-scoped event context
- * (`'retry'`, `'fallback'`, `'circuit_state'`, `'middleware'`). Built once
- * a specific target has actually been selected for this attempt, so every
- * field describes the real target, not a placeholder.
+ * The `ctx` for `transform` and every attempt scoped event. Built once a target is selected, so
+ * every field describes the real target.
  */
 export interface AttemptContext extends MiddlewareContextBase {
   stage: 'attempt';
@@ -182,25 +141,15 @@ export interface AttemptContext extends MiddlewareContextBase {
   isFallbackAttempt: boolean;
 
   /**
-   * The real, current attempt number for this dispatch.
-   *
-   * Exception: on a `'circuit_state'` event triggered by a pre-dispatch
-   * check (`assertClosed`, before any attempt has been made), this is
-   * `1` regardless of which attempt is about to run, since no attempt
-   * exists yet to report. Every other `'circuit_state'` event, and every
-   * other attempt-scoped event, reports the real attempt number.
+   * The current attempt number. A `'circuit_state'` event from the check before any attempt reports
+   * 1.
    */
   attempt: number;
 }
 
 /**
- * The `ctx` `wrap` receives before `next()` resolves (and `onError`'s own
- * `ctx`, built the same way under the hood). Built once, before any
- * fallback target is chosen, so it only ever describes the primary
- * target. There is no real "requested" target yet, and no attempt count,
- * fallback flag, or per-attempt capability to report. Read `next()`'s
- * resolved `CallResult.meta` once you need to know what actually
- * happened.
+ * The `ctx` for `wrap` and `onError`. Built before any target is chosen, so it only describes the
+ * primary. Read `next()`'s `CallResult.meta` for what happened.
  */
 export interface PreDispatchContext extends MiddlewareContextBase {
   stage: 'pre-dispatch';
@@ -213,12 +162,8 @@ export interface PreDispatchContext extends MiddlewareContextBase {
 }
 
 /**
- * `enabled` and `onEvent` are called from both stages (gating/observing
- * `transform` as well as `wrap`), so they receive this union and must
- * narrow on `ctx.stage` before reading stage-specific fields.
- * `transform` and `wrap` themselves receive the single variant that's
- * always accurate for them (`AttemptContext`/`PreDispatchContext`
- * respectively). See `VernLLMMiddleware`.
+ * What `enabled` and `onEvent` receive, since they run in both stages. Narrow on `ctx.stage` before
+ * reading stage specific fields.
  */
 export type MiddlewareContext = AttemptContext | PreDispatchContext;
 
@@ -263,16 +208,9 @@ export interface WireCallRequest {
 }
 
 /**
- * What `transform` returns: a patch merged onto the request that
- * `RequestBuilder.build()` (plus every earlier middleware's own patch)
- * already produced, not a replacement for it. `model` and
- * `response_format` can't be expressed here at all, since everything
- * downstream that attributes a call to a target keys off the values
- * `RequestBuilder` already resolved for those two fields, not off
- * whatever ends up on the wire request. `messages`/`tools` are joined by
- * a separate `add*` field, appended rather than replaced, so two
- * independently written middleware can each add to the list without one
- * silently clobbering what the other already added.
+ * A patch `transform` returns, merged onto the built request. `model` and `response_format` can't
+ * be patched, since targets are attributed by the values already resolved. `add*` fields append, so
+ * two middleware can add without overwriting each other.
  */
 export interface WireCallRequestPatch {
   temperature?: number;
@@ -293,10 +231,8 @@ export interface WireCallRequestPatch {
 }
 
 /**
- * The settled outcome of one logical call, passed to `wrap`'s `next()`.
- * `meta` is populated once a target has actually answered, for both
- * streaming and non-streaming calls (`undefined` only on a cache hit,
- * where nothing was actually spent).
+ * The settled outcome of one logical call, from `wrap`'s `next()`. `meta` is `undefined` only on a
+ * cache hit.
  */
 export interface CallResult<T = unknown> {
   value: T;
@@ -304,22 +240,16 @@ export interface CallResult<T = unknown> {
 }
 
 /**
- * One entry in `VernLLMOptions.middleware`. All hooks are optional;
- * an entry that sets none of them is inert. See the middleware docs for
- * how `transform`, `wrap`, `dispatch`, `onEvent`, and `enabled` compose across
- * several entries.
+ * One entry in `VernLLMOptions.middleware`. Every hook is optional. See the middleware docs for how
+ * hooks compose.
  */
 export interface VernLLMMiddleware {
   /** Used in log lines and the `'middleware'` event. Defaults to this entry's array position when omitted. */
   name?: string;
 
   /**
-   * This entry's own identity, purely for another middleware's
-   * `runsAfter`/`runsBefore` to target. Create with `createMiddlewareRef`,
-   * export it, and have a dependent import the same reference. Optional:
-   * only needed if something else must be able to depend on this
-   * specific entry. Unrelated to `name`: `ref` is never shown in logs,
-   * `name` is never matched against for ordering.
+   * This entry's identity for other entries' `runsAfter` and `runsBefore`. Unrelated to `name`,
+   * which is only a label.
    */
   ref?: MiddlewareRef;
 
@@ -327,16 +257,8 @@ export interface VernLLMMiddleware {
   priority?: number;
 
   /**
-   * Other middleware this entry must run after, breaking ties
-   * `priority` alone can't express. Matched by `ref` identity, so a
-   * typo or a stale copy simply fails to resolve instead of silently
-   * matching the wrong entry. A bare `MiddlewareRef` that doesn't
-   * resolve is dropped, not an error, since a third party may
-   * reasonably reference a well known middleware that isn't installed
-   * everywhere; wrap it with `requireRef` to make that same target
-   * mandatory instead, throwing at `VernLLM` construction time if it's
-   * missing. A cycle across `runsAfter`/`runsBefore` always throws,
-   * regardless of whether any individual entry is required.
+   * Middleware this entry runs after. An unresolved bare ref is dropped; wrap it with `requireRef`
+   * to throw at construction instead. A cycle always throws.
    */
   runsAfter?: (MiddlewareRef | RequiredMiddlewareRef)[];
 
@@ -348,12 +270,8 @@ export interface VernLLMMiddleware {
   runsBefore?: (MiddlewareRef | RequiredMiddlewareRef)[];
 
   /**
-   * Pins this entry's slot in `wrap` nesting only, independent of
-   * `priority`/`runsAfter`/`runsBefore`, which still govern
-   * `transform`/`onEvent` order. `'outermost'` sees the net
-   * `CallResult` of every retry, fallback, and other middleware's
-   * `wrap`; `'innermost'` sits closest to the real dispatch. A numeric
-   * value behaves like `priority`, but only for `wrap` nesting.
+   * Pins this entry in `wrap` nesting only. `'outermost'` sees the net result of every retry and
+   * fallback; `'innermost'` sits next to dispatch. A number works like `priority` for `wrap` only.
    */
   position?: 'outermost' | 'innermost' | number;
 
@@ -374,12 +292,8 @@ export interface VernLLMMiddleware {
   ) => WireCallRequestPatch | Promise<WireCallRequestPatch>;
 
   /**
-   * Wraps one whole logical call, exactly once, regardless of how many
-   * retries or fallback targets ran underneath it. `ctx` is built once,
-   * before any fallback target is chosen, so it only describes the
-   * primary target. There is no `requestedProvider`/`isFallbackAttempt`/
-   * `attempt` to read here. Read `next()`'s resolved `CallResult.meta`
-   * for what actually happened.
+   * Wraps one whole logical call once, however many retries or targets ran. `ctx` only describes
+   * the primary; read `next()`'s `CallResult.meta` for what happened.
    */
   wrap?: (
     request: Readonly<WireCallRequest>,
@@ -388,22 +302,13 @@ export interface VernLLMMiddleware {
   ) => Promise<CallResult>;
 
   /**
-   * Wraps the provider request of one attempt, after the rate limiter
-   * granted capacity and every `transform` ran. `request` is exactly
-   * what goes to the adapter. Runs once per attempt, retries included,
-   * nested in `wrap` order (`position` applies), so the outermost entry
-   * sees the others' time too.
+   * Wraps one attempt's provider request, after the limiter and every `transform`. `request` is
+   * exactly what the adapter gets. Runs per attempt, nested in `wrap` order.
    *
-   * `next()` sends the request and resolves once the response arrives,
-   * or, for a stream, at its first content chunk. Keep-alive pings don't
-   * count, so a stream that fails before content rejects it. It rejects
-   * with the attempt's error as an `LLMError`. Calling it again returns
-   * the same promise.
-   *
-   * Observes the request, it can't change its outcome. A hook that
-   * throws, or returns, without calling `next()` fails the attempt with
-   * `LLMError('invalid_params')`, code `middleware_threw`. Once `next()`
-   * was called, the provider's outcome stands and a throw is only logged.
+   * `next()` resolves when the response arrives, or at a stream's first content chunk; pings don't
+   * count. It rejects with the attempt's `LLMError`. A hook can observe but not change the outcome:
+   * returning or throwing without calling `next()` fails the attempt with code `middleware_threw`,
+   * and a throw after it is only logged.
    */
   dispatch?: (
     request: Readonly<WireCallRequest>,

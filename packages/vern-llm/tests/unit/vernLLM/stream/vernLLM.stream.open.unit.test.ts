@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { LLMError, type WireStreamChunk } from '../../../src/index.js';
-import { VernLLM } from '../../../src/vernLLM.js';
-import { createMockStreamingClient, drain } from '../../helpers.js';
+import { LLMError, type WireStreamChunk } from '../../../../src/index.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
+import { createMockStreamingClient, drain } from '../../../helpers.js';
 
 function hintThenThrow(error: Error): () => AsyncIterable<WireStreamChunk> {
   return () => ({

@@ -320,11 +320,15 @@ real 429 regardless, since that only needs the response status, not header acces
 
 | AIMD option      | Default   | Notes                                                                                                               |
 | ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------- |
-| `increaseBy`     | required  | Added to the ceiling on every clean release.                                                                        |
+| `increaseBy`     | required  | Added to the ceiling on every clean release. A negative value is clamped to `0`.                                    |
 | `decreaseFactor` | required  | Multiplied against the ceiling on a rate-limit signal. Must be greater than `0` and at most `1`; clamped otherwise. |
-| `minCapacity`    | required  | Floor the ceiling never shrinks below.                                                                              |
-| `maxCapacity`    | required  | Ceiling the bucket never grows above.                                                                               |
+| `minCapacity`    | required  | Floor the ceiling never shrinks below. At least `1`, since every call takes one request.                            |
+| `maxCapacity`    | required  | Ceiling the bucket never grows above. At least `1` and not below `minCapacity`.                                     |
 | `proactiveFloor` | `0` (off) | Shrink once a hint reports remaining capacity at or below this.                                                     |
+
+`increaseBy`, `decreaseFactor`, `minCapacity` and `maxCapacity` must be finite. A value that isn't,
+or a capacity outside the rules above, throws `LLMError('invalid_params')` when the instance is
+built.
 
 ## Observing waits
 

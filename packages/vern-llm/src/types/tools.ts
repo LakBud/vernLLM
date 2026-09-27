@@ -12,36 +12,18 @@ export interface ToolDefinition<Name extends string = string, Args = unknown> {
   /** JSON Schema for the tool's input. */
   parameters: Record<string, unknown>;
   /**
-   * Optional client-side validator run on the parsed `arguments` before
-   * they're handed back to the caller, mirroring the `schema: SchemaLike<T>`
-   * pattern already used for response validation (see `types/schema.ts`).
-   * Reuses that zero-dependency, `safeParse`-compatible shape instead of
-   * requiring a JSON Schema validator (e.g. ajv) as a new dependency.
-   * Failed validation throws `LLMError('validation')`. On success the
-   * returned `ToolCall.arguments` is the schema's output, so defaults,
-   * coercions and transforms apply, matching `schema`. If omitted, VernLLM
-   * parses arguments as JSON but does not validate them further.
-   *
-   * When set, `Args` (and therefore `Name`) flow into the `ToolCall`s
-   * returned by `call()`/`cachedCall()`, provided the tool was declared
-   * with `defineTool()` or otherwise has a literal `name`; see
-   * `defineTool()` below for why a plain object literal often doesn't.
+   * Validates the parsed `arguments`, using the same `safeParse` shape as `schema`. Failure throws
+   * `LLMError('validation')`; on success `ToolCall.arguments` is the schema's output, defaults and
+   * transforms applied. Without it, arguments are parsed as JSON only. Types flow into `ToolCall`
+   * when the tool's `name` is literal, see `defineTool()`.
    */
   argumentsSchema?: SchemaLike<Args>;
 }
 
 /**
- * Preserves a tool definition's literal `name` (and its `argumentsSchema`'s
- * inferred `Args`) so it can discriminate a `ToolCall` union later.
- *
- * A plain object literal like `{ name: 'get_weather', ... }` widens `name`
- * to `string` unless annotated `as const`, which silently defeats
- * `ToolCall` narrowing the moment a second tool is added to the same
- * `tools: [...]` array (single-tool arrays still narrow fine even without
- * this, since there's nothing to discriminate against but that stops
- * being true as soon as a second tool shows up). Wrapping the same object
- * in `defineTool()` preserves the literal `name` type without requiring
- * `as const` at every call site.
+ * Keeps a tool's literal `name` and inferred `Args`, so `ToolCall` narrows by name. A plain object
+ * literal widens `name` to `string` without `as const`, which breaks narrowing once a second tool
+ * is added.
  */
 export function defineTool<const Name extends string, Args = unknown>(
   tool: ToolDefinition<Name, Args>,
@@ -54,14 +36,8 @@ type ToolCallFor<T> =
   T extends ToolDefinition<infer N, infer A> ? { id: string; name: N; arguments: A } : never;
 
 /**
- * A single tool invocation requested by the model.
- *
- * When `Tools` is a literal tuple (e.g. inferred from `tools: [getWeather,
- * cancelOrder]` at a `call()`/`cachedCall()` site), this is a discriminated
- * union keyed by `name`. Checking `call.name === 'get_weather'` narrows
- * `call.arguments` to that tool's `Args` with no cast needed. Without a
- * literal `Tools` (the default), this collapses back to today's
- * `{ id: string; name: string; arguments: unknown }`.
+ * One tool call from the model. With a literal `Tools` tuple this is a union keyed by `name`, so
+ * checking `name` narrows `arguments`. Otherwise `arguments` is `unknown`.
  */
 export type ToolCall<Tools extends readonly ToolDefinition[] = ToolDefinition[]> = ToolCallFor<
   Tools[number]
@@ -72,11 +48,9 @@ export interface ToolResult {
   toolCallId: string;
   content: unknown;
   /**
-   * Signals a failed tool execution back to the model (matches Anthropic's
-   * native `is_error` on tool_result blocks). `fromAnthropic` sends it as
-   * `is_error`, `fromBedrock` as `toolResult.status: 'error'`, and the
-   * OpenAI-compatible adapters prefix the content with `Error: `. Gemini has
-   * no equivalent wire concept and ignores it silently.
+   * Marks a failed tool execution. Sent as Anthropic's `is_error` and Bedrock's error status;
+   * OpenAI-compatible adapters prefix the content with `Error: `; Gemini has no equivalent and
+   * ignores it.
    */
   isError?: boolean;
 }
@@ -115,18 +89,9 @@ type ExtractTools<R> =
 type ResolvedTools<Tools, R> = [Tools] extends [never] ? ExtractTools<R> : Tools;
 
 /**
- * Runtime check for whether a `call()` result is a `tool_calls` result. Use
- * this instead of trusting static narrowing whenever `tools` was set
- * conditionally, see `ConditionalToolCallParams`.
- *
- * ```ts
- * const result = await llm.call({ userContent: '...', tools: someCondition ? [myTool] : undefined });
- * if (isToolCallResult(result)) {
- *   // result.toolCalls[number].arguments typed per tool, inferred automatically
- * }
- * ```
- *
- * Pass `Tools` explicitly to override inference, e.g. `isToolCallResult<typeof tools>(result)`.
+ * Whether a `call()` result is a tool calls result. Use it whenever `tools` was set conditionally.
+ * `toolCalls[number].arguments` is typed per tool; pass `Tools` explicitly to override inference,
+ * e.g. `isToolCallResult<typeof tools>(result)`.
  */
 export function isToolCallResult<
   Tools extends readonly ToolDefinition[] | undefined = never,

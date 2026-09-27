@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createBreakerGateway } from '../../../../../../src/internal/execution/circuitBreakerContext.js';
 import { prepareAttempt } from '../../../../../../src/internal/execution/utils/dispatch/attemptDispatch.utils.js';
-import { NoopLogger } from '../../../../../../src/logger.js';
+import { NoopLogger } from '../../../../../../src/internal/utils/logger.utils.js';
 import { createMiddlewareStateBag } from '../../../../../../src/types/middleware.js';
 
 import type { RequestBuilder } from '../../../../../../src/internal/execution/requestBuilder.js';
@@ -12,11 +12,6 @@ import type {
   VernLLMMiddleware,
   WireCallRequest,
 } from '../../../../../../src/types/index.js';
-
-/** Matches the local `noopLogger` helper other execution tests use (see `retry.utils.unit.test.ts`). */
-function noopLogger() {
-  return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-}
 
 const wireRequest: WireCallRequest = {
   model: 'test-model',
@@ -83,7 +78,7 @@ function baseParams<T>(
     middleware: overrides.middleware ?? [],
     dispatchHooks: [],
     middlewareTimeoutMs: 5000,
-    logger: noopLogger(),
+    logger: new NoopLogger(),
     reportEvent: vi.fn(),
   };
 }

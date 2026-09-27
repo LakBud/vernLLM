@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { createSafeLogger, logHookError } from '../../src/internal/utils/logger.utils.js';
-import { ConsoleLogger, NoopLogger } from '../../src/logger.js';
+import {
+  createSafeLogger,
+  logHookError,
+  NoopLogger,
+} from '../../src/internal/utils/logger.utils.js';
+import { ConsoleLogger } from '../../src/logger.js';
 import { VernLLM } from '../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from './../helpers.js';
 

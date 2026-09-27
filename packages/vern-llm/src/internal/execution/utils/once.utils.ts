@@ -15,16 +15,8 @@ export interface OnceAsync<T> {
 }
 
 /**
- * Wraps an async function so repeated calls dispatch it at most once,
- * reusing the first call's promise for every later one, and so a caller
- * that invokes `call()` and then discards the returned promise (e.g.
- * after deciding to short circuit) doesn't leave an unhandled rejection
- * behind if that promise later rejects.
- *
- * Pulled out of `runOperation`'s `next()` wrapper, where a middleware's
- * `wrap` may call `next()` more than once, or not await what it returns.
- * Generic and self contained: nothing here depends on `CallResult` or
- * middleware.
+ * Runs `fn` at most once, reusing the first promise, and marks it handled so a discarded result
+ * never becomes an unhandled rejection. A `wrap` may call `next()` more than once or not await it.
  */
 export function createOnceAsync<T>(fn: () => Promise<T>): OnceAsync<T> {
   let called = false;

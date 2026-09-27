@@ -3,6 +3,8 @@ import {
   withReservedUsageForStream,
 } from '../execution/utils/response/usage.utils.js';
 import { onEarlyExit } from '../execution/utils/stream/earlyExit.utils.js';
+import { createDeferred } from '../utils/deferred.utils.js';
+import { errorMessage, logError } from '../utils/logger.utils.js';
 import { createInFlightRegistry } from './utils/inFlightRegistry.utils.js';
 import { buildReplayChunks, buildReplayChunksFromPromise } from './utils/replay.utils.js';
 import {
@@ -18,13 +20,8 @@ import type { CacheAdapter, StreamChunk, UsageHooks } from '../../types/index.js
 import type { InternalCacheParams, InternalCacheStreamParams } from './utils/cache.utils.js';
 
 /**
- * Owns cache key resolution, cache reads/writes, and in-flight coalescing
- * for concurrent misses on the same key. Doesn't know about `CallExecutor`,
- * retries, or providers at all: `fn`/`openStream` are opaque callbacks
- * (`VernLLM.cachedCall` passes `() => this.call(...)`), so this class only
- * needs the cache adapter and a logger. Extracted from `VernLLM` since
- * caching and per-target call mechanics are independent concerns that
- * happened to live on the same class.
+ * Cache key resolution, reads, writes and coalescing of concurrent misses. Knows nothing about
+ * providers: the work is an opaque callback from `cachedCall`.
  */
 export class CacheOrchestrator {
   private readonly inFlight = createInFlightRegistry<unknown>();
@@ -52,18 +49,8 @@ export class CacheOrchestrator {
     try {
       await this.cache.delete(await this.resolveCacheKey(key));
     } catch (error) {
-      this.logger.warn(
-        `[VernLLM] cache delete failed: ${error instanceof Error ? error.message : 'unknown'}`,
-      );
+      this.logger.warn(`[VernLLM] cache delete failed: ${errorMessage(error)}`);
     }
-  }
-
-  /** Logs a failed refundUsage attempt via the configured logger. */
-  private logRefundError(logMessage: string, error: unknown): void {
-    this.logger.error(logMessage, {
-      message: error instanceof Error ? error.message : 'unknown',
-      stack: error instanceof Error ? error.stack : undefined,
-    });
   }
 
   /**
@@ -75,9 +62,7 @@ export class CacheOrchestrator {
     try {
       return await this.cache.get(key);
     } catch (error) {
-      this.logger.warn(
-        `[VernLLM] cache read failed: ${error instanceof Error ? error.message : 'unknown'}`,
-      );
+      this.logger.warn(`[VernLLM] cache read failed: ${errorMessage(error)}`);
 
       return { hit: false };
     }
@@ -119,10 +104,8 @@ export class CacheOrchestrator {
   }
 
   /**
-   * Waits on another call's already in-flight promise instead of
-   * starting a new one, reserving usage as a coalesced spend. This
-   * caller's own `signal` ends only its own wait; the shared work keeps
-   * running while any other participant remains.
+   * Joins another caller's in-flight work, reserving usage as a coalesced spend. This caller's
+   * signal only ends its own wait.
    */
   private joinInFlight<T, P extends UsageHooks & { signal?: AbortSignal }>(
     params: P,
@@ -136,7 +119,7 @@ export class CacheOrchestrator {
       true,
       () => raceAbort(existing, params.signal),
       params.signal,
-      (logMessage, error) => this.logRefundError(logMessage, error),
+      (logMessage, error) => logError(this.logger, logMessage, error),
     );
 
     void result.then(release, release);
@@ -145,19 +128,11 @@ export class CacheOrchestrator {
   }
 
   /**
-   * Internal cache primitive around caller-supplied logic. Concurrent misses
-   * for the same `cacheKey` share a single in-flight call, avoiding cache
-   * stampedes. The shared call is only aborted once every caller waiting
-   * on it has left.
+   * The caching core behind `cachedCall()`. Concurrent misses for one key share a single in-flight
+   * call, aborted only once every waiting caller has left.
    *
-   * Backs the public `VernLLM.cachedCall()`, which always composes this
-   * with `call()` so cached results get the same retry/timeout/
-   * circuit-breaker guarantees as any other LLM call.
-   *
-   * @param params `cacheKey`, `ttl`, `fn` (the work to run on a cache
-   * miss, typically `() => this.call(...)`), and optional
-   * `reserveUsage`/`refundUsage`/`signal`. See `InternalCacheParams`.
-   * @returns The cached value on a hit, or the result of `fn()` on a miss.
+   * @param params Cache settings plus `fn`, the work to run on a miss. See `InternalCacheParams`.
+   * @returns The cached value on a hit, or `fn()`'s result on a miss.
    */
   async runCached<T>(params: InternalCacheParams<T>): Promise<T> {
     const { resolvedParams, cached } = await this.resolveKeyAndReadCache(params);
@@ -174,20 +149,12 @@ export class CacheOrchestrator {
   }
 
   /**
-   * Creates the shared deferred work for a miss and registers it
-   * synchronously, so a concurrent caller always sees it in time to join.
-   * `start` runs the work at most once. `fail` rejects it without running,
-   * for a trigger that failed before starting and left nobody behind.
+   * Creates and registers the shared work synchronously, so a concurrent caller always sees it in
+   * time to join. `start` runs it at most once.
    */
   private createShared<V>(key: string, run: (signal: AbortSignal) => Promise<V>) {
     const shared = createSharedAbort();
-    let resolveShared!: (value: V) => void;
-    let rejectShared!: (error: unknown) => void;
-
-    const promise = new Promise<V>((resolve, reject) => {
-      resolveShared = resolve;
-      rejectShared = reject;
-    });
+    const { promise, resolve: resolveShared, reject: rejectShared } = createDeferred<V>();
 
     void promise.then(shared.settle, shared.settle);
     this.sharedAborts.set(promise, shared);
@@ -239,7 +206,7 @@ export class CacheOrchestrator {
       false,
       () => raceAbort(start(), params.signal),
       params.signal,
-      (logMessage, error) => this.logRefundError(logMessage, error),
+      (logMessage, error) => logError(this.logger, logMessage, error),
     );
 
     void resultPromise.then(release, (error: unknown) => {
@@ -275,30 +242,15 @@ export class CacheOrchestrator {
     try {
       await this.cache.set(key, value, ttl);
     } catch (error) {
-      this.logger.warn(
-        `[VernLLM] cache write failed: ${error instanceof Error ? error.message : 'unknown'}`,
-      );
+      this.logger.warn(`[VernLLM] cache write failed: ${errorMessage(error)}`);
     }
   }
 
   /**
-   * Streaming counterpart to `runCached`. Three cases:
-   *
-   * - Hit: no live generation to relay. Returns immediately with
-   *   `finalResult` resolved to the cached value and a one-shot `chunks`
-   *   replay built from it, so `for await (const c of chunks)` call sites
-   *   work identically on a hit or a miss. No usage hooks fire, since
-   *   nothing was actually spent.
-   * - Miss, nothing else in flight for this key: delegates to
-   *   `registerStreamTrigger`, which opens the stream and relays its
-   *   `chunks` live.
-   * - Miss, but another call for the same key is already in flight: this
-   *   call has no live chunks of its own to relay, so it's treated like a
-   *   delayed hit. `finalResult` shares the trigger's in-flight promise
-   *   (the same in-flight registry non-streaming `runCached` uses, so
-   *   streaming and non-streaming calls for the same key coalesce
-   *   against each other too), and `chunks` is a one-shot replay built
-   *   once that promise resolves.
+   * Streaming counterpart to `runCached`. A hit returns the cached value with a one-shot replay of
+   * `chunks`, and no usage hooks fire. A miss with nothing in flight opens the stream and relays it
+   * live. A miss that finds work in flight replays once it resolves; streaming and plain calls for
+   * a key coalesce with each other.
    */
   async runCachedStream<T>(
     params: InternalCacheStreamParams<T>,
@@ -330,13 +282,9 @@ export class CacheOrchestrator {
   }
 
   /**
-   * Opens the shared stream for a cache miss and tracks its settled value
-   * in the in-flight registry until it resolves or rejects. Writes to the
-   * cache on success only, matching `runAndCache`.
-   *
-   * The stream runs under the shared signal, so it keeps going for any
-   * joiner after the trigger aborts. The trigger's own `chunks` and
-   * `finalResult` stop at the trigger's own signal.
+   * Opens the shared stream for a miss and tracks it until it settles, caching on success only. The
+   * stream runs under the shared signal, so joiners keep it after the trigger leaves; the trigger's
+   * own `chunks` and `finalResult` stop at its signal.
    */
   private registerStreamTrigger<T>(
     params: InternalCacheStreamParams<T>,
@@ -388,7 +336,7 @@ export class CacheOrchestrator {
         };
       },
       params.signal,
-      (logMessage, error) => this.logRefundError(logMessage, error),
+      (logMessage, error) => logError(this.logger, logMessage, error),
     );
 
     const onFailed = (error: unknown) => {

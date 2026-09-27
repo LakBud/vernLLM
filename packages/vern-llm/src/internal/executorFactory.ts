@@ -12,12 +12,8 @@ import type { FallbackTarget } from '../types/fallback.js';
 import type { TokenUsage, VernLLMEvent, VernLLMMiddleware } from '../types/index.js';
 
 /**
- * Everything `buildExecutors` needs beyond the targets themselves:
- * `VernLLM`'s own resolved shared defaults (the primary's own
- * `defaultTemperature`/`defaultReasoningEffort`/`defaultBudgetTokens`,
- * already resolved once by the caller, not the raw possibly-undefined
- * options) plus the plain `VernLLMOptions` knobs every target falls back
- * to when it doesn't set its own.
+ * What `buildExecutors` needs besides the targets: the primary's resolved defaults and the instance
+ * options each target falls back to.
  */
 export interface ExecutorFactoryShared {
   /** This instance's provider label, used as the primary target's name unless it sets its own. */
@@ -48,12 +44,8 @@ export interface ExecutorFactoryShared {
 }
 
 /**
- * Builds one `CallExecutor` per provider target: `primaryTarget` first,
- * then `declaredFallbacks` in order, matching `FallbackAttempt.index`
- * (`-1` for the primary). Each target's own option inherits from
- * `shared` only when the target itself leaves it unset; a target's
- * `circuitBreaker`/`rateLimit` are always its own, never inherited (see
- * `FallbackTarget`'s docs).
+ * One `CallExecutor` per target, primary first, then fallbacks in order. A target inherits an
+ * option only when it leaves it unset; breaker and limiter are never inherited.
  */
 export function buildExecutors(
   primaryTarget: FallbackTarget,

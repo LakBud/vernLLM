@@ -3,12 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { CircuitBreaker } from '../../../../../../src/circuitBreaker.js';
 import { runAttemptLoop } from '../../../../../../src/internal/execution/utils/dispatch/attemptLoop.utils.js';
 import { RetryBudget } from '../../../../../../src/internal/retryBudget.js';
+import { NoopLogger } from '../../../../../../src/internal/utils/logger.utils.js';
 import { LLMError } from '../../../../../../src/types/errors.js';
-
-/** Matches the local `noopLogger` helper other execution tests use (see `retry.utils.unit.test.ts`). */
-function noopLogger() {
-  return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-}
 
 function baseParams(
   overrides: Partial<Parameters<typeof runAttemptLoop>[0]> = {},
@@ -27,7 +23,7 @@ function baseParams(
     nonRetryableStatus: [],
     middleware: [],
     middlewareTimeoutMs: 5000,
-    logger: noopLogger(),
+    logger: new NoopLogger(),
     reportEvent: vi.fn(),
     logLabel: 'error',
     redactText: (text) => text,
@@ -129,7 +125,8 @@ describe('runAttemptLoop, terminal failure', () => {
     const fn = vi.fn(async () => {
       throw new LLMError('secret leaked', 'api');
     });
-    const logger = noopLogger();
+    const logger = new NoopLogger();
+    vi.spyOn(logger, 'debug');
     const redactText = vi.fn((text: string) => text.replace('secret leaked', '[redacted]'));
 
     await expect(

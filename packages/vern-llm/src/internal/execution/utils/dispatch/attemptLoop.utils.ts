@@ -1,6 +1,6 @@
 import { LLMError, type LLMRequestSnapshot, type RetryAttempt } from '../../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../../types/middleware.js';
-import { middlewareContextNames } from '../../../resolveMiddlewareOrder.js';
+import { middlewareContextNames } from '../../../utils/middlewareLabels.utils.js';
 import { createBreakerGateway, type BreakerGateway } from '../../circuitBreakerContext.js';
 import { describeError, extractStatus, normalizeError } from '../errors.utils.js';
 import { emitEvent } from '../middleware/middleware.utils.js';
@@ -16,12 +16,7 @@ import type {
 } from '../../../../types/index.js';
 import type { RetryBudget } from '../../../retryBudget.js';
 
-/**
- * Everything `runAttemptLoop` needs beyond the per-call `fn` it retries.
- * Mirrors what `run`/`runStream` used to build by hand for
- * `retryWithBackoff`, plus the breaker/logging wiring that used to live
- * in their own `catch` blocks.
- */
+/** Everything `runAttemptLoop` needs besides the per attempt `fn`. */
 export interface RunAttemptLoopParams<T> {
   fn: (
     attempt: number,
@@ -72,12 +67,9 @@ export interface RunAttemptLoopParams<T> {
 }
 
 /**
- * Retries `fn` with backoff, building the `BreakerGateway` this call's
- * attempts share and, on terminal failure, normalizing the error,
- * recording it against the breaker when `countsTowardBreaker` allows it,
- * and logging it under `logLabel` before rethrowing. This is the
- * retry-loop wiring `run` and `runStream` used to duplicate almost
- * verbatim; only `fn` and `logLabel` differ between callers now.
+ * Retries `fn` with backoff through one shared `BreakerGateway`. On final failure it normalizes,
+ * records against the breaker when `countsTowardBreaker` allows, logs under `logLabel`, and
+ * rethrows.
  */
 export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promise<T> {
   const {
@@ -175,13 +167,8 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
       normalizeError: normalize,
     });
   } catch (error) {
-    // `attempts` only holds prior attempts that were actually retried
-    // past. It's `[]` when nothing was retried, so normalize that to
-    // `undefined` per `LLMError.attempts`'s contract. `budgetExhaustedError`
-    // still goes through `normalizeError` so it inherits that same
-    // history: `normalizeError` fills in `attempts` on an already-built
-    // `LLMError` without overwriting anything it already carries, so
-    // this doesn't touch the error's own `type`/`code`.
+    // An empty `attempts` becomes `undefined`, per `LLMError.attempts`. The budget error goes
+    // through `normalizeError` too, which adds the history without changing its type or code.
     const normalized = normalize(
       budgetExhaustedError ?? error,
       signal,
