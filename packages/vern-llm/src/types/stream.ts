@@ -20,35 +20,23 @@ export type StreamChunk =
       name?: string;
       argsDelta?: string;
       /**
-       * True when `argsDelta` is the whole set of arguments, not a
-       * fragment. Set for Gemini (its API returns function-call args
-       * whole in one chunk) and for cache/replay chunks, which are
-       * one-shot too. Omitted or `false` for a genuine fragment from
-       * providers that do stream incrementally (OpenAI-compatible,
-       * Anthropic, Bedrock).
+       * True when `argsDelta` holds the whole arguments rather than a fragment, as with Gemini and
+       * cache replays.
        */
       complete?: boolean;
     }
   | { type: 'usage'; usage: TokenUsage };
 
 /**
- * What `call()` returns when `stream: true`. `finalResult` resolves to
- * the same shape `call()` would have returned with `stream` omitted.
- * `chunks` is single-use and buffered; see the streaming docs for the
- * full consumption/backpressure semantics.
+ * What `call()` returns with `stream: true`. `finalResult` resolves to the same shape a
+ * non-streaming call returns. `chunks` is single use; see the streaming docs.
  */
 export interface StreamCallResult<R> {
   chunks: AsyncIterable<StreamChunk>;
   finalResult: Promise<R>;
 }
 
-/**
- * A `CallParams` variant where streaming is explicitly enabled.
- *
- * Requiring `stream: true` to be statically present allows TypeScript to
- * select the streaming `call()` overload and return `StreamCallResult<...>`
- * instead of the normal, single-shot response type.
- */
+/** `CallParams` with `stream: true`, selecting the overload that returns `StreamCallResult`. */
 export type StreamEnabledCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
@@ -82,19 +70,8 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
 }
 
 /**
- * Runtime check for whether a `call()` result is a `StreamCallResult`
- * (`{ chunks, finalResult }`) rather than the resolved value directly.
- * Useful when `stream` was computed conditionally and cast/narrowed
- * manually, since TypeScript's `call()` overloads only pick the streaming
- * shape for a literal `stream: true` at the call site.
- *
- * ```ts
- * const params = someCondition ? { userContent: '...', stream: true } : { userContent: '...' };
- * const result = await llm.call(params as CallParams<string> | (CallParams<string> & { stream: true }));
- * if (isStreamResult(result)) {
- *   for await (const chunk of result.chunks) { ... }
- * }
- * ```
+ * Whether a `call()` result is a `StreamCallResult`. Useful when `stream` was set conditionally,
+ * since the overloads only pick the streaming shape for a literal `stream: true`.
  */
 export function isStreamResult<R = unknown>(
   result: R,
@@ -106,9 +83,7 @@ export function isStreamResult<R = unknown>(
 }
 
 /**
- * `StreamEnabledCallParams` with `jsonMode: false`. Selects the streaming
- * `call()` overload whose `finalResult` resolves to a plain `string`.
- * `jsonSchema` is typed `never` for the same reason as
+ * Streaming `jsonMode: false`, with `finalResult` as a `string`. `jsonSchema` is `never`, as in
  * `JsonModeDisabledCallParams`.
  */
 export type StreamJsonModeDisabledCallParams = Omit<
@@ -120,15 +95,8 @@ export type StreamJsonModeDisabledCallParams = Omit<
 };
 
 /**
- * `StreamEnabledCallParams` with `jsonMode: true` and no `schema`. Selects
- * the streaming `call()` overload whose `finalResult` resolves to a
- * `JsonValue`.
- *
- * `schema` is explicitly `never` here for the same reason as
- * `JsonModeEnabledCallParams`: a schema whose result type is itself
- * structurally assignable to `JsonValue` would otherwise still satisfy this
- * overload's shape and incorrectly widen the result to `JsonValue` instead
- * of the schema's real type.
+ * Streaming `jsonMode: true` without `schema`, with `finalResult` as `JsonValue`. `schema` is
+ * `never`, as in `JsonModeEnabledCallParams`.
  */
 export type StreamJsonModeEnabledCallParams = Omit<StreamEnabledCallParams<JsonValue>, 'schema'> & {
   jsonMode: true;
@@ -161,23 +129,13 @@ export type WireStreamChunk =
       };
     }
   | {
-      /**
-       * A provider keep-alive signal with no content of its own (e.g.
-       * Anthropic's `ping` events, an SSE comment-line heartbeat).
-       * Adapters yield this so the stream loop resets its idle timeout.
-       * Never surfaced to callers as a `StreamChunk`.
-       */
+      /** A provider keep-alive with no content. Resets the idle timeout; never reaches callers. */
       type: 'ping';
     }
   | {
       /**
-       * AIMD's proactive rate-limit hint, read off the stream's
-       * response headers (where the adapter/SDK can get at them) and
-       * yielded once, as early as possible. Mirrors `attachRateLimitHint`
-       * for the non-streaming path, just carried as a chunk instead of a
-       * hidden property on a response object, since a stream has no
-       * single response value to attach one to. Never surfaced to
-       * callers as a `StreamChunk`.
+       * A rate limit hint from the stream's response headers, yielded as early as possible for
+       * AIMD. The streaming counterpart of `attachRateLimitHint`. Never reaches callers.
        */
       type: 'rate_limit_hint';
       hint: ProviderRateLimitHint;
@@ -193,28 +151,14 @@ export type WireStreamChunk =
     };
 
 /**
- * Parameters for a cached, streaming LLM call without tool calling.
- *
- * The cached value is `T`, same as `CachedCallParams<T>`, but a miss
- * relays live `chunks` to the caller while the result is being generated,
- * and a hit synthesizes a one-shot `chunks` replay from the cached value
- * (see `VernLLM.cachedCall`'s docs for exactly what that replay looks
- * like).
- *
- * `reserveUsage`/`refundUsage` are omitted from `call`'s type; see
- * `CachedCallParams` for why they belong at the top level here too.
+ * A cached streaming call without tools. A miss relays live chunks; a hit replays the cached value
+ * as chunks. `reserveUsage` and `refundUsage` go at the top level.
  */
 export type CachedStreamCallParams<T> = CachedCallInput & {
   call: LLMRequestShape<T> & { stream: true };
 };
 
-/**
- * Parameters for a cached, streaming LLM call with tool calling enabled.
- *
- * The cached value is the full `CallWithToolsResult<T>`, same as
- * `CachedToolCallParams<T>`, with the same live-chunks-on-miss,
- * replayed-chunks-on-hit behavior as `CachedStreamCallParams<T>`.
- */
+/** A cached streaming call with tools, caching the full `CallWithToolsResult<T>`. */
 export type CachedStreamToolCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
@@ -226,11 +170,8 @@ export type CachedStreamToolCallParams<
 };
 
 /**
- * Parameters for a cached, streaming LLM call with `call.tools` set
- * conditionally. Selects the `cachedCall()` overload whose `finalResult`
- * (on a miss) or cached value (on a hit) is the honest union
- * `T | CallWithToolsResult<T>` instead of narrowing to plain `T`. See
- * `ConditionalToolCallParams` for why this overload exists.
+ * A cached streaming call with `call.tools` set conditionally, resolving to `T |
+ * CallWithToolsResult<T>`.
  */
 export type CachedStreamConditionalToolCallParams<
   T,

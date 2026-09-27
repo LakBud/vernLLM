@@ -20,12 +20,7 @@ import type {
 import type { BreakerGateway } from '../../circuitBreakerContext.js';
 import type { RequestBuilder } from '../../requestBuilder.js';
 
-/**
- * `executeCall`/`executeStreamCall` call `onRequest` with a fully built
- * `LLMRequestSnapshot`, right after the outgoing payload is built and
- * before dispatch. See the fuller comment where it's used, moved here
- * since `prepareAttempt` is where it's actually invoked.
- */
+/** Receives a snapshot of the built request, just before dispatch. */
 export type OnRequest = (snapshot: LLMRequestSnapshot) => void;
 
 /** Everything `prepareAttempt` needs beyond the per-attempt request params. */
@@ -66,11 +61,8 @@ export interface PreparedAttempt {
 }
 
 /**
- * Everything `executeCall` and `executeStreamCall` do before they diverge:
- * build the wire request, run middleware `transform`s, snapshot the
- * outgoing payload through `onRequest`, and acquire rate limit capacity
- * for this attempt. Pulled out so the two dispatch paths don't drift
- * independently.
+ * Shared start of both attempt paths: build the request, run `transform`s, snapshot it through
+ * `onRequest`, and acquire rate limit capacity.
  */
 export async function prepareAttempt<T>(p: PrepareAttemptParams<T>): Promise<PreparedAttempt> {
   const {

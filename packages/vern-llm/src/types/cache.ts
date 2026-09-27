@@ -61,12 +61,8 @@ function isLiveTtl(ttl: number): boolean {
 }
 
 /**
- * Whether `structuredClone` returns a faithful copy of `value`: plain
- * objects and arrays, primitives, and the built-ins it recreates with
- * their own type (Date, RegExp, Map, Set, binary data), all the way down.
- * A class instance would come back as a plain object without its
- * methods, and a function or symbol can't be cloned at all, so either
- * anywhere in the value makes it unsafe to copy.
+ * Whether `structuredClone` copies `value` faithfully all the way down. A class instance would lose
+ * its methods, and functions or symbols can't be cloned.
  */
 function isFaithfullyCloneable(value: unknown, seen = new Set<object>()): boolean {
   if (value === null) return true;
@@ -117,16 +113,10 @@ function isFaithfullyCloneable(value: unknown, seen = new Set<object>()): boolea
 }
 
 /**
- * Trivial default so the package works out of the box with no external deps.
- * Not shared across processes, swap in Redis/Upstash/etc for production.
- *
- * Values are copied on `set` and on every `get`, so mutating a result
- * never changes what the next hit returns. A value that can't be copied
- * faithfully (a class instance, a function, anywhere inside it) is not
- * stored, and drops any existing entry for the key, since the store would
- * otherwise have to share it or hand back a copy without its methods. A
- * `ttl` that is missing, NaN, zero, or negative is treated the same way,
- * since an entry that can't expire would be served forever.
+ * The default in-process cache. Not shared across processes; use a shared backend in production.
+ * Values are copied on `set` and `get`, so mutating a result never changes the next hit. A value
+ * that can't be copied faithfully, or a missing, NaN, zero or negative `ttl`, is not stored and
+ * drops any existing entry.
  */
 export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
   private store = new Map<string, { value: T; expiresAt: number }>();
@@ -198,11 +188,9 @@ export class InMemoryCacheAdapter<T = unknown> implements CacheAdapter<T> {
 }
 
 /**
- * Normalizes keys before caching to avoid duplicate entries from formatting
- * differences that can't change a prompt's meaning: Unicode composition,
- * line ending style, and leading or trailing whitespace. Case, punctuation,
- * and inner whitespace are kept, since `"2+2"` and `"2-2"` (or indented
- * code) must never share an answer.
+ * Normalizes keys to avoid duplicates from formatting that can't change a prompt's meaning: Unicode
+ * composition, line endings and outer whitespace. Case, punctuation and inner whitespace are kept,
+ * since `"2+2"` and `"2-2"` must never share an answer.
  */
 export class NormalizedCacheAdapter<T = unknown> implements CacheAdapter<T> {
   constructor(private readonly inner: CacheAdapter<T> = new InMemoryCacheAdapter<T>()) {}
@@ -232,23 +220,17 @@ export class NormalizedCacheAdapter<T = unknown> implements CacheAdapter<T> {
 const MAX_TRACKED_EXPIRIES = 10_000;
 
 /**
- * Two-tier cache with fast local L1 and shared L2.
- * L2 hits are promoted back to L1.
- *
- * An L1 entry never outlives the L2 entry it mirrors when this adapter
- * wrote that L2 entry. L2 doesn't report how long an entry it holds has
- * left, so a promoted entry that another process wrote keeps `l1Ttl`
- * (60s by default).
+ * Two tier cache: fast local L1, shared L2, with L2 hits promoted to L1. An L1 entry never outlives
+ * an L2 entry this adapter wrote. A promoted entry another process wrote keeps `l1Ttl`, since L2
+ * doesn't report remaining ttl.
  */
 export class TieredCacheAdapter<T = unknown> implements CacheAdapter<T> {
   /** L2 expiry (epoch ms) per key this adapter wrote, oldest write first. */
   private readonly l2ExpiresAt = new Map<string, number>();
 
   /**
-   * The same expiries as a min-heap, soonest first, so a write only visits
-   * records that have actually expired. Entries go stale when their key is
-   * rewritten, deleted, or capped out, and are skipped when popped: a heap
-   * entry only counts while the map still holds that exact expiry.
+   * Expiries as a min heap, so a write only visits expired records. Stale heap entries are skipped
+   * unless the map still holds that exact expiry.
    */
   private expiryHeap: Array<{ key: string; expiresAt: number }> = [];
 

@@ -1,11 +1,6 @@
 /**
- * A capacity that refills continuously. Used for requests per minute and
- * tokens per minute, where `refillPerMs` is `capacity / 60000`, and for
- * concurrency, where `refillPerMs` is 0 and every release calls
- * `give(1)` instead of relying on the clock.
- *
- * `capacity`/`refillPerMs` are mutable so AIMD (`RateLimiter`'s `aimd`
- * option) can `resize()` a bucket's ceiling after construction.
+ * A continuously refilling capacity. Per minute buckets refill at `capacity / 60000` per ms; a
+ * concurrency bucket refills only through `give`. Mutable so AIMD can `resize()` it.
  */
 export class TokenBucket {
   private available: number;
@@ -24,13 +19,7 @@ export class TokenBucket {
     const now = Date.now();
     const elapsedMs = now - this.lastRefill;
 
-    // A backward clock adjustment (NTP correction, VM migration, etc.)
-    // makes `elapsedMs` negative, which would otherwise reduce `available`
-    // on the next line, rate-limiting harder than configured for no
-    // real-world reason. Treat a negative elapsed time as no time having
-    // passed instead: `available` just doesn't grow this tick, rather
-    // than shrinking, and `lastRefill` still advances so a subsequent
-    // forward-moving `now` measures from here, not from the skewed past.
+    // A backward clock jump counts as no time passing, so it never shrinks `available`.
     this.available = Math.min(
       this.capacity,
       this.available + Math.max(0, elapsedMs) * this.refillPerMs,
@@ -49,10 +38,8 @@ export class TokenBucket {
   }
 
   /**
-   * Refills, then reports how many ms until this bucket could supply
-   * `amount`, assuming nothing else takes from it meanwhile. Returns 0 if
-   * it already can, `Infinity` if it never will on its own (a
-   * concurrency bucket, `refillPerMs === 0`, only frees via `give`).
+   * Ms until `amount` is available, assuming nothing else takes from it. 0 if it already is,
+   * `Infinity` for a bucket that only refills through `give`.
    */
   msUntilAvailable(amount: number): number {
     this.refill();
@@ -64,10 +51,8 @@ export class TokenBucket {
   }
 
   /**
-   * Gives capacity back. Not floored at 0: a bad token-usage estimate can
-   * push `available` negative, and it self-corrects on the next refill
-   * rather than being clamped away immediately. Only ceilinged at
-   * `capacity`, so a give can never overfill the bucket.
+   * Returns capacity, capped at `capacity`. Not floored at 0: a bad estimate can push it negative,
+   * and refill corrects that.
    */
   give(amount: number): void {
     this.available = Math.min(this.capacity, this.available + amount);
@@ -85,11 +70,8 @@ export class TokenBucket {
   }
 
   /**
-   * Changes capacity in place. A shrink clamps `available` down but
-   * never raises it. `refillPerMs` rescales by the same ratio, so a
-   * shrink doesn't leave the bucket refilling at its old, relatively
-   * too-fast rate; a concurrency bucket (`refillPerMs === 0`) is
-   * unaffected.
+   * Changes capacity in place, clamping `available` on a shrink and rescaling the refill rate by
+   * the same ratio.
    */
   resize(newCapacity: number): void {
     this.refill();

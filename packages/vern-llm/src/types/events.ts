@@ -25,13 +25,8 @@ export type VernLLMEvent =
       kind: 'circuit_state';
       provider: string;
       /**
-       * The model of the call that triggered this specific transition
-       * (whatever was passed to the `assertClosed`/`recordSuccess`/
-       * `recordFailure` call that caused it), not a property of the
-       * circuit itself: the breaker still counts failures across every
-       * model together, so a threshold crossing can be the sum of
-       * several different models' failures even though only the
-       * triggering call's `model` is reported here.
+       * The model of the call that triggered this transition. Without `isolateByModel` the count
+       * spans every model, so the threshold may have been reached by several.
        */
       model: string;
       from: CircuitState;
@@ -85,10 +80,8 @@ export type VernLLMEvent =
     }
   | {
       /**
-       * A provider response arrived, carrying real usage, and VernLLM's own
-       * post-processing then failed. Fires once per failed attempt with
-       * extractable usage, matching `VernLLMOptions.onUsageFailure`'s own
-       * granularity, which this event is sugar over, not a second path.
+       * A response carried usage and post-processing then failed. Once per such attempt;
+       * `onUsageFailure` is driven from this event.
        */
       kind: 'usage_failure';
       requestId: string;

@@ -1,9 +1,18 @@
+import { MAX_TIMER_DELAY_MS } from './internal/execution/utils/deadline.utils.js';
 import { TokenBucket } from './internal/tokenBucket.js';
+import {
+  assertValidLimits,
+  buildAimdOptions,
+  buildEstimateFraction,
+} from './internal/utils/rate-limit/rateLimitOptions.utils.js';
+import { defaultEstimateTokens } from './internal/utils/rate-limit/tokenEstimate.utils.js';
 import { LLMError } from './types/errors.js';
 
 import type { ProviderRateLimitHint } from './internal/utils/rate-limit/rateLimitHint.utils.js';
 import type { Logger } from './logger.js';
 import type { LLMClient } from './types/client.js';
+
+export { defaultEstimateTokens };
 
 /** The request shape sent to `LLMClient['chat']['completions']['create']`, used for token estimation. */
 export type WireRequest = Parameters<LLMClient['chat']['completions']['create']>[0];
@@ -37,13 +46,9 @@ export interface RateLimitOptions {
    */
   estimateTokens?: (request: WireRequest) => number;
   /**
-   * Scales the pre-flight estimate down before it's reserved against
-   * `tokensPerMinute`, since most calls don't use their full `max_tokens`
-   * budget. Applied after `estimateTokens`, as rate-limiter bookkeeping
-   * only; never changes the `max_tokens` sent to the provider.
-   * `release`'s `actualTokens` still reconciles against real usage
-   * afterward. Default `1` (today's behavior, no scaling). Must be a
-   * finite number greater than `0`; values above `1` are clamped to `1`.
+   * Scales the token estimate reserved against `tokensPerMinute`, since most calls use less than
+   * `max_tokens`. Limiter bookkeeping only; `release` reconciles against real usage. Default 1,
+   * must be above 0, clamped to 1.
    */
   estimateFraction?: number;
   /**
@@ -82,201 +87,14 @@ export interface RateLimitState {
 
 export interface RateLimitAcquireResult {
   /**
-   * Releases the concurrency slot this attempt held and reconciles the
-   * token bucket against real usage, when `actualTokens` is supplied.
-   * Idempotent: only the first call does anything. Must run in a
-   * `finally` block so a slot is never leaked on a failed attempt.
+   * Frees the concurrency slot and reconciles tokens when `actualTokens` is given. Only the first
+   * call counts. Call it in a `finally` so a failed attempt never leaks a slot.
    */
   release: (actualTokens?: number, success?: boolean) => void;
   /** How long this attempt waited in queue before capacity was available. */
   waitedMs: number;
   /** Which bucket was blocking this attempt just before it cleared, if any wait happened. */
   reason?: RateLimitReason;
-}
-
-/**
- * Tokens reserved per image by `defaultEstimateTokens`. Providers bill an
- * image by its pixel dimensions, not its base64 size, and a large image
- * lands around 1,100 to 1,600 tokens on every supported provider. The top
- * of that range errs toward over reserving, which `release` reconciles
- * against real usage anyway.
- */
-const IMAGE_TOKEN_ESTIMATE = 1_600;
-
-/** Counts text chars and images in one message's content, so base64 image data is never read as text. */
-function measureContent(content: unknown): { chars: number; images: number } {
-  if (typeof content === 'string') return { chars: content.length, images: 0 };
-  if (content === undefined || content === null) return { chars: 0, images: 0 };
-
-  if (Array.isArray(content)) {
-    let chars = 0;
-    let images = 0;
-
-    for (const block of content as Array<{ type?: unknown; text?: unknown }>) {
-      if (block?.type === 'image') images += 1;
-      else if (block?.type === 'text' && typeof block.text === 'string') chars += block.text.length;
-      else chars += safeJsonLength(block);
-    }
-
-    return { chars, images };
-  }
-
-  return { chars: safeJsonLength(content), images: 0 };
-}
-
-function safeJsonLength(value: unknown): number {
-  try {
-    return JSON.stringify(value)?.length ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * Default `estimateTokens`: chars/4 over every message's text, plus
- * `IMAGE_TOKEN_ESTIMATE` per image, plus the requested `max_tokens`.
- */
-export function defaultEstimateTokens(request: WireRequest): number {
-  let chars = 0;
-  let images = 0;
-
-  for (const message of request.messages) {
-    const measured = measureContent((message as { content?: unknown }).content);
-    chars += measured.chars;
-    images += measured.images;
-  }
-
-  return Math.ceil(chars / 4) + images * IMAGE_TOKEN_ESTIMATE + (request.max_tokens ?? 0);
-}
-
-/**
- * Validates `estimateFraction` at construction. Non-finite or `<= 0` is
- * a config mistake that would zero out or invert the reservation, so it
- * throws rather than silently misbehaving. A value above `1` isn't
- * unsafe, just wasteful (it would over-reserve past today's default
- * behavior), so it's clamped to `1` instead of thrown.
- */
-function buildEstimateFraction(fraction: number | undefined): number {
-  if (fraction === undefined) return 1;
-
-  if (!Number.isFinite(fraction) || fraction <= 0) {
-    throw new LLMError(
-      `estimateFraction (${fraction}) must be a finite number greater than 0.`,
-      'invalid_params',
-    );
-  }
-
-  return Math.min(fraction, 1);
-}
-
-/**
- * Clamps `AimdOptions` at construction: an out-of-range `decreaseFactor`
- * or negative `increaseBy` is a config mistake, clamped rather than
- * thrown. `minCapacity` above `maxCapacity` is unsatisfiable and throws.
- * `minCapacity`/`maxCapacity` below 1 also throw: the requests bucket
- * always takes exactly 1 per acquire, so a ceiling under 1 can never be
- * satisfied no matter how long a caller waits (`available` never
- * exceeds `capacity`, see `TokenBucket.tryTake`). Worse, since AIMD only
- * ever resizes the requests bucket, letting capacity reach exactly 0
- * would also permanently zero `TokenBucket`'s internal refill rate (see
- * `resize`'s own comment), with no way back: nothing could ever succeed
- * again to trigger `growOnSuccess()`. A fractional value at or above 1
- * is fine, since the bucket still refills past 1 over time.
- */
-function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefined {
-  if (!option) return undefined;
-
-  const assertFinite = (name: 'minCapacity' | 'maxCapacity' | 'increaseBy' | 'decreaseFactor') => {
-    if (!Number.isFinite(option[name])) {
-      throw new LLMError(
-        `aimd.${name} (${option[name]}) must be a finite number.`,
-        'invalid_params',
-      );
-    }
-  };
-
-  for (const name of ['minCapacity', 'maxCapacity', 'increaseBy', 'decreaseFactor'] as const) {
-    assertFinite(name);
-  }
-
-  if (option.minCapacity < 1 || option.maxCapacity < 1) {
-    throw new LLMError(
-      `aimd.minCapacity (${option.minCapacity}) and aimd.maxCapacity (${option.maxCapacity}) must both be at least 1, since the requests bucket always takes 1 per acquire; a capacity below 1 could never be satisfied.`,
-      'invalid_params',
-    );
-  }
-
-  if (option.minCapacity > option.maxCapacity) {
-    throw new LLMError(
-      `aimd.minCapacity (${option.minCapacity}) must not exceed aimd.maxCapacity (${option.maxCapacity}).`,
-      'invalid_params',
-    );
-  }
-
-  return {
-    increaseBy: Math.max(0, option.increaseBy),
-    decreaseFactor: Math.min(1, Math.max(Number.MIN_VALUE, option.decreaseFactor)),
-    minCapacity: option.minCapacity,
-    maxCapacity: option.maxCapacity,
-    proactiveFloor: option.proactiveFloor ?? 0,
-  };
-}
-
-/**
- * Validates the bucket and queue limits at construction. Each one is a
- * config mistake that would otherwise misbehave silently: `NaN` reads as
- * unlimited, a negative ceiling blocks every call, `Infinity` or a
- * `maxQueueMs` past the timer range times the queue out at once, and a
- * ceiling between 0 and 1 can never be met, since every acquire takes at
- * least 1. `0` stays valid wherever it already meant unlimited or no
- * timeout.
- */
-function assertValidLimits(options: RateLimitOptions): void {
-  const invalid = (message: string): never => {
-    throw new LLMError(message, 'invalid_params');
-  };
-
-  for (const name of ['requestsPerMinute', 'tokensPerMinute'] as const) {
-    const value = options[name];
-    if (value === undefined || value === 0) continue;
-
-    if (!Number.isFinite(value) || value < 1) {
-      invalid(`${name} (${value}) must be 0 (unlimited) or a finite number of at least 1.`);
-    }
-  }
-
-  // A fractional slot count can't describe calls in flight.
-  for (const name of ['maxConcurrent', 'maxQueueSize'] as const) {
-    const value = options[name];
-    if (value === undefined) continue;
-
-    if (!Number.isInteger(value) || value < 0) {
-      invalid(`${name} (${value}) must be a non-negative integer (0 means unlimited).`);
-    }
-  }
-
-  const { maxQueueMs } = options;
-  if (
-    maxQueueMs !== undefined &&
-    (!Number.isFinite(maxQueueMs) || maxQueueMs < 0 || maxQueueMs > MAX_WAKE_DELAY_MS)
-  ) {
-    invalid(
-      `maxQueueMs (${maxQueueMs}) must be a finite number from 0 to ${MAX_WAKE_DELAY_MS}. Pass 0 to wait indefinitely.`,
-    );
-  }
-
-  const { aimd } = options;
-  if (!aimd) return;
-
-  // Without it there is no ceiling to adjust, so AIMD would do nothing.
-  if (!options.requestsPerMinute) {
-    invalid('aimd requires requestsPerMinute to be set.');
-  }
-
-  const floor = aimd.proactiveFloor;
-  if (floor !== undefined && (!Number.isFinite(floor) || floor < 0)) {
-    invalid(`aimd.proactiveFloor (${floor}) must be a finite number that is not negative.`);
-  }
 }
 
 /** Same amount used by `tryAcquireBuckets` and `scheduleWake`, stated once so the two can't drift apart. tpm spends `estimatedTokens`, everything else spends 1. */
@@ -291,19 +109,8 @@ function buildPerMinuteBucket(capacityPerMinute: number | undefined): TokenBucke
 }
 
 /**
- * `setTimeout` silently clamps any delay above this (~24.8 days) instead
- * of erroring, so an uncapped delay derived from a very small
- * `requestsPerMinute`/`tokensPerMinute` could wrap around to firing
- * almost immediately instead of waiting. Mirrors the same guard in
- * `withTimeout`/`withChunkIdleTimeout`.
- */
-const MAX_WAKE_DELAY_MS = 2_147_483_647;
-
-/**
- * Minimum gap between two AIMD shrinks: one full refill of the per minute
- * requests bucket. A burst of 429s from calls already in flight all
- * describe the same overload, so shrinking once per response would drive
- * the ceiling to `minCapacity` from a single spike.
+ * Minimum gap between AIMD shrinks, one full refill. A burst of 429s from calls already in flight
+ * describes one overload, so shrinking per response would collapse the ceiling from a single spike.
  */
 const AIMD_SHRINK_WINDOW_MS = 60_000;
 
@@ -318,11 +125,8 @@ interface Waiter {
 }
 
 /**
- * What VernLLM's dispatch layer needs from a limiter. `RateLimiter`
- * implements this; a caller wanting cross-process coordination can hand
- * over their own instance instead, see `buildRateLimit`. Every method is
- * required, `RateLimiter` itself already no-ops the AIMD methods when
- * `aimd` isn't configured, so a custom limiter follows the same pattern.
+ * What VernLLM needs from a limiter. Pass your own for cross-process coordination. Every method is
+ * required; no-op the AIMD ones when unused, as `RateLimiter` does.
  */
 export interface RateLimiterAdapter {
   estimate(request: WireRequest): number;
@@ -338,10 +142,8 @@ export interface RateLimiterAdapter {
 }
 
 /**
- * Per-target rate limiter. Up to three buckets (requests/min, tokens/min,
- * concurrency) behind one FIFO queue, so a large call isn't starved by a
- * stream of small ones. Any bucket omitted from `options` has infinite
- * capacity and never blocks.
+ * Per target limiter: up to three buckets (requests, tokens, concurrency) behind one FIFO queue, so
+ * a large call isn't starved by small ones. An omitted bucket never blocks.
  */
 export class RateLimiter implements RateLimiterAdapter {
   private readonly requests?: TokenBucket;
@@ -360,11 +162,9 @@ export class RateLimiter implements RateLimiterAdapter {
   private readonly queue: Waiter[] = [];
 
   /**
-   * A single scheduled re-check for the head of the queue when it's
-   * blocked on a bucket that refills on its own clock (rpm/tpm), so a
-   * queue that nobody calls `acquire`/`release` on again isn't stuck
-   * forever waiting for an external trigger to re-drain it. Not needed
-   * for a concurrency block, which only clears via `release`.
+   * A scheduled recheck of the queue head when it waits on a bucket that refills by time, so the
+   * queue doesn't wait for an unrelated acquire or release. A concurrency block only clears on
+   * release.
    */
   private wakeTimer?: ReturnType<typeof setTimeout>;
 
@@ -397,11 +197,8 @@ export class RateLimiter implements RateLimiterAdapter {
   }
 
   /**
-   * Pre-flight token estimate for a request, per the configured (or
-   * default) heuristic, scaled by `estimateFraction`. This is the sole
-   * value reserved against `tokensPerMinute` and later reconciled in
-   * `release`; the provider-facing `max_tokens` on the request itself is
-   * never touched.
+   * The token estimate reserved against `tokensPerMinute`, scaled by `estimateFraction`. The
+   * request's `max_tokens` is never changed.
    */
   estimate(request: WireRequest): number {
     return Math.ceil(this.estimateTokensFn(request) * this.estimateFraction);
@@ -486,12 +283,8 @@ export class RateLimiter implements RateLimiterAdapter {
         reject: (error) => {
           cleanup();
 
-          // The removed waiter may have been the head a wakeTimer was
-          // scheduled around (or, for a concurrency block, the head with
-          // no timer scheduled at all). Either way, re-drain immediately
-          // so a successor with different requirements is evaluated now
-          // instead of waiting on a stale timer or an unrelated
-          // acquire/release call to trigger it.
+          // The removed waiter may have been the head a wake was scheduled for, so drain now rather
+          // than waiting on a stale timer.
           if (this.wakeTimer) {
             clearTimeout(this.wakeTimer);
             this.wakeTimer = undefined;
@@ -513,12 +306,8 @@ export class RateLimiter implements RateLimiterAdapter {
         signal?.removeEventListener('abort', onAbort);
 
         const index = this.queue.indexOf(waiter);
-        // Defensive: every current call site removes this waiter from
-        // the queue at most once (the abort listener is `{ once: true }`,
-        // and the queue timer is cleared above before it could also
-        // fire), so `index` should always be found. Guards against
-        // `splice(-1, 1)` silently deleting an unrelated waiter if that
-        // invariant is ever broken by a future change.
+        // Defensive: each waiter is removed at most once, so `index` is always found. Guards
+        // `splice(-1, 1)` against removing another waiter if that ever changes.
         /* v8 ignore next */
         if (index !== -1) this.queue.splice(index, 1);
       };
@@ -587,10 +376,8 @@ export class RateLimiter implements RateLimiterAdapter {
   }
 
   /**
-   * Schedules a one-shot re-check of the queue for whenever the bucket
-   * that's currently blocking the head waiter should next have enough
-   * capacity. A no-op for a concurrency block (only `release` can clear
-   * that) or while a wake is already pending.
+   * Schedules one recheck for when the bucket blocking the head should have capacity. No-op for a
+   * concurrency block or while a wake is pending.
    */
   private scheduleWake(reason: RateLimitReason, estimatedTokens: number): void {
     if (this.wakeTimer) return;
@@ -605,13 +392,9 @@ export class RateLimiter implements RateLimiterAdapter {
     /* v8 ignore next */
     if (ms === undefined || !Number.isFinite(ms)) return;
 
-    // Capped, not just clamped-by-omission: `drain()` re-derives the
-    // real remaining wait from live bucket state on every firing (it
-    // doesn't trust the delay that got it there), so a wake that fires
-    // early because the true wait exceeded the cap just re-schedules
-    // correctly from where the bucket actually is, rather than looping
-    // on a delay that never shrinks.
-    const delay = Math.min(Math.max(1, Math.ceil(ms)), MAX_WAKE_DELAY_MS);
+    // Capped at the timer limit. `drain()` rereads bucket state on every wake, so an early wake
+    // just reschedules.
+    const delay = Math.min(Math.max(1, Math.ceil(ms)), MAX_TIMER_DELAY_MS);
 
     this.wakeTimer = setTimeout(() => {
       this.wakeTimer = undefined;
@@ -620,17 +403,9 @@ export class RateLimiter implements RateLimiterAdapter {
   }
 
   /**
-   * Builds the one-shot release closure for an acquired slot. Only the
-   * concurrency bucket is given back on release; the requests-per-minute
-   * bucket is a real spend that only recovers via its own refill, and the
-   * tokens bucket is reconciled against `actualTokens` rather than fully
-   * refunded, since real tokens really were spent.
-   *
-   * `success` defaults to `false`: the AIMD ceiling only grows when the
-   * caller explicitly confirms a successful attempt. A failed or
-   * rate-limited attempt still releases its slot (so nothing leaks), but
-   * must not also grow the ceiling right back up after
-   * `signalRateLimit()` just shrank it.
+   * The one-shot release for an acquired slot. Concurrency is given back, requests only recover by
+   * refill, and tokens are reconciled against real usage. AIMD grows only when `success` is true,
+   * so a failed attempt can't undo a shrink.
    */
   private makeRelease(estimatedTokens: number): (actualTokens?: number, success?: boolean) => void {
     let released = false;
@@ -641,13 +416,8 @@ export class RateLimiter implements RateLimiterAdapter {
 
       this.concurrency?.give(1);
 
-      // An invalid `actualTokens` (e.g. NaN from a malformed usage
-      // report) must not reach `give`: `Math.min(capacity, available +
-      // NaN)` is NaN, and a NaN `available` poisons every future
-      // `tryTake` on that bucket (any comparison against NaN is false,
-      // so it would look permanently under capacity and rate limiting
-      // would silently stop happening). Falling back to no reconciliation
-      // at least keeps the estimated debit, the safe direction to err.
+      // A NaN would poison the bucket and silently stop limiting, so a non-finite `actualTokens`
+      // skips reconciliation and keeps the safer estimated debit.
       if (this.tokens && actualTokens !== undefined && Number.isFinite(actualTokens)) {
         this.tokens.give(estimatedTokens - actualTokens);
       }
@@ -672,11 +442,8 @@ export class RateLimiter implements RateLimiterAdapter {
   }
 
   /**
-   * AIMD's multiplicative-decrease half. Called on a real 429, and,
-   * where an adapter can produce a hint, proactively via
-   * `reactToRateLimitHint`. Never throws or blocks a call itself, only
-   * adjusts the ceiling as a side effect. Shrinks at most once per
-   * `AIMD_SHRINK_WINDOW_MS`, later signals in the same window are ignored.
+   * AIMD's decrease, on a real 429 or a low remaining hint. Only adjusts the ceiling, never throws.
+   * Shrinks at most once per `AIMD_SHRINK_WINDOW_MS`.
    */
   signalRateLimit(): void {
     if (!this.aimd || !this.requests) return;

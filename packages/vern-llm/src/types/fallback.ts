@@ -7,18 +7,9 @@ import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
 
 /**
- * One provider to try after the primary (or after an earlier fallback
- * target) fails. Order is the policy: VernLLM never reorders, scores, or
- * selects a target, it only walks the list as given.
- *
- * Most per-target overrides fall back to the parent `VernLLM` instance's
- * own option when omitted, so a target only needs to specify what's
- * actually different about it (a different client/model is the common
- * case). `circuitBreaker`, `rateLimit`, and `retryBudget` are the
- * exception: they are never inherited from the parent, since a breaker,
- * limiter, or budget tuned for the primary provider's limits is rarely
- * right for a fallback's. Leave them unset on a target to run it without
- * one, even if the parent has one configured.
+ * A provider tried after the primary fails, in the order given. Omitted overrides fall back to the
+ * instance's options, except `circuitBreaker`, `rateLimit` and `retryBudget`, which are never
+ * inherited since limits tuned for the primary rarely fit a fallback.
  */
 export interface FallbackTarget {
   client: LLMClient;
@@ -44,10 +35,8 @@ export interface FallbackTarget {
   /** This target's own retry budget, independent of every other target's. Not inherited from the parent's `retryBudget`. */
   retryBudget?: RetryBudgetOptions;
   /**
-   * Reclassifies an otherwise-successful result from this target as a
-   * failure. Falls back to the parent `VernLLM` instance's own
-   * `detectSoftFailure` when omitted, same as most other per-target
-   * options (unlike `circuitBreaker`/`rateLimit`, which never inherit).
+   * Reclassifies a successful result from this target as a failure. Inherits the instance's
+   * `detectSoftFailure` when omitted.
    */
   detectSoftFailure?: DetectSoftFailure;
 }
@@ -88,10 +77,7 @@ export interface CircuitTarget {
 }
 
 /**
- * One target's failure, recorded on the way to either the next target or
- * `FallbackExhaustedError`. Extends `RetryAttempt`: `index` is `-1` for
- * the primary target here (rather than a plain retry count), and
- * `provider`/`model` identify which target failed.
+ * One target's failure. `index` is `-1` for the primary; `provider` and `model` name the target.
  */
 export interface FallbackAttempt extends RetryAttempt {
   provider: string;
@@ -99,22 +85,15 @@ export interface FallbackAttempt extends RetryAttempt {
 }
 
 /**
- * Decides what happens after a target's own retries are exhausted or
- * abandoned early. Called once per failed target. `'retry'` is not a
- * valid return here: retrying already happened inside the target, this
- * only decides whether to move on to the next one or stop.
+ * Whether to try the next target (`'next'`) or give up (`'stop'`) after a target's own retries.
+ * Called once per failed target.
  */
 export type FallbackOn = (error: LLMError, context: { isLastTarget: boolean }) => 'next' | 'stop';
 
 /**
- * Tool contract failures where retrying elsewhere can't help: `unknown_tool`,
- * `tool_choice_none_violated`, and `unexpected_tool_calls` are the model
- * ignoring the request outright. `duplicate_tool_call_id` is different in
- * kind, once an adapter prefers a real provider-issued id and only
- * synthesizes a collision-free one when none is given, a duplicate means an
- * actual protocol violation (the provider reused an id it shouldn't have),
- * not the model misbehaving, but it's still not something a different
- * provider in the chain would be expected to reproduce or fix.
+ * Tool contract failures another provider can't fix. Most are the model ignoring the request;
+ * `duplicate_tool_call_id` is a provider protocol violation, but equally not something a fallback
+ * would change.
  */
 const TOOL_CONTRACT_CODES = new Set([
   'unknown_tool',
@@ -145,13 +124,8 @@ export const defaultFallbackOn: FallbackOn = (error) => {
 };
 
 /**
- * Thrown when the chain gives up, whether because the last target failed
- * or `fallbackOn` chose to stop early. Carries each attempt in order so
- * an outage across providers stays debuggable without reproducing it.
- * Extends `LLMError` so `isLLMError` and any `instanceof LLMError` check
- * still passes, inheriting the last failure's `type`/`status`/`retryAfterMs`
- * so existing type-based handling, including reading `retryAfterMs` on an
- * `'api'`-typed error, keeps working on a fallback-exhausted error too.
+ * Thrown when the chain gives up, carrying every attempt in order. Extends `LLMError` and takes the
+ * last failure's `type`, `status` and `retryAfterMs`, so existing handling keeps working.
  */
 export class FallbackExhaustedError extends LLMError {
   constructor(public override readonly attempts: FallbackAttempt[]) {
@@ -181,10 +155,8 @@ export class FallbackExhaustedError extends LLMError {
   }
 
   /**
-   * `type: 'fallback_exhausted'` by itself says nothing about whether
-   * retrying could help; the reason the last target failed does. Defers to
-   * that attempt's own `retryable` instead of anything about this class's
-   * own type.
+   * Defers to the last attempt's `retryable`, since `fallback_exhausted` alone says nothing about
+   * it.
    */
   override get retryable(): boolean {
     const last = this.attempts[this.attempts.length - 1]?.error;
@@ -198,9 +170,8 @@ export function isFallbackExhaustedError(err: unknown): err is FallbackExhausted
 }
 
 /**
- * Creates an empty ref box to pass as `CallParams['meta']`, so a caller can
- * read the `CallMeta` written by `call()` on the same line as the result
- * instead of pre-declaring a `{ current?: CallMeta }` by hand.
+ * An empty holder for `CallParams['meta']`, so `call()`'s `CallMeta` can be read without declaring
+ * one by hand.
  *
  * @example
  * const meta = metaRef();

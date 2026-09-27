@@ -23,31 +23,23 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 /**
- * Content for an `assistant` turn in `history`. Accepts a string or a
- * parsed `JsonValue`, so a prior `jsonMode: true` response can be pushed
- * straight back into history. Request construction stringifies non-string
- * content before it's sent to the provider.
+ * Content for an `assistant` turn in `history`. A parsed `JsonValue` from a `jsonMode` response can
+ * go straight back in; it is stringified before sending.
  */
 export type AssistantContent = string | JsonValue;
 
 /**
- * A reasoning block Claude produced before a tool call, returned on
- * `ToolCallResult.thinking`. Claude with thinking on requires these, as
- * returned, on the assistant turn that requested the tools, or the next
- * call in the tool loop is rejected. Pass them back untouched: the
- * `signature` covers the text, so an edited block is rejected too.
+ * A reasoning block Claude produced before a tool call. Pass it back untouched on the assistant
+ * turn that requested the tools: Claude with thinking on rejects the next call without it, and the
+ * `signature` covers the text.
  */
 export type ThinkingBlock =
   | { type: 'thinking'; thinking: string; signature: string }
   | { type: 'redacted_thinking'; data: string };
 
 /**
- * A single prior turn in a multi-turn conversation, passed via `history`.
- *
- * Supports normal user/assistant messages and tool continuations: an assistant
- * turn may include `toolCalls`, and a tool turn carries the matching
- * `toolResults`. A tool turn must immediately follow an assistant tool call
- * turn, and every requested tool call must have a result.
+ * One prior turn in `history`. A tool turn must directly follow the assistant turn that called the
+ * tools, with a result for every call.
  */
 export type ConversationTurn =
   | {
@@ -77,12 +69,8 @@ export interface TextBlock {
 }
 
 /**
- * An inline image segment of a multimodal `userContent` array.
- *
- * `data` is the raw base64-encoded image bytes, with no `data:` URL prefix
- * (adapters that need a data URL, e.g. OpenAI-compatible `image_url`, build
- * it themselves from `mimeType` + `data`; adapters that need raw bytes, e.g.
- * Bedrock, decode the base64 themselves).
+ * An inline image in a multimodal `userContent` array. `data` is raw base64 with no `data:` prefix;
+ * each adapter converts it as its provider needs.
  */
 export interface ImageBlock {
   type: 'image';
@@ -96,12 +84,8 @@ export interface ImageBlock {
 export type ContentBlock = TextBlock | ImageBlock;
 
 /**
- * Every field of a call request except the `reserveUsage`/`refundUsage`
- * hooks from `UsageHooks`. `CallParams` is this plus `UsageHooks`; the
- * `Cached*` param types below are call sites that want the request shape
- * without those two hooks (usage is metered once, at the `cachedCall`
- * level, not per-request), and use this directly instead of re-deriving
- * it with `Omit<CallParams<T>, 'reserveUsage' | 'refundUsage'>` each time.
+ * Every request field except the `UsageHooks`. The `Cached*` params use it, since `cachedCall`
+ * meters usage once at the top level.
  */
 export interface LLMRequestShape<
   T = unknown,
@@ -130,26 +114,15 @@ export interface LLMRequestShape<
   signal?: AbortSignal;
 
   /**
-   * Total time budget in ms for this whole call, across every retry and
-   * every fallback target. Unlike timeoutMs, which resets on each attempt,
-   * this is a single clock starting when call is invoked. The call is
-   * aborted once this elapses, even mid retry or mid fallback, the same
-   * way an aborted signal is today. Omit (or pass Infinity) for no
-   * overall deadline, only the existing per attempt timeoutMs applies.
-   *
-   * Only bounds getting to a final result: choosing a target, retrying,
-   * and opening a stream. It does not extend to the time spent reading a
-   * stream after it has opened. Use chunkIdleTimeoutMs for gaps between
-   * chunks once a stream is open.
+   * Total ms budget for the whole call, across retries and fallback targets, unlike the per attempt
+   * `timeoutMs`. Covers getting to a result and opening a stream, not reading one; use
+   * `chunkIdleTimeoutMs` for that. Omit or pass Infinity for none.
    */
   deadlineMs?: number;
 
   /**
-   * Per-call override for the instance's `chunkIdleTimeoutMs` (max gap
-   * between stream chunks once opened). Only applies when `stream: true`.
-   * Useful for routes using reasoning-heavy models with documented long
-   * silent gaps mid-stream. Pass 0 to disable the idle timeout for this
-   * call.
+   * Per call override for the max gap between stream chunks. Only applies with `stream: true`. Pass
+   * 0 to disable.
    */
   chunkIdleTimeoutMs?: number;
 
@@ -160,27 +133,15 @@ export interface LLMRequestShape<
   model?: string;
 
   /**
-   * Reasoning effort for supported reasoning models. Pass `null` to
-   * explicitly skip an instance-level `defaultReasoningEffort` for this
-   * one call (e.g. a call using a forced `toolChoice`, which Anthropic
-   * rejects alongside any reasoning at all), the same way `temperature:
-   * null` opts a call out of `defaultTemperature`. Omitting the field
-   * entirely (`undefined`) defers to the instance default instead.
+   * Reasoning effort for supported models. `null` skips `defaultReasoningEffort` for this call, as
+   * `temperature: null` does; `undefined` uses the default.
    */
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | null;
 
   /**
-   * Token budget for internal reasoning, for models with a native numeric
-   * budget (Anthropic's `budget_tokens`, Gemini's `thinkingBudget`). On a
-   * provider that only understands `reasoningEffort` tiers (OpenAI-
-   * compatible), this is converted to the nearest tier instead of sent as
-   * a raw number. When both `budgetTokens` and `reasoningEffort` are set,
-   * each adapter prefers whichever field it natively understands and
-   * ignores the other. See the reasoning budget docs for the conversion
-   * table used in each direction. Pass `null` to explicitly skip an
-   * instance-level `defaultBudgetTokens` for this one call, mirroring
-   * `reasoningEffort: null` above; omitting the field entirely defers to
-   * the instance default.
+   * Reasoning token budget, for providers with a numeric budget. Providers with only effort tiers
+   * get the nearest tier. With both set, each adapter uses the one it understands. `null` skips
+   * `defaultBudgetTokens`.
    */
   budgetTokens?: number | null;
 
@@ -196,13 +157,8 @@ export interface LLMRequestShape<
   schema?: SchemaLike<T>;
 
   /**
-   * Tools the model may call. When set, `call()` returns a
-   * `CallWithToolsResult<T>` union instead of `T` directly. Combining with
-   * `jsonSchema` is provider-dependent; see the Tool Calling docs.
-   *
-   * Passed as a literal array (or via `defineTool()`-wrapped entries, see
-   * `types/tools.ts`), this also drives the `Tools` type parameter, which
-   * narrows `CallWithToolsResult`'s `toolCalls[number].arguments` per tool.
+   * Tools the model may call. Makes `call()` return `CallWithToolsResult<T>`. A literal array also
+   * types each tool's `arguments`.
    */
   tools?: Tools;
 
@@ -210,36 +166,16 @@ export interface LLMRequestShape<
   toolChoice?: ToolChoice;
 
   /**
-   * Streams the response incrementally instead of resolving once. Default:
-   * false. Requires a client/adapter that implements `createStream`.
-   * Retry/timeout/circuit-breaker guarantees apply only to opening the
-   * stream (through the first chunk); a failure after that point rejects
-   * `finalResult` directly and is not retried, since a mid-stream failure
-   * isn't connection-time evidence for the circuit breaker, the attempt
-   * already counted as a success once the first chunk arrived. Once the
-   * stream opens successfully, `finalResult` still resolves to the same
-   * validated `T`/`CallWithToolsResult<T>` shape `call()` would have
-   * returned for the same params with `stream` omitted. See
-   * `StreamCallResult`.
+   * Streams the response. Requires an adapter with `createStream`. Retries and fallback cover the
+   * stream until its first content; later failures reject `finalResult`. `finalResult` resolves to
+   * the same shape a non-streaming call returns. See `StreamCallResult`.
    */
   stream?: boolean;
 
   /**
-   * Optional out-parameter for provider identity. Pass `{}` (or any object
-   * with a mutable `current` property) and `call()` writes a `CallMeta`
-   * into `meta.current` before returning, alongside whatever `onUsage`
-   * already reports. This includes `stream: true`: the target is chosen
-   * once the stream opens, which is also the point `call()` itself
-   * returns `{ chunks, finalResult }`, so `meta.current` is already set
-   * by then. `TokenUsage.provider`/`usedFallback` from `onUsage` reports
-   * the same information asynchronously, for both streaming and
-   * non-streaming calls.
-   *
-   * `meta.current` is only written once execution actually reaches and
-   * selects a provider target. A `wrap` middleware that short-circuits
-   * without calling `next()` never reaches that point, so `meta.current`
-   * is left untouched; if the same holder object is reused across calls,
-   * it can still hold a prior call's target.
+   * Out parameter written with the answering target's `CallMeta`, set before `call()` returns,
+   * streams included. Left untouched when a `wrap` middleware short-circuits, so a reused holder
+   * may keep an older value.
    */
   meta?: { current?: CallMeta };
 }
@@ -247,13 +183,7 @@ export interface LLMRequestShape<
 export interface CallParams<T = unknown, Tools extends readonly ToolDefinition[] = ToolDefinition[]>
   extends LLMRequestShape<T, Tools>, UsageHooks {}
 
-/**
- * A `CallParams` variant where tool calling is explicitly enabled.
- *
- * Requiring `tools` to be present allows TypeScript to select the
- * tool-aware `call()` overload and return `CallWithToolsResult<T>` instead
- * of the normal `T` response type.
- */
+/** `CallParams` with `tools` set, selecting the overload that returns `CallWithToolsResult<T>`. */
 export type ToolEnabledCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
@@ -262,22 +192,9 @@ export type ToolEnabledCallParams<
 };
 
 /**
- * A `CallParams` variant for tools set conditionally, e.g. `tools:
- * someCondition ? [myTool] : undefined`. Selects the `call()` overload
- * returning the honest union `T | CallWithToolsResult<T, Tools>` instead of
- * falling through to plain `T` (which is what happened before this type
- * existed, since `ToolDefinition[] | undefined` matched neither
- * `ToolEnabledCallParams` nor `ToolsDisabledCallParams`). Forces an
- * `isToolCallResult()` check before treating the result as plain
- * content. Omitting `tools` entirely still resolves to plain `T`, since
- * tools genuinely cannot have run there.
- *
- * `Tools` still can't reliably infer a literal tuple here the way
- * `ToolEnabledCallParams` does for an inline array (a ternary/variable
- * expression doesn't carry the same `const`-literal preservation), so
- * getting typed `arguments` out of a conditional-tools result also needs
- * an explicit `Tools` type argument on `isToolCallResult<Tools>()` when
- * narrowing, see its docs.
+ * `CallParams` for conditionally set tools, e.g. `tools: flag ? [tool] : undefined`. Returns `T |
+ * CallWithToolsResult<T, Tools>`, forcing an `isToolCallResult()` check. Typed `arguments` need an
+ * explicit `Tools` argument on that check, since a ternary loses the literal tuple.
  */
 export type ConditionalToolCallParams<
   T,
@@ -294,14 +211,8 @@ export type ConditionalStringToolCallParams<
 };
 
 /**
- * A `CallParams` variant where tools are offered but the model is barred
- * from calling one. `toolChoice: 'none'` guarantees the response can never
- * be a `tool_calls` result, so `call()` can narrow straight to
- * `ContentResult<T>` instead of the full `CallWithToolsResult<T>` union.
- * A call site that already knows it forced `'none'` no longer needs a
- * runtime `isToolCallResult` check, or to remember that `String(result)`
- * on the wrapper object silently produces `"[object Object]"` instead of
- * throwing. The type itself rules that shape out.
+ * `CallParams` with `toolChoice: 'none'`. The model can't call a tool, so `call()` returns
+ * `ContentResult<T>` and no `isToolCallResult` check is needed.
  */
 export type ToolsDisabledCallParams<
   T,
@@ -312,12 +223,8 @@ export type ToolsDisabledCallParams<
 };
 
 /**
- * `CallParams` with `jsonMode: false`. Selects the `call()` overload
- * that returns a plain `string`. `jsonSchema` is typed `never` here: a
- * truthy `jsonSchema` forces JSON parsing at runtime regardless of
- * `jsonMode` (see `RequestBuilder.build()`), so `jsonMode: false` +
- * `jsonSchema` together would otherwise still match this overload and
- * falsely promise a `string`.
+ * `CallParams` with `jsonMode: false`, returning a `string`. `jsonSchema` is `never`, since a
+ * schema forces JSON parsing regardless of `jsonMode`.
  */
 export type JsonModeDisabledCallParams = Omit<CallParams<unknown>, 'jsonSchema'> & {
   jsonMode: false;
@@ -325,17 +232,9 @@ export type JsonModeDisabledCallParams = Omit<CallParams<unknown>, 'jsonSchema'>
 };
 
 /**
- * `CallParams` with `jsonMode: true` and no `schema`. Selects the
- * `call()` overload that returns a `JsonValue`.
- *
- * `schema` is explicitly typed `never` here, not just omitted: `CallParams<JsonValue>['schema']`
- * would be `SchemaLike<JsonValue> | undefined`, and a schema whose inferred result type is
- * itself structurally assignable to `JsonValue` (e.g. a schema for `string[]` or
- * `Record<string, string>`) would still satisfy that shape, incorrectly selecting this
- * overload over the schema-aware generic one and widening the result to `JsonValue`. Forcing
- * `schema?: never` makes any call that sets `schema` fail this overload's structural check
- * regardless of the schema's result type, so it always falls through to the generic
- * `CallParams<T>` overload and infers `T` from the schema instead.
+ * `CallParams` with `jsonMode: true` and no `schema`, returning `JsonValue`. `schema` is `never`
+ * rather than omitted, so a schema whose output happens to fit `JsonValue` still picks the schema
+ * aware overload.
  */
 export type JsonModeEnabledCallParams = Omit<CallParams<JsonValue>, 'schema'> & {
   jsonMode: true;
@@ -350,25 +249,14 @@ export interface CachedCallInput extends UsageHooks {
 }
 
 /**
- * Parameters for a cached LLM call without tool calling: cache config
- * plus the `CallParams` passed to `call()`. `reserveUsage`/`refundUsage`
- * belong at the top level (`CachedCallInput`), not nested in `call`; see
- * the caching docs for why.
+ * A cached call without tools: cache config plus the `call` params. `reserveUsage` and
+ * `refundUsage` go at the top level, not inside `call`.
  */
 export type CachedCallParams<T> = CachedCallInput & {
   call: LLMRequestShape<T>;
 };
 
-/**
- * Parameters for a cached LLM call with tool calling enabled.
- *
- * The cached value includes the full `CallWithToolsResult<T>`, meaning
- * tool requests and normal content responses are cached exactly as returned
- * by the model.
- *
- * See `CachedCallParams` for why `reserveUsage`/`refundUsage` are omitted
- * from `call`'s type here too.
- */
+/** A cached call with tools. Tool requests and content responses are cached exactly as returned. */
 export type CachedToolCallParams<
   T,
   Tools extends readonly ToolDefinition[] = ToolDefinition[],
@@ -379,10 +267,8 @@ export type CachedToolCallParams<
 };
 
 /**
- * Parameters for a cached LLM call with `call.tools` set conditionally.
- * Selects the `cachedCall()` overload that returns the honest union
- * `T | CallWithToolsResult<T>` instead of narrowing to plain `T`. See
- * `ConditionalToolCallParams` for why this overload exists.
+ * A cached call with `call.tools` set conditionally. Returns `T | CallWithToolsResult<T>`, see
+ * `ConditionalToolCallParams`.
  */
 export type CachedConditionalToolCallParams<
   T,
@@ -429,21 +315,16 @@ export interface SoftFailureMeta {
   /** 1-based, matching `CallMeta.attempts`. */
   attempt: number;
   /**
-   * Token usage for this attempt, if the provider reported it on this
-   * response. `undefined` when the provider omitted usage, not when
-   * usage was zero, so a cost check should treat a missing value as
-   * unknown rather than as free.
+   * Usage for this attempt, if reported. `undefined` means unknown, not zero, so treat it as such
+   * in cost checks.
    */
   usage?: TokenUsage;
 }
 
 /**
- * Inspects an otherwise-successful result and optionally reclassifies it
- * as a failure. Returning `undefined` leaves the result as a success;
- * returning an `LLMErrorCode` fails the attempt with that code, feeding
- * the same retry and circuit-breaker paths a thrown error would. A
- * result that parses fine but is empty, truncated, or a low-confidence
- * refusal is otherwise invisible to both.
+ * Reclassifies an otherwise successful result. Return an `LLMErrorCode` to fail the attempt through
+ * the normal retry and breaker paths, or `undefined` to keep it. Catches empty, truncated or
+ * refusal answers that parse fine.
  */
 export type DetectSoftFailure<T = unknown> = (
   result: T | CallWithToolsResult<T>,

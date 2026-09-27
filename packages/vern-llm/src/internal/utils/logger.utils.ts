@@ -1,14 +1,19 @@
 import type { Logger } from '../../logger.js';
 
-/**
- * Logs a user-supplied hook (`onEvent`, `onUsage`, a middleware method, etc.)
- * throwing, in the shared `[VernLLM] <hookName> failed` shape. Centralized so
- * every call site reduces the error the same way instead of re-deriving
- * `message`/`stack` inline, and so the `[VernLLM]` prefix can't drift.
- */
+/** Logs a user hook that threw, as `[VernLLM] <hookName> failed` with message and stack. */
 export function logHookError(logger: Logger, hookName: string, error: unknown): void {
-  logger.error(`[VernLLM] ${hookName} failed`, {
-    message: error instanceof Error ? error.message : 'unknown',
+  logError(logger, `[VernLLM] ${hookName} failed`, error);
+}
+
+/** An error's message, or `'unknown'` for a non-Error throw. */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown';
+}
+
+/** Logs `message` at error level with the error's message and stack kept. */
+export function logError(logger: Logger, message: string, error: unknown): void {
+  logger.error(message, {
+    message: errorMessage(error),
     stack: error instanceof Error ? error.stack : undefined,
   });
 }
@@ -27,12 +32,8 @@ export function callHookSafely(logger: Logger, hookName: string, fn: () => void)
 }
 
 /**
- * Wraps a `Logger` so a throwing implementation can never break the call
- * it's trying to describe. `logger` is user-supplied (`VernLLMOptions.logger`),
- * so a custom logger that ships to a file, Datadog, etc. can throw for
- * reasons unrelated to VernLLM. Wrap once at construction so every
- * downstream `this.logger.warn(...)` call stays as-is and is safe by
- * construction, instead of guarding each call site individually.
+ * Wraps a user supplied `Logger` so a throwing one can never break the call it describes. Wrapped
+ * once, so call sites need no guard.
  */
 export function createSafeLogger(logger: Logger): Logger {
   return {
@@ -64,4 +65,11 @@ function swallowRejection(result: unknown): void {
       // a broken logger must never break the call it's describing
     });
   }
+}
+
+/** Discards every call. Used for `logger: 'silent'`. */
+export class NoopLogger implements Logger {
+  debug(_message: string): void {}
+  warn(_message: string): void {}
+  error(_message: string, _meta?: Record<string, unknown>): void {}
 }

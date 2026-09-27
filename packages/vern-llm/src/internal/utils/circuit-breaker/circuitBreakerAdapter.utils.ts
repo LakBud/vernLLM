@@ -7,8 +7,8 @@ import {
 import { LLMError } from '../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../types/middleware.js';
 import { emitEvent } from '../../execution/utils/middleware/middleware.utils.js';
-import { middlewareContextNames } from '../../resolveMiddlewareOrder.js';
 import { CUSTOM_ADAPTER } from '../adapterInfo.utils.js';
+import { middlewareContextNames } from '../middlewareLabels.utils.js';
 import { callHookSafely } from './../logger.utils.js';
 import { makeEventReporter, reportRejection } from './circuitBreaker.utils.js';
 
@@ -16,13 +16,7 @@ import type { Logger } from '../../../logger.js';
 import type { VernLLMEvent } from '../../../types/events.js';
 import type { AdapterInfo, AttemptContext, VernLLMMiddleware } from '../../../types/index.js';
 
-/**
- * Not re-exported from the package root, imported directly from this
- * internal module by `VernLLMOptions.circuitBreaker`'s own type (see
- * options.ts) so that union isn't duplicated between the public option
- * field and `buildCircuitBreaker`'s own signature below, same pattern
- * `CacheOption` and `RateLimitOption` already use for their own options.
- */
+/** The `circuitBreaker` option union, shared by `VernLLMOptions` and `buildCircuitBreaker`. */
 export type CircuitBreakerOption = boolean | CircuitBreakerOptions | CircuitBreakerAdapter;
 
 const REQUIRED_ADAPTER_METHOD_NAMES = [
@@ -32,23 +26,12 @@ const REQUIRED_ADAPTER_METHOD_NAMES = [
   'onStateChange',
 ] as const;
 
-/**
- * Method names that exist only on `CircuitBreakerAdapter`, never on plain
- * `CircuitBreakerOptions`. `onStateChange` is deliberately excluded here,
- * it's a legitimate `CircuitBreakerOptions` field too (`circuitBreaker: {
- * threshold: 5, onStateChange: fn }`), so its presence alone must not be
- * read as "this is an attempted adapter". These three are the only
- * unambiguous signal.
- */
+/** Members only an adapter has. `onStateChange` is left out since plain options have it too. */
 const ADAPTER_ONLY_METHOD_NAMES = ['assertClosed', 'recordSuccess', 'recordFailure'] as const;
 
 /**
- * Optional `CircuitBreakerAdapter` members that only make sense as
- * functions, and never appear on plain `CircuitBreakerOptions`, so any
- * non function value assigned to one is unambiguously a mistake.
- * `isolateByModel` is deliberately excluded: it's a legitimate
- * `CircuitBreakerOptions` field too (a real boolean, not a function), so
- * validating its type here isn't this check's job.
+ * Optional adapter members that must be functions. `isolateByModel` is left out since plain options
+ * have it as a boolean.
  */
 const OPTIONAL_FUNCTION_MEMBER_NAMES = [
   'getState',
@@ -80,11 +63,8 @@ function hasInvalidPrepareTimeout(option: CircuitBreakerOptions | CircuitBreaker
 }
 
 /**
- * Computes, in one pass, everything `buildCircuitBreaker` needs to decide
- * between plain options, a complete adapter, an incomplete adapter, and
- * an otherwise-plain object with an invalid optional member. Replaces
- * what used to be three separate functions each re-deriving overlapping
- * facts about the same candidate object.
+ * Classifies the option in one pass: plain options, a complete adapter, an incomplete adapter, or
+ * options with an invalid optional member.
  */
 function classifyCircuitBreakerOption(option: CircuitBreakerOptions | CircuitBreakerAdapter): {
   /** At least one of the three adapter-only methods is present, so this is clearly an attempted adapter, not plain options. */
@@ -105,11 +85,8 @@ function classifyCircuitBreakerOption(option: CircuitBreakerOptions | CircuitBre
 }
 
 /**
- * Wraps a caller supplied `onStateChange` (from `CircuitBreakerOptions` or
- * from a `CircuitBreakerAdapter`) so every real state change also reports
- * a `circuit_state` event, then chains into the original handler, safely.
- * One shared implementation so the built in `CircuitBreaker` and a custom
- * `CircuitBreakerAdapter` report events the exact same way.
+ * Wraps a caller's `onStateChange` so every real change first reports a `circuit_state` event, then
+ * calls the handler safely. Shared by the built in breaker and custom adapters.
  */
 function wrapOnStateChange(
   userOnStateChange: CircuitBreakerStateChangeHandler | undefined,
@@ -175,13 +152,7 @@ function wrapOnStateChange(
   };
 }
 
-/**
- * One dispatcher `Set` per `CircuitBreakerAdapter` instance, keyed by
- * object identity so it never leaks a strong reference of its own.
- * `wireAdapterOnStateChange` reads/writes this instead of letting
- * `buildCircuitBreaker` reassign `adapter.onStateChange` directly on
- * every call, see that function's doc comment for why.
- */
+/** One subscriber set per adapter, keyed weakly. See `wireAdapterOnStateChange`. */
 const adapterSubscribers = new WeakMap<
   CircuitBreakerAdapter,
   Set<CircuitBreakerStateChangeHandler>
@@ -191,13 +162,9 @@ const adapterSubscribers = new WeakMap<
 const warnedAboutSharing = new WeakSet<CircuitBreakerAdapter>();
 
 /**
- * Registers `subscriber` against `adapter`, installing one dispatcher onto
- * `adapter.onStateChange` the first time this adapter is seen instead of
- * wrapping it again on every call, which would silently chain deeper for
- * every target that ever shared this adapter. The dispatcher calls every
- * subscribed target's own tagged handler plus the adapter's original
- * `onStateChange` exactly once per real transition, no matter how many
- * targets share it.
+ * Subscribes a target to an adapter's state changes. The first call installs one dispatcher, rather
+ * than wrapping again per target, and it calls the adapter's original handler once per transition
+ * however many targets share it.
  */
 function wireAdapterOnStateChange(
   adapter: CircuitBreakerAdapter,
@@ -235,21 +202,9 @@ function wireAdapterOnStateChange(
 }
 
 /**
- * Builds the optional circuit breaker for one provider target, resolving
- * `circuitBreakerOption` into a real `CircuitBreaker`, a caller supplied
- * `CircuitBreakerAdapter`, or `undefined` when it's falsy, matching the
- * option's own semantics.
- *
- * Lives outside `CallExecutor` (and outside `VernLLM`, once this were
- * inlined) because the breaker has to exist *before* the executor it's
- * passed into, so its construction can't be an executor concern.
- * `onEvent` is called directly rather than through the executor for the
- * same reason: nothing executor-shaped exists yet at this point.
- *
- * Takes the specific fields it needs (rather than a full `VernLLMOptions`)
- * so it works identically for the primary target and for each fallback
- * target, which carry their own `circuitBreaker` override alongside the
- * shared `onEvent`/`middleware`.
+ * Builds one target's breaker: a `CircuitBreaker`, the caller's adapter, or `undefined`. Built
+ * before its executor, so it reports events through `onEvent` directly. Takes only the fields it
+ * needs so primary and fallback targets use it alike.
  */
 export function buildCircuitBreaker(
   circuitBreakerOption: CircuitBreakerOption | undefined,
@@ -309,21 +264,9 @@ export function buildCircuitBreaker(
       );
     }
 
-    // A full adapter keeps its own state and dispatch logic. VernLLM only
-    // subscribes to its `onStateChange` through `wireAdapterOnStateChange`,
-    // which installs one shared dispatcher the first time this adapter is
-    // seen, so sharing one adapter across targets is explicit and bounded
-    // rather than an invisible, ever-growing call chain. See that
-    // function's doc comment. This subscriber only reports the event,
-    // `wireAdapterOnStateChange` itself calls the adapter's real original
-    // `onStateChange` exactly once per transition, so passing `undefined`
-    // here avoids calling it once per subscribing target instead of once
-    // total.
-    //
-    // Reaching here means `attemptsAdapter` is true (or the function
-    // would already have returned/thrown above) and both `missing` and
-    // `invalid` are empty, so `circuitBreakerOption` is a complete,
-    // valid `CircuitBreakerAdapter`.
+    // A complete adapter keeps its own state; VernLLM only subscribes through the shared
+    // dispatcher. The dispatcher calls the adapter's original handler, so this subscriber passes
+    // `undefined` to avoid calling it once per target.
     if (attemptsAdapter) {
       const adapter = circuitBreakerOption as CircuitBreakerAdapter;
       wireAdapterOnStateChange(adapter, wrap(undefined), logger);

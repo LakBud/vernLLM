@@ -5,10 +5,8 @@ import type { Logger } from '../../../../logger.js';
 /** Everything `createBackpressureChannel` needs. Generic over the item type: no knowledge of `StreamChunk`. */
 export interface BackpressureChannelOptions {
   /**
-   * Hard cap on buffered items once nothing is pulling. The buffer is
-   * allowed to grow to twice this before it trims back down in one
-   * batch, so eviction cost stays cheap per push (see the eviction
-   * comment inside `createBackpressureChannel`).
+   * Cap on buffered items while nothing is pulling. The buffer grows to twice this before trimming
+   * in one batch, keeping eviction cheap per push.
    */
   capacity: number;
   logger: Pick<Logger, 'warn'>;
@@ -43,19 +41,10 @@ export interface BackpressureChannel<T> {
 }
 
 /**
- * A push based, bounded-buffer async channel: `push`/`finish`/`fail`
- * drive it from a producer that runs independently of whether anyone is
- * pulling from `iterable`. Buffer size, not "has anyone started
- * iterating yet", is what caps memory, since the producer can outrace
- * the caller starting iteration.
- *
- * Once a consumer starts reading, a full buffer holds the producer back
- * instead of evicting, so a slow reader never loses items. Eviction only
- * applies while no reader is active, so an ignored channel can't
- * stall the producer or grow without bound.
- *
- * Generic over the item type on purpose: `buildStreamResult` is the only
- * caller today, but nothing here depends on `StreamChunk`.
+ * A bounded push channel whose producer runs whether or not anyone reads. Buffer size caps memory,
+ * since the producer can outrace the first read. Once a reader starts, a full buffer holds the
+ * producer back instead of evicting, so a slow reader never loses items; eviction only applies
+ * while no reader is active.
  */
 export function createBackpressureChannel<T>(
   options: BackpressureChannelOptions,
@@ -145,19 +134,9 @@ export function createBackpressureChannel<T>(
         );
       }
 
-      // Trim back down to the cap in one batch operation instead of
-      // `shift()`ing a single element off on every push once the cap is
-      // reached. A per-push `shift()` here is O(current length) in the
-      // worst case, cheap for a handful of calls, but that cost is
-      // paid on every push for the remainder of an ignored channel, and
-      // its real-world cost isn't a stable, engine-independent
-      // property: benchmarking this exact pattern at a similar backing
-      // array size showed multi-second stalls for what should be
-      // sub-millisecond work. Letting the array grow to twice the cap
-      // before trimming amortizes the O(n) `splice` across `capacity`
-      // pushes, so the average cost per push stays O(1) regardless of
-      // how far past the cap the array is allowed to grow before
-      // trimming.
+      // Trimmed in one batch once the buffer reaches twice the cap. A `shift()` per push is O(n)
+      // every time and stalled for seconds in benchmarks; one `splice` per `capacity` pushes keeps
+      // the cost O(1) on average.
       buffered.splice(0, buffered.length - capacity);
     }
   }

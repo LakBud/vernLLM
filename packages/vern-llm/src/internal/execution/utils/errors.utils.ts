@@ -2,12 +2,8 @@ import { LLMError, type LLMErrorCode, type RetryAttempt } from '../../../types/e
 import { extractRetryAfterMs } from './retry/retry.utils.js';
 
 /**
- * Looks inside an unknown error value and pulls out an http status code
- * if one is present. Checks the status field first then the status code
- * field since different client libraries use different names for this,
- * falling back to AWS SDK v3's `$metadata.httpStatusCode` (e.g. Bedrock's
- * `ThrottlingException`), which doesn't set either of the other two.
- * Returns undefined when the error is not an object or carries no status
+ * The HTTP status on an unknown error: `status`, then `statusCode`, then the AWS SDK's
+ * `$metadata.httpStatusCode`. `undefined` when none is present.
  */
 export function extractStatus(err: unknown): number | undefined {
   if (!err || typeof err !== 'object') return undefined;
@@ -25,15 +21,7 @@ export function extractStatus(err: unknown): number | undefined {
   return undefined;
 }
 
-/**
- * POSIX/libuv error codes libuv (and so Node's `fetch`/undici) attaches to
- * genuine transport-level failures: connection refused, DNS lookup
- * failure, connection reset mid-request, a connect that never completed,
- * DNS server unreachable, broken pipe, or host/network unreachable.
- * Deliberately narrow: only codes that can only mean "the connection
- * itself failed," not anything that could also indicate an application
- * error.
- */
+/** Error codes that can only mean the connection itself failed, never an application error. */
 const NETWORK_ERROR_CODES = new Set([
   'ECONNREFUSED',
   'ENOTFOUND',
@@ -55,12 +43,8 @@ const NETWORK_ERROR_MESSAGES = new Set([
 ]);
 
 /**
- * Whether `error` is, with reasonable confidence, a transport-level
- * failure (never reached the provider, as opposed to the provider itself
- * responding with an error) rather than some other unexpected exception.
- * Checked via explicit, well-known signals only, so a genuinely unknown
- * error never gets misclassified as a connection failure just because it
- * also lacked an HTTP status.
+ * Whether `error` is a transport failure that never reached the provider. Only well known signals
+ * count, so an unknown error isn't misread as a connection failure.
  */
 function isNetworkError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -73,12 +57,8 @@ function isNetworkError(error: unknown): boolean {
     return true;
   }
 
-  // undici/Node's `fetch` wraps the real libuv error one level down, as
-  // TypeError('fetch failed', { cause: <the real error, with .code> }).
-  // The message check above already catches that wrapper by itself if
-  // the cause is missing or unrecognized, this catches it by the cause's
-  // code when the wrapper's own message wasn't matched (e.g. a runtime
-  // that phrases the wrapper differently but still sets `cause.code`).
+  // Node's `fetch` wraps the real error in `TypeError('fetch failed', { cause })`. This catches it
+  // by the cause's code when the wrapper message differs.
   if (err.cause && typeof err.cause === 'object') {
     const cause = err.cause as { code?: unknown };
     if (typeof cause.code === 'string' && NETWORK_ERROR_CODES.has(cause.code)) return true;
@@ -100,11 +80,8 @@ function formatSafely(value: unknown): string {
 }
 
 /**
- * Looks inside an unknown thrown value and pulls out a human-readable
- * description of it. Checks the `error` field first (the provider's raw
- * rejection body, JSON-stringified if possible) then falls back to the
- * message` field. Always returns a safe string, even when the thrown value
- * has hostile properties or cannot be serialized normally.
+ * A readable description of a thrown value: its `error` field (the provider body), else `message`.
+ * Always a safe string.
  */
 export function describeError(err: unknown): string {
   if (err && typeof err === 'object') {
@@ -127,11 +104,8 @@ export function describeError(err: unknown): string {
 }
 
 /**
- * Maps an HTTP status to its corresponding `LLMErrorCode`, derived purely
- * from the status itself so it applies the same way regardless of which
- * adapter or client raised the error. Used both when building a fresh
- * `LLMError` and when filling in a `code` on an already-normalized one
- * that doesn't have one yet, so the two paths can't drift apart.
+ * The `LLMErrorCode` for an HTTP status, shared by new and already normalized errors so they can't
+ * drift.
  */
 function codeForStatus(status: number): LLMErrorCode | undefined {
   switch (status) {
@@ -151,19 +125,9 @@ function codeForStatus(status: number): LLMErrorCode | undefined {
 }
 
 /**
- * Whether a provider's error response actually contains anything a person
- * could act on. Some providers return a non-2xx status with **no body at
- * all** for certain field-validation failures (Mistral's OpenAI-compatible
- * endpoint does this, for example, when a request includes a field the
- * target model doesn't support). SDKs built on top of `openai` render that
- * specific case as a message like `"400 status code (no body)"`.
- *
- * Derived from the object's own `error`/`message` fields directly, rather
- * than from whatever `describeError` rendered, because `describeError`
- * falls back to serializing the *whole* thrown value when neither field is
- * present or meaningful. That fallback is local echo (e.g. just the
- * `status` a caller passed in), not provider diagnostic content, and
- * treating it as "detail" defeats the whole point of this check.
+ * Some providers answer a non-2xx with no body, which SDKs render as `"400 status code (no body)"`.
+ * Detail is read from the `error` and `message` fields directly, since `describeError` falls back
+ * to echoing the whole value.
  */
 const NO_BODY_MESSAGE_PATTERN = /\(no body\)/i;
 
@@ -181,12 +145,8 @@ function hasNoDiagnosticDetail(error: unknown): boolean {
   if (error && typeof error === 'object') {
     const { error: errorField, message } = error as { error?: unknown; message?: unknown };
 
-    // A present, non-null, non-empty `.error` is the provider's raw
-    // structured error body, genuine diagnostic content whenever it's
-    // present, regardless of how describeError ends up phrasing it.
-    // `error: null`, `error: ''`, and `error: {}` are all placeholders,
-    // not real content, and fall through to the message check below like
-    // a missing field would.
+    // A non-empty `error` is the provider's body and counts as detail. `null`, `''` and `{}` are
+    // placeholders and fall through.
     if (errorField !== undefined && errorField !== null) {
       const isEmptyString = typeof errorField === 'string' && errorField.trim().length === 0;
       const isEmptyStruct = typeof errorField === 'object' && isEmptyObject(errorField);
@@ -216,12 +176,8 @@ function hasNoDiagnosticDetail(error: unknown): boolean {
 }
 
 /**
- * Converts any thrown value into a well-typed LLMError. `attempts`, when
- * given, is the accumulated record of every attempt made before `error`
- * was thrown; it's passed straight into the constructed error's options
- * rather than assigned onto the error afterward, so `attempts` is always
- * settled once, through the constructor, like every other field on
- * `LLMError`.
+ * Converts any thrown value into an `LLMError`. `attempts` goes through the constructor like every
+ * other field.
  */
 export function normalizeError(
   error: unknown,
@@ -263,14 +219,8 @@ export function normalizeError(
   if (status !== undefined) {
     const description = describeError(error);
 
-    // The generic "LLM request failed" message previously never carried
-    // any of the detail describeError() already extracts (that function
-    // was only ever used for debug logging, gated behind `debug: true`),
-    // so a caught LLMError's own .message told you nothing beyond "it
-    // failed with this status," even when the provider's response did
-    // include a real, readable description. Folding that description into
-    // the thrown message means the detail is there unconditionally, not
-    // only when debug logging happens to be on.
+    // The provider's description goes into the message itself, so it is there without debug
+    // logging.
     const code = codeForStatus(status);
 
     // The "probably an unsupported field/value" guidance is only accurate

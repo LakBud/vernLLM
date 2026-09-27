@@ -13,11 +13,8 @@ export type LLMErrorType =
   | 'unknown';
 
 /**
- * Machine readable discriminator within a `type`, for cases where `type`
- * alone is too coarse to act on. Optional and additive: errors thrown
- * before a given code existed simply omit it. Not owned by a single type;
- * e.g. `authentication`/`authorization` apply the same way regardless of
- * which type wraps them.
+ * Machine readable detail within a `type`, for when `type` alone is too coarse to act on. Optional:
+ * errors from before a code existed omit it.
  */
 export type LLMErrorCode =
   // Tool contract (validation)
@@ -70,12 +67,8 @@ export type LLMErrorCode =
   | 'soft_failure_detected';
 
 /**
- * Tool contract codes: a model or provider response defect, not a
- * transient provider fault. Deterministic on the wire request, so
- * retrying can't change the outcome and it shouldn't count toward the
- * circuit breaker either. Shared by `LLMError.retryable` below and by
- * `CallExecutor`'s own retry/breaker accounting, so the two can't drift
- * apart.
+ * Model or provider response defects. Deterministic for the same request, so never retried and
+ * never counted toward the breaker.
  */
 export const NON_RETRYABLE_TOOL_CONTRACT_CODES: ReadonlySet<LLMErrorCode> = new Set([
   'unknown_tool',
@@ -85,11 +78,8 @@ export const NON_RETRYABLE_TOOL_CONTRACT_CODES: ReadonlySet<LLMErrorCode> = new 
 ]);
 
 /**
- * Local rate-limit codes: the call never reached the provider, so it says
- * nothing about the provider's health, and retrying either just requeues
- * behind the same limit (the two queue codes) or can never succeed at all
- * (`rate_limit_capacity_exceeded`, `retry_budget_exhausted`). Shared for
- * the same reason as {@link NON_RETRYABLE_TOOL_CONTRACT_CODES}.
+ * Local limiter rejections. The provider was never reached, and retrying either requeues behind the
+ * same limit or can never succeed.
  */
 export const LOCAL_RATE_LIMIT_CODES: ReadonlySet<LLMErrorCode> = new Set([
   'rate_limit_queue_full',
@@ -99,12 +89,8 @@ export const LOCAL_RATE_LIMIT_CODES: ReadonlySet<LLMErrorCode> = new Set([
 ]);
 
 /**
- * A middleware's own `transform`/`enabled` timed out against
- * `middlewareTimeoutMs` (or its per-middleware override) without ever
- * reaching the provider. Distinct from `request_timeout`, which is the
- * provider call itself timing out: retrying a middleware timeout just
- * re-runs the same slow/hung middleware code and times out again, so
- * it's excluded from the general `timeout` type's retryability.
+ * A middleware `transform` or `enabled` timed out. Retrying reruns the same slow code, so unlike a
+ * provider timeout it is not retryable.
  */
 export const NON_RETRYABLE_MIDDLEWARE_TIMEOUT_CODES: ReadonlySet<LLMErrorCode> = new Set([
   'middleware_timeout',
@@ -123,10 +109,8 @@ const NON_RETRYABLE_TYPES: ReadonlySet<LLMErrorType> = new Set([
 ]);
 
 /**
- * Shared retryability rule behind both `LLMError.retryable` and
- * `LLMErrorSnapshot.retryable`. Pulled out so the two can't drift apart:
- * a snapshot is a point-in-time copy of an error's fields, and this is
- * one of them, so it has to be computed the same way in both places.
+ * The retry rule behind both `LLMError.retryable` and `LLMErrorSnapshot.retryable`, kept in one
+ * place so they can't drift.
  */
 function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): boolean {
   // Output cut off at max_tokens can come back complete on a resend, since
@@ -142,21 +126,14 @@ function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): b
 }
 
 /**
- * Types that are excluded from the circuit breaker even when retryable.
- * `quota_exceeded` is a caller/account level limit, not a signal about
- * whether the provider itself is healthy, so it should never push a
- * healthy provider's circuit toward opening. Only ever removes from what
- * `computeRetryable` already allows, never adds back something
- * `computeRetryable` excluded.
+ * Retryable types that still say nothing about provider health, so they never count toward the
+ * breaker.
  */
 const NON_BREAKER_TYPES: ReadonlySet<LLMErrorType> = new Set(['quota_exceeded']);
 
 /**
- * 4xx statuses that still say something about the provider rather than
- * the request: a request timeout, a too-early rejection, and a provider
- * rate limit. Every other 4xx is about one caller's request or account,
- * so letting it count would let one bad caller open the circuit for
- * everyone sharing it.
+ * 4xx statuses that describe the provider rather than one caller's request. Any other 4xx counting
+ * would let one bad caller open the circuit for everyone.
  */
 const PROVIDER_SIDE_CLIENT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429]);
 
@@ -170,11 +147,8 @@ function isCallerSideStatus(status: number | undefined): boolean {
 }
 
 /**
- * Shared "should this failure count toward the circuit breaker" rule
- * behind `LLMError.countsTowardBreaker`. Always defers to
- * `computeRetryable` first, so anything already excluded from retry is
- * also excluded from the breaker; `NON_BREAKER_TYPES` only narrows
- * further.
+ * The breaker rule behind `LLMError.countsTowardBreaker`. Never counts what `computeRetryable`
+ * excludes.
  */
 function computeCountsTowardBreaker(
   type: LLMErrorType,
@@ -190,15 +164,8 @@ function computeCountsTowardBreaker(
 }
 
 /**
- * Returns `issues` unchanged when it can survive `JSON.stringify`.
- * Most `issues` values are VernLLM's own structured shapes (see
- * `LLMErrorIssuesByCode`) and always safe. The one exception is a
- * schema validation failure, where `issues` is a caller supplied
- * `SchemaLike` validator's own `error: unknown`, not controlled by
- * VernLLM and not guaranteed to be circular free. Rather than silently
- * dropping it in that case, this returns a marker string so a reader
- * of serialized output can tell "no issues data" apart from "issues
- * existed but could not be shown".
+ * `issues` if it survives `JSON.stringify`, otherwise a marker string. Only a caller supplied
+ * schema validator's error can be circular.
  */
 function safeIssues(issues: unknown): unknown {
   if (issues === undefined) return undefined;
@@ -211,19 +178,9 @@ function safeIssues(issues: unknown): unknown {
 }
 
 /**
- * Returns a JSON safe, independent copy of `body`, or a marker string if
- * `body` can't survive `JSON.stringify` (e.g. a circular reference). A
- * request body built from adapter-transformed messages is normally
- * always plain data, but tool call arguments or a caller supplied
- * `cause`-adjacent value could in principle carry a circular reference,
- * so this guards the same way `safeIssues` does rather than assuming it
- * can't happen. Unlike `safeIssues`, this clones rather than returning
- * the same reference: the object backing a request body can still be
- * mutated by adapter code between when a request is dispatched and when
- * an attempt is later recorded as failed (e.g. `fromGemini` sets
- * `request.config` in place), so returning the same reference here could
- * make a stored snapshot silently reflect a later, different state than
- * what was actually sent.
+ * A JSON safe copy of `body`, or a marker string if it can't be serialized. Cloned, not shared,
+ * since adapter code can still mutate the request after dispatch (`fromGemini` sets
+ * `request.config` in place).
  */
 function safeBody(body: unknown): unknown {
   if (body === undefined) return undefined;
@@ -249,28 +206,15 @@ function stripAuthHeaders(
 }
 
 /**
- * Depth cap for `safeAttempts`, guarding against a pathological,
- * self referential `attempts` array. `attempts` is a public
- * `LLMErrorOptions` field, so a caller can construct one by hand; this
- * keeps that path bounded the same way a circular `issues` value is
- * bounded, rather than assuming well formed input.
+ * Depth cap for `safeAttempts`, since a caller can hand build a self referential `attempts` array.
  */
 const MAX_ATTEMPTS_DEPTH = 20;
 
 /**
- * Returns a copy of `attempts` with every nested snapshot's `issues`
- * re-checked through `safeIssues`, recursively through each snapshot's
- * own `attempts`. Needed for two reasons: `safeIssues` returns a safe
- * `issues` value by reference, so a shared object can be mutated into a
- * circular one after the snapshot was created, and `attempts` is a
- * public constructor option, so a caller can hand build a `RetryAttempt`
- * (or a whole `LLMErrorSnapshot`) with a circular `issues` and pass it
- * in directly, never touching `toSnapshot()` at all. The same applies to
- * `request`: its `body` is re-checked through `safeBody`, and its
- * `headers` are re-stripped through `stripAuthHeaders`, so a hand built
- * `RetryAttempt.request` can't smuggle an auth header past `toSnapshot()`
- * either. Extra fields on an attempt (e.g. `FallbackAttempt`'s
- * `provider`/`model`) are preserved.
+ * Copies `attempts` with every nested `issues`, request `body` and request headers rechecked,
+ * recursively. A caller can pass hand built attempts straight to the constructor, and a shared
+ * `issues` object can turn circular after capture. Extra fields such as `FallbackAttempt.provider`
+ * are kept.
  */
 function safeAttempts(attempts: RetryAttempt[] | undefined, depth = 0): RetryAttempt[] | undefined {
   if (attempts === undefined) return undefined;
@@ -335,21 +279,9 @@ export interface UnsupportedCapabilityIssue {
 }
 
 /**
- * Maps each `LLMErrorCode` that carries structured `issues` to that
- * payload's exact shape. Not every code appears here: most `invalid_params`
- * failures are a single deterministic fact the `message` already states in
- * full, so adding a typed `issues` entry for them would only duplicate the
- * message into a field, the same near-duplicate-code problem `code` itself
- * avoids. Codes that repeat here are exactly the ones whose `message`
- * already string-joins a list a caller might want to consume directly
- * rather than re-parse out of prose, or that otherwise want a place to
- * report the exact captured values of a failure.
- *
- * Deliberately not a mapped type over the whole `LLMErrorCode` union: a
- * schema-validation failure's `issues` (the caller's own Zod-compatible
- * validator's error object) has no code and no shape VernLLM could know in
- * advance, so it stays untyped on `LLMError.issues` itself rather than
- * forcing every code into this table.
+ * The exact `issues` shape for each code that carries one. Codes whose message already says
+ * everything have no entry. Schema validation `issues` stay untyped, since they come from the
+ * caller's own validator.
  */
 export interface LLMErrorIssuesByCode {
   unknown_tool: ToolIssue[];
@@ -363,25 +295,8 @@ export interface LLMErrorIssuesByCode {
 }
 
 /**
- * Point-in-time copy of an `LLMError`'s fields, produced by
- * `LLMError.toSnapshot()`. This is what `RetryAttempt.error` holds
- * instead of a live `LLMError`.
- *
- * A past attempt only needs to be describable (message, type, code,
- * whether it was retryable), never thrown again. So it skips `Error`'s
- * behavior, `instanceof` identity, and any live getter. Using the full
- * `LLMError` class here would also make the type self referential
- * through its own `attempts` field.
- *
- * Has no `cause`. `cause` is `unknown` and never validated by VernLLM,
- * and it is meant to be read directly on the live error you just
- * caught, not carried indefinitely inside history. `type`, `code`,
- * `status`, and `issues` are the structured fields a snapshot carries
- * instead.
- *
- * `attempts` is still present, since a recorded attempt can itself be
- * the terminal failure of an inner retry loop with its own history (see
- * `FallbackAttempt`). That's a tree of past data, not a cycle.
+ * Plain data copy of an `LLMError`, as held by `RetryAttempt.error`. Never thrown again, so no
+ * `cause` and no live getters. Nested `attempts` form a tree, not a cycle.
  */
 export interface LLMErrorSnapshot {
   message: string;
@@ -397,10 +312,8 @@ export interface LLMErrorSnapshot {
 }
 
 /**
- * Point-in-time copy of the request an attempt sent, produced by
- * `toRequestSnapshot()`. This is what `RetryAttempt.request` holds.
- * Mirrors `LLMErrorSnapshot`: plain data, never thrown or dispatched
- * again, safe to serialize and store.
+ * Plain data copy of the request an attempt sent, as held by `RetryAttempt.request`. Safe to
+ * serialize and store.
  */
 export interface LLMRequestSnapshot {
   /** Provider id this attempt targeted, e.g. "openai". */
@@ -416,18 +329,8 @@ export interface LLMRequestSnapshot {
 }
 
 /**
- * Builds a point-in-time, plain data copy of one attempt's outgoing
- * request. Mirrors `LLMError.toSnapshot()`: never thrown or dispatched
- * again, safe to serialize and store. A plain function rather than a
- * method, since unlike `LLMError` a request has no throwable identity or
- * derived state worth wrapping in a class.
- *
- * `startedAt` is optional so existing call sites (and tests) that don't
- * care about exact timing keep working, but a caller that has a real
- * capture time should always pass it: this function may run well after
- * the request was actually dispatched (e.g. `callExecutor` only builds
- * the snapshot once an attempt has failed), so defaulting to `Date.now()`
- * here would record failure-handling time, not request-start time.
+ * A plain data copy of one attempt's request. Pass `startedAt` when known: this often runs after
+ * the attempt failed, so `Date.now()` would record the wrong time.
  */
 export function toRequestSnapshot(
   provider: string,
@@ -445,12 +348,7 @@ export function toRequestSnapshot(
   };
 }
 
-/**
- * One failed attempt on the way to a terminal error: which attempt index
- * it was, and a snapshot of the error it failed with. The base shape
- * every richer attempt record (e.g. `FallbackAttempt`) extends, rather
- * than duplicates.
- */
+/** One failed attempt: its index and a snapshot of its error. `FallbackAttempt` extends it. */
 export interface RetryAttempt {
   index: number;
   error: LLMErrorSnapshot;
@@ -496,42 +394,24 @@ export class LLMError extends Error {
   }
 
   /**
-   * Computed purely from `type`/`code`, independent of any specific call's
-   * `nonRetryableStatus` list. False for `parse`/`validation`/
-   * `invalid_params`/`aborted` types (the caller's own input, the model's
-   * own response, or intentional cancellation, none of which are the
-   * provider being unhealthy), the tool contract codes, the local
-   * rate limit codes, the middleware timeout code, and `payload_too_large`.
-   * `response_truncated` is retryable despite its `parse` type.
-   * Subclasses (see `FallbackExhaustedError`) may override this when `type`
-   * alone carries no retry signal.
+   * Whether retrying could help, from `type` and `code` alone. See Error Handling for the full
+   * list. `response_truncated` is retryable despite its `parse` type.
    */
   get retryable(): boolean {
     return computeRetryable(this.type, this.code);
   }
 
   /**
-   * Whether this failure should count toward the circuit breaker's
-   * failure threshold. Not the same question as `retryable`:
-   * `quota_exceeded` is retryable but says nothing about provider
-   * health, so it's excluded here even though `retryable` is true for
-   * it. Same for any 4xx `status` other than 408, 425, and 429, since
-   * those describe one caller's request, not the provider. Always false
-   * whenever `retryable` is false.
+   * Whether this failure counts toward the breaker. Stricter than `retryable`: `quota_exceeded` and
+   * any 4xx other than 408, 425 and 429 are excluded.
    */
   get countsTowardBreaker(): boolean {
     return computeCountsTowardBreaker(this.type, this.code, this.status);
   }
 
   /**
-   * Copies this error's fields into an {@link LLMErrorSnapshot}, for
-   * recording as a `RetryAttempt`/`FallbackAttempt`. `retryable` is
-   * captured here since a snapshot has no getter of its own. `cause` is
-   * not copied, see `LLMErrorSnapshot`'s own doc. `issues` and every
-   * nested `attempts` entry's own `issues` go through `safeAttempts`,
-   * since a schema validation failure's `issues` is a caller supplied
-   * value, not controlled by VernLLM, and `attempts` is itself a public
-   * constructor option a caller can hand build.
+   * Copies the fields into an `LLMErrorSnapshot`. `cause` is left out, and `issues` are made
+   * serialization safe.
    */
   toSnapshot(): LLMErrorSnapshot {
     return {
@@ -547,17 +427,8 @@ export class LLMError extends Error {
   }
 
   /**
-   * Controls what `JSON.stringify(err)` produces. Omits `cause` for the
-   * same reason `toSnapshot()` does: `cause` is `unknown` and never
-   * validated by VernLLM, and some SDK errors carry circular structures
-   * `JSON.stringify` cannot serialize at all. Read `err.cause` directly
-   * instead. `issues`, including every nested `attempts` entry's own
-   * `issues`, goes through `safeAttempts` for the same reason: a schema
-   * validation failure's `issues` is caller supplied and not guaranteed
-   * circular free. Also includes `message` and `retryable`, which a
-   * plain property walk would otherwise miss: `message` is
-   * non-enumerable on `Error`, and `retryable` is a getter, not an own
-   * property.
+   * Serializes `message` and `retryable` too, which a plain property walk misses. `cause` is left
+   * out since SDK errors can be circular; read `err.cause` directly.
    */
   toJSON(): Record<string, unknown> {
     return {
@@ -579,16 +450,7 @@ export function isLLMError(err: unknown): err is LLMError {
 }
 
 /**
- * Narrows `err.issues` to the exact shape {@link LLMErrorIssuesByCode} maps
- * `code` to, for any code listed there. `code` stays the only discriminator
- * VernLLM uses; this just gives that existing check a typed return instead
- * of requiring a manual cast of `issues`:
- *
- * ```ts
- * if (isLLMError(err) && hasIssues(err, 'duplicate_tool_names')) {
- *   console.log(err.issues.names); // string[], no cast needed
- * }
- * ```
+ * Narrows `err.issues` to the shape `LLMErrorIssuesByCode` maps `code` to, so no cast is needed.
  */
 export function hasIssues<C extends keyof LLMErrorIssuesByCode>(
   err: LLMError,

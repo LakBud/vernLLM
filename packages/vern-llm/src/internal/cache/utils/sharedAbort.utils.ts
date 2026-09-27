@@ -3,10 +3,8 @@ import { LLMError } from '../../../types/errors.js';
 import type { StreamChunk } from '../../../types/stream.js';
 
 /**
- * An abort signal owned by every caller coalesced onto one in-flight
- * operation, rather than by whichever caller happened to start it. It
- * only fires once the last participant has left, so one caller's abort
- * or deadline never cancels work other callers are still waiting on.
+ * A signal owned by every caller coalesced onto one operation. It fires only once the last one has
+ * left, so one caller's abort never cancels work others still wait on.
  */
 export interface SharedAbort {
   /** Passed to the shared operation. Fires only when no participant remains. */
@@ -85,11 +83,8 @@ export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal | undefine
 }
 
 /**
- * Relays `chunks` until `signal` fires, then throws an `aborted` LLMError
- * from this caller's iteration. The underlying stream is left running for
- * any other participant: stopping early, whether by abort or a `break`,
- * detaches this caller instead of cancelling the shared stream, and a
- * detached reader no longer holds the stream back.
+ * Relays `chunks` until `signal` fires, then throws `aborted` for this caller only. Leaving early
+ * detaches this reader and leaves the shared stream running for the others.
  */
 export function abortableChunks(
   chunks: AsyncIterable<StreamChunk>,

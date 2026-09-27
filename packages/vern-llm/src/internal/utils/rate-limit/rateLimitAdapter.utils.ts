@@ -17,11 +17,8 @@ const ADAPTER_METHOD_NAMES = [
 const OPTIONAL_FUNCTION_MEMBER_NAMES = ['getState', 'readState', 'setLogger'] as const;
 
 /**
- * The optional members that are present but not callable, e.g. someone
- * accidentally assigned a plain object instead of a function. Caught here
- * rather than left to surface later as a confusing "getState is not a
- * function" the first time `getRateLimitState()` calls it: `?.()` only
- * guards against `null`/`undefined`, not a present-but-wrong-type value.
+ * Optional members that are set but not functions, caught now rather than as a confusing "not a
+ * function" later.
  */
 function invalidOptionalMembers(
   option: RateLimitOption,
@@ -48,14 +45,8 @@ function isIncompleteRateLimiterAdapter(option: RateLimitOption): boolean {
 }
 
 /**
- * Resolves `rateLimit` into a real `RateLimiterAdapter`, or `undefined`.
- * Unlike `buildCache`, `undefined` has no fallback instance, no rate
- * limiting is the correct default. An object with some but not all four
- * adapter methods throws here rather than silently passing through as
- * an incomplete adapter or being misread as plain config, either of
- * which would only surface as a confusing "not a function" error later,
- * whenever the missing method first gets called. Same reasoning for a
- * present-but-non-function optional member.
+ * Resolves `rateLimit` into an adapter, or `undefined` for no limiting. An object with only some
+ * adapter methods, or a non-function optional member, throws now instead of failing later.
  */
 export function buildRateLimit(
   option: RateLimitOption | undefined,

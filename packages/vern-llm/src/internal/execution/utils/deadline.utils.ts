@@ -17,12 +17,8 @@ export interface DeadlineSetup {
 }
 
 /**
- * Composes `deadlineMs` into a single `AbortSignal` the rest of `call()`
- * can treat exactly like a caller-supplied one, reusing the same
- * `AbortSignal.any` pattern `withTimeout` already uses to combine an
- * internal timeout with an external signal. When `deadlineMs` is omitted,
- * this is a no-op: the caller's own `signal` (or `undefined`) passes
- * straight through, and no controller or timer is created.
+ * Joins `deadlineMs` into one signal the rest of `call()` treats like the caller's own. Without a
+ * deadline the caller's signal passes through and no timer is created.
  */
 export function setupDeadline(
   deadlineMs: number | undefined,
@@ -60,13 +56,8 @@ export function setupDeadline(
 }
 
 /**
- * Fills in `code: 'deadline_exceeded'` on an already-normalized aborted
- * error, but only when the abort was actually caused by `deadlineMs`
- * elapsing rather than a caller-supplied signal firing first, and only
- * when the error doesn't already carry a code. Mirrors the same fill-in
- * pattern `normalizeError` already uses for `status` to `code`, applied
- * one layer up, at the whole call level instead of the single attempt
- * level.
+ * Sets `code: 'deadline_exceeded'` on an aborted error without a code, only when the deadline
+ * caused the abort rather than the caller's signal.
  */
 export function stampDeadlineCode(error: unknown, signal: AbortSignal | undefined): unknown {
   if (

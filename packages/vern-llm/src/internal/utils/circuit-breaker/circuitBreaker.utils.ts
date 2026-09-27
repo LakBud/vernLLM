@@ -13,20 +13,9 @@ export interface UsageReporterHooks {
 }
 
 /**
- * Builds a `(event) => void` reporter that no-ops when `onEvent` is unset,
- * and otherwise calls it, swallowing and logging any error the handler
- * throws so a broken `onEvent` can't break the call that triggered it.
- * Shared by `buildCircuitBreaker` (which needs to report before any
- * executor exists) and `CallExecutor.reportEvent`, kept independent of the
- * executor for that reason.
- *
- * Also the single place `onUsage`/`onUsageFailure` are driven from: a
- * `'usage'`/`'usage_failure'` event always reaches `onEvent` like any
- * other event, and additionally, separately, reaches the matching plain
- * callback here. Neither call knows the other happened; a throwing
- * `onUsage` can't stop `onEvent` from running or vice versa. This makes
- * the plain options sugar over the event stream, not a second reporting
- * path UsageReporter has to call directly.
+ * An event reporter that logs, rather than throws, a failing `onEvent`. Kept free of the executor
+ * since breakers report before one exists. Also drives `onUsage` and `onUsageFailure` from the
+ * usage events, each called independently of `onEvent`.
  */
 export function makeEventReporter(
   onEvent: ((event: VernLLMEvent) => void) | undefined,
@@ -80,12 +69,9 @@ export function warnIfModelUnsupported(
 }
 
 /**
- * Some adapter methods are declared `void`, but an adapter whose state is
- * remote (Redis) naturally does its work asynchronously and may hand back a
- * promise anyway. Nobody awaits it, so a rejection would otherwise be an
- * unhandled one, which in Node ends the process after the call it belonged
- * to already succeeded. Reports the rejection through `logger` instead, so
- * no adapter has to get this right for itself. A non promise `result` resolves and is ignored.
+ * A `void` adapter method with remote state may still return a promise nobody awaits, and an
+ * unhandled rejection can end the Node process after the call succeeded. Logs the rejection
+ * instead, so adapters don't each have to handle it.
  */
 export function reportRejection(logger: Logger, message: string, result: unknown): void {
   void Promise.resolve(result).catch((error: unknown) => {

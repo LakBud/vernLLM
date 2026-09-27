@@ -1,6 +1,7 @@
 import { LLMError } from '../../types/errors.js';
 import { FallbackExhaustedError } from '../../types/fallback.js';
-import { middlewareContextNames } from '../resolveMiddlewareOrder.js';
+import { createDeferred } from '../utils/deferred.utils.js';
+import { middlewareContextNames } from '../utils/middlewareLabels.utils.js';
 import { normalizeError } from './utils/errors.utils.js';
 import { emitEvent } from './utils/middleware/middleware.utils.js';
 
@@ -20,12 +21,7 @@ import type {
 } from '../../types/index.js';
 import type { CallExecutor } from './callExecutor.js';
 
-/**
- * Everything `runFallbackChain`/`executeLogicalCall`/
- * `executeLogicalStreamCall` need from `VernLLM` itself, gathered into
- * one small object so those functions can live outside the class as
- * plain, independently testable functions instead of private methods.
- */
+/** What the logical call functions need from `VernLLM`, so they can live outside the class. */
 export interface LogicalCallDependencies {
   /** One `CallExecutor` per provider target: index 0 is the primary, everything after it is a `fallback` target, in the order declared. */
   executors: CallExecutor[];
@@ -41,10 +37,8 @@ export interface LogicalCallDependencies {
 }
 
 /**
- * The outcome of walking `runFallbackChain`: the winning target's own
- * result, which target answered, that target's index within
- * `LogicalCallDependencies.executors`, and how many real attempts
- * (retries included) that target itself made.
+ * The chain's outcome: the winning result, which target answered and its index, and how many
+ * attempts that target made.
  */
 export interface FallbackChainOutcome<TResult> {
   result: TResult;
@@ -56,10 +50,8 @@ export interface FallbackChainOutcome<TResult> {
 }
 
 /**
- * The per call `model` override for the target at `targetIndex`, or
- * `undefined` so the target uses its own configured model. The override
- * names a model on the primary's provider, so sending it to a fallback
- * on another provider (say `gpt-4o-mini` to Anthropic) can only fail.
+ * The per call `model` override for this target, or `undefined` to use its own. The override names
+ * a model on the primary's provider, so a fallback on another provider can only fail with it.
  */
 export function modelForTarget(
   params: Pick<CallParams<unknown>, 'model'>,
@@ -78,21 +70,9 @@ export function paramsForTarget<P extends Pick<CallParams<unknown>, 'model'>>(
 }
 
 /**
- * Walks `dependencies.executors` in order, starting from the primary
- * target, calling `attempt` against each until one succeeds or every
- * target has failed. `skipBreakerCheckForFirst` mirrors the sole-target
- * breaker precheck `VernLLM.call()` already performs before usage is
- * reserved: rechecking the same executor's breaker here would either
- * falsely see a half-open trial slot as already claimed, or double-claim
- * a slot no concurrent caller actually has.
- *
- * A per call `model` override applies to the primary only. Every
- * fallback target runs its own configured model, see `modelForTarget`.
- *
- * Throws the lone failure directly when only one target was ever tried
- * (so a single-target caller's error shape is unchanged from
- * pre-fallback behavior), or a `FallbackExhaustedError` carrying every
- * attempt once more than one target has failed.
+ * Tries each target in order until one succeeds. `skipBreakerCheckForFirst` is set when `call()`
+ * already checked the sole target, since checking again would see its own claimed trial. Throws the
+ * lone failure when one target was tried, else `FallbackExhaustedError` with every attempt.
  */
 export async function runFallbackChain<R>(
   dependencies: LogicalCallDependencies,
@@ -111,14 +91,8 @@ export async function runFallbackChain<R>(
     let attemptCount = 0;
 
     try {
-      // Already checked once, before usage was reserved, when this is
-      // the sole target (see `VernLLM.call()`). `assertBreakerClosed`
-      // claims a half-open trial slot as a side effect on a
-      // non-throwing call, so it must run exactly once per logical
-      // call: checking it again here for the same executor could
-      // either falsely see "trial already in flight" (from the check
-      // that just claimed it) or double-claim a slot no concurrent
-      // caller actually has.
+      // Claiming a half-open trial is a side effect, so a target already checked by `call()` isn't
+      // checked twice.
       if (!(targetIndex === 0 && skipBreakerCheckForFirst)) {
         const checking = executor.assertBreakerClosed(targetModel, {
           requestId,
@@ -182,46 +156,16 @@ export async function runFallbackChain<R>(
           : normalizedError;
       }
 
-      const nextExecutor = dependencies.executors[targetIndex + 1]!;
-      const failedModel = targetModel ?? executor.model;
-
-      // `ctx` describes the target that just failed (`from`), not the
-      // one about to be tried next.
-      const ctx: AttemptContext = {
-        stage: 'attempt',
+      reportFallback(dependencies, {
         requestId,
-        requestedProvider: executor.providerName,
-        adapter: executor.adapter,
-        requestedModel: failedModel,
-        isFallbackAttempt: targetIndex > 0,
-        // `attemptCount` stays `0` when `assertBreakerClosed` throws
-        // before `attempt()` ever runs; `AttemptContext.attempt` is
-        // documented as 1-based, so floor it here.
-        attempt: attemptCount || 1,
-        capabilities: { supportsJsonObjectMode: executor.jsonObjectModeSupported },
+        targetIndex,
+        failedModel: targetModel ?? executor.model,
+        attempt: attemptCount,
+        error: normalizedError,
+        elapsedMs: Date.now() - startedAt,
         signal: params.signal,
-        state: middlewareState,
-        own: {},
-        ...middlewareContextNames(dependencies.middleware),
-      };
-
-      emitEvent(
-        {
-          kind: 'fallback',
-          requestId,
-          from: executor.providerName,
-          to: nextExecutor.providerName,
-          fromIndex: targetIndex - 1,
-          toIndex: targetIndex,
-          error: normalizedError,
-          elapsedMs: Date.now() - startedAt,
-        },
-        ctx,
-        dependencies.reportEvent,
-        dependencies.middleware,
-        dependencies.middlewareTimeoutMs,
-        dependencies.logger,
-      );
+        middlewareState,
+      });
     }
   }
 
@@ -229,6 +173,62 @@ export async function runFallbackChain<R>(
   // running out of targets (the last iteration's `isLastTarget` forces
   // a throw). Kept only to satisfy the return type.
   throw new LLMError('No provider targets configured', 'invalid_params');
+}
+
+/**
+ * Emits the `'fallback'` event for the target at `targetIndex` that just failed.
+ * The context describes that failed target, not the next one.
+ */
+function reportFallback(
+  dependencies: LogicalCallDependencies,
+  failure: {
+    requestId: string;
+    targetIndex: number;
+    failedModel: string;
+    attempt: number;
+    error: LLMError;
+    elapsedMs: number;
+    signal: AbortSignal | undefined;
+    middlewareState: MiddlewareStateBag;
+  },
+): void {
+  const { requestId, targetIndex, signal } = failure;
+  const executor = dependencies.executors[targetIndex]!;
+  const nextExecutor = dependencies.executors[targetIndex + 1]!;
+
+  const ctx: AttemptContext = {
+    stage: 'attempt',
+    requestId,
+    requestedProvider: executor.providerName,
+    adapter: executor.adapter,
+    requestedModel: failure.failedModel,
+    isFallbackAttempt: targetIndex > 0,
+    // Stays 0 when the breaker check threw before any attempt; the field is 1-based.
+    attempt: failure.attempt || 1,
+    capabilities: { supportsJsonObjectMode: executor.jsonObjectModeSupported },
+    signal,
+    state: failure.middlewareState,
+    own: {},
+    ...middlewareContextNames(dependencies.middleware),
+  };
+
+  emitEvent(
+    {
+      kind: 'fallback',
+      requestId,
+      from: executor.providerName,
+      to: nextExecutor.providerName,
+      fromIndex: targetIndex - 1,
+      toIndex: targetIndex,
+      error: failure.error,
+      elapsedMs: failure.elapsedMs,
+    },
+    ctx,
+    dependencies.reportEvent,
+    dependencies.middleware,
+    dependencies.middlewareTimeoutMs,
+    dependencies.logger,
+  );
 }
 
 /** The `CallResult.meta` fields for whichever target answered. */
@@ -248,10 +248,8 @@ function metaFor(
 }
 
 /**
- * Builds the `CallResult.meta` block from a `runFallbackChain` outcome
- * and, when `params.meta` was given, writes it into `meta.current`.
- * Shared by `executeLogicalCall` and `executeLogicalStreamCall`, which
- * differ only in what they pass as `runFallbackChain`'s `attempt`.
+ * Builds `CallResult.meta` from the chain's outcome and writes it to `params.meta.current` when
+ * given.
  */
 function buildCallResult<R>(
   outcome: FallbackChainOutcome<R>,
@@ -270,11 +268,8 @@ function buildCallResult<R>(
 }
 
 /**
- * The fallback-chain + retry core of one logical, non-streaming call,
- * with no middleware `wrap` of its own: callers (`VernLLM.call()`
- * directly, or `cachedCall()`'s cache-miss path) each wrap this in
- * exactly one `runOperation` themselves, so a value never passes through
- * `wrap` twice.
+ * The fallback chain and retries of one non-streaming call, without `wrap`. Each caller wraps it
+ * once, so no value passes through `wrap` twice.
  */
 export async function executeLogicalCall<T>(
   dependencies: LogicalCallDependencies,
@@ -297,17 +292,10 @@ export async function executeLogicalCall<T>(
 }
 
 /**
- * Streaming counterpart to `executeLogicalCall`. Resolves as soon as the
- * first stream opens (a keep-alive ping is enough), so the caller holds
- * `chunks` and `finalResult` while the model is still thinking. Until
- * the first content chunk arrives, the fallback chain keeps running
- * behind them: a failure before content retries and falls back as
- * usual, and the returned `chunks` and `finalResult` follow whichever
- * attempt produces content. `meta` starts out describing the target that
- * opened and is updated in place once the answering target is known.
- *
- * A chain that fails before any stream opens rejects this call, exactly
- * as before.
+ * Streaming counterpart to `executeLogicalCall`. Resolves when the first stream opens, a ping
+ * included, while the chain keeps running behind it until content arrives: a failure before content
+ * still retries and falls back, and `chunks` and `finalResult` follow whichever attempt answers.
+ * `meta` is updated in place once that target is known.
  */
 export async function executeLogicalStreamCall<T>(
   dependencies: LogicalCallDependencies,
@@ -323,10 +311,7 @@ export async function executeLogicalStreamCall<T>(
 > {
   type Opened = { executor: CallExecutor; index: number; attempts: number };
 
-  let resolveOpened!: (opened: Opened) => void;
-  const opened = new Promise<Opened>((resolve) => {
-    resolveOpened = resolve;
-  });
+  const { promise: opened, resolve: resolveOpened } = createDeferred<Opened>();
 
   const chain = runFallbackChain(
     dependencies,

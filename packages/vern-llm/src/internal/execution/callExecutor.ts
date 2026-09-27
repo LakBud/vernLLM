@@ -1,4 +1,3 @@
-import { LLMError } from '../../types/errors.js';
 import { type RetryBudget } from '../retryBudget.js';
 import { resolveAdapterInfo } from '../utils/adapterInfo.utils.js';
 import {
@@ -9,36 +8,30 @@ import {
   runPrepare,
   type PreparableBreaker,
 } from '../utils/circuit-breaker/prepareBreaker.utils.js';
-import { redactResponseBody } from '../utils/errors/responseBody.utils.js';
 import { callHookSafely } from '../utils/logger.utils.js';
-import { readRateLimitHint } from '../utils/rate-limit/rateLimitHint.utils.js';
-import { type BreakerGateway } from './circuitBreakerContext.js';
+import {
+  countsTowardBreaker,
+  redactText,
+  type AttemptEnvironment,
+} from './attempt/attemptEnvironment.js';
+import { executeCall } from './attempt/nonStreamAttempt.js';
+import { executeStreamCall } from './attempt/streamAttempt.js';
 import { RequestBuilder } from './requestBuilder.js';
-import { finalizeResponse } from './responseFinalizer.js';
-import { buildStreamResult } from './streamAccumulator.js';
-import { createUsageReporter, type UsageReporter } from './usageReporter.js';
-import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
-import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
-import { isLimiterFailure } from './utils/dispatch/rateLimitDispatch.utils.js';
-import { extractStatus, normalizeError } from './utils/errors.utils.js';
+import { createUsageReporter } from './usageReporter.js';
+import { type OnRequest } from './utils/dispatch/attemptDispatch.utils.js';
+import { runAttemptLoop, type RunAttemptLoopParams } from './utils/dispatch/attemptLoop.utils.js';
 import {
   DEFAULT_MIDDLEWARE_TIMEOUT_MS,
+  buildDispatchHooks,
   emitEvent,
-  middlewareLabel,
-  type DispatchHook,
 } from './utils/middleware/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
-import { toTokenUsage } from './utils/response/usage.utils.js';
-import {
-  normalizeMaxRetries,
-  validateMaxRetryAfterMs,
-  withChunkIdleTimeout,
-  withTimeout,
-} from './utils/retry/retry.utils.js';
+import { normalizeMaxRetries, validateMaxRetryAfterMs } from './utils/retry/retry.utils.js';
 
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import type { Logger } from '../../logger.js';
 import type { RateLimiterAdapter } from '../../rateLimit.js';
+import type { LLMError } from '../../types/errors.js';
 import type {
   AdapterInfo,
   CallParams,
@@ -51,7 +44,6 @@ import type {
   VernLLMEvent,
   VernLLMMiddleware,
   WireCallRequest,
-  WireStreamChunk,
 } from '../../types/index.js';
 
 export type { OnRequest };
@@ -98,53 +90,35 @@ export interface CallExecutorOptions {
 }
 
 /**
- * Everything one provider target needs to attempt a call: request
- * building, retry with backoff, the per-target breaker, the per-target
- * limiter. Never exported publicly. `VernLLM` holds one per target and
- * owns the fallback loop and caching on top.
+ * One provider target: request building, retries, and its own breaker and limiter. `VernLLM` holds
+ * one per target and adds fallback and caching on top.
  */
 export class CallExecutor {
   private readonly maxRetries: number;
-  private readonly timeoutMs: number;
-  private readonly chunkIdleTimeoutMs: number;
-  private readonly readerStallTimeoutMs?: number;
   private readonly baseDelayMs: number;
-  private readonly maxRetryAfterMs: number;
   private readonly nonRetryableStatus: number[];
-  private readonly parseJson: (content: string) => unknown;
   private readonly logger: Logger;
-  private readonly redact?: (text: string) => string;
-  private readonly usageReporter: UsageReporter;
-  private readonly reportEvent: (event: VernLLMEvent) => void;
   private readonly breaker?: CircuitBreakerAdapter;
   private readonly budget?: RetryBudget;
   private readonly limiter?: RateLimiterAdapter;
   private readonly isFallback: boolean;
-  private readonly requestBuilder: RequestBuilder;
-  private readonly middleware: VernLLMMiddleware[];
-  private readonly dispatchHooks: readonly DispatchHook[];
-  private readonly middlewareTimeoutMs: number;
+  private readonly supportsJsonObjectMode: boolean;
+  /** Everything a single attempt reads. Shared by both attempt paths. */
+  private readonly env: AttemptEnvironment;
   /** See `AttemptContext.adapter`. */
   readonly adapter: AdapterInfo;
-  private readonly supportsJsonObjectMode: boolean;
-  private readonly detectSoftFailure?: DetectSoftFailure;
 
   constructor(
     readonly providerName: string,
-    private readonly client: LLMClient,
+    client: LLMClient,
     readonly model: string,
     options: CallExecutorOptions,
   ) {
     this.maxRetries = normalizeMaxRetries(options.maxRetries);
-    this.timeoutMs = options.timeoutMs;
-    this.chunkIdleTimeoutMs = options.chunkIdleTimeoutMs;
-    this.readerStallTimeoutMs = options.readerStallTimeoutMs;
     this.baseDelayMs = options.baseDelayMs;
-    this.maxRetryAfterMs = validateMaxRetryAfterMs(options.maxRetryAfterMs, providerName);
+    const maxRetryAfterMs = validateMaxRetryAfterMs(options.maxRetryAfterMs, providerName);
     this.nonRetryableStatus = options.nonRetryableStatus;
-    this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
-    this.redact = options.redact;
 
     if (this.maxRetries !== options.maxRetries) {
       this.logger.warn(
@@ -152,7 +126,7 @@ export class CallExecutor {
       );
     }
 
-    this.reportEvent = makeEventReporter(options.onEvent, this.logger, {
+    const reportEvent = makeEventReporter(options.onEvent, this.logger, {
       onUsage: options.onUsage,
       onUsageFailure: options.onUsageFailure,
     });
@@ -161,31 +135,23 @@ export class CallExecutor {
     this.budget = options.budget;
     this.limiter = options.limiter;
     this.isFallback = options.isFallback ?? false;
-    this.middleware = options.middleware ?? [];
-    this.dispatchHooks = buildDispatchHooks(this.middleware, options.dispatchOrder);
+    const middleware = options.middleware ?? [];
+    const dispatchHooks = buildDispatchHooks(middleware, options.dispatchOrder);
     this.adapter = resolveAdapterInfo(client);
     callHookSafely(this.logger, 'client.setLogger', () => client.setLogger?.(this.logger));
-    this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
+    const middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
     this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
-    this.detectSoftFailure = options.detectSoftFailure;
 
-    this.usageReporter = createUsageReporter({
-      providerName: this.providerName,
+    const usageReporter = createUsageReporter({
+      providerName,
       isFallback: this.isFallback,
       maxRetries: this.maxRetries,
       emitEvent: (event, ctx) =>
-        emitEvent(
-          event,
-          ctx,
-          this.reportEvent,
-          this.middleware,
-          this.middlewareTimeoutMs,
-          this.logger,
-        ),
+        emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, this.logger),
       logger: this.logger,
     });
 
-    this.requestBuilder = new RequestBuilder({
+    const requestBuilder = new RequestBuilder({
       model,
       defaultMaxTokens: options.defaultMaxTokens,
       defaultTemperature: options.defaultTemperature,
@@ -193,20 +159,39 @@ export class CallExecutor {
       defaultBudgetTokens: options.defaultBudgetTokens,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
     });
+
+    this.env = {
+      client,
+      providerName,
+      isFallback: this.isFallback,
+      timeoutMs: options.timeoutMs,
+      chunkIdleTimeoutMs: options.chunkIdleTimeoutMs,
+      readerStallTimeoutMs: options.readerStallTimeoutMs,
+      maxRetryAfterMs,
+      parseJson: options.parseJson ?? defaultParseJson,
+      logger: this.logger,
+      redact: options.redact,
+      usageReporter,
+      reportEvent,
+      limiter: this.limiter,
+      requestBuilder,
+      middleware,
+      dispatchHooks,
+      middlewareTimeoutMs,
+      detectSoftFailure: options.detectSoftFailure,
+    };
   }
 
   /**
-   * Builds this target's wire request for `params` without dispatching
-   * it or applying any middleware `transform`. Used by `VernLLM` to hand
-   * `wrap` middleware a representative request before the real,
-   * per-attempt request (which does run `transform`) exists yet.
+   * This target's wire request for `params`, without dispatch or `transform`.
+   * Gives `wrap` a representative request before the real one exists.
    */
   previewRequest<T>(params: CallParams<T>): { model: string; request: WireCallRequest } {
-    const { model, request } = this.requestBuilder.build(params);
+    const { model, request } = this.env.requestBuilder.build(params);
     return { model, request };
   }
 
-  /** Whether this target's underlying client supports `response_format: 'json_object'`. Used to seed `MiddlewareContext.capabilities.supportsJsonObjectMode` for the primary target before a real request exists. */
+  /** Whether the client supports `response_format: 'json_object'`. */
   get jsonObjectModeSupported(): boolean {
     return this.supportsJsonObjectMode;
   }
@@ -215,66 +200,53 @@ export class CallExecutor {
     return this.breaker?.getState?.(model);
   }
 
-  /** Live circuit state: the breaker's `readState` if it has one, otherwise its `getState`. Undefined if no breaker is configured. */
+  /** The breaker's `readState` if it has one, otherwise `getState`. */
   async readCircuitState(model?: string) {
     return this.breaker?.readState
       ? this.breaker.readState(model)
       : this.breaker?.getState?.(model);
   }
 
-  /** Failure counts by `LLMErrorCode` for this target's breaker, if configured and it reports them. Undefined otherwise. */
   getFailureBreakdown(model?: string) {
     return this.breaker?.getFailureBreakdown?.(model);
   }
 
-  /** This target's current retry budget traffic/ratio, if a budget is configured. Undefined otherwise. */
   getRetryBudgetState() {
     return this.budget?.getSnapshot();
   }
 
-  /** This target's current rate limit levels, if a limiter is configured and reports state. Undefined otherwise. */
   getRateLimitState() {
     return this.limiter?.getState?.();
   }
 
-  /** Live rate limit levels: the limiter's `readState` if it has one, otherwise its `getState`. Undefined if no limiter is configured or it reports none. */
+  /** The limiter's `readState` if it has one, otherwise `getState`. */
   async readRateLimitState() {
     return this.limiter?.readState ? this.limiter.readState() : this.limiter?.getState?.();
   }
 
-  /** Whether this target's breaker tracks failures per model. `false` if no breaker is configured, or if the breaker doesn't report this. */
+  /** `false` without a breaker, or when the breaker doesn't report it. */
   get isolateByModel(): boolean {
     return this.breaker?.isolateByModel ?? false;
   }
 
-  /** Manually opens this target's circuit breaker, if one is configured and supports it. No-op otherwise. */
   openCircuit(model?: string, context?: CircuitBreakerCallContext): void {
     this.breaker?.open?.(model, context);
   }
 
-  /** Manually closes this target's circuit breaker, if one is configured and supports it. No-op otherwise. */
   closeCircuit(model?: string, context?: CircuitBreakerCallContext): void {
     this.breaker?.close?.(model, context);
   }
 
   /**
-   * Throws if the breaker is open for this target/model, exactly like the
-   * check `run`/`runStream` used to make internally. Exposed so `VernLLM`
-   * can gate on it before reserving usage, avoiding a reserve-then-refund
-   * round trip on a call that was never going to be attempted. `assertClosed`
-   * has a stateful side effect (claiming a half-open trial slot), so it must
-   * run exactly once per logical call: `run`/`runStream` no longer call it
-   * themselves, this is now the only call site.
-   *
-   * Returns a promise only when the breaker has a `prepare` to await first
-   * (see `CircuitBreakerAdapter.prepare`), so callers `await` it only when
-   * they get one back and a plain breaker costs nothing extra.
+   * Throws if the breaker is open. May claim a half-open trial, so it runs
+   * once per logical call, from `VernLLM` or the fallback chain, never from
+   * `run`. Returns a promise only when the breaker has a `prepare`, so a plain
+   * breaker adds no tick.
    */
   assertBreakerClosed(model?: string, context?: CircuitBreakerCallContext): void | Promise<void> {
     const breaker = this.breaker;
     const resolvedModel = model ?? this.model;
 
-    // No `prepare`: exactly the old synchronous check, no extra tick.
     if (!breaker?.prepare) {
       breaker?.assertClosed(resolvedModel, context);
       return;
@@ -285,11 +257,7 @@ export class CallExecutor {
     );
   }
 
-  /**
-   * Gives back a half-open trial slot `assertBreakerClosed` may have claimed
-   * for this call, when the call ended without a recorded outcome. Safe to
-   * call on any failure path: idempotent, and a no-op if none was claimed.
-   */
+  /** Gives back a trial `assertBreakerClosed` may have claimed. Idempotent. */
   releaseBreakerTrial(model?: string, context?: CircuitBreakerCallContext): void {
     // Declared `void`, but a remote adapter may return a promise anyway.
     reportRejection(
@@ -299,54 +267,36 @@ export class CallExecutor {
     );
   }
 
-  /**
-   * Runs a single logical call against this target: retry with backoff,
-   * normalized error on exhaustion. Mirrors the old `VernLLM.call`'s
-   * non-streaming branch, minus cache/usage-reservation and the breaker
-   * check, which stay one layer up since they aren't per-target concerns
-   * (see `assertBreakerClosed`).
-   */
+  /** One logical call against this target, with retries. The breaker check stays with the caller. */
   async run<T>(
     params: CallParams<T>,
     requestId: string,
     onAttempt?: () => void,
     state?: MiddlewareStateBag,
   ): Promise<T | CallWithToolsResult<T>> {
-    return runAttemptLoop({
-      fn: (attempt, onRequest, resolvedState, gateway) =>
-        this.executeCall(params, requestId, attempt, onRequest, resolvedState, gateway),
-      requestId,
-      model: params.model ?? this.model,
-      providerName: this.providerName,
-      isFallback: this.isFallback,
-      supportsJsonObjectMode: this.supportsJsonObjectMode,
-      adapter: this.adapter,
-      breaker: this.breaker,
-      budget: this.budget,
-      maxRetries: this.maxRetries,
-      baseDelayMs: this.baseDelayMs,
-      maxRetryAfterMs: this.maxRetryAfterMs,
-      nonRetryableStatus: this.nonRetryableStatus,
-      signal: params.signal,
-      onAttempt,
-      state,
-      middleware: this.middleware,
-      middlewareTimeoutMs: this.middlewareTimeoutMs,
-      logger: this.logger,
-      reportEvent: this.reportEvent,
-      logLabel: 'error',
-      redactText: (text) => this.redactText(text),
-      countsTowardBreaker: (error) => this.countsTowardBreaker(error),
-    });
+    return runAttemptLoop(
+      this.attemptLoopParams(
+        params,
+        requestId,
+        onAttempt,
+        state,
+        'error',
+        (attempt, onRequest, middlewareState, gateway) =>
+          executeCall(this.env, {
+            params,
+            requestId,
+            attempt,
+            onRequest,
+            middlewareState,
+            gateway,
+          }),
+      ),
+    );
   }
 
-  /** Streaming counterpart to `run`. Mirrors the old streaming branch of `VernLLM.call`. */
   /**
-   * `onOpened` fires the first time any attempt's stream opens, which a
-   * keep-alive ping already counts as. The attempt itself only succeeds
-   * once the first content chunk arrives, so a failure before that is
-   * retried here and can fall back, while the caller already holds the
-   * stream. See `executeLogicalStreamCall`.
+   * Streaming counterpart to `run`. `onOpened` fires when any attempt's stream
+   * opens, a ping included. See `executeLogicalStreamCall`.
    */
   async runStream<T>(
     params: CallParams<T>,
@@ -358,17 +308,33 @@ export class CallExecutor {
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }> {
-    return runAttemptLoop({
-      fn: (attempt, onRequest, resolvedState, gateway) =>
-        this.executeStreamCall(
-          params,
-          requestId,
-          attempt,
-          onRequest,
-          resolvedState,
-          gateway,
-          onOpened,
-        ),
+    return runAttemptLoop(
+      this.attemptLoopParams(
+        params,
+        requestId,
+        onAttempt,
+        state,
+        'stream-open error',
+        (attempt, onRequest, middlewareState, gateway) =>
+          executeStreamCall(
+            this.env,
+            { params, requestId, attempt, onRequest, middlewareState, gateway },
+            onOpened,
+          ),
+      ),
+    );
+  }
+
+  private attemptLoopParams<R>(
+    params: CallParams<unknown>,
+    requestId: string,
+    onAttempt: (() => void) | undefined,
+    state: MiddlewareStateBag | undefined,
+    logLabel: RunAttemptLoopParams<R>['logLabel'],
+    fn: RunAttemptLoopParams<R>['fn'],
+  ): RunAttemptLoopParams<R> {
+    return {
+      fn,
       requestId,
       model: params.model ?? this.model,
       providerName: this.providerName,
@@ -379,618 +345,18 @@ export class CallExecutor {
       budget: this.budget,
       maxRetries: this.maxRetries,
       baseDelayMs: this.baseDelayMs,
-      maxRetryAfterMs: this.maxRetryAfterMs,
+      maxRetryAfterMs: this.env.maxRetryAfterMs,
       nonRetryableStatus: this.nonRetryableStatus,
       signal: params.signal,
       onAttempt,
       state,
-      middleware: this.middleware,
-      middlewareTimeoutMs: this.middlewareTimeoutMs,
+      middleware: this.env.middleware,
+      middlewareTimeoutMs: this.env.middlewareTimeoutMs,
       logger: this.logger,
-      reportEvent: this.reportEvent,
-      logLabel: 'stream-open error',
-      redactText: (text) => this.redactText(text),
-      countsTowardBreaker: (error) => this.countsTowardBreaker(error),
-    });
-  }
-
-  /**
-   * Performs a single attempt: builds the request (translating `tools` to
-   * wire shape when present), dispatches it with a timeout, and shapes the
-   * response into `T` or a `CallWithToolsResult<T>` when `params.tools` was
-   * set. Throws on an empty response (no text and no tool_calls) so the
-   * retry loop treats it like any other transient failure.
-   */
-  private async executeCall<T>(
-    params: CallParams<T>,
-    requestId: string,
-    attempt: number,
-    onRequest: OnRequest | undefined,
-    middlewareState: MiddlewareStateBag | undefined,
-    gateway: BreakerGateway,
-  ): Promise<T | CallWithToolsResult<T>> {
-    // A retry is a real request, so capacity is acquired per attempt
-    // (inside the retry loop, via `executeCall` being re-invoked), not
-    // once for the whole call.
-    const {
-      request,
-      model,
-      useJson,
-      state,
-      release: acquiredRelease,
-      dispatch,
-    } = await prepareAttempt({
-      params,
-      requestId,
-      attempt,
-      onRequest,
-      middlewareState,
-      gateway,
-      requestBuilder: this.requestBuilder,
-      providerName: this.providerName,
-      limiter: this.limiter,
-      middleware: this.middleware,
-      dispatchHooks: this.dispatchHooks,
-      middlewareTimeoutMs: this.middlewareTimeoutMs,
-      logger: this.logger,
-      reportEvent: this.reportEvent,
-    });
-    let release = acquiredRelease;
-
-    try {
-      let response!: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
-
-      await this.dispatchToProvider(dispatch, params.signal, async () => {
-        response = await withTimeout(
-          (attemptSignal) =>
-            this.client.chat.completions.create(request, { signal: attemptSignal }),
-          this.timeoutMs,
-          params.signal,
-        );
-      });
-
-      // AIMD's proactive path.
-      this.limiter?.reactToRateLimitHint(readRateLimitHint(response));
-
-      // Extracted right after the response arrives, before anything else
-      // touches it, so a post-response failure still gets its usage reported.
-      const usage = this.usageReporter.extract(response, requestId, model);
-      const actualTokens = this.usageReporter.actualTokensFor(usage);
-
-      // Raw and unvalidated on purpose. Extraction (including `.trim()`,
-      // which throws on a non-string `content`) happens inside
-      // `finalizeResponse`'s try/catch, so a malformed response still gets
-      // normalized and its usage failure reported.
-      const rawContent = response.choices?.[0]?.message?.content;
-      const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
-      const truncated = response.choices?.[0]?.finish_reason === 'length';
-      const thinking = response.choices?.[0]?.message?.thinking;
-
-      let finalized: T | CallWithToolsResult<T>;
-
-      try {
-        finalized = finalizeResponse(
-          rawContent,
-          wireToolCalls,
-          params,
-          useJson,
-          usage,
-          requestId,
-          attempt,
-          state,
-          {
-            gateway,
-            usageReporter: this.usageReporter,
-            logger: this.logger,
-            redactText: (text) => this.redactText(text),
-            parseJson: this.parseJson,
-            detectSoftFailure: this.detectSoftFailure,
-            providerName: this.providerName,
-            isFallback: this.isFallback,
-            model,
-          },
-          truncated,
-          thinking,
-        );
-      } catch (error) {
-        // Still reconcile real token usage and give the concurrency slot
-        // back, but never grow the AIMD ceiling for a response VernLLM
-        // itself rejected (invalid JSON, schema/tool-contract validation,
-        // empty content, a soft failure): only a response that actually
-        // made it back to the caller counts as a success.
-        release?.(actualTokens);
-        release = undefined;
-        throw error;
-      }
-
-      // `success: true` is what lets AIMD grow the ceiling here, only
-      // once finalization has actually succeeded. The `finally` block's
-      // own `release?.()` below never passes it, so a failed attempt
-      // only ever shrinks via `reactToRateLimitError`, never grows right
-      // back.
-      release?.(actualTokens, true);
-      release = undefined;
-
-      return finalized;
-    } finally {
-      release?.();
-    }
-  }
-
-  /** Applies `redact` (if configured); otherwise returns `text` unchanged. */
-  private redactText(text: string): string {
-    return this.redact ? this.redact(text) : text;
-  }
-
-  /**
-   * Reads past pings and rate limit hints until the first content chunk
-   * (text or a tool call delta) or the end of the stream. A usage chunk
-   * seen on the way is kept and replayed ahead of that content, so
-   * nothing but pings and hints is dropped. On failure the stream is
-   * closed, and usage already reported is handed to `onFailedUsage`,
-   * before the error is rethrown. Runs inside `dispatchToProvider`, which
-   * feeds the error to AIMD.
-   */
-  private async readUntilContent(
-    iterator: AsyncIterator<WireStreamChunk>,
-    first: IteratorResult<WireStreamChunk>,
-    chunkIdleTimeoutMs: number | undefined,
-    streamController: AbortController,
-    onFailedUsage: (
-      usage: Extract<WireStreamChunk, { type: 'usage' }>['usage'],
-      error: unknown,
-    ) => void,
-  ): Promise<{ head: IteratorResult<WireStreamChunk>; rest: AsyncIterator<WireStreamChunk> }> {
-    const held: WireStreamChunk[] = [];
-    let current = first;
-
-    try {
-      while (!current.done && !isContentChunk(current.value)) {
-        const chunk = current.value;
-
-        if (chunk.type === 'rate_limit_hint') {
-          this.limiter?.reactToRateLimitHint(chunk.hint);
-        } else if (chunk.type !== 'ping') {
-          held.push(chunk);
-        }
-
-        current = await withChunkIdleTimeout(
-          () => iterator.next(),
-          chunkIdleTimeoutMs,
-          () => streamController.abort(),
-          this.logger,
-        );
-      }
-    } catch (error) {
-      // Not awaited: after an idle timeout the adapter's generator can
-      // still be suspended in its own await, and `return()` on a running
-      // generator waits for that to settle. The abort is what tears the
-      // transport down; `return()` only asks nicely.
-      streamController.abort();
-      void Promise.resolve()
-        .then(() => iterator.return?.())
-        .catch(() => {});
-
-      const lastUsage = [...held].reverse().find((chunk) => chunk.type === 'usage');
-      if (lastUsage?.type === 'usage') onFailedUsage(lastUsage.usage, error);
-
-      throw error;
-    }
-
-    if (current.done || held.length === 0) return { head: current, rest: iterator };
-
-    // Replays the held chunks, then the content chunk, then the live stream.
-    const queue: WireStreamChunk[] = [...held.slice(1), current.value];
-    const rest: AsyncIterator<WireStreamChunk> = {
-      next: () => {
-        const queued = queue.shift();
-        return queued ? Promise.resolve({ done: false, value: queued }) : iterator.next();
-      },
-      return: async () => iterator.return?.() ?? { done: true, value: undefined },
+      reportEvent: this.env.reportEvent,
+      logLabel,
+      redactText: (text) => redactText(this.env, text),
+      countsTowardBreaker,
     };
-
-    return { head: { done: false, value: held[0]! }, rest };
   }
-
-  /**
-   * Runs `send` inside the attempt's `dispatch` hooks. A provider failure
-   * is redacted, fed to AIMD, and rethrown as the raw error, not the
-   * `LLMError` hooks saw, since retry timing reads `Retry-After` off it.
-   * Anything else, a hook that never sent the request, is thrown as is.
-   */
-  private async dispatchToProvider(
-    dispatch: (send: () => Promise<void>) => Promise<void>,
-    signal: AbortSignal | undefined,
-    send: () => Promise<void>,
-  ): Promise<void> {
-    let providerFailure: { error: unknown } | undefined;
-
-    try {
-      await dispatch(async () => {
-        try {
-          await send();
-        } catch (error) {
-          this.redactProviderError(error);
-          this.reactToRateLimitError(error);
-          providerFailure = { error };
-          throw normalizeError(error, signal, undefined, this.maxRetryAfterMs);
-        }
-      });
-    } catch (error) {
-      throw providerFailure ? providerFailure.error : error;
-    }
-  }
-
-  /**
-   * Runs `redact` over a provider response body an adapter embedded in
-   * its error, before that message becomes `LLMError.message` or is
-   * logged. See `errorWithResponseBody`.
-   */
-  private redactProviderError(error: unknown): void {
-    if (this.redact) redactResponseBody(error, this.redact);
-  }
-
-  /**
-   * AIMD's reactive path: shrinks the ceiling on a real 429,
-   * adapter-agnostic, independent of `supportsWithResponse`.
-   */
-  private reactToRateLimitError(error: unknown): void {
-    if (!this.limiter) return;
-    if (extractStatus(error) !== 429) return;
-
-    this.limiter.signalRateLimit();
-  }
-
-  /**
-   * Opens a stream for a single attempt: builds the request exactly like
-   * `executeCall`, then requires `createStream` on the client (a clear
-   * `validation` error if the adapter doesn't support it). The timeout
-   * wraps stream construction and the first `.next()` together, not just
-   * construction: calling an `async function*` returns an iterator
-   * synchronously without running its body until `.next()` is first
-   * invoked, so timing only construction would time an operation that's
-   * always instant, not the actual connection. Both are folded into a
-   * single `withTimeout` so the same abort signal reaches whatever the
-   * adapter's `createStream` uses internally for its first network
-   * round-trip.
-   *
-   * Circuit-breaker success is recorded once the stream fully completes,
-   * not on the first chunk arriving, so a connection that opens but then
-   * dies mid-stream isn't masked as a success (see `buildStreamResult`).
-   */
-  private async executeStreamCall<T>(
-    params: CallParams<T>,
-    requestId: string,
-    attempt: number,
-    onRequest: OnRequest | undefined,
-    middlewareState: MiddlewareStateBag | undefined,
-    gateway: BreakerGateway,
-    onOpened?: () => void,
-  ): Promise<{
-    chunks: AsyncIterable<StreamChunk>;
-    finalResult: Promise<T | CallWithToolsResult<T>>;
-  }> {
-    // A stream holds a real connection for its whole life, so its
-    // capacity is released on completion (in `buildStreamResult`), not
-    // once opening succeeds.
-    const completions = this.client.chat.completions;
-
-    if (!completions.createStream) {
-      throw new LLMError(
-        'stream: true requires a client/adapter with createStream',
-        'invalid_params',
-        {
-          code: 'unsupported_capability',
-          issues: { capability: 'createStream' },
-        },
-      );
-    }
-
-    const createStream = completions.createStream.bind(completions);
-
-    const {
-      request,
-      model,
-      useJson,
-      state,
-      release: acquiredRelease,
-      dispatch,
-    } = await prepareAttempt({
-      params,
-      requestId,
-      attempt,
-      onRequest,
-      middlewareState,
-      gateway,
-      requestBuilder: this.requestBuilder,
-      providerName: this.providerName,
-      limiter: this.limiter,
-      middleware: this.middleware,
-      dispatchHooks: this.dispatchHooks,
-      middlewareTimeoutMs: this.middlewareTimeoutMs,
-      logger: this.logger,
-      reportEvent: this.reportEvent,
-    });
-    let release = acquiredRelease;
-
-    // One controller for the entire stream, not just opening it. Adapters
-    // already thread this signal into their transport for the life of the
-    // request (that's how user-initiated cancellation works today), so
-    // reusing it for the idle timeout means the same abort() call that
-    // fires when the stream goes idle mid-way also tears down the
-    // underlying connection, instead of only rejecting VernLLM's own
-    // promise while the transport stays open.
-    const streamController = new AbortController();
-    const combinedExternal = params.signal
-      ? AbortSignal.any([params.signal, streamController.signal])
-      : streamController.signal;
-
-    try {
-      const chunkIdleTimeoutMs = params.chunkIdleTimeoutMs ?? this.chunkIdleTimeoutMs;
-      let opened!: {
-        head: IteratorResult<WireStreamChunk>;
-        rest: AsyncIterator<WireStreamChunk>;
-      };
-
-      await this.dispatchToProvider(dispatch, params.signal, async () => {
-        const { iterator, first } = await withTimeout(
-          async (attemptSignal) => {
-            const streamIterator = createStream(request, { signal: attemptSignal })[
-              Symbol.asyncIterator
-            ]();
-            let firstResult = await streamIterator.next();
-
-            // A rate-limit hint is read off the response headers, not the
-            // body, so it can arrive before any real content. It must not
-            // count as the stream having opened, or a failure on the first
-            // real chunk would skip retries and fallback.
-            while (!firstResult.done && firstResult.value.type === 'rate_limit_hint') {
-              this.limiter?.reactToRateLimitHint(firstResult.value.hint);
-              firstResult = await streamIterator.next();
-            }
-
-            return { iterator: streamIterator, first: firstResult };
-          },
-          this.timeoutMs,
-          combinedExternal,
-        );
-
-        // A ping counts as the stream opening, so a model's thinking phase
-        // (which can far outlast `timeoutMs`) only needs pings to stay open.
-        if (!first.done) onOpened?.();
-
-        // Until the first content chunk, nothing has reached the caller, so a
-        // failure here is still an ordinary attempt failure: thrown back to
-        // the retry loop, and past it to fallback. The idle timeout, which
-        // every ping resets, is what bounds this wait. Read inside `dispatch`,
-        // so its hooks see the attempt settle where it succeeds or fails, not
-        // at a keep-alive ping.
-        opened = await this.readUntilContent(
-          iterator,
-          first,
-          chunkIdleTimeoutMs,
-          streamController,
-          (wireUsage, error) => {
-            const usage = toTokenUsage(wireUsage, {
-              requestId,
-              model,
-              providerName: this.providerName,
-              isFallback: this.isFallback,
-            });
-            const normalized = normalizeError(
-              error,
-              params.signal,
-              undefined,
-              this.maxRetryAfterMs,
-            );
-
-            if (normalized.type !== 'aborted') {
-              this.usageReporter.reportFailure(
-                usage,
-                normalized,
-                attempt,
-                gateway.buildAttemptContext(attempt, params.signal, state),
-                true,
-              );
-            }
-
-            release?.(this.usageReporter.actualTokensFor(usage));
-            release = undefined;
-          },
-        );
-      });
-
-      const { head, rest } = opened;
-
-      // An exhausted stream with no content at all is the streaming
-      // equivalent of `executeCall`'s empty-response check: surface the same
-      // `LLMError('Empty LLM response', 'api')` so retry behaves identically
-      // whether the empty result came from a non-streaming or streaming
-      // attempt.
-      if (head.done) {
-        throw new LLMError('Empty LLM response', 'api');
-      }
-
-      // Snapshotted before the closures below are created, since `release`
-      // (the outer variable) is reassigned to undefined right after this
-      // call to hand ownership off. The callbacks only run later, once the
-      // stream completes, so closing over the mutable variable itself
-      // would see that later `undefined` instead of the value being
-      // handed off.
-      const releaseAtOpen = release;
-
-      const result = buildStreamResult(rest, head, {
-        requestId,
-        model,
-        providerName: this.providerName,
-        isFallback: this.isFallback,
-        chunkIdleTimeoutMs,
-        readerStallTimeoutMs: this.readerStallTimeoutMs,
-        streamController,
-        logger: this.logger,
-        signal: params.signal,
-        maxRetryAfterMs: this.maxRetryAfterMs,
-        onRateLimitHint: (hint) => {
-          this.limiter?.reactToRateLimitHint(hint);
-        },
-        onStreamSuccess: (_usage) => {
-          // No breaker success recorded here, and no release here
-          // either. `finalize`, below, is the single source of truth
-          // for a streaming success, exactly like the non-streaming
-          // path: releasing (and possibly growing the AIMD ceiling)
-          // here, before finalize runs, would treat the attempt as
-          // successful even when finalize's own shaping or
-          // detectSoftFailure check is about to reject it, and would
-          // reset consecutiveFailures right before the failure path
-          // below tries to increment it.
-        },
-        onStreamFailure: (normalized, usage) => {
-          // AIMD's reactive path. A provider can emit a 429 after the
-          // stream has already opened (e.g. Bedrock's mid-stream
-          // `throttlingException`), not just on the opening attempt
-          // (already handled above, around the initial `withTimeout`
-          // call): both are real rate-limit signals and must shrink
-          // the ceiling the same way.
-          this.reactToRateLimitError(normalized);
-
-          // Idle timeout is the one mid-stream failure that trips the
-          // breaker: otherwise a provider that hangs after one chunk
-          // would always record a success and never open it.
-          if (normalized.type === 'timeout') {
-            gateway.recordFailure(attempt, params.signal, state, normalized.code);
-          } else {
-            gateway.releaseTrial(attempt, params.signal, state);
-          }
-
-          if (usage && normalized.type !== 'aborted') {
-            this.usageReporter.reportFailure(
-              usage,
-              normalized,
-              attempt,
-              gateway.buildAttemptContext(attempt, params.signal, state),
-              true,
-            );
-          }
-
-          releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
-        },
-        finalize: (textAcc, wireToolCalls, usage, thinking) => {
-          const actualTokens = this.usageReporter.actualTokensFor(usage);
-
-          try {
-            const finalized = finalizeResponse(
-              textAcc,
-              wireToolCalls,
-              params,
-              useJson,
-              usage,
-              requestId,
-              attempt,
-              state,
-              {
-                gateway,
-                usageReporter: this.usageReporter,
-                logger: this.logger,
-                redactText: (text) => this.redactText(text),
-                parseJson: this.parseJson,
-                detectSoftFailure: this.detectSoftFailure,
-                providerName: this.providerName,
-                isFallback: this.isFallback,
-                model,
-              },
-              false,
-              thinking,
-            );
-
-            // Only now, once finalization has actually succeeded, is
-            // this attempt a real success: release and let AIMD grow
-            // the ceiling. See `onStreamSuccess`'s own comment for why
-            // this can't happen any earlier.
-            releaseAtOpen?.(actualTokens, true);
-
-            return finalized;
-          } catch (error) {
-            // Still reconcile real token usage and give the
-            // concurrency slot back, but never grow the AIMD ceiling
-            // for a response VernLLM itself rejected (invalid JSON,
-            // schema/tool-contract validation, empty content, a soft
-            // failure).
-            releaseAtOpen?.(actualTokens);
-
-            // This attempt already returned successfully to the retry
-            // loop once the stream opened, so unlike the non-streaming
-            // path, nothing else will ever record a finalize-time
-            // failure (including a soft failure) against the breaker.
-            // Recorded here directly, gated by the same
-            // countsTowardBreaker policy the non-streaming path already
-            // applies, so this doesn't count anything that policy would
-            // otherwise exclude.
-            if (error instanceof LLMError && this.countsTowardBreaker(error)) {
-              gateway.recordFailure(attempt, params.signal, state, error.code);
-            } else {
-              gateway.releaseTrial(attempt, params.signal, state);
-            }
-
-            throw error;
-          }
-        },
-      });
-
-      // Ownership of `release` passes to `buildStreamResult` from here.
-      release = undefined;
-
-      return result;
-    } finally {
-      // Only reached if opening the stream itself threw; a successful
-      // open hands `release` off above and leaves this a no-op.
-      release?.();
-    }
-  }
-
-  /**
-   * Decides whether a failed attempt should count toward the circuit
-   * breaker's failure threshold. A model hallucinating a tool name,
-   * reusing a call id, or a provider ignoring `toolChoice: 'none'` isn't
-   * the provider being unhealthy, it's a model/provider response defect
-   * that will very likely recur regardless of provider health, so it
-   * shouldn't push a healthy provider's circuit toward opening. Same for
-   * a caller-input bug or a local rate-limit rejection: neither ever
-   * reached the provider at all. A `quota_exceeded` rejection is also
-   * excluded: it's a caller/account level limit, not a signal about
-   * provider health, even though it's still retryable. This defers
-   * directly to `LLMError.countsTowardBreaker`, which captures both
-   * exclusions. Anything the limiter threw is excluded too, even a raw
-   * store failure, since no provider request was made.
-   */
-  private countsTowardBreaker(error: LLMError): boolean {
-    return error.countsTowardBreaker && !isLimiterFailure(error);
-  }
-}
-
-/**
- * Every entry with a `dispatch`, in `order` (outermost first), labeled by
- * its `transformOrder` position so an unnamed entry reads the same as in
- * `registeredMiddlewareNames` whatever `position` it pins.
- */
-function buildDispatchHooks(
-  transformOrder: VernLLMMiddleware[],
-  order: VernLLMMiddleware[] = transformOrder,
-): readonly DispatchHook[] {
-  const indexByEntry = new Map(transformOrder.map((entry, index) => [entry, index]));
-
-  return order.flatMap((entry) =>
-    entry.dispatch
-      ? [
-          {
-            entry: entry as DispatchHook['entry'],
-            label: middlewareLabel(entry, indexByEntry.get(entry)!),
-          },
-        ]
-      : [],
-  );
-}
-
-/** Text or a tool call delta: the first chunk that reaches the caller as content. */
-function isContentChunk(chunk: WireStreamChunk): boolean {
-  return chunk.type === 'text-delta' || chunk.type === 'tool_call_delta';
 }

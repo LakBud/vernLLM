@@ -12,12 +12,8 @@ export interface UsageReporterOptions {
   isFallback: boolean;
   maxRetries: number;
   /**
-   * Reports a `'usage'`/`'usage_failure'` event through the same
-   * instance-level reporter and middleware fan-out every other event
-   * uses (see `emitEvent`). `VernLLMOptions.onUsage`/`onUsageFailure`
-   * are driven from this same event by `makeEventReporter`, not called
-   * directly here: `UsageReporter` has exactly one way to report
-   * usage, not two.
+   * Reports `'usage'` and `'usage_failure'` events through the shared event path. `onUsage` and
+   * `onUsageFailure` are driven from those events, so usage has one reporting route.
    */
   emitEvent: (event: VernLLMEvent, ctx: AttemptContext) => void;
   logger: Logger;
@@ -25,10 +21,8 @@ export interface UsageReporterOptions {
 
 export interface UsageReporter {
   /**
-   * Pulls `TokenUsage` out of a raw response, if the provider reported it.
-   * Extraction doesn't depend on what happens to the response afterward,
-   * so a malformed body can still yield usage if the provider's usage
-   * block itself came through intact.
+   * `TokenUsage` from a raw response, if reported. Independent of the rest of the body, so a
+   * malformed response can still yield usage.
    */
   extract(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
@@ -36,21 +30,15 @@ export interface UsageReporter {
     model: string,
   ): TokenUsage | undefined;
   /**
-   * The token count to reconcile the rate limiter against for a finished
-   * attempt: `totalTokens` when reported, otherwise the sum of prompt and
-   * completion tokens, matching `reportFailure`'s own fallback for a
-   * hand-rolled client that reports the parts but omits the total.
-   * `undefined` when there is no usage or it is all zero, so the limiter
-   * keeps its estimate.
+   * The token count to reconcile the limiter with: `totalTokens`, else prompt plus completion.
+   * `undefined` when missing or all zero, so the limiter keeps its estimate.
    */
   actualTokensFor(usage: TokenUsage | undefined): number | undefined;
   /** Reports token usage for a successful call as a `'usage'` event. `ctx` is this attempt's `AttemptContext`, used to fan the event out to middleware and to `onEvent`/`onUsage`. */
   reportSuccess(usage: TokenUsage | undefined, ctx: AttemptContext): void;
   /**
-   * Reports token usage spent on an attempt that then failed, as a
-   * `'usage_failure'` event, so it isn't dropped alongside the error.
-   * Covers any error thrown after usage extraction, since all of them
-   * happen only after a response (real spend) already arrived.
+   * Reports usage spent on an attempt that then failed, as `'usage_failure'`, so it isn't lost with
+   * the error.
    */
   reportFailure(
     usage: TokenUsage,

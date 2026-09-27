@@ -31,26 +31,20 @@ export interface TokenUsage {
   completionTokens: number;
   totalTokens: number;
   /**
-   * Tokens spent on internal reasoning, a subset of `completionTokens`,
-   * never added on top of it. Undefined when the provider's response
-   * doesn't report a separate reasoning figure, e.g. Bedrock Converse
-   * without an explicit `additionalModelResponseFieldPaths` request.
+   * Reasoning tokens, a subset of `completionTokens`, not extra. `undefined` when the provider
+   * doesn't report them separately.
    */
   reasoningTokens?: number;
   requestId: string;
   model: string;
   /**
-   * The provider target that produced this usage. See `VernLLMOptions['name']`,
-   * default `'primary'`. Optional so consumers constructing a `TokenUsage`
-   * themselves (e.g. in tests) aren't forced to supply it; `VernLLM` always
-   * populates it. Absent means the same as `'primary'` if you need a value.
+   * The target that produced this usage, `'primary'` by default. Always set by VernLLM; optional
+   * for hand built values.
    */
   provider?: string;
   /**
-   * Whether this usage came from a fallback target rather than the
-   * primary. Optional for the same reason `provider` is: `VernLLM`
-   * always populates it, a hand-constructed `TokenUsage` (e.g. in tests)
-   * isn't forced to.
+   * Whether a fallback target produced this usage. Always set by VernLLM; optional for hand built
+   * values.
    */
   usedFallback?: boolean;
 }
@@ -58,12 +52,7 @@ export interface TokenUsage {
 export type OnUsage = (usage: TokenUsage) => void;
 
 /**
- * Called when a provider response arrives but VernLLM's own post-processing
- * then fails, after usage data was already present in that response. Covers
- * any error thrown after usage extraction, not just parse/validation, since
- * everything in that path only runs once a response, and real spend, has
- * already arrived. Fires once per failed attempt with extractable usage,
- * never for transport failures, where no response means no honest number
- * to report.
+ * Called when a response carried usage but post-processing failed. Once per such attempt; never for
+ * transport failures, which have no usage to report.
  */
 export type OnUsageFailure = (usage: TokenUsage, error: LLMError) => void;

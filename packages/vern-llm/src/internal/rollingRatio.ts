@@ -1,16 +1,12 @@
 /**
- * Fixed number of coarse time buckets, not one entry per call, the same
- * bounded memory tradeoff `TokenBucket` makes by tracking a running
- * number instead of full history. Lazily rotated on access, no timer,
- * same style as `TokenBucket.refill()`.
+ * A fixed number of coarse time buckets rather than one entry per call, keeping memory bounded.
+ * Rotated lazily on access, with no timer.
  */
 const BUCKET_COUNT = 10;
 
 /**
- * Tracks a failure ratio over a trailing time window with bounded
- * memory. Shared by `RollingTripping` (circuitBreaker.ts) and
- * `RetryBudget`, the same way `TokenBucket` is written once and reused
- * by every bucket inside `RateLimiter`.
+ * A failure ratio over a trailing window with bounded memory. Shared by `RollingTripping` and
+ * `RetryBudget`.
  */
 export class RollingRatio {
   private buckets: { total: number; failures: number }[];

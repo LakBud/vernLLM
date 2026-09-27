@@ -13,19 +13,10 @@ export type PreparableBreaker = CircuitBreakerAdapter &
 type PrepareOutcome = 'ready' | 'timeout' | 'aborted' | { failed: unknown };
 
 /**
- * Awaits `breaker.prepare` so the synchronous `assertClosed` that follows
- * decides against fresh data, without ever letting a slow or broken
- * `prepare` block or fail the call it was meant to help.
- *
- * A rejection, a synchronous throw, or running past the timeout is
- * logged as a warning and the call carries on with whatever the adapter
- * already knows locally. The one exception is the call's own abort
- * signal: an aborted call stops waiting at once and rejects with
- * `aborted`, like every other place a call can be cancelled.
- *
- * Whichever way it ends, the timer and the abort listener are removed,
- * and a `prepare` that rejects after losing the race is still handled, so
- * it can never surface as an unhandled rejection.
+ * Awaits `breaker.prepare` so `assertClosed` decides on fresh data, without letting a slow or
+ * broken `prepare` block or fail the call. A rejection, throw or timeout is logged and the call
+ * goes on with local state; only the call's own abort rejects, as `aborted`. A late rejection is
+ * still handled.
  */
 export async function runPrepare(
   breaker: PreparableBreaker,

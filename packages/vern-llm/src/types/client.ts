@@ -57,24 +57,14 @@ export interface AdapterInfo {
 }
 
 /**
- * Minimal shape similar to the OpenAI SDK's chat.completions.create API,
- * `response_format.json_schema` and `reasoning_effort` are optional on the wire
- * providers that don't support them will just ignore fields they don't recognize,
- * but not every SDKs TS types accept them, hence this being a structural type
- * rather than importing the SDKs own params type
+ * The client shape adapters implement, modeled on OpenAI's `chat.completions.create`. Structural
+ * rather than an SDK's own types, since not every SDK's types accept every field.
  */
 export interface LLMClient {
   /**
-   * Whether this client supports OpenAI's `response_format: { type:
-   * 'json_object' }` as a real, API-level constraint. Defaults to `true`
-   * when omitted (every OpenAI-compatible client and `fromGemini` map it to
-   * a real field). `fromAnthropic` and `fromBedrock` set this to `false`:
-   * neither provider has a field that mechanically guarantees JSON output
-   * for this mode, so `RequestBuilder` downgrades a *default* (unset)
-   * `jsonMode` to plain text for these clients instead of requesting
-   * `json_object` and getting an unenforced, provider-side no-op back. An
-   * *explicit* `jsonMode: true` still throws for such clients, since that's
-   * a caller deliberately asking for a guarantee the client can't provide.
+   * Whether `response_format: 'json_object'` is really enforced. Defaults to `true`. `false` makes
+   * a default `jsonMode` fall back to plain text instead of getting an unenforced no-op, while an
+   * explicit `jsonMode: true` throws.
    */
   supportsJsonObjectMode?: boolean;
 
@@ -109,10 +99,8 @@ export interface LLMClient {
           /** OpenAI reasoning-model param (o-series, gpt-5), ignored by providers that don't support it */
           reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
           /**
-           * Numeric reasoning token budget, for providers with a native
-           * budget field (Anthropic, Gemini). Ignored by clients that only
-           * understand `reasoning_effort` tiers, use that field instead for
-           * those.
+           * Numeric reasoning budget, for providers with one. Clients with only effort tiers use
+           * `reasoning_effort` instead.
            */
           budget_tokens?: number;
           /** Tools the model may call, OpenAI's `function`-wrapped shape. */
@@ -142,11 +130,8 @@ export interface LLMClient {
             thinking?: ThinkingBlock[];
           };
           /**
-           * Why generation stopped, in OpenAI's vocabulary. Only `'length'`
-           * (cut off at `max_tokens`) is read: output that then fails to
-           * parse becomes a retryable `response_truncated` error instead
-           * of a plain parse error. Optional, adapters that can't tell
-           * leave it out.
+           * Why generation stopped, in OpenAI's terms. Only `'length'` is read: output that then
+           * fails to parse becomes the retryable `response_truncated`. Optional.
            */
           finish_reason?: string | null;
         }>;
@@ -159,10 +144,8 @@ export interface LLMClient {
       }>;
 
       /**
-       * Optional. Required only for `stream: true` calls. Adapters/clients
-       * that don't implement this make `stream: true` throw a clear
-       * `LLMError('validation')` rather than a confusing runtime failure.
-       * Takes the same request shape as `create`, minus the response type.
+       * Required only for `stream: true`, which throws a clear error without it. Takes the same
+       * request as `create`.
        */
       createStream?(
         params: Parameters<LLMClient['chat']['completions']['create']>[0],

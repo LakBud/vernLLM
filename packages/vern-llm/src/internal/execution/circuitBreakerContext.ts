@@ -8,7 +8,7 @@ import type {
   LLMErrorCode,
   MiddlewareStateBag,
 } from '../../types/index.js';
-import type { MiddlewareContextNames } from '../resolveMiddlewareOrder.js';
+import type { MiddlewareContextNames } from '../utils/middlewareLabels.utils.js';
 
 /** Everything one logical call needs to build attempt context and talk to its breaker. */
 export interface BreakerGatewayOptions {

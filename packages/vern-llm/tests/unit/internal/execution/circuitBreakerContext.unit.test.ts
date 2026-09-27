@@ -5,7 +5,7 @@ import {
   createBreakerGateway,
   type BreakerGatewayOptions,
 } from '../../../../src/internal/execution/circuitBreakerContext.js';
-import { NoopLogger } from '../../../../src/logger.js';
+import { NoopLogger } from '../../../../src/internal/utils/logger.utils.js';
 import { createMiddlewareStateBag } from '../../../../src/types/middleware.js';
 
 function baseOptions(overrides: Partial<BreakerGatewayOptions> = {}): BreakerGatewayOptions {

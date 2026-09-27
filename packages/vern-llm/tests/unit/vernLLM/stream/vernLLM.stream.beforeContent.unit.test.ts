@@ -5,9 +5,9 @@ import {
   type CallMeta,
   type StreamChunk,
   type WireStreamChunk,
-} from '../../../src/index.js';
-import { VernLLM } from '../../../src/vernLLM.js';
-import { FakeApiError, createMockStreamingClient } from '../../helpers.js';
+} from '../../../../src/index.js';
+import { VernLLM } from '../../../../src/vernLLM.js';
+import { FakeApiError, createMockStreamingClient } from '../../../helpers.js';
 
 type Step = WireStreamChunk | Error | { waitMs: number };
 

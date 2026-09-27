@@ -1,9 +1,18 @@
+import {
+  middlewareContextNames,
+  middlewareLabel,
+  middlewareLabels,
+  type MiddlewareContextNames,
+} from './utils/middlewareLabels.utils.js';
+
 import type { Logger } from '../logger.js';
 import type {
   MiddlewareRef,
   RequiredMiddlewareRef,
   VernLLMMiddleware,
 } from '../types/middleware.js';
+
+export { middlewareContextNames, middlewareLabel, middlewareLabels, type MiddlewareContextNames };
 
 /**
  * Every resolved view of middleware order, built once at `VernLLM`
@@ -21,76 +30,14 @@ export interface MiddlewarePipeline {
   transformNames: readonly string[];
 }
 
-/**
- * `name`, or the entry's own array index. Deliberately not
- * `middlewareLabel`'s bracketed display form. Used both as the graph
- * key inside `buildNodes` (against the original, pre-sort `entries`
- * order) and, via `buildMiddlewarePipeline`'s `names`, as the resolved
- * label for an already-ordered array (against `transformOrder`
- * position). Exported so a call site that already has a
- * `MiddlewarePipeline`-ordered array in hand (see
- * `attemptLoop.utils.ts`) can derive the identical labels
- * `names` already holds, instead of inventing a second way to compute
- * them.
- */
+/** `name`, or the array index. Not the bracketed display label: this is the ordering graph's id. */
 export function idFor(entry: VernLLMMiddleware, index: number): string {
   return entry.name ?? String(index);
 }
 
 /**
- * A middleware's label everywhere a caller can see one: logs, the
- * `'middleware'` event, and `registeredMiddlewareNames`. `name`, or the
- * bracketed `transformOrder` position when unnamed. The brackets keep an
- * unnamed entry from ever reading like one named `"0"`.
- */
-export function middlewareLabel(middleware: VernLLMMiddleware, index: number): string {
-  return middleware.name ?? `[${index}]`;
-}
-
-/** `middlewareLabel` for every entry of an already ordered array. */
-export function middlewareLabels(ordered: readonly VernLLMMiddleware[]): readonly string[] {
-  return Object.freeze(ordered.map((entry, index) => middlewareLabel(entry, index)));
-}
-
-/** The two label lists every middleware context carries. */
-export interface MiddlewareContextNames {
-  registeredMiddlewareNames: readonly string[];
-  transformMiddlewareNames: readonly string[];
-}
-
-/**
- * Keyed by array identity: every call site passes the same
- * `transformOrder` array, so the labels are built once per instance
- * instead of once per event or attempt.
- */
-const contextNamesCache = new WeakMap<readonly VernLLMMiddleware[], MiddlewareContextNames>();
-
-/** `registeredMiddlewareNames` and `transformMiddlewareNames` for an already ordered array. */
-export function middlewareContextNames(
-  ordered: readonly VernLLMMiddleware[],
-): MiddlewareContextNames {
-  let names = contextNamesCache.get(ordered);
-
-  if (!names) {
-    const labels = middlewareLabels(ordered);
-    names = {
-      registeredMiddlewareNames: labels,
-      transformMiddlewareNames: Object.freeze(
-        labels.filter((_, index) => ordered[index]!.transform !== undefined),
-      ),
-    };
-    contextNamesCache.set(ordered, names);
-  }
-
-  return names;
-}
-
-/**
- * Throws if two ordered entries publish the same label. Separate from
- * `assertNoDuplicateLabels`, which guards the ordering graph's ids: a
- * middleware named `"[1]"` and an unnamed one landing at position 1 have
- * different graph ids but would publish the same label, so logs, events,
- * and `registeredMiddlewareNames` couldn't tell them apart.
+ * Throws if two entries publish the same label. Graph ids can differ while labels clash, e.g. one
+ * named `"[1]"` and an unnamed entry at position 1.
  */
 function assertNoDuplicatePublishedLabels(labels: readonly string[]): void {
   const seen = new Set<string>();
@@ -105,12 +52,8 @@ function assertNoDuplicatePublishedLabels(labels: readonly string[]): void {
 }
 
 /**
- * A middleware's resolved position in the graph: its id, its entry, its
- * original array index (the tie break once `priority` is also equal),
- * and the ids of every entry that must come after it. Built once per
- * `resolveMiddlewareOrder` call in a single pass over `entries`, so
- * collecting edges and warning about unknown references never walk the
- * input twice for the same data.
+ * One entry in the ordering graph: its id, entry, original index for tie breaks, and the ids that
+ * must come after it.
  */
 interface Node {
   id: string;
@@ -135,16 +78,8 @@ function assertNoDuplicateLabels(entries: readonly VernLLMMiddleware[]): void {
 }
 
 /**
- * Throws if two entries share the same `ref` object. Runs unconditionally,
- * not just when `buildNodes` runs: a duplicate `ref` is a real misuse
- * regardless of whether anything currently targets it via `runsAfter`/
- * `runsBefore` (the fast `!hasEdges` path in `resolveMiddlewareOrder`
- * would otherwise skip `buildNodes`, and with it this check, letting a
- * duplicate `ref` sit silently until some future edit adds an edge that
- * targets it and gets the wrong node). Every entry with a `ref` set is
- * checked here, so this is the single source of truth for ref
- * uniqueness; `buildNodes`'s own `byRef` construction never needs to
- * re-check it.
+ * Throws if two entries share a `ref`. Runs even when no entry has edges, so a duplicate can't sit
+ * unnoticed until an edge targets it.
  */
 function assertNoDuplicateRefs(entries: readonly VernLLMMiddleware[]): void {
   const seen = new Map<MiddlewareRef, number>();
@@ -162,11 +97,8 @@ function assertNoDuplicateRefs(entries: readonly VernLLMMiddleware[]): void {
 }
 
 /**
- * Normalizes one `runsAfter`/`runsBefore` entry into its `ref` and
- * whether it's required. Told apart by shape alone: a bare
- * `MiddlewareRef` is always optional; a `RequiredMiddlewareRef` (only
- * producible via `requireRef`) is always required, so presence of the
- * `ref` property is itself the required/optional signal.
+ * Splits a `runsAfter` or `runsBefore` entry into its ref and whether it is required. Only
+ * `requireRef` output has a `ref` property.
  */
 function unwrapReference(target: MiddlewareRef | RequiredMiddlewareRef): {
   ref: MiddlewareRef;
@@ -176,16 +108,8 @@ function unwrapReference(target: MiddlewareRef | RequiredMiddlewareRef): {
 }
 
 /**
- * Resolves one `runsAfter`/`runsBefore` entry into a `mustPrecede` edge
- * on the graph. Matched by `ref` identity (`byRef`), never by `name`: a
- * typo, a stale copy, or a ref nobody attached simply doesn't resolve,
- * and two entries that happen to share a `name` are never confused with
- * each other, since the map key is the ref object itself. An
- * unresolved bare `MiddlewareRef` warns and is dropped; an unresolved
- * `RequiredMiddlewareRef` (built via `requireRef`) throws instead,
- * since its author declared the dependency mandatory. Pulled out of
- * `buildNodes` so edge resolution (this) is testable independently of
- * node/index construction.
+ * Turns one `runsAfter` or `runsBefore` entry into a graph edge, matched by ref identity, never by
+ * `name`. An unresolved bare ref warns and is dropped; an unresolved required ref throws.
  */
 function resolveReference(
   byId: Map<string, Node>,
@@ -228,13 +152,8 @@ function buildNodes(entries: readonly VernLLMMiddleware[], logger?: Logger): Nod
   }));
   const byId = new Map(nodes.map((node) => [node.id, node]));
 
-  // Only entries that opted into a `ref` are targetable by
-  // `runsAfter`/`runsBefore` at all. Keyed by the ref object itself,
-  // not `name`, so ordering and display labels never interact.
-  // `resolveMiddlewareOrder` already ran `assertNoDuplicateRefs` over
-  // every entry, unconditionally, before this function is ever called,
-  // so a plain `Map` construction is safe here: two different nodes
-  // can never share a `ref` by the time this runs.
+  // Only entries with a `ref` can be targeted, keyed by the ref object so labels never affect
+  // order. Refs are already known to be unique here.
   const byRef = new Map(
     nodes.filter((node) => node.entry.ref).map((node) => [node.entry.ref!, node]),
   );
@@ -258,17 +177,9 @@ function byPriorityThenIndex(a: Node, b: Node): number {
 }
 
 /**
- * Kahn's algorithm over `nodes`' `mustPrecede` edges, ties among
- * simultaneously-ready nodes broken by `byPriorityThenIndex`. Doubles
- * as cycle detection: a valid DAG always drains the ready queue down to
- * every node, so if any are left unvisited once it's empty, they and
- * everything reachable among them form a cycle. This replaces a
- * separate DFS pass that used to check for cycles before this ran;
- * Kahn's already proves acyclicity as a side effect of ordering, so
- * doing both was one full extra walk of the same graph for the same
- * answer. Throws a plain `Error`, not `LLMError`, since a cycle is a
- * construction-time config mistake the caller made, not a failure that
- * came from a call.
+ * Kahn's algorithm, ties broken by `byPriorityThenIndex`. Nodes left unvisited form a cycle, so
+ * this is also the cycle check. Throws a plain `Error`, since a cycle is a construction time
+ * mistake.
  */
 function topologicalSort(nodes: Node[]): VernLLMMiddleware[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -306,13 +217,8 @@ function topologicalSort(nodes: Node[]): VernLLMMiddleware[] {
 }
 
 /**
- * Sorts `entries` once, at `VernLLM` construction time. With no
- * `runsAfter`/`runsBefore` anywhere, this is exactly today's flat
- * `priority` sort, ascending, ties by original index, and skips graph
- * construction entirely. With edges present, resolves them first via
- * Kahn's algorithm over an adjacency list built once up front, and only
- * falls back to `priority` then original index to break ties among
- * nodes with no constraint between them at a given step.
+ * Sorts `entries` once, at construction. Without `runsAfter` or `runsBefore` this is a plain
+ * `priority` sort, ties by index; with edges it runs the graph sort.
  */
 export function resolveMiddlewareOrder(
   entries: readonly VernLLMMiddleware[],
@@ -343,18 +249,9 @@ export function resolveMiddlewareOrder(
 }
 
 /**
- * Stable sort: `'outermost'` entries move to the front, `'innermost'` to
- * the back. Everything else stays in the middle group; a numeric
- * `position` there sorts like `priority` (ascending), but only for
- * `wrapOrder`, ties broken by `transformOrder` position since `sort` is
- * stable. Entries with no `position` at all default to `0`, so they
- * interleave with numeric-positioned entries rather than always sorting
- * after them. Multiple `'outermost'` claimants are ordered by registration,
- * so the first one registered holds the true outermost slot. Multiple
- * `'innermost'` claimants are ordered by registration, so the last one
- * registered holds the true innermost slot. Their `priority` and
- * `runsAfter`/`runsBefore` decide `transformOrder` only, never who wraps
- * whom.
+ * Stable sort for `wrapOrder`: `'outermost'` first, `'innermost'` last, numeric or missing (`0`)
+ * positions in between like `priority`. Among several outermost claimants the first registered is
+ * outermost; among innermost claimants the last registered is innermost.
  */
 function applyPositionOverride(
   order: readonly VernLLMMiddleware[],
@@ -390,10 +287,7 @@ function applyPositionOverride(
 }
 
 /**
- * Builds the one `MiddlewarePipeline` a `VernLLM` instance uses for its
- * whole lifetime. Called once, in the constructor. Nothing downstream,
- * `runOperation.ts`, `middleware.utils.ts`, `circuitBreakerContext.ts`,
- * computes order itself; each reads the field it needs off this object.
+ * Builds the one `MiddlewarePipeline` an instance uses. Nothing downstream computes order itself.
  */
 export function buildMiddlewarePipeline(
   entries: readonly VernLLMMiddleware[],

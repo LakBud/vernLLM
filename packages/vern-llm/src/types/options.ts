@@ -23,34 +23,22 @@ export interface VernLLMOptions {
   /** Per-attempt timeout in ms. Default 25000 */
   timeoutMs?: number;
   /**
-   * For `stream: true` calls: max gap allowed between chunks once the
-   * stream has opened, in ms. Resets on every chunk, including keep-alive
-   * pings. `timeoutMs` only covers opening the stream and its first
-   * chunk; this covers every gap after that. Also counts as a
-   * circuit-breaker failure, unlike other mid-stream errors, since a
-   * provider that streams one chunk then stalls should still trip it.
-   * Default 30000. Pass 0 or negative to disable.
+   * Max gap between stream chunks once open, in ms. Resets on every chunk, pings included. Unlike
+   * other mid-stream errors it counts toward the breaker, so a provider that stalls after one chunk
+   * still trips it. Default 30000; 0 or negative disables.
    */
   chunkIdleTimeoutMs?: number;
   /**
-   * For `stream: true` calls: how long a `chunks` reader may stop pulling
-   * while the buffer is full before it is detached. The detached reader's
-   * next pull rejects with `LLMError('timeout')`, code
-   * `reader_stall_timeout`, and the stream keeps running so `finalResult`
-   * still settles and its connection and rate limit slot are freed. Off by
-   * default: a reader that stops pulling holds the stream until it resumes.
-   * Pass 0 or negative to keep it off.
+   * How long a `chunks` reader may stop pulling on a full buffer before it is detached. Its next
+   * pull rejects with code `reader_stall_timeout`, while the stream finishes so `finalResult`
+   * settles and its slot is freed. Off by default.
    */
   readerStallTimeoutMs?: number;
   /** Base delay for exponential backoff in ms. Default 500 */
   baseDelayMs?: number;
   /**
-   * Longest `Retry-After` wait honored between retries, in ms. A longer
-   * value from the provider is capped to this, and so is
-   * `LLMError.retryAfterMs`. `0` retries right away even when the
-   * provider asks for a wait. `Infinity` removes the cap; `deadlineMs`
-   * still bounds the call. Default 10000. A negative or NaN value throws
-   * at construction.
+   * Longest `Retry-After` wait honored, in ms. Also caps `LLMError.retryAfterMs`. `0` retries at
+   * once; `Infinity` removes the cap. Default 10000. Negative or NaN throws.
    */
   maxRetryAfterMs?: number;
   /** Default max_tokens for calls that don't override it. Default 1000 */
@@ -61,58 +49,30 @@ export interface VernLLMOptions {
    * request entirely, so the provider applies its own default instead.
    */
   defaultTemperature?: number | null;
-  /**
-   * Default reasoning effort for calls that don't override it. Not sent
-   * when omitted, same as leaving `reasoningEffort` unset on a call. See
-   * `budgetTokens`/`reasoningEffort` on `CallParams` for how the two
-   * relate and how each adapter converts between them.
-   */
+  /** Default reasoning effort for calls that don't set one. Not sent when omitted. */
   defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
-  /**
-   * Default reasoning token budget for calls that don't override it. Not
-   * sent when omitted. If both this and `defaultReasoningEffort` are set,
-   * each adapter still prefers whichever field it natively understands,
-   * same as at the per-call level.
-   */
+  /** Default reasoning token budget for calls that don't set one. Not sent when omitted. */
   defaultBudgetTokens?: number;
   /**
-   * Enables debug logging of raw model output (logs up to 800 chars of each
-   * response) and provider errors. Off by default. Only controls the
-   * default `ConsoleLogger`: when a custom `logger` is supplied instead,
-   * that logger's own `debug()` implementation decides whether messages
-   * are emitted, and this option has no effect on it.
+   * Logs raw model output (up to 800 chars) and provider errors. Only affects the default
+   * `ConsoleLogger`; a custom `logger` decides for itself.
    */
   debug?: boolean;
   /**
-   * Applied before every internal `logger.debug()` call: the raw output
-   * logged on success, and the provider error logged on a failed call or
-   * a failed stream open. This is the one piece of logging an app can't
-   * intercept itself, since it's a direct call into `logger.debug`
-   * rather than something routed through `onEvent`/`onUsage`; anything
-   * caught elsewhere (events, `LLMError.cause`) already passes through
-   * the app's own callback and can be redacted there instead. Runs
-   * before `logger.debug()` regardless of whether that call ends up
-   * emitting anything, so with a custom `logger`, `redact` still applies
-   * even without `debug: true`; see `debug` for why. Default: identity
-   * (no redaction).
+   * Applied to model output and provider errors before VernLLM's own `logger.debug()` calls, the
+   * one log path an app can't intercept. Runs even without `debug: true`, since a custom logger may
+   * emit debug anyway. Default: no redaction.
    */
   redact?: (text: string) => string;
   /**
-   * Cache for cachedCall. `{ maxSize, eviction }` configures the
-   * built-in in-memory adapter (`eviction` default `'fifo'`). Pass a
-   * `CacheAdapter` directly for a real backend. Default: in-memory,
-   * maxSize 1000, fifo.
+   * Cache for `cachedCall`. `{ maxSize, eviction }` configures the built in adapter; pass a
+   * `CacheAdapter` for a real backend. Default in memory, 1000 entries, fifo.
    */
   cache?: CacheOption;
   /**
-   * Reclassifies an otherwise-successful result as a failure, e.g. a
-   * response that parsed fine but came back empty or truncated. Runs
-   * once per attempt, right after a response is validated. Returning
-   * `undefined` leaves the result untouched; returning an
-   * `LLMErrorCode` fails that attempt with it, feeding the same retry
-   * and circuit-breaker paths a thrown error would. A throwing hook is
-   * caught, logged, and treated as no soft failure, so a broken hook
-   * degrades safely instead of failing every call.
+   * Reclassifies an otherwise successful result as a failure. Runs once per attempt after
+   * validation; returning an `LLMErrorCode` fails the attempt through the normal retry and breaker
+   * paths. A throwing hook is logged and ignored.
    */
   detectSoftFailure?: DetectSoftFailure;
   /** HTTP status codes that should fail fast without retrying. Default [400, 401, 402, 403, 404, 413, 422] */
@@ -122,15 +82,9 @@ export interface VernLLMOptions {
   /** Called after every successful call with token usage, if the provider reports it */
   onUsage?: OnUsage;
   /**
-   * Called when a provider response arrives but VernLLM's own post-processing
-   * then fails, after usage data was already present in that response.
-   * Separate from `onUsage`, which only fires on full success.
-   *
-   * For non-streaming calls, never fires for transport failures (timeout,
-   * network error, non-retryable status), since no response means no usage
-   * to report. For streaming calls, this is not guaranteed: a stream can
-   * deliver a usage chunk and then fail later (e.g. an idle timeout waiting
-   * for the final close), in which case this does fire.
+   * Fires when a response carried usage but post-processing then failed. `onUsage` only fires on
+   * success. A non-streaming transport failure has no usage to report; a stream can deliver usage
+   * and fail later, which does fire this.
    */
   onUsageFailure?: OnUsageFailure;
   /**
@@ -139,11 +93,8 @@ export interface VernLLMOptions {
    */
   logger?: Logger | 'silent';
   /**
-   * Enables a circuit breaker that short-circuits calls after repeated
-   * consecutive failures, instead of continuing to hammer a down provider
-   * Pass `true` for defaults, or an options object to tune threshold/cooldown.
-   * Pass a `CircuitBreakerAdapter` instead for cross-process coordination,
-   * the same pattern `cache` and `rateLimit` already support.
+   * Short-circuits calls after repeated failures. `true` for defaults, options to tune, or a
+   * `CircuitBreakerAdapter` for cross-process state.
    */
   circuitBreaker?: CircuitBreakerOption;
   /**
@@ -153,61 +104,36 @@ export interface VernLLMOptions {
    */
   onEvent?: OnEvent;
   /**
-   * Client-side rate limiting. Queues calls locally to stay under the
-   * configured requests/tokens-per-minute or concurrency caps, instead of
-   * letting the provider reject them. Independent of the `Retry-After`
-   * handling already applied to a provider 429: this avoids tripping the
-   * limit in the first place. Omit for unlimited (the default).
-   *
-   * A plain config object builds an in-process limiter. Pass a
-   * `RateLimiterAdapter` instead for cross-process coordination.
+   * Client side rate limiting: queues calls to stay under request, token or concurrency caps rather
+   * than letting the provider reject them. A config object builds an in-process limiter; pass a
+   * `RateLimiterAdapter` for cross-process. Omit for unlimited.
    */
   rateLimit?: RateLimitOption;
   /**
-   * Caps how much of this target's recent traffic is allowed to be
-   * retries, independent of `circuitBreaker`. Once at least `minCalls`
-   * calls have landed in the trailing `windowMs` and the retry ratio
-   * among them reaches `retryRatio`, further retries against this target
-   * throw `LLMError('retry_budget_exhausted')` instead of retrying,
-   * protecting the target's real capacity even while its breaker is
-   * still closed. Omit for no budget (the default). Never inherited by
-   * `fallback` targets, same as `circuitBreaker`/`rateLimit`.
+   * Caps the share of this target's recent traffic that may be retries. Once `minCalls` calls land
+   * in `windowMs` and the retry ratio reaches `retryRatio`, retries throw `retry_budget_exhausted`,
+   * even while the breaker is closed. Not inherited by fallback targets.
    */
   retryBudget?: RetryBudgetOptions;
   /**
-   * Ordered targets tried after the primary, in order, once it (and its
-   * own retries) is exhausted or abandoned. Order is the policy: VernLLM
-   * never reorders, scores, or selects between targets. Each target keeps
-   * its own retry state, circuit breaker, and rate limiter, independent
-   * of every other target's. A single `FallbackTarget` is equivalent to
-   * `[target]`.
+   * Targets tried in order after the primary is exhausted. VernLLM never reorders them. Each keeps
+   * its own retries, breaker and limiter. A single target equals `[target]`.
    */
   fallback?: FallbackTarget | FallbackTarget[];
   /**
-   * Decides what happens after a target fails: `'next'` to move on to
-   * the following target (or throw, if it was the last one), `'stop'` to
-   * give up immediately without trying any remaining targets. Called
-   * once per failed target, after that target's own retries are
-   * exhausted or abandoned early, so `'retry'` is never a valid return
-   * here. Defaults to `defaultFallbackOn`, which stops on
-   * parse/validation/aborted/quota errors, on tool-contract failures
-   * (the model ignoring the request, not the provider being unhealthy),
-   * and on `invalid_params` other than `unsupported_capability`, and
-   * moves on for everything else.
+   * Whether a failed target moves on (`'next'`) or ends the call (`'stop'`). Called once per failed
+   * target after its own retries. Defaults to `defaultFallbackOn`; see its docs for what it stops
+   * on.
    */
   fallbackOn?: FallbackOn;
   /**
-   * Transforms outgoing requests and/or wraps whole logical calls,
-   * without touching retry, circuit breaker, or fallback internals.
-   * Defaults to an empty array. See `VernLLMMiddleware` for the
-   * available hooks (`transform`, `wrap`, `dispatch`, `onEvent`, `enabled`).
+   * Request transforms and call wrappers that leave retry, breaker and fallback internals alone.
+   * See `VernLLMMiddleware` for the hooks.
    */
   middleware?: VernLLMMiddleware[];
   /**
-   * Bounds `transform` and a function `enabled`, the same way every
-   * other blocking operation in the package is already bounded.
-   * Overridable per middleware via that entry's own `timeoutMs`.
-   * `<= 0` means unbounded (no timer at all). Default 5000.
+   * Bounds `transform` and a function `enabled`. Overridable per middleware with `timeoutMs`. `<=
+   * 0` means unbounded. Default 5000.
    */
   middlewareTimeoutMs?: number;
 }
