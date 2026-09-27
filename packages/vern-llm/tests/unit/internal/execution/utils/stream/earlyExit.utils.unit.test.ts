@@ -110,6 +110,77 @@ describe('onEarlyExit', () => {
     expect(onExit).toHaveBeenCalledTimes(1);
   });
 
+  it('does not fire while another reader is still active, then fires when the last one leaves', async () => {
+    const { iterable } = source([1, 2, 3]);
+    const onExit = vi.fn();
+    const wrapped = onEarlyExit(iterable, onExit);
+    const a = wrapped[Symbol.asyncIterator]();
+    const b = wrapped[Symbol.asyncIterator]();
+
+    await a.next();
+    await b.next();
+    await a.return!();
+    expect(onExit).not.toHaveBeenCalled();
+
+    await b.return!();
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a reader that reached the end as gone, so the next early exit fires', async () => {
+    const { iterable } = source([1]);
+    const onExit = vi.fn();
+    const wrapped = onEarlyExit(iterable, onExit);
+    const a = wrapped[Symbol.asyncIterator]();
+    const b = wrapped[Symbol.asyncIterator]();
+
+    await b.next();
+    await a.next();
+    await a.next(); // the shared source is now exhausted for a
+    await b.return!();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a reader whose pull rejected as gone, so the next early exit fires', async () => {
+    const { iterable } = source([1, 2], { failAt: 1 });
+    const onExit = vi.fn();
+    const wrapped = onEarlyExit(iterable, onExit);
+    const a = wrapped[Symbol.asyncIterator]();
+    const b = wrapped[Symbol.asyncIterator]();
+
+    await a.next();
+    await b.next();
+    await expect(b.next()).rejects.toThrow('stream failed');
+    await a.return!();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire when a reader that never pulled returns while another is active', async () => {
+    const { iterable } = source([1, 2]);
+    const onExit = vi.fn();
+    const wrapped = onEarlyExit(iterable, onExit);
+    const reading = wrapped[Symbol.asyncIterator]();
+
+    await reading.next();
+    await wrapped[Symbol.asyncIterator]().return!();
+
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it('does not count a reader again when it pulls after reaching the end', async () => {
+    const { iterable } = source([]);
+    const onExit = vi.fn();
+    const wrapped = onEarlyExit(iterable, onExit);
+    const a = wrapped[Symbol.asyncIterator]();
+
+    await a.next();
+    await a.next();
+    await wrapped[Symbol.asyncIterator]().return!();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
   it('works over an inner iterator that has no return()', async () => {
     const inner: AsyncIterable<number> = {
       [Symbol.asyncIterator]: () => ({ next: async () => ({ done: false, value: 1 }) }),

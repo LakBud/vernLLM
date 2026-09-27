@@ -140,7 +140,8 @@ consumers share the same underlying buffered stream and split the chunks between
 Leaving a `for await` over `chunks` before the end cancels the provider stream. That covers a
 `break`, a `return`, an exception in the loop body, and calling `return()` by hand. `finalResult`
 then rejects with `LLMError('aborted')`, and the rate limiter slot is freed. A stream that already
-finished is left alone.
+finished is left alone. With more than one reader, the stream is cancelled once the last active one
+stops early.
 
 If you only need the final value, never touch `chunks` and just `await finalResult`.
 

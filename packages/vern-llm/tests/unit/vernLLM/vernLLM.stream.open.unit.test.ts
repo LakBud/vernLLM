@@ -155,6 +155,48 @@ describe('VernLLM.call, stream early exit', () => {
     expect(signals[0]!.aborted).toBe(true);
   });
 
+  it('keeps the stream running when one of two concurrent readers breaks, and cancels once the other does', async () => {
+    const { client, signals, release } = gatedStream();
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    const a = result.chunks[Symbol.asyncIterator]();
+    const b = result.chunks[Symbol.asyncIterator]();
+
+    await a.next(); // takes 'a'
+    const pending = b.next(); // waits for 'b'
+    await a.return!();
+    expect(signals[0]!.aborted).toBe(false);
+
+    release();
+    await expect(pending).resolves.toEqual({
+      done: false,
+      value: { type: 'text-delta', delta: 'b' },
+    });
+    await expect(result.finalResult).resolves.toBe('ab');
+    await b.return!();
+    expect(signals[0]!.aborted).toBe(false);
+  });
+
+  it('cancels when the last of two concurrent readers breaks before the end', async () => {
+    const { client, signals } = gatedStream();
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    const a = result.chunks[Symbol.asyncIterator]();
+    const b = result.chunks[Symbol.asyncIterator]();
+
+    await a.next();
+    const pending = b.next();
+    await a.return!();
+    await b.return!();
+
+    // The stream is cancelled under the pull still waiting for 'b'.
+    await expect(pending).rejects.toMatchObject({ type: 'aborted' });
+    await expect(result.finalResult).rejects.toMatchObject({ type: 'aborted' });
+    expect(signals[0]!.aborted).toBe(true);
+  });
+
   it('rejects as aborted even when the adapter ignores the abort and keeps yielding', async () => {
     const { client, release } = gatedStream({ ignoreAbort: true });
     const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });

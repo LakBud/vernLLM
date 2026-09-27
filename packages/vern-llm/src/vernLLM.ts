@@ -950,8 +950,8 @@ export class VernLLM {
 }
 
 /**
- * Aborts `controller` when the caller stops reading `chunks` early, see
- * `onEarlyExit`. A no-op without a controller (`cachedCall()`'s inner call).
+ * Aborts `controller` when the last active reader of `chunks` stops
+ * early, see `onEarlyExit`. A no-op without a controller (`cachedCall()`'s inner call).
  */
 function cancelOnBreak<R>(
   stream: { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<R> },
