@@ -41,9 +41,13 @@ recoverDelay = retryAfterMs ?? getBackoffDelay(baseDelayMs, attempt);
 <Callout>
   `Retry-After` is parsed from both delta-seconds form (`"30"`) and HTTP-date form (`"Wed, 21 Oct
   2015 07:28:00 GMT"`), checking `.headers` (fetch-style) then `.response.headers` (axios-style) so
-  it works across client libraries. The honored value is capped at the same max delay as backoff, so
-  a misbehaving or adversarial header can't stall a caller indefinitely.
+  it works across client libraries. The honored value is capped by `maxRetryAfterMs`, 10 seconds by
+  default, so a misbehaving or adversarial header can't stall a caller indefinitely.
 </Callout>
+
+`maxRetryAfterMs` caps both the wait and `LLMError.retryAfterMs`. Raise it for a provider that asks
+for longer waits, `0` retries right away, and `Infinity` removes the cap, leaving `deadlineMs` as
+the only bound. A negative or NaN value throws at construction. Fallback targets can set their own.
 
 ### Millisecond headers and malformed values
 
@@ -143,6 +147,7 @@ try {
 | -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `maxRetries`         | `1`                                   | Retries after the first attempt. `maxRetries: 3` means up to 4 attempts.                                                 |
 | `baseDelayMs`        | `500`                                 | Base for exponential backoff. Actual delay grows per attempt with jitter, and is overridden by an honored `Retry-After`. |
+| `maxRetryAfterMs`    | `10000`                               | Longest honored `Retry-After` wait, also the cap on `LLMError.retryAfterMs`. `0` retries at once, `Infinity` removes it. |
 | `nonRetryableStatus` | `[400, 401, 402, 403, 404, 413, 422]` | Status codes that fail immediately instead of retrying.                                                                  |
 
 See [Configuration](/docs/API-reference/configuration) for every option alongside timeout and circuit breaker settings.

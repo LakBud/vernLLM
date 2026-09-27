@@ -2,7 +2,13 @@ import { reportRejection } from '../utils/circuit-breaker/circuitBreaker.utils.j
 
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
 import type { Logger } from '../../logger.js';
-import type { AttemptContext, LLMErrorCode, MiddlewareStateBag } from '../../types/index.js';
+import type {
+  AdapterInfo,
+  AttemptContext,
+  LLMErrorCode,
+  MiddlewareStateBag,
+} from '../../types/index.js';
+import type { MiddlewareContextNames } from '../resolveMiddlewareOrder.js';
 
 /** Everything one logical call needs to build attempt context and talk to its breaker. */
 export interface BreakerGatewayOptions {
@@ -14,8 +20,10 @@ export interface BreakerGatewayOptions {
   providerName: string;
   isFallback: boolean;
   supportsJsonObjectMode: boolean;
-  /** `MiddlewarePipeline.names`, threaded through for `AttemptContext.registeredMiddlewareNames`. */
-  registeredMiddlewareNames: readonly string[];
+  /** Threaded through for `AttemptContext.registeredMiddlewareNames` and `transformMiddlewareNames`. */
+  middlewareNames: MiddlewareContextNames;
+  /** Threaded through for `AttemptContext.adapter`. */
+  adapter: AdapterInfo;
 }
 
 /**
@@ -57,7 +65,8 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
     providerName,
     isFallback,
     supportsJsonObjectMode,
-    registeredMiddlewareNames,
+    middlewareNames,
+    adapter,
   } = options;
 
   function buildAttemptContext(
@@ -69,6 +78,7 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
       stage: 'attempt',
       requestId,
       requestedProvider: providerName,
+      adapter,
       requestedModel: model,
       isFallbackAttempt: isFallback,
       attempt: attempt + 1,
@@ -76,7 +86,7 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
       signal,
       state,
       own: {},
-      registeredMiddlewareNames,
+      ...middlewareNames,
     };
   }
 

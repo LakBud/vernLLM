@@ -25,6 +25,7 @@ function fakeCtx(overrides: Partial<AttemptContext> = {}): AttemptContext {
   return {
     stage: 'attempt',
     requestId: 'req-1',
+    adapter: { name: 'custom' },
     requestedProvider: 'openai',
     requestedModel: 'gpt-test',
     isFallbackAttempt: false,
@@ -33,6 +34,7 @@ function fakeCtx(overrides: Partial<AttemptContext> = {}): AttemptContext {
     state: fakeState(),
     own: {},
     registeredMiddlewareNames: [],
+    transformMiddlewareNames: [],
     ...overrides,
   };
 }

@@ -235,6 +235,19 @@ describe('buildMiddlewarePipeline', () => {
     expect(Object.isFrozen(pipeline.names)).toBe(true);
   });
 
+  it('lists only entries with a transform in transformNames, in transform order, frozen', () => {
+    const middleware = [
+      mw({ name: 'late', priority: 2, transform: () => ({}) }),
+      mw({ name: 'observer', priority: 1, onEvent: () => {} }),
+      mw({ priority: 0, transform: () => ({}) }),
+    ];
+    const pipeline = buildMiddlewarePipeline(middleware);
+
+    expect(pipeline.names).toEqual(['[0]', 'observer', 'late']);
+    expect(pipeline.transformNames).toEqual(['[0]', 'late']);
+    expect(Object.isFrozen(pipeline.transformNames)).toBe(true);
+  });
+
   it("throws when a name matches an unnamed entry's published bracketed label", () => {
     // Graph ids differ ("[1]" vs "1"), but both would publish as "[1]".
     const middleware = [mw({ name: '[1]', priority: 0 }), mw({ priority: 1 })];

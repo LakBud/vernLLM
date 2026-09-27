@@ -31,6 +31,17 @@ export type JsonValue =
 export type AssistantContent = string | JsonValue;
 
 /**
+ * A reasoning block Claude produced before a tool call, returned on
+ * `ToolCallResult.thinking`. Claude with thinking on requires these, as
+ * returned, on the assistant turn that requested the tools, or the next
+ * call in the tool loop is rejected. Pass them back untouched: the
+ * `signature` covers the text, so an edited block is rejected too.
+ */
+export type ThinkingBlock =
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string };
+
+/**
  * A single prior turn in a multi-turn conversation, passed via `history`.
  *
  * Supports normal user/assistant messages and tool continuations: an assistant
@@ -47,6 +58,12 @@ export type ConversationTurn =
       role: 'assistant';
       content?: AssistantContent;
       toolCalls?: ToolCall[];
+      /**
+       * Reasoning blocks from this turn, as `ToolCallResult.thinking`
+       * returned them. Sent ahead of the text and tool calls by
+       * `fromAnthropic` and `fromBedrock`; other adapters drop them.
+       */
+      thinking?: ThinkingBlock[];
     }
   | {
       role: 'tool';

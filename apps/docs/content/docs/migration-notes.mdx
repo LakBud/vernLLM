@@ -7,6 +7,72 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 3.0.0: Streaming, usage, and provider request changes
+
+No request that works today is sent differently. What changes is type level, one usage count, and
+requests the provider already rejects. Skip to what applies to you:
+[new union members](#300-new-union-members),
+[Anthropic prompt tokens include cache writes](#300-anthropic-prompt-tokens-include-cache-writes),
+[Claude forced `tool_choice`](#300-claude-models-that-reject-a-forced-tool_choice), and
+[GPT-6 tools on Chat Completions](#300-gpt-6-tools-on-chat-completions).
+
+### 3.0.0: New union members
+
+`LLMErrorCode` gains `'reader_stall_timeout'`, and `WireStreamChunk` gains
+`{ type: 'thinking_block'; block: ThinkingBlock }`. An exhaustive `switch` over either one with no
+`default` branch stops compiling until it adds the case:
+
+```ts
+switch (error.code) {
+  // ...
+  case 'reader_stall_timeout': // only raised with readerStallTimeoutMs set
+    break;
+}
+```
+
+A custom adapter that only yields chunks is unaffected. `reader_stall_timeout` only appears when you
+opt into [`readerStallTimeoutMs`](/docs/core/streaming#reader-stall-timeout).
+
+### 3.0.0: Anthropic prompt tokens include cache writes
+
+`fromAnthropic` now adds `cache_creation_input_tokens` to `promptTokens` and `totalTokens`, since
+Anthropic counts cache writes toward its input rate limit. On calls that write to the prompt cache,
+`onUsage`, the `'usage'` event, and the rate limiter all see the higher number. Cache reads are
+still left out. If you compute cost from `promptTokens`, price cache writes from the provider's own
+usage fields rather than subtracting them back out.
+
+### 3.0.0: Claude models that reject a forced `tool_choice`
+
+On Claude Fable 5.1 and later, Opus 5.5 and later, and every Claude major 6 and later,
+`fromAnthropic` and `fromBedrock` change two things:
+
+| Before                                                        | After                                                                       |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `toolChoice: 'required'` or `{ name }` sent, provider rejects | Throws `LLMError('invalid_params')`, code `unsupported_capability`, locally |
+| `jsonSchema` sent as a forced tool, provider rejects          | Sent as native structured output, and works                                 |
+
+The local error is never retried and never counts toward the breaker, so fallback can still try
+another target. Use `toolChoice: 'auto'`, or replace the model list with
+`forcedToolChoiceUnsupportedModels`.
+
+### 3.0.0: GPT-6 tools on Chat Completions
+
+`fromOpenAICompatible` now sends `reasoning_effort: "none"` for bare `gpt-` models of major 6 and
+later when tools are present and no reasoning was asked for. When `reasoningEffort` or
+`budgetTokens` is set, an instance `defaultReasoningEffort` included, the call throws
+`unsupported_capability` locally instead of reaching the provider:
+
+```ts
+// Before: rejected by the provider
+await llm.call({ userContent, tools }); // with defaultReasoningEffort: 'medium'
+
+// After: clear the default for this call
+await llm.call({ userContent, tools, reasoningEffort: null });
+```
+
+Use the Responses API for reasoning with tools, or replace the model list with
+`noReasoningToolModels`.
+
 ## 2.9.0: New `usage`/`usage_failure` members on `VernLLMEvent`
 
 `VernLLMEvent` gains two new members, `'usage'` and `'usage_failure'`, so a middleware's own

@@ -560,6 +560,23 @@ if (first.type === 'tool_calls') {
 }
 ```
 
+### Claude thinking in a tool loop
+
+With thinking on (`reasoningEffort` or `budgetTokens`), Claude requires its reasoning blocks back on
+the assistant turn that requested the tools. `fromAnthropic` and `fromBedrock` return them on
+`result.thinking`; pass them back as returned:
+
+```ts title="tool-calling-thinking.ts"
+history: [
+  { role: 'assistant', toolCalls: first.toolCalls, thinking: first.thinking },
+  { role: 'tool', toolResults },
+],
+```
+
+The `signature` covers the text, so an edited block is rejected. A malformed block throws
+`LLMError('invalid_params')` before dispatch. Other adapters never return `thinking` and drop it
+from `history`. Streaming collects the blocks onto `finalResult`, never onto `chunks`.
+
 See [the tool execution loop guide](/docs/guides/tool-execution-loop) for a complete,
 runnable example, and [Multi-turn Conversations](/docs/guides/multi-turn-conversations)
 for how tool turns fit into `history` more generally.
@@ -618,6 +635,20 @@ you were given.
   throws `LLMError('invalid_params')` with `code: 'unsupported_capability'` rather than silently
   falling back to `'auto'`, which would let the model call tools despite the caller explicitly
   asking it not to. Omit `tools` entirely for that call instead.
+</Callout>
+
+<Callout type="warn">
+  Some models reject a forced choice. On Claude Fable 5.1 and later, Opus 5.5 and later, and every
+  Claude major 6 and later, `'required'` and `{ name }` throw `LLMError('invalid_params')`, code
+  `unsupported_capability`, before dispatch, so fallback can still try another target. Adjust the
+  list with `forcedToolChoiceUnsupportedModels` on [`fromAnthropic`](/docs/adapters/anthropic) or
+  [`fromBedrock`](/docs/adapters/bedrock).
+
+GPT-6 and later accept tools on Chat Completions only with `reasoning_effort: "none"`.
+`fromOpenAICompatible` sends it when no reasoning was asked for, and throws the same error when
+`reasoningEffort` or `budgetTokens` is set, an instance default included. Pass `reasoningEffort: null`
+for that call, or use the Responses API. See [OpenAI-compatible](/docs/adapters/openai-compatible).
+
 </Callout>
 
 ## Combining with jsonSchema

@@ -1,5 +1,6 @@
 import { LLMError } from '../../types/errors.js';
 import { type RetryBudget } from '../retryBudget.js';
+import { resolveAdapterInfo } from '../utils/adapterInfo.utils.js';
 import {
   makeEventReporter,
   reportRejection,
@@ -9,6 +10,7 @@ import {
   type PreparableBreaker,
 } from '../utils/circuit-breaker/prepareBreaker.utils.js';
 import { redactResponseBody } from '../utils/errors/responseBody.utils.js';
+import { callHookSafely } from '../utils/logger.utils.js';
 import { readRateLimitHint } from '../utils/rate-limit/rateLimitHint.utils.js';
 import { type BreakerGateway } from './circuitBreakerContext.js';
 import { RequestBuilder } from './requestBuilder.js';
@@ -19,11 +21,17 @@ import { prepareAttempt, type OnRequest } from './utils/dispatch/attemptDispatch
 import { runAttemptLoop } from './utils/dispatch/attemptLoop.utils.js';
 import { isLimiterFailure } from './utils/dispatch/rateLimitDispatch.utils.js';
 import { extractStatus, normalizeError } from './utils/errors.utils.js';
-import { DEFAULT_MIDDLEWARE_TIMEOUT_MS, emitEvent } from './utils/middleware/middleware.utils.js';
+import {
+  DEFAULT_MIDDLEWARE_TIMEOUT_MS,
+  emitEvent,
+  middlewareLabel,
+  type DispatchHook,
+} from './utils/middleware/middleware.utils.js';
 import { defaultParseJson } from './utils/parse.utils.js';
 import { toTokenUsage } from './utils/response/usage.utils.js';
 import {
   normalizeMaxRetries,
+  validateMaxRetryAfterMs,
   withChunkIdleTimeout,
   withTimeout,
 } from './utils/retry/retry.utils.js';
@@ -32,6 +40,7 @@ import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../cir
 import type { Logger } from '../../logger.js';
 import type { RateLimiterAdapter } from '../../rateLimit.js';
 import type {
+  AdapterInfo,
   CallParams,
   CallWithToolsResult,
   DetectSoftFailure,
@@ -52,7 +61,11 @@ export interface CallExecutorOptions {
   maxRetries: number;
   timeoutMs: number;
   chunkIdleTimeoutMs: number;
+  /** See `VernLLMOptions.readerStallTimeoutMs`. Off when omitted. */
+  readerStallTimeoutMs?: number;
   baseDelayMs: number;
+  /** See `VernLLMOptions.maxRetryAfterMs`. */
+  maxRetryAfterMs: number;
   defaultMaxTokens: number;
   defaultTemperature: number | null;
   defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
@@ -73,6 +86,11 @@ export interface CallExecutorOptions {
   isFallback?: boolean;
   /** See `VernLLMOptions.middleware`. */
   middleware?: VernLLMMiddleware[];
+  /**
+   * `wrap` nesting order (`position` applied), which `dispatch` hooks nest
+   * in too. Defaults to `middleware`'s order.
+   */
+  dispatchOrder?: VernLLMMiddleware[];
   /** See `VernLLMOptions.middlewareTimeoutMs`. */
   middlewareTimeoutMs?: number;
   /** See `VernLLMOptions.detectSoftFailure`. */
@@ -89,7 +107,9 @@ export class CallExecutor {
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
   private readonly chunkIdleTimeoutMs: number;
+  private readonly readerStallTimeoutMs?: number;
   private readonly baseDelayMs: number;
+  private readonly maxRetryAfterMs: number;
   private readonly nonRetryableStatus: number[];
   private readonly parseJson: (content: string) => unknown;
   private readonly logger: Logger;
@@ -102,7 +122,10 @@ export class CallExecutor {
   private readonly isFallback: boolean;
   private readonly requestBuilder: RequestBuilder;
   private readonly middleware: VernLLMMiddleware[];
+  private readonly dispatchHooks: readonly DispatchHook[];
   private readonly middlewareTimeoutMs: number;
+  /** See `AttemptContext.adapter`. */
+  readonly adapter: AdapterInfo;
   private readonly supportsJsonObjectMode: boolean;
   private readonly detectSoftFailure?: DetectSoftFailure;
 
@@ -115,7 +138,9 @@ export class CallExecutor {
     this.maxRetries = normalizeMaxRetries(options.maxRetries);
     this.timeoutMs = options.timeoutMs;
     this.chunkIdleTimeoutMs = options.chunkIdleTimeoutMs;
+    this.readerStallTimeoutMs = options.readerStallTimeoutMs;
     this.baseDelayMs = options.baseDelayMs;
+    this.maxRetryAfterMs = validateMaxRetryAfterMs(options.maxRetryAfterMs, providerName);
     this.nonRetryableStatus = options.nonRetryableStatus;
     this.parseJson = options.parseJson ?? defaultParseJson;
     this.logger = options.logger;
@@ -137,6 +162,9 @@ export class CallExecutor {
     this.limiter = options.limiter;
     this.isFallback = options.isFallback ?? false;
     this.middleware = options.middleware ?? [];
+    this.dispatchHooks = buildDispatchHooks(this.middleware, options.dispatchOrder);
+    this.adapter = resolveAdapterInfo(client);
+    callHookSafely(this.logger, 'client.setLogger', () => client.setLogger?.(this.logger));
     this.middlewareTimeoutMs = options.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
     this.supportsJsonObjectMode = client.supportsJsonObjectMode ?? true;
     this.detectSoftFailure = options.detectSoftFailure;
@@ -292,10 +320,12 @@ export class CallExecutor {
       providerName: this.providerName,
       isFallback: this.isFallback,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
+      adapter: this.adapter,
       breaker: this.breaker,
       budget: this.budget,
       maxRetries: this.maxRetries,
       baseDelayMs: this.baseDelayMs,
+      maxRetryAfterMs: this.maxRetryAfterMs,
       nonRetryableStatus: this.nonRetryableStatus,
       signal: params.signal,
       onAttempt,
@@ -344,10 +374,12 @@ export class CallExecutor {
       providerName: this.providerName,
       isFallback: this.isFallback,
       supportsJsonObjectMode: this.supportsJsonObjectMode,
+      adapter: this.adapter,
       breaker: this.breaker,
       budget: this.budget,
       maxRetries: this.maxRetries,
       baseDelayMs: this.baseDelayMs,
+      maxRetryAfterMs: this.maxRetryAfterMs,
       nonRetryableStatus: this.nonRetryableStatus,
       signal: params.signal,
       onAttempt,
@@ -386,6 +418,7 @@ export class CallExecutor {
       useJson,
       state,
       release: acquiredRelease,
+      dispatch,
     } = await prepareAttempt({
       params,
       requestId,
@@ -397,6 +430,7 @@ export class CallExecutor {
       providerName: this.providerName,
       limiter: this.limiter,
       middleware: this.middleware,
+      dispatchHooks: this.dispatchHooks,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
       logger: this.logger,
       reportEvent: this.reportEvent,
@@ -404,20 +438,16 @@ export class CallExecutor {
     let release = acquiredRelease;
 
     try {
-      let response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
+      let response!: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>;
 
-      try {
+      await this.dispatchToProvider(dispatch, params.signal, async () => {
         response = await withTimeout(
           (attemptSignal) =>
             this.client.chat.completions.create(request, { signal: attemptSignal }),
           this.timeoutMs,
           params.signal,
         );
-      } catch (error) {
-        this.redactProviderError(error);
-        this.reactToRateLimitError(error);
-        throw error;
-      }
+      });
 
       // AIMD's proactive path.
       this.limiter?.reactToRateLimitHint(readRateLimitHint(response));
@@ -434,6 +464,7 @@ export class CallExecutor {
       const rawContent = response.choices?.[0]?.message?.content;
       const wireToolCalls = response.choices?.[0]?.message?.tool_calls;
       const truncated = response.choices?.[0]?.finish_reason === 'length';
+      const thinking = response.choices?.[0]?.message?.thinking;
 
       let finalized: T | CallWithToolsResult<T>;
 
@@ -459,6 +490,7 @@ export class CallExecutor {
             model,
           },
           truncated,
+          thinking,
         );
       } catch (error) {
         // Still reconcile real token usage and give the concurrency slot
@@ -561,9 +593,34 @@ export class CallExecutor {
   }
 
   /**
-   * AIMD's reactive path: shrinks the ceiling on a real 429,
-   * adapter-agnostic, independent of `supportsWithResponse`.
+   * Runs `send` inside the attempt's `dispatch` hooks. A provider failure
+   * is redacted, fed to AIMD, and rethrown as the raw error, not the
+   * `LLMError` hooks saw, since retry timing reads `Retry-After` off it.
+   * Anything else, a hook that never sent the request, is thrown as is.
    */
+  private async dispatchToProvider(
+    dispatch: (send: () => Promise<void>) => Promise<void>,
+    signal: AbortSignal | undefined,
+    send: () => Promise<void>,
+  ): Promise<void> {
+    let providerFailure: { error: unknown } | undefined;
+
+    try {
+      await dispatch(async () => {
+        try {
+          await send();
+        } catch (error) {
+          this.redactProviderError(error);
+          this.reactToRateLimitError(error);
+          providerFailure = { error };
+          throw normalizeError(error, signal, undefined, this.maxRetryAfterMs);
+        }
+      });
+    } catch (error) {
+      throw providerFailure ? providerFailure.error : error;
+    }
+  }
+
   /**
    * Runs `redact` over a provider response body an adapter embedded in
    * its error, before that message becomes `LLMError.message` or is
@@ -573,6 +630,10 @@ export class CallExecutor {
     if (this.redact) redactResponseBody(error, this.redact);
   }
 
+  /**
+   * AIMD's reactive path: shrinks the ceiling on a real 429,
+   * adapter-agnostic, independent of `supportsWithResponse`.
+   */
   private reactToRateLimitError(error: unknown): void {
     if (!this.limiter) return;
     if (extractStatus(error) !== 429) return;
@@ -633,6 +694,7 @@ export class CallExecutor {
       useJson,
       state,
       release: acquiredRelease,
+      dispatch,
     } = await prepareAttempt({
       params,
       requestId,
@@ -644,6 +706,7 @@ export class CallExecutor {
       providerName: this.providerName,
       limiter: this.limiter,
       middleware: this.middleware,
+      dispatchHooks: this.dispatchHooks,
       middlewareTimeoutMs: this.middlewareTimeoutMs,
       logger: this.logger,
       reportEvent: this.reportEvent,
@@ -663,35 +726,36 @@ export class CallExecutor {
       : streamController.signal;
 
     try {
-      const { iterator, first } = await (async () => {
-        try {
-          return await withTimeout(
-            async (attemptSignal) => {
-              const streamIterator = createStream(request, { signal: attemptSignal })[
-                Symbol.asyncIterator
-              ]();
-              let firstResult = await streamIterator.next();
+      let opened!: {
+        iterator: AsyncIterator<WireStreamChunk>;
+        first: IteratorResult<WireStreamChunk>;
+      };
 
-              // A rate-limit hint is read off the response headers, not the
-              // body, so it can arrive before any real content. It must not
-              // count as the stream having opened, or a failure on the first
-              // real chunk would skip retries and fallback.
-              while (!firstResult.done && firstResult.value.type === 'rate_limit_hint') {
-                this.limiter?.reactToRateLimitHint(firstResult.value.hint);
-                firstResult = await streamIterator.next();
-              }
+      await this.dispatchToProvider(dispatch, params.signal, async () => {
+        opened = await withTimeout(
+          async (attemptSignal) => {
+            const streamIterator = createStream(request, { signal: attemptSignal })[
+              Symbol.asyncIterator
+            ]();
+            let firstResult = await streamIterator.next();
 
-              return { iterator: streamIterator, first: firstResult };
-            },
-            this.timeoutMs,
-            combinedExternal,
-          );
-        } catch (error) {
-          this.redactProviderError(error);
-          this.reactToRateLimitError(error);
-          throw error;
-        }
-      })();
+            // A rate-limit hint is read off the response headers, not the
+            // body, so it can arrive before any real content. It must not
+            // count as the stream having opened, or a failure on the first
+            // real chunk would skip retries and fallback.
+            while (!firstResult.done && firstResult.value.type === 'rate_limit_hint') {
+              this.limiter?.reactToRateLimitHint(firstResult.value.hint);
+              firstResult = await streamIterator.next();
+            }
+
+            return { iterator: streamIterator, first: firstResult };
+          },
+          this.timeoutMs,
+          combinedExternal,
+        );
+      });
+
+      const { iterator, first } = opened;
 
       // A ping counts as the stream opening, so a model's thinking phase
       // (which can far outlast `timeoutMs`) only needs pings to stay open.
@@ -714,7 +778,7 @@ export class CallExecutor {
             providerName: this.providerName,
             isFallback: this.isFallback,
           });
-          const normalized = normalizeError(error, params.signal);
+          const normalized = normalizeError(error, params.signal, undefined, this.maxRetryAfterMs);
 
           if (normalized.type !== 'aborted') {
             this.usageReporter.reportFailure(
@@ -754,9 +818,11 @@ export class CallExecutor {
         providerName: this.providerName,
         isFallback: this.isFallback,
         chunkIdleTimeoutMs,
+        readerStallTimeoutMs: this.readerStallTimeoutMs,
         streamController,
         logger: this.logger,
         signal: params.signal,
+        maxRetryAfterMs: this.maxRetryAfterMs,
         onRateLimitHint: (hint) => {
           this.limiter?.reactToRateLimitHint(hint);
         },
@@ -801,7 +867,7 @@ export class CallExecutor {
 
           releaseAtOpen?.(this.usageReporter.actualTokensFor(usage));
         },
-        finalize: (textAcc, wireToolCalls, usage) => {
+        finalize: (textAcc, wireToolCalls, usage, thinking) => {
           const actualTokens = this.usageReporter.actualTokensFor(usage);
 
           try {
@@ -825,6 +891,8 @@ export class CallExecutor {
                 isFallback: this.isFallback,
                 model,
               },
+              false,
+              thinking,
             );
 
             // Only now, once finalization has actually succeeded, is
@@ -890,6 +958,29 @@ export class CallExecutor {
   private countsTowardBreaker(error: LLMError): boolean {
     return error.countsTowardBreaker && !isLimiterFailure(error);
   }
+}
+
+/**
+ * Every entry with a `dispatch`, in `order` (outermost first), labeled by
+ * its `transformOrder` position so an unnamed entry reads the same as in
+ * `registeredMiddlewareNames` whatever `position` it pins.
+ */
+function buildDispatchHooks(
+  transformOrder: VernLLMMiddleware[],
+  order: VernLLMMiddleware[] = transformOrder,
+): readonly DispatchHook[] {
+  const indexByEntry = new Map(transformOrder.map((entry, index) => [entry, index]));
+
+  return order.flatMap((entry) =>
+    entry.dispatch
+      ? [
+          {
+            entry: entry as DispatchHook['entry'],
+            label: middlewareLabel(entry, indexByEntry.get(entry)!),
+          },
+        ]
+      : [],
+  );
 }
 
 /** Text or a tool call delta: the first chunk that reaches the caller as content. */

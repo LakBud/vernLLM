@@ -2,6 +2,7 @@ import {
   attachRateLimitHint,
   parseOpenAIRateLimitHeaders,
 } from '../internal/utils/rate-limit/rateLimitHint.utils.js';
+import { LLMError } from '../types/errors.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 import {
   budgetTokensToEffort,
@@ -9,7 +10,75 @@ import {
   type EffortTokenTable,
 } from './internal/reasoningBudget.utils.js';
 
+import type { Logger } from '../logger.js';
 import type { ContentBlock, LLMClient, WireStreamChunk } from '../types/index.js';
+import type { ModelCapabilityOverride } from './internal/nativeStructuredOutput.js';
+
+/** `reasoning_effort` as this adapter sends it: VernLLM's tiers, plus OpenAI's `'none'`. */
+type OpenAIWireReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high';
+
+/**
+ * Built in rule for models that only accept `tools` on Chat Completions
+ * with `reasoning_effort: "none"`: bare `gpt-` ids of major version 6 and
+ * later, `-chat` ids excepted, the same threshold style as
+ * `isOpenAIReasoningModel`. A gateway id (`openai/gpt-6`) is left alone,
+ * since the gateway decides what it forwards.
+ */
+function isDefaultNoReasoningToolModel(model: string): boolean {
+  if (/-chat/.test(model)) return false;
+
+  const gptMajor = /^gpt-(\d+)/.exec(model)?.[1];
+  return gptMajor !== undefined && Number(gptMajor) >= 6;
+}
+
+/** Whether `model` needs `reasoning_effort: "none"` to take tools. `override` replaces the built in rule. */
+function needsNoReasoningForTools(model: string, override?: ModelCapabilityOverride): boolean {
+  if (!override) return isDefaultNoReasoningToolModel(model);
+
+  return Array.isArray(override) ? override.includes(model) : override(model);
+}
+
+/**
+ * Whether this request must go out with `reasoning_effort: "none"`: tools
+ * on a model covered by `needsNoReasoningForTools`, with no reasoning
+ * asked for. Reasoning that was asked for (an instance default included)
+ * throws instead of being dropped, since dropping it would change output
+ * quality with no signal. Thrown before dispatch, so it is never retried
+ * and never counts toward the circuit breaker.
+ */
+function requiresNoReasoning(
+  params: Parameters<LLMClient['chat']['completions']['create']>[0],
+  override: ModelCapabilityOverride | undefined,
+): boolean {
+  if (!params.tools?.length || !needsNoReasoningForTools(params.model, override)) return false;
+
+  if (params.reasoning_effort !== undefined || params.budget_tokens !== undefined) {
+    throw new LLMError(
+      `OpenAI model "${params.model}" only accepts tools on Chat Completions with ` +
+        'reasoning_effort "none", but this call asks for reasoning through reasoningEffort or ' +
+        'budgetTokens (an instance default counts). Pass reasoningEffort: null and budgetTokens: ' +
+        'null for this call, or use the Responses API for reasoning with tools.',
+      'invalid_params',
+      { code: 'unsupported_capability', issues: { capability: 'tools_with_reasoning' } },
+    );
+  }
+
+  return true;
+}
+
+/** Sets `reasoning_effort: "none"` when `apply` is true, logging it once for this request. */
+function withNoReasoning<P extends { model: string }>(
+  params: P,
+  apply: boolean,
+  logger: Logger | undefined,
+): P & { reasoning_effort?: OpenAIWireReasoningEffort } {
+  if (!apply) return params;
+
+  logger?.debug(
+    `[VernLLM] ${params.model}: sending reasoning_effort "none", required for tools on Chat Completions`,
+  );
+  return { ...params, reasoning_effort: 'none' };
+}
 
 /**
  * OpenAI's wire format only understands `reasoning_effort`, not a raw
@@ -94,6 +163,12 @@ function toOpenAIMessages(
       return isError
         ? { ...openAIToolMessage, content: `Error: ${openAIToolMessage.content}` }
         : openAIToolMessage;
+    }
+
+    // Only Claude understands reasoning blocks; OpenAI rejects unknown message fields.
+    if (m.role === 'assistant' && m.thinking) {
+      const { thinking: _thinking, ...openAIAssistantMessage } = m;
+      return openAIAssistantMessage;
     }
 
     return m;
@@ -260,6 +335,55 @@ export interface OpenAICompatibleAdapterOptions {
    * every "OpenAI-compatible" client is confirmed to support it.
    */
   supportsWithResponse?: boolean;
+  /**
+   * The provider this client talks to, in the OpenTelemetry
+   * `gen_ai.provider.name` vocabulary, reported on `AttemptContext.adapter`.
+   * When omitted it is read off the client's `baseURL` for a few well
+   * known hosts (OpenAI, Azure OpenAI, Groq, Mistral, DeepSeek, xAI,
+   * Perplexity) and left unset otherwise.
+   */
+  provider?: string;
+  /**
+   * Models that only accept `tools` on Chat Completions with
+   * `reasoning_effort: "none"`. Replaces the built in rule (bare `gpt-` ids
+   * of major 6 and later, except `-chat` ids) when set. With tools and no
+   * reasoning asked for, `"none"` is sent. With `reasoningEffort` or
+   * `budgetTokens` set, an instance default included, the call throws
+   * `LLMError('invalid_params')`, code `unsupported_capability`, before
+   * dispatch. Requests without tools are unchanged.
+   */
+  noReasoningToolModels?: ModelCapabilityOverride;
+}
+
+/** Hosts whose provider is unambiguous. A gateway or proxy host is never listed. */
+const PROVIDER_BY_HOST: ReadonlyArray<[RegExp, string]> = [
+  [/^api\.openai\.com$/, 'openai'],
+  [/\.openai\.azure\.com$/, 'azure.ai.openai'],
+  [/^api\.groq\.com$/, 'groq'],
+  [/^api\.mistral\.ai$/, 'mistral_ai'],
+  [/^api\.deepseek\.com$/, 'deepseek'],
+  [/^api\.x\.ai$/, 'x_ai'],
+  [/^api\.perplexity\.ai$/, 'perplexity'],
+];
+
+/** The provider for an OpenAI compatible client, from the option or its `baseURL`. */
+function openAICompatibleProvider(
+  client: unknown,
+  provider: string | undefined,
+): string | undefined {
+  if (typeof provider === 'string' && provider.trim() !== '') return provider;
+
+  const baseURL = (client as { baseURL?: unknown }).baseURL;
+  if (typeof baseURL !== 'string') return undefined;
+
+  let host: string;
+  try {
+    host = new URL(baseURL).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+
+  return PROVIDER_BY_HOST.find(([pattern]) => pattern.test(host))?.[1];
 }
 
 export function fromOpenAICompatible(
@@ -269,6 +393,8 @@ export function fromOpenAICompatible(
   const raw = client as LLMClient;
   const { supportsStreamUsage = true, supportsWithResponse = false } = options;
   const effortTokenTable = resolveEffortTokenTable(options.reasoningEffortTokens);
+  const noReasoningToolModels = options.noReasoningToolModels;
+  let logger: Logger | undefined;
 
   // The underlying client's `create`, called with `stream: true`, returns
   // an AsyncIterable of `OpenAIStreamChunk` rather than
@@ -281,13 +407,25 @@ export function fromOpenAICompatible(
     options: { signal: AbortSignal },
   ) => Promise<unknown> | AsyncIterable<OpenAIStreamChunk>;
 
+  const provider = openAICompatibleProvider(client, options.provider);
+
   return {
+    adapter: { name: 'openai-compatible', ...(provider ? { provider } : {}) },
+    setLogger(next) {
+      logger = next;
+    },
     chat: {
       completions: {
         async create(params, options) {
+          const noReasoning = requiresNoReasoning(params, noReasoningToolModels);
           const messages = ensureJsonKeyword(toOpenAIMessages(params), params.response_format);
-          const built = applyReasoningModelParams(
-            applyReasoningBudget({ ...params, messages }, effortTokenTable),
+          // Cast: the SDK takes `reasoning_effort: 'none'`, VernLLM's own wire type doesn't list it.
+          const built = withNoReasoning(
+            applyReasoningModelParams(
+              applyReasoningBudget({ ...params, messages }, effortTokenTable),
+            ),
+            noReasoning,
+            logger,
           ) as Parameters<LLMClient['chat']['completions']['create']>[0];
 
           if (!supportsWithResponse) {
@@ -311,17 +449,22 @@ export function fromOpenAICompatible(
         },
 
         async *createStream(params, options) {
+          const noReasoning = requiresNoReasoning(params, noReasoningToolModels);
           const messages = ensureJsonKeyword(toOpenAIMessages(params), params.response_format);
-          const built = applyReasoningModelParams(
-            applyReasoningBudget(
-              {
-                ...params,
-                messages,
-                stream: true,
-                ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
-              },
-              effortTokenTable,
+          const built = withNoReasoning(
+            applyReasoningModelParams(
+              applyReasoningBudget(
+                {
+                  ...params,
+                  messages,
+                  stream: true,
+                  ...(supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+                },
+                effortTokenTable,
+              ),
             ),
+            noReasoning,
+            logger,
           );
 
           let stream: AsyncIterable<OpenAIStreamChunk>;

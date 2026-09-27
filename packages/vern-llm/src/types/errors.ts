@@ -44,6 +44,7 @@ export type LLMErrorCode =
   // Timeouts (timeout)
   | 'request_timeout'
   | 'idle_timeout'
+  | 'reader_stall_timeout'
   | 'middleware_timeout'
   // Deadline (aborted)
   | 'deadline_exceeded'

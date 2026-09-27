@@ -17,7 +17,8 @@ function baseOptions(overrides: Partial<BreakerGatewayOptions> = {}): BreakerGat
     providerName: 'openai',
     isFallback: false,
     supportsJsonObjectMode: true,
-    registeredMiddlewareNames: [],
+    middlewareNames: { registeredMiddlewareNames: [], transformMiddlewareNames: [] },
+    adapter: { name: 'custom' },
     ...overrides,
   };
 }
@@ -174,7 +175,11 @@ describe('createBreakerGateway, recordSuccess/recordFailure', () => {
 
   it('threads registeredMiddlewareNames through as the same reference it was given, not a copy', () => {
     const names = Object.freeze(['first', 'second']);
-    const gateway = createBreakerGateway(baseOptions({ registeredMiddlewareNames: names }));
+    const gateway = createBreakerGateway(
+      baseOptions({
+        middlewareNames: { registeredMiddlewareNames: names, transformMiddlewareNames: [] },
+      }),
+    );
     const state = createMiddlewareStateBag();
 
     const ctx = gateway.buildAttemptContext(0, undefined, state);

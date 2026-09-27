@@ -23,6 +23,32 @@ describe('normalizeError', () => {
     expect(normalizeError(original)).toBe(original);
   });
 
+  it('clamps an existing LLMError retryAfterMs to maxRetryAfterMs, keeping its other details', () => {
+    const original = new LLMError('rate limited', 'api', { status: 429, retryAfterMs: 90_000 });
+
+    const result = normalizeError(original, undefined, undefined, 5_000);
+
+    expect(result).toBe(original);
+    expect(result.retryAfterMs).toBe(5_000);
+    expect(result.status).toBe(429);
+    expect(result.type).toBe('api');
+    expect(result.code).toBe('provider_rate_limited');
+  });
+
+  it('clamps an existing LLMError retryAfterMs to a zero cap', () => {
+    const original = new LLMError('rate limited', 'api', { status: 429, retryAfterMs: 1_000 });
+
+    expect(normalizeError(original, undefined, undefined, 0).retryAfterMs).toBe(0);
+  });
+
+  it('leaves an existing LLMError retryAfterMs alone when under the cap or no cap is given', () => {
+    const under = new LLMError('rate limited', 'api', { status: 429, retryAfterMs: 1_000 });
+    const uncapped = new LLMError('rate limited', 'api', { status: 429, retryAfterMs: 90_000 });
+
+    expect(normalizeError(under, undefined, undefined, 5_000).retryAfterMs).toBe(1_000);
+    expect(normalizeError(uncapped).retryAfterMs).toBe(90_000);
+  });
+
   it('tags an already-normalized LLMError carrying status 429 with code "provider_rate_limited"', () => {
     const original = new LLMError('rate limited', 'api', { status: 429 });
 

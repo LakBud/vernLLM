@@ -28,6 +28,9 @@ const llm = new VernLLM({
 
 Non-2xx responses throw with `.status` set, so `nonRetryableStatus` still fails fast on 401/403 as usual. The thrown error also carries `.headers` (the response's `Headers`-like object), so retry logic can read things like `Retry-After`.
 
+Set `provider` on the config (an OpenTelemetry `gen_ai.provider.name` value) to report it on
+`AttemptContext.adapter`, see [`ctx.adapter`](/docs/core/middleware#ctxadapter).
+
 For `GET`/`HEAD` requests, the adapter skips attaching a `body` and a `Content-Type` header, since those methods don't support a request body.
 
 <Callout type="info">

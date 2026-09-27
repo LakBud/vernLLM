@@ -618,3 +618,110 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
     });
   });
 });
+
+describe('Bedrock adapter integration, thinking and forced tool_choice (real AWS SDK client)', () => {
+  let server: RealSdkServer | undefined;
+
+  afterEach(async () => {
+    await server?.close();
+    server = undefined;
+  });
+
+  function makeClient(): BedrockRuntimeClient {
+    if (!server) throw new Error('server not started');
+    return new BedrockRuntimeClient({
+      region: 'us-east-1',
+      endpoint: server.url,
+      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+      requestHandler: new NodeHttpHandler(),
+      maxAttempts: 1,
+    });
+  }
+
+  const weatherTool = {
+    name: 'get_weather',
+    description: 'Gets the weather',
+    parameters: { type: 'object', properties: { city: { type: 'string' } } },
+  };
+
+  it('carries reasoningContent through a real tool loop, redacted bytes included', async () => {
+    const redacted = Buffer.from([0, 1, 2]).toString('base64');
+    server = await startRealSdkServer([
+      {
+        body: {
+          output: {
+            message: {
+              role: 'assistant',
+              content: [
+                {
+                  reasoningContent: {
+                    reasoningText: { text: 'need weather', signature: 'sig-abc' },
+                  },
+                },
+                { reasoningContent: { redactedContent: redacted } },
+                { toolUse: { toolUseId: 'tu_1', name: 'get_weather', input: { city: 'Oslo' } } },
+              ],
+            },
+          },
+          stopReason: 'tool_use',
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        },
+      },
+      {
+        body: {
+          output: { message: { role: 'assistant', content: [{ text: 'Sunny.' }] } },
+          stopReason: 'end_turn',
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        },
+      },
+    ]);
+    const llm = new VernLLM({ client: fromBedrock(makeClient()), model: 'anthropic.claude-test' });
+
+    const first = await llm.call({
+      userContent: 'Weather in Oslo?',
+      tools: [weatherTool],
+      budgetTokens: 2000,
+      maxTokens: 4000,
+    });
+    if (first.type !== 'tool_calls') throw new Error('expected a tool call');
+
+    expect(first.thinking).toEqual([
+      { type: 'thinking', thinking: 'need weather', signature: 'sig-abc' },
+      { type: 'redacted_thinking', data: redacted },
+    ]);
+
+    await llm.call({
+      userContent: 'Weather in Oslo?',
+      tools: [weatherTool],
+      budgetTokens: 2000,
+      maxTokens: 4000,
+      jsonMode: false,
+      history: [
+        { role: 'assistant', toolCalls: first.toolCalls, thinking: first.thinking },
+        { role: 'tool', toolResults: [{ toolCallId: 'tu_1', content: 'sunny' }] },
+      ],
+    });
+
+    const sent = at(server.requests, 1).body as {
+      messages: Array<{ role: string; content: unknown[] }>;
+    };
+    expect(sent.messages.find((m) => m.role === 'assistant')?.content).toEqual([
+      { reasoningContent: { reasoningText: { text: 'need weather', signature: 'sig-abc' } } },
+      { reasoningContent: { redactedContent: redacted } },
+      { toolUse: { toolUseId: 'tu_1', name: 'get_weather', input: { city: 'Oslo' } } },
+    ]);
+  });
+
+  it('rejects a forced tool_choice on a region prefixed profile without sending anything', async () => {
+    server = await startRealSdkServer([{ body: {} }]);
+    const llm = new VernLLM({
+      client: fromBedrock(makeClient()),
+      model: 'us.anthropic.claude-opus-5-5-v1:0',
+    });
+
+    await expect(
+      llm.call({ userContent: 'hi', tools: [weatherTool], toolChoice: 'required' }),
+    ).rejects.toMatchObject({ type: 'invalid_params', code: 'unsupported_capability' });
+    expect(server.requests).toHaveLength(0);
+  });
+});

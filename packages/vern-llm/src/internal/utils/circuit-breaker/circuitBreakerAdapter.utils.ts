@@ -7,13 +7,14 @@ import {
 import { LLMError } from '../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../types/middleware.js';
 import { emitEvent } from '../../execution/utils/middleware/middleware.utils.js';
-import { middlewareLabels } from '../../resolveMiddlewareOrder.js';
+import { middlewareContextNames } from '../../resolveMiddlewareOrder.js';
+import { CUSTOM_ADAPTER } from '../adapterInfo.utils.js';
 import { callHookSafely } from './../logger.utils.js';
 import { makeEventReporter, reportRejection } from './circuitBreaker.utils.js';
 
 import type { Logger } from '../../../logger.js';
 import type { VernLLMEvent } from '../../../types/events.js';
-import type { AttemptContext, VernLLMMiddleware } from '../../../types/index.js';
+import type { AdapterInfo, AttemptContext, VernLLMMiddleware } from '../../../types/index.js';
 
 /**
  * Not re-exported from the package root, imported directly from this
@@ -120,6 +121,7 @@ function wrapOnStateChange(
   middlewareTimeoutMs: number,
   isFallback: boolean,
   supportsJsonObjectMode: boolean,
+  adapter: AdapterInfo,
 ): CircuitBreakerStateChangeHandler {
   return (from, to, consecutiveFailures, model, context) => {
     const event: VernLLMEvent = {
@@ -144,6 +146,7 @@ function wrapOnStateChange(
       stage: 'attempt',
       requestId: callContext.requestId,
       requestedProvider: providerName,
+      adapter,
       requestedModel: model ?? defaultModel,
       isFallbackAttempt: isFallback,
       // Most call sites (recordSuccess/recordFailure after a real
@@ -155,7 +158,7 @@ function wrapOnStateChange(
       signal: callContext.signal,
       state: callContext.state,
       own: {},
-      registeredMiddlewareNames: middlewareLabels(middleware),
+      ...middlewareContextNames(middleware),
     };
 
     emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, logger);
@@ -258,6 +261,7 @@ export function buildCircuitBreaker(
   middlewareTimeoutMs: number,
   isFallback: boolean,
   supportsJsonObjectMode: boolean,
+  adapter: AdapterInfo = CUSTOM_ADAPTER,
 ): CircuitBreakerAdapter | undefined {
   if (!circuitBreakerOption) return undefined;
 
@@ -274,6 +278,7 @@ export function buildCircuitBreaker(
       middlewareTimeoutMs,
       isFallback,
       supportsJsonObjectMode,
+      adapter,
     );
 
   if (typeof circuitBreakerOption === 'object') {

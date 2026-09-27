@@ -66,7 +66,8 @@ function baseParams<T>(
       providerName: 'openai',
       isFallback: false,
       supportsJsonObjectMode: true,
-      registeredMiddlewareNames: [],
+      middlewareNames: { registeredMiddlewareNames: [], transformMiddlewareNames: [] },
+      adapter: { name: 'custom' },
     });
 
   return {
@@ -80,6 +81,7 @@ function baseParams<T>(
     providerName: 'openai',
     limiter: overrides.limiter,
     middleware: overrides.middleware ?? [],
+    dispatchHooks: [],
     middlewareTimeoutMs: 5000,
     logger: noopLogger(),
     reportEvent: vi.fn(),

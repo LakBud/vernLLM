@@ -329,4 +329,18 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
       code: 'request_timeout',
     });
   });
+
+  it('names the provider from a real top level client, Gemini API or Vertex AI', () => {
+    expect(fromGemini(new GoogleGenAI({ apiKey: 'test-key' })).adapter).toEqual({
+      name: 'gemini',
+      provider: 'gcp.gemini',
+    });
+    expect(
+      fromGemini(new GoogleGenAI({ vertexai: true, project: 'p', location: 'us-central1' }))
+        .adapter,
+    ).toEqual({ name: 'gemini', provider: 'gcp.vertex_ai' });
+    expect(fromGemini(new GoogleGenAI({ apiKey: 'test-key' }).models).adapter).toEqual({
+      name: 'gemini',
+    });
+  });
 });

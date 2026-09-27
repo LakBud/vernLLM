@@ -1,3 +1,5 @@
+import { clampTimeoutMs, resolveActiveTimeoutMs } from '../retry/retry.utils.js';
+
 import type { Logger } from '../../../../logger.js';
 
 /** Everything `createBackpressureChannel` needs. Generic over the item type: no knowledge of `StreamChunk`. */
@@ -15,6 +17,13 @@ export interface BackpressureChannelOptions {
    * distinguishable in logs, e.g. `'stream chunk'`.
    */
   label: string;
+  /**
+   * How long a reader may hold the producer back on a full buffer before
+   * it is detached. `0`, negative, NaN, or `Infinity` waits forever.
+   */
+  stallTimeoutMs?: number;
+  /** What a detached reader's next pull rejects with. Required for `stallTimeoutMs` to apply. */
+  stallError?: () => unknown;
 }
 
 /** A push/pull async channel with a bounded buffer, returned by `createBackpressureChannel`. */
@@ -51,7 +60,8 @@ export interface BackpressureChannel<T> {
 export function createBackpressureChannel<T>(
   options: BackpressureChannelOptions,
 ): BackpressureChannel<T> {
-  const { capacity, logger, label } = options;
+  const { capacity, logger, label, stallError } = options;
+  const stallTimeoutMs = stallError ? resolveActiveTimeoutMs(options.stallTimeoutMs) : undefined;
 
   const buffered: T[] = [];
   // `owner` ties a pull to the iterator that made it, so one reader's
@@ -70,8 +80,26 @@ export function createBackpressureChannel<T>(
   // below applies, so a reader that left can't stall the producer.
   let activeReaders = 0;
   let spaceWaiters: Array<() => void> = [];
+  // Set once a reader held the producer back past `stallTimeoutMs`. From
+  // then on every pull rejects with it and nothing is buffered, so the
+  // producer runs to the end on its own instead of waiting forever.
+  let stall: { error: unknown } | undefined;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function detachStalledReaders(): void {
+    stallTimer = undefined;
+    stall = { error: stallError!() };
+    logger.warn(
+      `[VernLLM] ${label} reader held a full buffer for ${stallTimeoutMs}ms; detaching it so the stream can finish.`,
+    );
+    buffered.length = 0;
+    releaseProducer();
+  }
 
   function releaseProducer(): void {
+    clearTimeout(stallTimer);
+    stallTimer = undefined;
+
     const waiters = spaceWaiters;
 
     spaceWaiters = [];
@@ -79,6 +107,8 @@ export function createBackpressureChannel<T>(
   }
 
   function push(value: T): Promise<void> | undefined {
+    if (stall) return undefined;
+
     const waiter = pending.shift();
 
     if (waiter) {
@@ -90,6 +120,10 @@ export function createBackpressureChannel<T>(
 
     if (activeReaders > 0) {
       if (buffered.length < capacity) return undefined;
+
+      if (stallTimeoutMs !== undefined && stallTimer === undefined) {
+        stallTimer = setTimeout(detachStalledReaders, clampTimeoutMs(stallTimeoutMs));
+      }
 
       return new Promise((resolve) => {
         spaceWaiters.push(resolve);
@@ -159,6 +193,8 @@ export function createBackpressureChannel<T>(
             active = true;
             activeReaders++;
           }
+
+          if (stall) return Promise.reject(stall.error);
 
           if (buffered.length) {
             const value = buffered.shift() as T;

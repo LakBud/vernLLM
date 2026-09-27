@@ -269,6 +269,21 @@ const { chunks, finalResult } = await llm.call({
   delays.
 </Callout>
 
+## Reader stall timeout
+
+A reader that stops pulling from `chunks` while the buffer is full pauses the stream, holding its
+connection and rate limit slot until it resumes. `readerStallTimeoutMs`, off by default, bounds
+that:
+
+```ts
+const llm = new VernLLM({ client, model: 'gpt-4o-mini', readerStallTimeoutMs: 60_000 });
+```
+
+Past the timeout the reader is detached. Its next pull rejects with `LLMError('timeout')`, code
+`reader_stall_timeout`, the stream runs to the end without buffering, and `finalResult` still
+settles. A reader that keeps pulling, however slowly, is never detached. `0`, negative, or
+`Infinity` keeps it off. Fallback targets can set their own.
+
 ### Provider keep-alive pings
 
 Some providers send periodic keep-alive signals during long pauses in generation: Anthropic's

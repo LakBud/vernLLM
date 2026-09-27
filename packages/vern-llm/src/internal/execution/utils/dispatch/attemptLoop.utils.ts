@@ -1,6 +1,6 @@
 import { LLMError, type LLMRequestSnapshot, type RetryAttempt } from '../../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../../types/middleware.js';
-import { middlewareLabels } from '../../../resolveMiddlewareOrder.js';
+import { middlewareContextNames } from '../../../resolveMiddlewareOrder.js';
 import { createBreakerGateway, type BreakerGateway } from '../../circuitBreakerContext.js';
 import { describeError, extractStatus, normalizeError } from '../errors.utils.js';
 import { emitEvent } from '../middleware/middleware.utils.js';
@@ -9,6 +9,7 @@ import { recoverDelay, retryWithBackoff, shouldRetry } from '../retry/retry.util
 import type { CircuitBreakerAdapter } from '../../../../circuitBreaker.js';
 import type { Logger } from '../../../../logger.js';
 import type {
+  AdapterInfo,
   MiddlewareStateBag,
   VernLLMEvent,
   VernLLMMiddleware,
@@ -33,6 +34,8 @@ export interface RunAttemptLoopParams<T> {
   providerName: string;
   isFallback: boolean;
   supportsJsonObjectMode: boolean;
+  /** See `AttemptContext.adapter`. */
+  adapter: AdapterInfo;
   breaker?: CircuitBreakerAdapter;
   /**
    * Caps how much of this target's recent traffic is allowed to be
@@ -42,6 +45,8 @@ export interface RunAttemptLoopParams<T> {
   budget?: RetryBudget;
   maxRetries: number;
   baseDelayMs: number;
+  /** See `VernLLMOptions.maxRetryAfterMs`. Omitted means the 10s default. */
+  maxRetryAfterMs?: number;
   nonRetryableStatus: number[];
   signal?: AbortSignal;
   onAttempt?: () => void;
@@ -82,10 +87,12 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     providerName,
     isFallback,
     supportsJsonObjectMode,
+    adapter,
     breaker,
     budget,
     maxRetries,
     baseDelayMs,
+    maxRetryAfterMs,
     nonRetryableStatus,
     signal,
     onAttempt,
@@ -99,6 +106,10 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
   } = params;
 
   const resolvedState = params.state ?? createMiddlewareStateBag();
+  // Every error this loop builds reports `retryAfterMs` under the same cap
+  // the wait itself honors, so the two never disagree.
+  const normalize = (error: unknown, signal?: AbortSignal, attempts?: RetryAttempt[]) =>
+    normalizeError(error, signal, attempts, maxRetryAfterMs);
   const attempts: RetryAttempt[] = [];
   const gateway = createBreakerGateway({
     breaker,
@@ -108,7 +119,8 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     providerName,
     isFallback,
     supportsJsonObjectMode,
-    registeredMiddlewareNames: middlewareLabels(middleware),
+    middlewareNames: middlewareContextNames(middleware),
+    adapter,
   });
 
   // Set only when `budget.assertAvailable()` is what actually stopped a
@@ -149,6 +161,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
           providerName,
           maxRetries,
           baseDelayMs,
+          maxRetryAfterMs,
           middleware,
           middlewareTimeoutMs,
           logger,
@@ -156,10 +169,10 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
           buildEventContext: (_requestId, _model, attempt, signal, state) =>
             gateway.buildAttemptContext(attempt, signal, state),
           extractStatus,
-          normalizeError,
+          normalizeError: normalize,
           emitEvent,
         }),
-      normalizeError,
+      normalizeError: normalize,
     });
   } catch (error) {
     // `attempts` only holds prior attempts that were actually retried
@@ -169,7 +182,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     // history: `normalizeError` fills in `attempts` on an already-built
     // `LLMError` without overwriting anything it already carries, so
     // this doesn't touch the error's own `type`/`code`.
-    const normalized = normalizeError(
+    const normalized = normalize(
       budgetExhaustedError ?? error,
       signal,
       attempts.length > 0 ? attempts : undefined,

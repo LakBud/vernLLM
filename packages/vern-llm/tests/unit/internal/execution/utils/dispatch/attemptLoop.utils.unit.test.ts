@@ -20,6 +20,7 @@ function baseParams(
     providerName: 'openai',
     isFallback: false,
     supportsJsonObjectMode: true,
+    adapter: { name: 'custom' },
     breaker: undefined,
     maxRetries: 0,
     baseDelayMs: 0,

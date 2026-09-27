@@ -2,7 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { LLMError, type WireStreamChunk } from '../../../src/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
-import { createMockStreamingClient, drain, scriptedIteratorWithReturn } from '../../helpers.js';
+import {
+  createMockStreamingClient,
+  drain,
+  isPending,
+  scriptedIteratorWithReturn,
+} from '../../helpers.js';
 
 const weatherTool = {
   name: 'get_weather',
@@ -1130,5 +1135,56 @@ describe('VernLLM.call, stream: true, provider keep-alive pings', () => {
     const { finalResult } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
 
     await expect(finalResult).resolves.toBe('first');
+  });
+});
+
+describe('VernLLM streaming: readerStallTimeoutMs', () => {
+  function manyChunks(count: number): WireStreamChunk[] {
+    return Array.from({ length: count }, () => ({ type: 'text-delta' as const, delta: 'x' }));
+  }
+
+  it('detaches a reader that stops pulling, so finalResult still settles', async () => {
+    const { client } = createMockStreamingClient([manyChunks(10_050)]);
+    const llm = new VernLLM({
+      client,
+      model: 'm',
+      logger: 'silent',
+      readerStallTimeoutMs: 20,
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'u',
+      stream: true,
+      jsonMode: false,
+    });
+    const iterator = chunks[Symbol.asyncIterator]();
+    await iterator.next();
+
+    await expect(finalResult).resolves.toHaveLength(10_050);
+    await expect(iterator.next()).rejects.toMatchObject({
+      type: 'timeout',
+      code: 'reader_stall_timeout',
+    });
+  });
+
+  it('keeps holding the stream for a stalled reader when left unset', async () => {
+    const { client } = createMockStreamingClient([manyChunks(10_050)]);
+    const llm = new VernLLM({ client, model: 'm', logger: 'silent' });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'u',
+      stream: true,
+      jsonMode: false,
+    });
+    const iterator = chunks[Symbol.asyncIterator]();
+    await iterator.next();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(await isPending(finalResult)).toBe(true);
+
+    let read = 1;
+    while (!(await iterator.next()).done) read++;
+    expect(read).toBe(10_050);
+    await expect(finalResult).resolves.toHaveLength(10_050);
   });
 });

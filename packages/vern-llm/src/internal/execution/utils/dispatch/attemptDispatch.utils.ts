@@ -1,6 +1,11 @@
 import { toRequestSnapshot, type LLMRequestSnapshot } from '../../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../../types/middleware.js';
-import { applyMiddlewareTransforms, emitEvent } from '../middleware/middleware.utils.js';
+import {
+  applyMiddlewareTransforms,
+  emitEvent,
+  runDispatch,
+  type DispatchHook,
+} from '../middleware/middleware.utils.js';
 import { acquireRateLimit } from './rateLimitDispatch.utils.js';
 
 import type { Logger } from '../../../../logger.js';
@@ -35,6 +40,8 @@ export interface PrepareAttemptParams<T> {
   providerName: string;
   limiter: RateLimiterAdapter | undefined;
   middleware: VernLLMMiddleware[];
+  /** Every entry with a `dispatch`, outermost first. Filtered per attempt by `enabled`. */
+  dispatchHooks: readonly DispatchHook[];
   middlewareTimeoutMs: number;
   logger: Logger;
   reportEvent: (event: VernLLMEvent) => void;
@@ -51,6 +58,11 @@ export interface PreparedAttempt {
    * block so a slot is never leaked on a failed attempt (see `acquireRateLimit`).
    */
   release?: (actualTokens?: number, success?: boolean) => void;
+  /**
+   * Runs `send`, the provider request, inside this attempt's enabled
+   * `dispatch` hooks. Settles with `send`'s own outcome, see `runDispatch`.
+   */
+  dispatch: (send: () => Promise<void>) => Promise<void>;
 }
 
 /**
@@ -72,6 +84,7 @@ export async function prepareAttempt<T>(p: PrepareAttemptParams<T>): Promise<Pre
     providerName,
     limiter,
     middleware,
+    dispatchHooks,
     middlewareTimeoutMs,
     logger,
     reportEvent,
@@ -80,6 +93,7 @@ export async function prepareAttempt<T>(p: PrepareAttemptParams<T>): Promise<Pre
   const state = middlewareState ?? createMiddlewareStateBag();
   const built = requestBuilder.build(params);
   const { useJson, model } = built;
+  const enabledEntries = new Set<VernLLMMiddleware>();
 
   const request = await applyMiddlewareTransforms({
     request: built.request,
@@ -92,6 +106,7 @@ export async function prepareAttempt<T>(p: PrepareAttemptParams<T>): Promise<Pre
     logger,
     reportEvent,
     buildContext: (attempt, signal, state) => gateway.buildAttemptContext(attempt, signal, state),
+    enabledEntries,
   });
 
   onRequest?.(toRequestSnapshot(providerName, model, request, undefined, Date.now()));
@@ -119,5 +134,16 @@ export async function prepareAttempt<T>(p: PrepareAttemptParams<T>): Promise<Pre
     },
   );
 
-  return { request, model, useJson, state, release };
+  const hooks = dispatchHooks.filter((hook) => enabledEntries.has(hook.entry));
+
+  const dispatch = (send: () => Promise<void>): Promise<void> =>
+    runDispatch({
+      request,
+      hooks,
+      ctx: gateway.buildAttemptContext(attempt, params.signal, state),
+      send,
+      logger,
+    });
+
+  return { request, model, useJson, state, release, dispatch };
 }
