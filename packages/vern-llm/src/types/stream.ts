@@ -5,6 +5,7 @@ import type {
   ConditionalStringToolCallParams,
   JsonValue,
   LLMRequestShape,
+  ThinkingBlock,
 } from './call.js';
 import type { ToolDefinition } from './tools.js';
 import type { TokenUsage } from './usage.js';
@@ -180,6 +181,15 @@ export type WireStreamChunk =
        */
       type: 'rate_limit_hint';
       hint: ProviderRateLimitHint;
+    }
+  | {
+      /**
+       * One complete reasoning block, yielded once it has fully arrived.
+       * Collected onto `ToolCallResult.thinking`, never surfaced to
+       * callers as a `StreamChunk`.
+       */
+      type: 'thinking_block';
+      block: ThinkingBlock;
     };
 
 /**

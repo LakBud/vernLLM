@@ -1,4 +1,4 @@
-import type { WireMessage, WireToolChoice } from './client.js';
+import type { AdapterInfo, WireMessage, WireToolChoice } from './client.js';
 import type { VernLLMEvent } from './events.js';
 import type { CallMeta } from './fallback.js';
 
@@ -156,6 +156,13 @@ export interface MiddlewareContextBase {
    * that middleware's own configuration.
    */
   registeredMiddlewareNames: readonly string[];
+
+  /**
+   * The labels from `registeredMiddlewareNames` whose entry defines a
+   * `transform`, in the same order, frozen. Lets a middleware tell
+   * whether any entry after it can still change the request.
+   */
+  transformMiddlewareNames: readonly string[];
 }
 
 /**
@@ -169,6 +176,8 @@ export interface AttemptContext extends MiddlewareContextBase {
 
   /** The target this attempt is actually dispatched to. */
   requestedProvider: string;
+  /** The adapter behind this target. `{ name: 'custom' }` when its client doesn't identify one. */
+  adapter: AdapterInfo;
   requestedModel: string;
   isFallbackAttempt: boolean;
 
@@ -198,6 +207,8 @@ export interface PreDispatchContext extends MiddlewareContextBase {
 
   /** The primary target only, not necessarily who ends up answering. */
   primaryProvider: string;
+  /** The adapter behind the primary target. `{ name: 'custom' }` when its client doesn't identify one. */
+  primaryAdapter: AdapterInfo;
   primaryModel: string;
 }
 
@@ -293,9 +304,9 @@ export interface CallResult<T = unknown> {
 }
 
 /**
- * One entry in `VernLLMOptions.middleware`. All four hooks are optional;
+ * One entry in `VernLLMOptions.middleware`. All hooks are optional;
  * an entry that sets none of them is inert. See the middleware docs for
- * how `transform`, `wrap`, `onEvent`, and `enabled` compose across
+ * how `transform`, `wrap`, `dispatch`, `onEvent`, and `enabled` compose across
  * several entries.
  */
 export interface VernLLMMiddleware {
@@ -375,6 +386,28 @@ export interface VernLLMMiddleware {
     next: () => Promise<CallResult>,
     ctx: PreDispatchContext,
   ) => Promise<CallResult>;
+
+  /**
+   * Wraps the provider request of one attempt, after the rate limiter
+   * granted capacity and every `transform` ran. `request` is exactly
+   * what goes to the adapter. Runs once per attempt, retries included,
+   * nested in `wrap` order (`position` applies), so the outermost entry
+   * sees the others' time too.
+   *
+   * `next()` sends the request and resolves once the response arrives,
+   * or, for a stream, once it opens. It rejects with the attempt's error
+   * as an `LLMError`. Calling it again returns the same promise.
+   *
+   * Observes the request, it can't change its outcome. A hook that
+   * throws, or returns, without calling `next()` fails the attempt with
+   * `LLMError('invalid_params')`, code `middleware_threw`. Once `next()`
+   * was called, the provider's outcome stands and a throw is only logged.
+   */
+  dispatch?: (
+    request: Readonly<WireCallRequest>,
+    next: () => Promise<void>,
+    ctx: AttemptContext,
+  ) => Promise<void>;
 
   /** Observes the same events reported on `VernLLMOptions.onEvent`, filtered by this middleware's own `enabled`. Called from both stages; narrow on `ctx.stage` before reading stage-specific fields. */
   onEvent?: (event: VernLLMEvent, ctx: MiddlewareContext) => void;

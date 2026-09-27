@@ -96,6 +96,35 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     });
   });
 
+  it('counts cache writes from message_start as prompt tokens, leaving cache reads out', async () => {
+    const { client } = makeFakeStreamingAnthropicClient([
+      {
+        type: 'message_start',
+        message: {
+          usage: {
+            input_tokens: 5,
+            cache_creation_input_tokens: 900,
+            cache_read_input_tokens: 4000,
+          },
+        },
+      },
+      { type: 'message_delta', usage: { output_tokens: 2 } },
+      { type: 'message_stop' },
+    ]);
+
+    const chunks = await collect(
+      fromAnthropic(client).chat.completions.createStream!(
+        { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toContainEqual({
+      type: 'usage',
+      usage: { prompt_tokens: 905, completion_tokens: 2, total_tokens: 907 },
+    });
+  });
+
   it('defaults completion_tokens to 0 when message_delta carries no output_tokens', async () => {
     const { client } = makeFakeStreamingAnthropicClient([
       { type: 'message_start', message: { usage: { input_tokens: 5 } } },

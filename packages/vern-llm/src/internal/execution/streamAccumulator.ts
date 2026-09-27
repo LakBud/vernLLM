@@ -1,3 +1,4 @@
+import { LLMError } from '../../types/errors.js';
 import { normalizeError } from './utils/errors.utils.js';
 import { toTokenUsage } from './utils/response/usage.utils.js';
 import { withChunkIdleTimeout } from './utils/retry/retry.utils.js';
@@ -5,10 +6,10 @@ import { createBackpressureChannel } from './utils/stream/chunkBuffer.utils.js';
 import { createToolCallAccumulator } from './utils/stream/toolCallAccumulator.utils.js';
 
 import type { Logger } from '../../logger.js';
-import type { LLMError } from '../../types/errors.js';
 import type {
   CallWithToolsResult,
   StreamChunk,
+  ThinkingBlock,
   TokenUsage,
   WireStreamChunk,
   WireToolCall,
@@ -24,6 +25,8 @@ export interface StreamAccumulatorOptions<T> {
   isFallback: boolean;
   /** Per-call override, falling back to the instance default, mirroring every other per-call timeout. */
   chunkIdleTimeoutMs: number | undefined;
+  /** See `VernLLMOptions.readerStallTimeoutMs`. Off when omitted. */
+  readerStallTimeoutMs?: number;
   streamController: AbortController;
   logger: Logger;
   /** External signal, forwarded to `normalizeError` so a transport error during an already-aborted call is reported as `'aborted'`, not whatever the transport itself threw. */
@@ -62,6 +65,7 @@ export interface StreamAccumulatorOptions<T> {
     textAcc: string,
     wireToolCalls: WireToolCall[] | undefined,
     usage: TokenUsage | undefined,
+    thinking: ThinkingBlock[] | undefined,
   ) => T | CallWithToolsResult<T>;
 }
 
@@ -134,6 +138,7 @@ export function buildStreamResult<T>(
     providerName,
     isFallback,
     chunkIdleTimeoutMs,
+    readerStallTimeoutMs,
     streamController,
     logger,
     signal,
@@ -163,6 +168,13 @@ export function buildStreamResult<T>(
     capacity: MAX_BUFFERED_CHUNKS,
     logger,
     label: 'stream chunk',
+    stallTimeoutMs: readerStallTimeoutMs,
+    stallError: () =>
+      new LLMError(
+        `The chunks reader stopped pulling for ${readerStallTimeoutMs}ms with a full buffer, so it was detached. finalResult still settles.`,
+        'timeout',
+        { code: 'reader_stall_timeout' },
+      ),
   });
   const { push, finish, fail } = channel;
   const chunks = channel.iterable;
@@ -171,6 +183,7 @@ export function buildStreamResult<T>(
 
   let textAcc = '';
   let usage: TokenUsage | undefined;
+  const thinking: ThinkingBlock[] = [];
 
   // Fires immediately, not lazily, so it always drives finalResult to
   // completion regardless of whether the caller reads chunks.
@@ -194,6 +207,9 @@ export function buildStreamResult<T>(
           space = push({ type: 'text-delta', delta: wireChunk.delta });
         } else if (wireChunk.type === 'tool_call_delta') {
           space = push(toolCalls.apply(wireChunk));
+        } else if (wireChunk.type === 'thinking_block') {
+          // Kept for the result only: the caller never sees reasoning as a chunk.
+          thinking.push(wireChunk.block);
         } else if (wireChunk.type === 'usage') {
           usage = toTokenUsage(wireChunk.usage, { requestId, model, providerName, isFallback });
           space = push({ type: 'usage', usage });
@@ -241,7 +257,12 @@ export function buildStreamResult<T>(
     try {
       const wireToolCalls: WireToolCall[] | undefined = toolCalls.toWireToolCalls();
 
-      const finalized = options.finalize(textAcc, wireToolCalls, usage);
+      const finalized = options.finalize(
+        textAcc,
+        wireToolCalls,
+        usage,
+        thinking.length ? thinking : undefined,
+      );
 
       resolveFinal(finalized);
     } catch (error) {

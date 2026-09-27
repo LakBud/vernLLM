@@ -2,6 +2,7 @@ import {
   LLMError,
   type ContentBlock,
   type LLMClient,
+  type ThinkingBlock,
   type WireStreamChunk,
   type WireToolCall,
 } from '../types/index.js';
@@ -9,6 +10,10 @@ import {
   assertForcedJsonSchemaToolInputIsObject,
   throwMissingForcedJsonSchemaTool,
 } from './internal/forcedJsonSchemaTool.js';
+import {
+  assertForcedToolChoiceSupported,
+  rejectsForcedToolChoice,
+} from './internal/forcedToolChoice.js';
 import { assertSupportedImageMimeType } from './internal/imageFormat.js';
 import {
   supportsNativeStructuredOutput,
@@ -43,11 +48,17 @@ function isClaudeModel(model: string): boolean {
 /** Bedrock Converse's supported inline image formats. */
 type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
 
+/** Converse's reasoning block: signed text, or an encrypted redacted block. */
+type BedrockReasoningContent =
+  | { reasoningText: { text: string; signature?: string } }
+  | { redactedContent: Uint8Array };
+
 /** Bedrock Converse's native per-block content shape for a message. */
 type BedrockContentBlock =
   | { text: string }
   | { image: { format: BedrockImageFormat; source: { bytes: Uint8Array } } }
   | { toolUse: { toolUseId: string; name: string; input: unknown } }
+  | { reasoningContent: BedrockReasoningContent }
   | {
       toolResult: {
         toolUseId: string;
@@ -145,6 +156,10 @@ export interface BedrockConverseClient {
         content?: Array<{
           text?: string;
           toolUse?: { toolUseId?: string; name?: string; input?: unknown };
+          reasoningContent?: {
+            reasoningText?: { text?: string; signature?: string };
+            redactedContent?: Uint8Array;
+          };
         }>;
       };
     };
@@ -183,7 +198,16 @@ type BedrockConverseStreamEvent =
   | {
       contentBlockDelta: {
         contentBlockIndex: number;
-        delta?: { text?: string } | { toolUse?: { input?: string } };
+        delta?:
+          | { text?: string }
+          | { toolUse?: { input?: string } }
+          | {
+              reasoningContent?: {
+                text?: string;
+                signature?: string;
+                redactedContent?: Uint8Array;
+              };
+            };
       };
     }
   | { contentBlockStop: { contentBlockIndex: number } }
@@ -303,6 +327,16 @@ export interface BedrockAdapterOptions {
    * predicate.
    */
   adaptiveOnlyModels?: ModelCapabilityOverride;
+  /**
+   * Models that reject a `tool_choice` forcing tool use. Replaces the
+   * built in rule (Claude Fable 5.1 and later, Opus 5.5 and later, and
+   * every Claude major 6 and later) when set. On these models
+   * `toolChoice: 'required'` or `{ name }` throws
+   * `LLMError('invalid_params')`, code `unsupported_capability`, before
+   * dispatch, and `jsonSchema` always uses native structured output,
+   * since the forced tool emulation can't run there.
+   */
+  forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride;
 }
 
 type BedrockRequest = Parameters<BedrockConverseClient['converse']>[0];
@@ -355,6 +389,7 @@ function buildBedrockRequest(
   nativeStructuredOutputModels: BedrockAdapterOptions['nativeStructuredOutputModels'],
   effortTokenTable?: EffortTokenTable,
   adaptiveOnlyModels?: ModelCapabilityOverride,
+  forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride,
 ): { request: BedrockRequest; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -375,9 +410,22 @@ function buildBedrockRequest(
     throw new LLMError('json_schema.name must not be empty.', 'validation');
   }
 
+  const rejectsForced = rejectsForcedToolChoice(params.model, forcedToolChoiceUnsupportedModels);
+
+  if (params.tools?.length) {
+    assertForcedToolChoiceSupported(
+      'Bedrock',
+      params.model,
+      params.tool_choice,
+      forcedToolChoiceUnsupportedModels,
+    );
+  }
+
+  // A model that rejects forced tool_choice can't run the forced tool
+  // emulation, so native output is its only working path.
   const isNative =
     Boolean(jsonSchema) &&
-    supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels);
+    (rejectsForced || supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels));
 
   if (jsonSchema && params.tools?.length && !isNative) {
     throw new LLMError(
@@ -870,11 +918,13 @@ export function fromBedrock(
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
   const adaptiveOnlyModels = options?.adaptiveOnlyModels;
+  const forcedToolChoiceUnsupportedModels = options?.forcedToolChoiceUnsupportedModels;
 
   return {
     // json_object is not supported: see buildBedrockRequest's throw above,
     // and LLMClient.supportsJsonObjectMode's docs.
     supportsJsonObjectMode: false,
+    adapter: { name: 'bedrock', provider: 'aws.bedrock' },
     chat: {
       completions: {
         async create(params, requestOptions) {
@@ -884,12 +934,14 @@ export function fromBedrock(
             nativeStructuredOutputModels,
             effortTokenTable,
             adaptiveOnlyModels,
+            forcedToolChoiceUnsupportedModels,
           );
 
           const response = await client.converse(request, requestOptions);
 
           let text: string;
           let wireToolCalls: WireToolCall[] | undefined;
+          const thinking = toThinkingBlocks(response.output?.message?.content ?? []);
 
           if (toolName) {
             // Forced tool-use: the schema-conforming payload arrives as the
@@ -945,7 +997,11 @@ export function fromBedrock(
           return {
             choices: [
               {
-                message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
+                message: {
+                  content: text,
+                  ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
+                  ...(thinking.length ? { thinking } : {}),
+                },
                 ...(response.stopReason === 'max_tokens' ? { finish_reason: 'length' } : {}),
               },
             ],
@@ -972,11 +1028,18 @@ export function fromBedrock(
             nativeStructuredOutputModels,
             effortTokenTable,
             adaptiveOnlyModels,
+            forcedToolChoiceUnsupportedModels,
           );
 
           const { stream } = await client.converseStream(request, requestOptions);
 
           const blockKinds = new Map<number, 'text' | 'tool_use' | 'json-tool'>();
+          // Reasoning arrives as deltas and is only usable once whole, so it
+          // is gathered per block and yielded at that block's stop event.
+          const reasoning = new Map<
+            number,
+            { text: string; signature: string; redacted?: Uint8Array }
+          >();
           let sawJsonTool = false;
 
           for await (const event of stream) {
@@ -1014,6 +1077,14 @@ export function fromBedrock(
               // tool's JSON payload.
               if (delta && 'text' in delta && delta.text !== undefined && !toolName) {
                 yield { type: 'text-delta', delta: delta.text };
+              } else if (delta && 'reasoningContent' in delta && delta.reasoningContent) {
+                const part = delta.reasoningContent;
+                const block = reasoning.get(contentBlockIndex) ?? { text: '', signature: '' };
+
+                block.text += part.text ?? '';
+                block.signature += part.signature ?? '';
+                if (part.redactedContent) block.redacted = part.redactedContent;
+                reasoning.set(contentBlockIndex, block);
               } else if (delta && 'toolUse' in delta && delta.toolUse?.input !== undefined) {
                 const kind = blockKinds.get(contentBlockIndex);
 
@@ -1026,6 +1097,18 @@ export function fromBedrock(
                     argumentsDelta: delta.toolUse.input,
                   } satisfies WireStreamChunk;
                 }
+              }
+            } else if ('contentBlockStop' in event) {
+              const block = reasoning.get(event.contentBlockStop.contentBlockIndex);
+
+              if (block) {
+                reasoning.delete(event.contentBlockStop.contentBlockIndex);
+                yield {
+                  type: 'thinking_block',
+                  block: block.redacted
+                    ? { type: 'redacted_thinking', data: bytesToBase64(block.redacted) }
+                    : { type: 'thinking', thinking: block.text, signature: block.signature },
+                };
               }
             } else if ('metadata' in event && event.metadata.usage) {
               yield {
@@ -1128,12 +1211,18 @@ function toBedrockMessage(
     };
   }
 
-  if (m.role === 'assistant' && m.tool_calls?.length) {
-    const blocks: BedrockContentBlock[] = [];
+  if (m.role === 'assistant' && (m.tool_calls?.length || m.thinking?.length)) {
+    // Claude requires its reasoning ahead of the text and tool calls it led to.
+    const blocks: BedrockContentBlock[] = (m.thinking ?? []).map((block) => ({
+      reasoningContent:
+        block.type === 'thinking'
+          ? { reasoningText: { text: block.thinking, signature: block.signature } }
+          : { redactedContent: decodeBase64(block.data) },
+    }));
 
     if (m.content) blocks.push({ text: m.content });
 
-    for (const tc of m.tool_calls) {
+    for (const tc of m.tool_calls ?? []) {
       let input: unknown;
 
       if (!tc.function.arguments.trim()) {
@@ -1160,6 +1249,37 @@ function toBedrockMessage(
     role: m.role,
     content: Array.isArray(m.content) ? toBedrockContent(m.content) : [{ text: m.content ?? '' }],
   };
+}
+
+/** Base64 for redacted reasoning bytes, so they fit `ThinkingBlock`'s string `data`. */
+function bytesToBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+
+/** The reasoning blocks of a Converse response, in order, in VernLLM's shape. */
+function toThinkingBlocks(
+  content: NonNullable<
+    NonNullable<
+      NonNullable<Awaited<ReturnType<BedrockConverseClient['converse']>>['output']>['message']
+    >['content']
+  >,
+): ThinkingBlock[] {
+  return content.flatMap((block): ThinkingBlock[] => {
+    const reasoning = block.reasoningContent;
+    if (!reasoning) return [];
+
+    if (reasoning.redactedContent) {
+      return [{ type: 'redacted_thinking', data: bytesToBase64(reasoning.redactedContent) }];
+    }
+
+    return [
+      {
+        type: 'thinking',
+        thinking: reasoning.reasoningText?.text ?? '',
+        signature: reasoning.reasoningText?.signature ?? '',
+      },
+    ];
+  });
 }
 
 /**

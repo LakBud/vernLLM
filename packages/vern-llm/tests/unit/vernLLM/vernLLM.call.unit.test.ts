@@ -1228,3 +1228,66 @@ describe('VernLLM.call, abort during wrap vs breaker trial slot', () => {
     expect(llm.getCircuitState()).toBe('closed');
   });
 });
+
+describe('VernLLM.call: maxRetryAfterMs', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reports retryAfterMs under the configured cap instead of the 10s default', async () => {
+    const { client } = createMockClient([
+      new FakeApiError('rate limited', 429, { 'Retry-After': '30' }),
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 1, maxRetryAfterMs: 20_000 });
+
+    const promise = llm.call({ userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({ retryAfterMs: 20_000 });
+
+    await vi.advanceTimersByTimeAsync(19_999);
+    await vi.runAllTimersAsync();
+    await assertion;
+  });
+
+  it('lets a fallback target set its own cap', async () => {
+    const { client: primary } = createMockClient([new FakeApiError('down', 500)]);
+    const { client: fallback } = createMockClient([
+      new FakeApiError('rate limited', 429, { 'Retry-After': '30' }),
+    ]);
+    const llm = new VernLLM({
+      client: primary,
+      model: 'm',
+      maxRetries: 0,
+      logger: 'silent',
+      fallback: { client: fallback, model: 'f', maxRetryAfterMs: 0 },
+    });
+
+    const promise = llm.call({ userContent: 'u' });
+    const assertion = expect(promise).rejects.toMatchObject({
+      attempts: [
+        expect.anything(),
+        expect.objectContaining({ error: expect.objectContaining({ retryAfterMs: 0 }) }),
+      ],
+    });
+
+    await vi.runAllTimersAsync();
+    await assertion;
+  });
+
+  it('throws at construction for a negative or NaN cap', () => {
+    const { client } = createMockClient([textResponse('x')]);
+
+    expect(() => new VernLLM({ client, model: 'm', maxRetryAfterMs: -1 })).toThrow(RangeError);
+    expect(
+      () =>
+        new VernLLM({
+          client,
+          model: 'm',
+          fallback: { client, model: 'f', maxRetryAfterMs: NaN },
+        }),
+    ).toThrow('fallback[0]: maxRetryAfterMs must be 0 or more');
+  });
+});

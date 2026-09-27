@@ -372,3 +372,106 @@ describe('createBackpressureChannel, early return', () => {
     await expect(space).resolves.toBeUndefined();
   });
 });
+
+describe('createBackpressureChannel, reader stall timeout', () => {
+  function stalledChannel(stallTimeoutMs: number | undefined) {
+    const logger = testLogger();
+    const stallError = new Error('stalled');
+    const channel = createBackpressureChannel<number>({
+      capacity: 2,
+      logger,
+      label: 'item',
+      stallTimeoutMs,
+      stallError: () => stallError,
+    });
+    const iterator = channel.iterable[Symbol.asyncIterator]();
+    return { channel, iterator, logger, stallError };
+  }
+
+  it('detaches a reader that holds a full buffer past the timeout, releasing the producer', async () => {
+    vi.useFakeTimers();
+    try {
+      const { channel, iterator, logger, stallError } = stalledChannel(100);
+      channel.push(0);
+      await expect(iterator.next()).resolves.toEqual({ done: false, value: 0 });
+      channel.push(1);
+      const space = channel.push(2);
+      expect(space).toBeInstanceOf(Promise);
+
+      let released = false;
+      void space!.then(() => (released = true));
+      await vi.advanceTimersByTimeAsync(99);
+      expect(released).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(released).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('item reader held a full buffer for 100ms'),
+      );
+
+      // Later values are dropped instead of buffered, and every pull reports the stall.
+      expect(channel.push(3)).toBeUndefined();
+      await expect(iterator.next()).rejects.toBe(stallError);
+      channel.finish();
+      await expect(channel.iterable[Symbol.asyncIterator]().next()).rejects.toBe(stallError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never detaches a reader that keeps pulling, however slowly', async () => {
+    vi.useFakeTimers();
+    try {
+      const { channel, iterator } = stalledChannel(100);
+      channel.push(0);
+      await iterator.next();
+      channel.push(1);
+      channel.push(2);
+
+      for (let value = 3; value < 8; value++) {
+        await vi.advanceTimersByTimeAsync(90);
+        await expect(iterator.next()).resolves.toMatchObject({ done: false });
+        channel.push(value);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([undefined, 0, -1, NaN, Infinity])('stays off for %s', async (stallTimeoutMs) => {
+    vi.useFakeTimers();
+    try {
+      const { channel, iterator, logger } = stalledChannel(stallTimeoutMs);
+      void iterator.next();
+      channel.push(0);
+      channel.push(1);
+      channel.push(2);
+
+      await vi.advanceTimersByTimeAsync(10_000_000);
+
+      expect(logger.warn).not.toHaveBeenCalled();
+      await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels the pending detach once the channel finishes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { channel, iterator, logger } = stalledChannel(100);
+      void iterator.next();
+      channel.push(0);
+      channel.push(1);
+      channel.push(2);
+      channel.finish();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(logger.warn).not.toHaveBeenCalled();
+      await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

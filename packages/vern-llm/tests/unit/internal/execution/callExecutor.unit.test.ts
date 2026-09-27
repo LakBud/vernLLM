@@ -25,6 +25,7 @@ function baseOptions(overrides: Partial<CallExecutorOptions> = {}): CallExecutor
     timeoutMs: 25_000,
     chunkIdleTimeoutMs: 30_000,
     baseDelayMs: 500,
+    maxRetryAfterMs: 10_000,
     defaultMaxTokens: 1000,
     defaultTemperature: 0.2,
     nonRetryableStatus: [400, 401, 403, 404, 422],

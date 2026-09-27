@@ -1,3 +1,4 @@
+import type { ThinkingBlock } from './call.js';
 import type { SchemaLike } from './schema.js';
 
 /**
@@ -90,6 +91,12 @@ export interface ToolCallResult<Tools extends readonly ToolDefinition[] = ToolDe
   toolCalls: ToolCall<Tools>[];
   /** Any text the model produced alongside the tool request, if present. */
   content?: string;
+  /**
+   * Claude's reasoning blocks before this tool request, when thinking is
+   * on (`fromAnthropic` and `fromBedrock`). Put them on the assistant
+   * history turn with `toolCalls` so the tool loop can continue.
+   */
+  thinking?: ThinkingBlock[];
 }
 
 export type CallWithToolsResult<T, Tools extends readonly ToolDefinition[] = ToolDefinition[]> =

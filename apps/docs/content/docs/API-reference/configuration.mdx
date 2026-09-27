@@ -61,14 +61,16 @@ pipelines.
 
 ## Retry & timeout
 
-| Option               | Default                               | Notes                                                                                                                                                                                                                                |
-| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `maxRetries`         | `1`                                   | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                             |
-| `timeoutMs`          | `25000`                               | Per-attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, this bounds opening the stream and its first chunk; see `chunkIdleTimeoutMs`.                                   |
-| `chunkIdleTimeoutMs` | `30000`                               | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).                       |
-| `baseDelayMs`        | `500`                                 | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. A `Retry-After` header overrides the computed delay when present.                                                                          |
-| `nonRetryableStatus` | `[400, 401, 402, 403, 404, 413, 422]` | HTTP status codes that fail immediately instead of retrying.                                                                                                                                                                         |
-| `detectSoftFailure`  | none                                  | `(result, meta) => LLMErrorCode \| undefined`. Reclassifies a response that parsed and validated fine as a failure. `undefined` leaves it a success. See [Soft Failure Detection](/docs/core/error-handling#soft-failure-detection). |
+| Option                 | Default                               | Notes                                                                                                                                                                                                                                |
+| ---------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxRetries`           | `1`                                   | Retries after the first attempt, so 2 attempts total by default. `maxRetries: 3` means up to 4 attempts.                                                                                                                             |
+| `timeoutMs`            | `25000`                               | Per-attempt timeout, not a total call timeout. Each retry gets its own fresh `timeoutMs` window. For `stream: true`, this bounds opening the stream and its first chunk; see `chunkIdleTimeoutMs`.                                   |
+| `chunkIdleTimeoutMs`   | `30000`                               | `stream: true` only. Max gap between chunks once the stream has opened. Resets on every chunk, including provider keep-alive pings. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout).                       |
+| `baseDelayMs`          | `500`                                 | Base for exponential backoff between retries. Actual delay grows per attempt with jitter. A `Retry-After` header overrides the computed delay when present.                                                                          |
+| `maxRetryAfterMs`      | `10000`                               | Longest honored `Retry-After` wait, and the cap on `LLMError.retryAfterMs`. `0` retries at once, `Infinity` removes the cap. See [Honoring Retry-After](/docs/core/retries#honoring-retry-after).                                    |
+| `readerStallTimeoutMs` | off                                   | `stream: true` only. Detaches a `chunks` reader that holds a full buffer this long, so the stream can finish. See [Reader stall timeout](/docs/core/streaming#reader-stall-timeout).                                                 |
+| `nonRetryableStatus`   | `[400, 401, 402, 403, 404, 413, 422]` | HTTP status codes that fail immediately instead of retrying.                                                                                                                                                                         |
+| `detectSoftFailure`    | none                                  | `(result, meta) => LLMErrorCode \| undefined`. Reclassifies a response that parsed and validated fine as a failure. `undefined` leaves it a success. See [Soft Failure Detection](/docs/core/error-handling#soft-failure-detection). |
 
 ## Request defaults
 
@@ -197,7 +199,7 @@ count as a circuit-breaker failure. Like `circuitBreaker` and `rateLimit`, a tar
 | `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget }) => 'next' \| 'stop'`. Decides whether a failed target is followed by the next one.                                                                                                     |
 
 Each `FallbackTarget` needs its own `client` and `model`. `name`, `maxRetries`, `timeoutMs`,
-`chunkIdleTimeoutMs`, `baseDelayMs`, `defaultMaxTokens`, `defaultTemperature`,
+`chunkIdleTimeoutMs`, `readerStallTimeoutMs`, `baseDelayMs`, `maxRetryAfterMs`, `defaultMaxTokens`, `defaultTemperature`,
 `nonRetryableStatus`, and `detectSoftFailure` inherit the parent instance's resolved value when
 omitted.
 

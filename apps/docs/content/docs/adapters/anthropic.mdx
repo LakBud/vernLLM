@@ -118,6 +118,33 @@ counts `reasoningEffort` tiers map onto when `budgetTokens` isn't set directly. 
 [Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the full table and
 how it works across every adapter.
 
+With thinking on, a tool call result carries Claude's reasoning on `thinking`. Pass it back on the
+assistant history turn, see [Claude thinking in a tool loop](/docs/core/tool-calling#claude-thinking-in-a-tool-loop).
+
+## Prompt caching and usage
+
+`promptTokens` is `input_tokens` plus `cache_creation_input_tokens`, since Anthropic counts cache
+writes toward its input rate limit. Cache reads are left out, since it doesn't count those. The
+rate limiter reconciles against the same total.
+
+## Models that reject a forced tool_choice
+
+Claude Fable 5.1 and later, Opus 5.5 and later, and every Claude major 6 and later reject a
+`tool_choice` that forces tool use. On those models `fromAnthropic`:
+
+| Request                                | Result                                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------------------ |
+| `toolChoice: 'required'` or `{ name }` | Throws `LLMError('invalid_params')`, code `unsupported_capability`, before dispatch. |
+| `toolChoice: 'auto'` or `'none'`       | Sent unchanged.                                                                      |
+| `jsonSchema`                           | Uses native structured output, even without `nativeStructuredOutputModels`.          |
+
+The rule matches bare ids and snapshot dates. `forcedToolChoiceUnsupportedModels` replaces it with your own list or
+predicate:
+
+```ts
+fromAnthropic(client, { forcedToolChoiceUnsupportedModels: (model) => model.includes('opus-5-5') });
+```
+
 ## Streaming
 
 `fromAnthropic` implements `createStream` on top of the Messages API's own streaming mode. Anthropic's

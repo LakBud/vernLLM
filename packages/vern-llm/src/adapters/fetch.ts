@@ -72,6 +72,11 @@ export interface FetchAdapterConfig {
   /** HTTP method. Default 'POST' */
   method?: string;
   /**
+   * The provider behind `url`, in the OpenTelemetry `gen_ai.provider.name`
+   * vocabulary, reported on `AttemptContext.adapter`. Left unset when omitted.
+   */
+  provider?: string;
+  /**
    * The function used to make the HTTP request. Defaults to native `fetch`.
    * Swap in `axios`, `node-fetch`, or any other transport, as long as it
    * resolves to a `ResponseLike` object
@@ -279,6 +284,12 @@ async function buildRequestInit(
  */
 export function fromFetch(config: FetchAdapterConfig): LLMClient {
   return {
+    adapter: {
+      name: 'fetch',
+      ...(typeof config.provider === 'string' && config.provider.trim() !== ''
+        ? { provider: config.provider }
+        : {}),
+    },
     chat: {
       completions: {
         async create(params, options) {

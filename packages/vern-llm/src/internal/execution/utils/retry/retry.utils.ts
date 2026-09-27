@@ -30,12 +30,12 @@ const MAX_SETTIMEOUT_MS = 2_147_483_647;
  * than a boolean, lets callers narrow `number | undefined` to `number`
  * without an `as number` cast.
  */
-function resolveActiveTimeoutMs(ms: number | undefined): number | undefined {
+export function resolveActiveTimeoutMs(ms: number | undefined): number | undefined {
   return !ms || ms <= 0 || ms === Infinity ? undefined : ms;
 }
 
 /** Caps a timeout at the largest delay `setTimeout` actually honors. */
-function clampTimeoutMs(ms: number): number {
+export function clampTimeoutMs(ms: number): number {
   return Math.min(ms, MAX_SETTIMEOUT_MS);
 }
 
@@ -236,7 +236,7 @@ function clampOrUndefined(rawMs: number, maxDelayMs: number): number | undefined
  */
 export function extractRetryAfterMs(
   err: unknown,
-  maxDelayMs = DEFAULT_MAX_DELAY_MS,
+  maxDelayMs: number = DEFAULT_MAX_DELAY_MS,
 ): number | undefined {
   if (!err || typeof err !== 'object') return undefined;
 
@@ -317,10 +317,12 @@ export async function waitForRetry(delay: number, signal?: AbortSignal): Promise
       reject(new LLMError('Operation aborted', 'aborted'));
     };
 
+    // A Retry-After cap of Infinity can hand over a delay setTimeout would
+    // wrap to ~1ms, the opposite of the wait the provider asked for.
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
       resolve();
-    }, delay);
+    }, clampTimeoutMs(delay));
 
     signal?.addEventListener('abort', onAbort, { once: true });
   });
@@ -361,6 +363,8 @@ export interface RecoverDelayParams {
   providerName: string;
   maxRetries: number;
   baseDelayMs: number;
+  /** See `VernLLMOptions.maxRetryAfterMs`. Omitted means the 10s default. */
+  maxRetryAfterMs?: number;
   middleware: VernLLMMiddleware[];
   middlewareTimeoutMs: number;
   logger: Logger;
@@ -404,6 +408,7 @@ export async function recoverDelay(params: RecoverDelayParams): Promise<void> {
     providerName,
     maxRetries,
     baseDelayMs,
+    maxRetryAfterMs,
     middleware,
     middlewareTimeoutMs,
     logger,
@@ -414,7 +419,7 @@ export async function recoverDelay(params: RecoverDelayParams): Promise<void> {
     emitEvent,
   } = params;
 
-  const retryAfterMs = extractRetryAfterMs(error);
+  const retryAfterMs = extractRetryAfterMs(error, maxRetryAfterMs);
   const status = extractStatus(error);
   const delay =
     retryAfterMs ??
@@ -474,6 +479,22 @@ export interface RetryWithBackoffParams<T> {
   recoverDelayForAttempt: (attempt: number, error: unknown) => Promise<void>;
   /** Injected for the same reason as on `RecoverDelayParams`. */
   normalizeError: (err: unknown, signal?: AbortSignal) => LLMError;
+}
+
+/**
+ * Returns `maxRetryAfterMs` unchanged, or throws for a value that can't
+ * cap a wait. `0` is kept on purpose (retry without waiting), and so is
+ * `Infinity` (no cap). A negative or NaN cap has no sensible reading, so
+ * it fails at construction rather than silently falling back.
+ */
+export function validateMaxRetryAfterMs(maxRetryAfterMs: number, providerName: string): number {
+  if (typeof maxRetryAfterMs !== 'number' || Number.isNaN(maxRetryAfterMs) || maxRetryAfterMs < 0) {
+    throw new RangeError(
+      `${providerName}: maxRetryAfterMs must be 0 or more (Infinity for no cap), got ${String(maxRetryAfterMs)}`,
+    );
+  }
+
+  return maxRetryAfterMs;
 }
 
 /**

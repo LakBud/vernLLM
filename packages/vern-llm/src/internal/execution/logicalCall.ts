@@ -1,6 +1,6 @@
 import { LLMError } from '../../types/errors.js';
 import { FallbackExhaustedError } from '../../types/fallback.js';
-import { middlewareLabels } from '../resolveMiddlewareOrder.js';
+import { middlewareContextNames } from '../resolveMiddlewareOrder.js';
 import { normalizeError } from './utils/errors.utils.js';
 import { emitEvent } from './utils/middleware/middleware.utils.js';
 
@@ -191,6 +191,7 @@ export async function runFallbackChain<R>(
         stage: 'attempt',
         requestId,
         requestedProvider: executor.providerName,
+        adapter: executor.adapter,
         requestedModel: failedModel,
         isFallbackAttempt: targetIndex > 0,
         // `attemptCount` stays `0` when `assertBreakerClosed` throws
@@ -201,7 +202,7 @@ export async function runFallbackChain<R>(
         signal: params.signal,
         state: middlewareState,
         own: {},
-        registeredMiddlewareNames: middlewareLabels(dependencies.middleware),
+        ...middlewareContextNames(dependencies.middleware),
       };
 
       emitEvent(

@@ -244,6 +244,67 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
     expect(sentBody).not.toHaveProperty('temperature');
   });
 
+  const lookupTool = {
+    name: 'lookup',
+    description: 'Looks something up',
+    parameters: { type: 'object', properties: {} },
+  };
+
+  it('sends reasoning_effort none with tools to a real GPT-6 request', async () => {
+    server = await startRealSdkServer([{ body: completionBody('Done.') }]);
+
+    await makeLLM('gpt-6-sol').call({
+      userContent: 'Look it up.',
+      tools: [lookupTool],
+      jsonMode: false,
+    });
+
+    const sentBody = at(server.requests, 0).body as Record<string, unknown>;
+    expect(sentBody).toMatchObject({ model: 'gpt-6-sol', reasoning_effort: 'none' });
+    expect(sentBody.tools).toHaveLength(1);
+  });
+
+  it('refuses GPT-6 tools with reasoning asked for, without a request reaching the server', async () => {
+    server = await startRealSdkServer([{ body: completionBody('never') }]);
+
+    await expect(
+      makeLLM('gpt-6-sol').call({
+        userContent: 'Look it up.',
+        tools: [lookupTool],
+        reasoningEffort: 'high',
+      }),
+    ).rejects.toMatchObject({ type: 'invalid_params', code: 'unsupported_capability' });
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it('reads the provider off a real OpenAI client, and none off a local baseURL', async () => {
+    server = await startRealSdkServer([{ body: completionBody('ok') }]);
+    const adapters: unknown[] = [];
+    const observe = {
+      dispatch: async (_request: unknown, next: () => Promise<void>, ctx: { adapter: unknown }) => {
+        adapters.push(ctx.adapter);
+        await next();
+      },
+    };
+
+    const local = new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` });
+    await new VernLLM({
+      client: fromOpenAICompatible(local),
+      model: 'gpt-test',
+      middleware: [observe],
+    }).call({ userContent: 'hi', jsonMode: false });
+
+    expect(adapters).toEqual([{ name: 'openai-compatible' }]);
+    expect(fromOpenAICompatible(new OpenAI({ apiKey: 'test-key' })).adapter).toEqual({
+      name: 'openai-compatible',
+      provider: 'openai',
+    });
+    expect(fromGroq(new Groq({ apiKey: 'test-key' })).adapter).toEqual({
+      name: 'openai-compatible',
+      provider: 'groq',
+    });
+  });
+
   it('keeps a failed tool result visible to the model through the real SDK', async () => {
     server = await startRealSdkServer([{ body: completionBody('The lookup failed.') }]);
 
@@ -336,6 +397,37 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
 
     expect(result).toBe('ok after retry');
     expect(server.requests.length).toBe(2);
+  });
+
+  it('caps a real Retry-After header by maxRetryAfterMs, for the wait and the error alike', async () => {
+    const rateLimited = {
+      status: 429,
+      headers: { 'retry-after': '60' },
+      body: { error: { message: 'slow down', type: 'rate_limit_error' } },
+    };
+    server = await startRealSdkServer([rateLimited, rateLimited]);
+    const events: Array<{ kind: string; delayMs?: number; retryAfterHonored?: boolean }> = [];
+
+    const llm = new VernLLM({
+      client: fromOpenAICompatible(
+        new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1`, maxRetries: 0 }),
+      ),
+      model: 'gpt-test',
+      maxRetries: 1,
+      maxRetryAfterMs: 0,
+      logger: 'silent',
+      onEvent: (event) => events.push(event),
+    });
+
+    await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 0,
+    });
+    expect(server.requests).toHaveLength(2);
+    expect(events.find((event) => event.kind === 'retry')).toMatchObject({
+      delayMs: 0,
+      retryAfterHonored: true,
+    });
   });
 
   it('passes real multimodal image content through to the OpenAI SDK as a data URL', async () => {

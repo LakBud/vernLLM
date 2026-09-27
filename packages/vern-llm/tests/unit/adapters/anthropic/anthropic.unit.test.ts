@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import { type AnthropicClient, fromAnthropic } from '../../../../src/adapters/index.js';
+import { VernLLM, type RateLimiterAdapter } from '../../../../src/index.js';
 import { at, makeFakeAnthropicClient } from '../../../helpers.js';
 
 /** A fake client that responds with a forced tool_use block instead of text. */
@@ -97,6 +98,39 @@ describe('fromAnthropic', () => {
       completion_tokens: 3,
       total_tokens: 10,
     });
+  });
+
+  it('counts cache writes as prompt tokens and leaves cache reads out', async () => {
+    const { client } = makeFakeAnthropicClient('x', {
+      input_tokens: 7,
+      cache_creation_input_tokens: 1200,
+      cache_read_input_tokens: 5000,
+      output_tokens: 3,
+    } as never);
+
+    const result = await fromAnthropic(client).chat.completions.create(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage).toEqual({ prompt_tokens: 1207, completion_tokens: 3, total_tokens: 1210 });
+  });
+
+  it.each([
+    ['a null cache write count', { input_tokens: 7, cache_creation_input_tokens: null }, 7],
+    ['a non finite cache write count', { input_tokens: 7, cache_creation_input_tokens: NaN }, 7],
+    ['cache writes without input_tokens', { cache_creation_input_tokens: 40 }, 40],
+    ['no input counts at all', {}, undefined],
+  ])('handles %s', async (_label, usage, expected) => {
+    const { client } = makeFakeAnthropicClient('x', { ...usage, output_tokens: 3 } as never);
+
+    const result = await fromAnthropic(client).chat.completions.create(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage?.prompt_tokens).toBe(expected);
+    expect(result.usage?.total_tokens).toBe((expected ?? 0) + 3);
   });
 
   it('translates ContentBlock[] userContent into Anthropic image/text blocks', async () => {
@@ -1276,5 +1310,28 @@ describe('fromAnthropic, stop reason', () => {
     });
 
     expect(result.choices?.[0]).not.toHaveProperty('finish_reason');
+  });
+});
+
+describe('fromAnthropic, prompt caching and the rate limiter', () => {
+  it('reconciles the limiter against cache writes too', async () => {
+    const { client } = makeFakeAnthropicClient('x', {
+      input_tokens: 10,
+      cache_creation_input_tokens: 2000,
+      cache_read_input_tokens: 8000,
+      output_tokens: 5,
+    } as never);
+    const release = vi.fn();
+    const rateLimit: RateLimiterAdapter = {
+      estimate: () => 50,
+      acquire: async () => ({ release, waitedMs: 0 }),
+      signalRateLimit: () => {},
+      reactToRateLimitHint: () => {},
+    };
+
+    const llm = new VernLLM({ client: fromAnthropic(client), model: 'claude-x', rateLimit });
+    await llm.call({ userContent: 'hi', jsonMode: false });
+
+    expect(release).toHaveBeenCalledWith(2015, true);
   });
 });

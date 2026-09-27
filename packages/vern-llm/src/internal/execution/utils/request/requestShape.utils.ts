@@ -206,6 +206,7 @@ export function turnToWireMessages(turn: ConversationTurn): WireMessage[] {
         role: 'assistant' as const,
         ...(turn.content !== undefined ? { content: serializeAssistantContent(turn.content) } : {}),
         tool_calls: toWireToolCalls(turn.toolCalls),
+        ...(turn.thinking?.length ? { thinking: turn.thinking } : {}),
       },
     ];
   }
@@ -215,11 +216,41 @@ export function turnToWireMessages(turn: ConversationTurn): WireMessage[] {
       {
         role: 'assistant' as const,
         content: serializeAssistantContent(turn.content === undefined ? '' : turn.content),
+        ...(turn.thinking?.length ? { thinking: turn.thinking } : {}),
       },
     ];
   }
 
   return [{ role: turn.role as 'user', content: turn.content ?? '' }];
+}
+
+/**
+ * Throws `LLMError('invalid_params')` unless `thinking` is an array of
+ * well formed blocks. Checked locally since a malformed block would only
+ * come back as a provider 400 after a round trip.
+ */
+function assertValidThinking(thinking: unknown, index: number): void {
+  if (!Array.isArray(thinking)) {
+    throw new LLMError(`history[${index}].thinking must be an array`, 'invalid_params');
+  }
+
+  for (const [blockIndex, block] of thinking.entries()) {
+    const candidate = block as Partial<Record<string, unknown>> | null;
+    const valid =
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      ((candidate.type === 'thinking' &&
+        typeof candidate.thinking === 'string' &&
+        typeof candidate.signature === 'string') ||
+        (candidate.type === 'redacted_thinking' && typeof candidate.data === 'string'));
+
+    if (!valid) {
+      throw new LLMError(
+        `history[${index}].thinking[${blockIndex}] must be { type: 'thinking', thinking, signature } or { type: 'redacted_thinking', data }, as returned on ToolCallResult.thinking`,
+        'invalid_params',
+      );
+    }
+  }
 }
 
 /**
@@ -230,6 +261,10 @@ export function validateHistory(history: ConversationTurn[]): void {
   let previousTurn: ConversationTurn | undefined;
 
   for (const [index, turn] of history.entries()) {
+    if (turn.role === 'assistant' && turn.thinking !== undefined) {
+      assertValidThinking(turn.thinking, index);
+    }
+
     if (turn.role === 'tool') {
       if (previousTurn?.role !== 'assistant' || !previousTurn.toolCalls?.length) {
         throw new LLMError(

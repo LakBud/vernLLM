@@ -1,5 +1,7 @@
 import { CallExecutor } from './execution/callExecutor.js';
+import { DEFAULT_MAX_DELAY_MS } from './execution/utils/retry/retry.utils.js';
 import { RetryBudget } from './retryBudget.js';
+import { resolveAdapterInfo } from './utils/adapterInfo.utils.js';
 import { buildCircuitBreaker } from './utils/circuit-breaker/circuitBreakerAdapter.utils.js';
 import { buildRateLimit } from './utils/rate-limit/rateLimitAdapter.utils.js';
 
@@ -27,7 +29,9 @@ export interface ExecutorFactoryShared {
   maxRetries?: number;
   timeoutMs?: number;
   chunkIdleTimeoutMs?: number;
+  readerStallTimeoutMs?: number;
   baseDelayMs?: number;
+  maxRetryAfterMs?: number;
   defaultMaxTokens?: number;
   nonRetryableStatus?: number[];
   parseJson?: (content: string) => unknown;
@@ -37,6 +41,8 @@ export interface ExecutorFactoryShared {
   onEvent?: (event: VernLLMEvent) => void;
   logger: Logger;
   middleware: VernLLMMiddleware[];
+  /** `wrap` nesting order, which `dispatch` hooks nest in too. */
+  dispatchOrder?: VernLLMMiddleware[];
   middlewareTimeoutMs: number;
   detectSoftFailure?: DetectSoftFailure;
 }
@@ -73,6 +79,7 @@ export function buildExecutors(
       shared.middlewareTimeoutMs,
       isFallback,
       target.client.supportsJsonObjectMode ?? true,
+      resolveAdapterInfo(target.client),
     );
 
     // Independent of `breaker`, never inherited from `shared`, same as
@@ -84,7 +91,9 @@ export function buildExecutors(
       maxRetries: target.maxRetries ?? shared.maxRetries ?? 1,
       timeoutMs: target.timeoutMs ?? shared.timeoutMs ?? 25_000,
       chunkIdleTimeoutMs: target.chunkIdleTimeoutMs ?? shared.chunkIdleTimeoutMs ?? 30_000,
+      readerStallTimeoutMs: target.readerStallTimeoutMs ?? shared.readerStallTimeoutMs,
       baseDelayMs: target.baseDelayMs ?? shared.baseDelayMs ?? 500,
+      maxRetryAfterMs: target.maxRetryAfterMs ?? shared.maxRetryAfterMs ?? DEFAULT_MAX_DELAY_MS,
       defaultMaxTokens: target.defaultMaxTokens ?? shared.defaultMaxTokens ?? 1000,
       defaultTemperature:
         target.defaultTemperature === undefined
@@ -111,6 +120,7 @@ export function buildExecutors(
       limiter: buildRateLimit(target.rateLimit, shared.logger),
       isFallback,
       middleware: shared.middleware,
+      dispatchOrder: shared.dispatchOrder,
       middlewareTimeoutMs: shared.middlewareTimeoutMs,
       detectSoftFailure: target.detectSoftFailure ?? shared.detectSoftFailure,
     });

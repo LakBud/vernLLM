@@ -29,7 +29,9 @@ export interface FallbackTarget {
   maxRetries?: number;
   timeoutMs?: number;
   chunkIdleTimeoutMs?: number;
+  readerStallTimeoutMs?: number;
   baseDelayMs?: number;
+  maxRetryAfterMs?: number;
   defaultMaxTokens?: number;
   defaultTemperature?: number | null;
   defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';

@@ -417,3 +417,232 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
     });
   });
 });
+
+describe('Anthropic adapter integration, thinking, caching and forced tool_choice (real SDK)', () => {
+  let server: RealSdkServer | undefined;
+
+  afterEach(async () => {
+    await server?.close();
+    server = undefined;
+  });
+
+  const weatherTool = {
+    name: 'get_weather',
+    description: 'Gets the weather',
+    parameters: { type: 'object', properties: { city: { type: 'string' } } },
+  };
+
+  const message = (content: unknown[], usage: Record<string, number> = {}) => ({
+    body: {
+      id: 'msg_t',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-test',
+      content,
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 10, output_tokens: 5, ...usage },
+    },
+  });
+
+  it('carries thinking blocks through a real tool loop, sent back ahead of the tool_use', async () => {
+    server = await startRealSdkServer([
+      message([
+        { type: 'thinking', thinking: 'need weather', signature: 'sig-abc' },
+        { type: 'redacted_thinking', data: 'enc-xyz' },
+        { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } },
+      ]),
+      message([{ type: 'text', text: 'It is sunny.' }]),
+    ]);
+    const llm = new VernLLM({
+      client: fromAnthropic(new Anthropic({ apiKey: 'test-key', baseURL: server.url })),
+      model: 'claude-test',
+    });
+
+    const first = await llm.call({
+      userContent: 'Weather in Oslo?',
+      tools: [weatherTool],
+      budgetTokens: 2000,
+      maxTokens: 4000,
+    });
+    if (first.type !== 'tool_calls') throw new Error('expected a tool call');
+
+    expect(first.thinking).toEqual([
+      { type: 'thinking', thinking: 'need weather', signature: 'sig-abc' },
+      { type: 'redacted_thinking', data: 'enc-xyz' },
+    ]);
+
+    await llm.call({
+      userContent: 'Weather in Oslo?',
+      tools: [weatherTool],
+      budgetTokens: 2000,
+      maxTokens: 4000,
+      jsonMode: false,
+      history: [
+        { role: 'assistant', toolCalls: first.toolCalls, thinking: first.thinking },
+        { role: 'tool', toolResults: [{ toolCallId: 'toolu_1', content: 'sunny' }] },
+      ],
+    });
+
+    const sent = at(server.requests, 1).body as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(sent.messages.find((m) => m.role === 'assistant')?.content).toEqual([
+      { type: 'thinking', thinking: 'need weather', signature: 'sig-abc' },
+      { type: 'redacted_thinking', data: 'enc-xyz' },
+      { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } },
+    ]);
+  });
+
+  it('assembles streamed thinking and signature deltas onto finalResult, never onto chunks', async () => {
+    const event = (data: { type: string }) => ({ event: data.type, data });
+    server = await startRealSdkServer([
+      {
+        raw: sseRaw([
+          event({ type: 'message_start', message: { usage: { input_tokens: 10 } } } as never),
+          event({
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'thinking', thinking: '', signature: '' },
+          } as never),
+          event({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'thinking_delta', thinking: 'need ' },
+          } as never),
+          event({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'thinking_delta', thinking: 'weather' },
+          } as never),
+          event({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'signature_delta', signature: 'sig-abc' },
+          } as never),
+          event({ type: 'content_block_stop', index: 0 } as never),
+          event({
+            type: 'content_block_start',
+            index: 1,
+            content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: {} },
+          } as never),
+          event({
+            type: 'content_block_delta',
+            index: 1,
+            delta: { type: 'input_json_delta', partial_json: '{"city":"Oslo"}' },
+          } as never),
+          event({ type: 'content_block_stop', index: 1 } as never),
+          event({ type: 'message_delta', usage: { output_tokens: 5 } } as never),
+          event({ type: 'message_stop' }),
+        ]),
+      },
+    ]);
+    const llm = new VernLLM({
+      client: fromAnthropic(new Anthropic({ apiKey: 'test-key', baseURL: server.url })),
+      model: 'claude-test',
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'Weather in Oslo?',
+      tools: [weatherTool],
+      budgetTokens: 2000,
+      maxTokens: 4000,
+      stream: true,
+    });
+    const collected = await drain(chunks);
+
+    expect(collected.map((chunk) => chunk.type)).not.toContain('thinking_block');
+    await expect(finalResult).resolves.toMatchObject({
+      type: 'tool_calls',
+      thinking: [{ type: 'thinking', thinking: 'need weather', signature: 'sig-abc' }],
+    });
+  });
+
+  it('counts real cache writes toward usage and the rate limiter, and leaves cache reads out', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          id: 'msg_c',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-test',
+          content: [{ type: 'text', text: 'cached' }],
+          stop_reason: 'end_turn',
+          usage: {
+            input_tokens: 10,
+            cache_creation_input_tokens: 2000,
+            cache_read_input_tokens: 8000,
+            output_tokens: 5,
+          },
+        },
+      },
+    ]);
+    const onUsage = vi.fn();
+    const release = vi.fn();
+    const llm = new VernLLM({
+      client: fromAnthropic(new Anthropic({ apiKey: 'test-key', baseURL: server.url })),
+      model: 'claude-test',
+      onUsage,
+      rateLimit: {
+        estimate: () => 50,
+        acquire: async () => ({ release, waitedMs: 0 }),
+        signalRateLimit: () => {},
+        reactToRateLimitHint: () => {},
+      },
+    });
+
+    await llm.call({ userContent: 'hi', jsonMode: false });
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ promptTokens: 2010, completionTokens: 5, totalTokens: 2015 }),
+    );
+    expect(release).toHaveBeenCalledWith(2015, true);
+  });
+
+  it('rejects a forced tool_choice on a model that refuses it without sending anything', async () => {
+    server = await startRealSdkServer([message([{ type: 'text', text: 'never' }])]);
+    const llm = new VernLLM({
+      client: fromAnthropic(new Anthropic({ apiKey: 'test-key', baseURL: server.url })),
+      model: 'claude-opus-5-5',
+      maxRetries: 2,
+    });
+
+    await expect(
+      llm.call({ userContent: 'hi', tools: [weatherTool], toolChoice: 'required' }),
+    ).rejects.toMatchObject({ type: 'invalid_params', code: 'unsupported_capability' });
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it('sends jsonSchema as native output_config on a model that refuses forced tool_choice', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          id: 'msg_n',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [{ type: 'text', text: '{"headline":"ok"}' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      },
+    ]);
+    const llm = new VernLLM({
+      client: fromAnthropic(new Anthropic({ apiKey: 'test-key', baseURL: server.url })),
+      model: 'claude-fable-5-1',
+    });
+
+    await expect(
+      llm.call({
+        userContent: 'Summarize',
+        jsonSchema: {
+          name: 'Summary',
+          schema: { type: 'object', properties: { headline: { type: 'string' } } },
+        },
+      }),
+    ).resolves.toEqual({ headline: 'ok' });
+
+    const sent = at(server.requests, 0).body as Record<string, unknown>;
+    expect(sent.output_config).toMatchObject({ format: { type: 'json_schema' } });
+    expect(sent).not.toHaveProperty('tool_choice');
+  });
+});

@@ -32,8 +32,27 @@ export interface VernLLMOptions {
    * Default 30000. Pass 0 or negative to disable.
    */
   chunkIdleTimeoutMs?: number;
+  /**
+   * For `stream: true` calls: how long a `chunks` reader may stop pulling
+   * while the buffer is full before it is detached. The detached reader's
+   * next pull rejects with `LLMError('timeout')`, code
+   * `reader_stall_timeout`, and the stream keeps running so `finalResult`
+   * still settles and its connection and rate limit slot are freed. Off by
+   * default: a reader that stops pulling holds the stream until it resumes.
+   * Pass 0 or negative to keep it off.
+   */
+  readerStallTimeoutMs?: number;
   /** Base delay for exponential backoff in ms. Default 500 */
   baseDelayMs?: number;
+  /**
+   * Longest `Retry-After` wait honored between retries, in ms. A longer
+   * value from the provider is capped to this, and so is
+   * `LLMError.retryAfterMs`. `0` retries right away even when the
+   * provider asks for a wait. `Infinity` removes the cap; `deadlineMs`
+   * still bounds the call. Default 10000. A negative or NaN value throws
+   * at construction.
+   */
+  maxRetryAfterMs?: number;
   /** Default max_tokens for calls that don't override it. Default 1000 */
   defaultMaxTokens?: number;
   /**
@@ -180,8 +199,8 @@ export interface VernLLMOptions {
   /**
    * Transforms outgoing requests and/or wraps whole logical calls,
    * without touching retry, circuit breaker, or fallback internals.
-   * Defaults to an empty array. See `VernLLMMiddleware` for the four
-   * available hooks (`transform`, `wrap`, `onEvent`, `enabled`).
+   * Defaults to an empty array. See `VernLLMMiddleware` for the
+   * available hooks (`transform`, `wrap`, `dispatch`, `onEvent`, `enabled`).
    */
   middleware?: VernLLMMiddleware[];
   /**

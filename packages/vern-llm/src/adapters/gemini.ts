@@ -527,6 +527,18 @@ export interface GeminiAdapterOptions {
   thinkingLevelModels?: ModelCapabilityOverride;
 }
 
+/**
+ * The top level `GoogleGenAI` client says whether it talks to Vertex AI
+ * or the Gemini API. `ai.models` doesn't, so no provider is claimed for it.
+ */
+function geminiProvider(client: GeminiClient): { provider?: string } {
+  const vertexai = (client as { vertexai?: unknown }).vertexai;
+
+  if (vertexai === true) return { provider: 'gcp.vertex_ai' };
+  if (vertexai === false) return { provider: 'gcp.gemini' };
+  return {};
+}
+
 export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions): LLMClient {
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
   const thinkingLevelModels = options?.thinkingLevelModels;
@@ -547,6 +559,7 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
       : undefined;
 
   return {
+    adapter: { name: 'gemini', ...geminiProvider(client) },
     chat: {
       completions: {
         async create(params, options) {

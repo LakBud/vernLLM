@@ -227,6 +227,7 @@ export function normalizeError(
   error: unknown,
   signal?: AbortSignal,
   attempts?: RetryAttempt[],
+  maxRetryAfterMs?: number,
 ): LLMError {
   if (signal?.aborted) {
     return new LLMError('LLM request aborted', 'aborted', { attempts });
@@ -251,7 +252,7 @@ export function normalizeError(
   }
 
   const status = extractStatus(error);
-  const retryAfterMs = extractRetryAfterMs(error);
+  const retryAfterMs = extractRetryAfterMs(error, maxRetryAfterMs);
 
   if (status !== undefined) {
     const description = describeError(error);

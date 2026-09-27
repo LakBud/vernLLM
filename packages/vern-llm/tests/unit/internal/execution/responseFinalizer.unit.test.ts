@@ -15,6 +15,7 @@ import type { AttemptContext, CallParams, TokenUsage } from '../../../../src/typ
 const fakeAttemptContext: AttemptContext = {
   stage: 'attempt',
   requestId: 'req-1',
+  adapter: { name: 'custom' },
   requestedProvider: 'test-provider',
   requestedModel: 'gpt-test',
   isFallbackAttempt: false,
@@ -23,6 +24,7 @@ const fakeAttemptContext: AttemptContext = {
   state: createMiddlewareStateBag(),
   own: {},
   registeredMiddlewareNames: [],
+  transformMiddlewareNames: [],
 };
 
 function fakeGateway(): BreakerGateway {

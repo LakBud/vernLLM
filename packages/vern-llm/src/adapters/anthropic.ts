@@ -6,6 +6,7 @@ import {
   LLMError,
   type ContentBlock,
   type LLMClient,
+  type ThinkingBlock,
   type WireStreamChunk,
   type WireToolCall,
 } from '../types/index.js';
@@ -13,6 +14,10 @@ import {
   assertForcedJsonSchemaToolInputIsObject,
   throwMissingForcedJsonSchemaTool,
 } from './internal/forcedJsonSchemaTool.js';
+import {
+  assertForcedToolChoiceSupported,
+  rejectsForcedToolChoice,
+} from './internal/forcedToolChoice.js';
 import {
   assertSupportedImageMimeType,
   type SupportedImageMimeType,
@@ -41,7 +46,9 @@ type AnthropicContentBlock =
       source: { type: 'base64'; media_type: SupportedImageMimeType; data: string };
     }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string };
 
 /** Minimal structural type for the Anthropic SDK's `messages.create` */
 export interface AnthropicClient {
@@ -112,10 +119,20 @@ export interface AnthropicClient {
       },
       options: { signal: AbortSignal },
     ): Promise<{
-      content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
+      content: Array<{
+        type: string;
+        text?: string;
+        id?: string;
+        name?: string;
+        input?: unknown;
+        thinking?: string;
+        signature?: string;
+        data?: string;
+      }>;
       stop_reason?: string | null;
       usage?: {
         input_tokens?: number;
+        cache_creation_input_tokens?: number | null;
         output_tokens?: number;
         output_tokens_details?: { thinking_tokens?: number } | null;
       };
@@ -197,18 +214,32 @@ function toAnthropicToolChoice(
 
 /** One SSE event of an Anthropic `messages.create({ stream: true })` stream. */
 type AnthropicStreamEvent =
-  | { type: 'message_start'; message: { usage?: { input_tokens?: number } } }
+  | {
+      type: 'message_start';
+      message: {
+        usage?: { input_tokens?: number; cache_creation_input_tokens?: number | null };
+      };
+    }
   | {
       type: 'content_block_start';
       index: number;
-      content_block: { type: string; id?: string; name?: string };
+      content_block: {
+        type: string;
+        id?: string;
+        name?: string;
+        thinking?: string;
+        signature?: string;
+        data?: string;
+      };
     }
   | {
       type: 'content_block_delta';
       index: number;
       delta:
         | { type: 'text_delta'; text: string }
-        | { type: 'input_json_delta'; partial_json: string };
+        | { type: 'input_json_delta'; partial_json: string }
+        | { type: 'thinking_delta'; thinking: string }
+        | { type: 'signature_delta'; signature: string };
     }
   | { type: 'content_block_stop'; index: number }
   | {
@@ -274,6 +305,7 @@ function buildAnthropicRequestBody(
   nativeStructuredOutputModels?: ModelCapabilityOverride,
   effortTokenTable?: EffortTokenTable,
   adaptiveOnlyModels?: ModelCapabilityOverride,
+  forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride,
 ): { body: AnthropicRequestBody; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -294,9 +326,22 @@ function buildAnthropicRequestBody(
     throw new LLMError('json_schema.name must not be empty.', 'validation');
   }
 
+  const rejectsForced = rejectsForcedToolChoice(params.model, forcedToolChoiceUnsupportedModels);
+
+  if (params.tools?.length) {
+    assertForcedToolChoiceSupported(
+      'Anthropic',
+      params.model,
+      params.tool_choice,
+      forcedToolChoiceUnsupportedModels,
+    );
+  }
+
+  // A model that rejects forced tool_choice can't run the forced tool
+  // emulation, so native output is its only working path.
   const isNative =
     Boolean(jsonSchema) &&
-    supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels);
+    (rejectsForced || supportsNativeStructuredOutput(params.model, nativeStructuredOutputModels));
 
   if (jsonSchema && params.tools?.length && !isNative) {
     throw new LLMError(
@@ -480,6 +525,16 @@ export interface AnthropicAdapterOptions {
    */
   adaptiveOnlyModels?: ModelCapabilityOverride;
   /**
+   * Models that reject a `tool_choice` forcing tool use. Replaces the
+   * built in rule (Claude Fable 5.1 and later, Opus 5.5 and later, and
+   * every Claude major 6 and later) when set. On these models
+   * `toolChoice: 'required'` or `{ name }` throws
+   * `LLMError('invalid_params')`, code `unsupported_capability`, before
+   * dispatch, and `jsonSchema` always uses native structured output,
+   * since the forced tool emulation can't run there.
+   */
+  forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride;
+  /**
    * Whether the client's `messages.create` supports `.withResponse()`
    * (needed for AIMD's proactive path). Default `false`, since
    * `AnthropicClient` is structural and a test fake or thin wrapper
@@ -526,6 +581,7 @@ export function fromAnthropic(
   const nativeStructuredOutputModels = options?.nativeStructuredOutputModels;
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
   const adaptiveOnlyModels = options?.adaptiveOnlyModels;
+  const forcedToolChoiceUnsupportedModels = options?.forcedToolChoiceUnsupportedModels;
   const supportsWithResponse = options?.supportsWithResponse ?? false;
   // The Anthropic SDK's `messages.create`, called with `stream: true`,
   // returns an AsyncIterable of `AnthropicStreamEvent` rather than
@@ -547,6 +603,7 @@ export function fromAnthropic(
     // RequestBuilder downgrade a default (unset) jsonMode to plain text
     // instead of requesting a mode this client can't honor.
     supportsJsonObjectMode: false,
+    adapter: { name: 'anthropic', provider: 'anthropic' },
     chat: {
       completions: {
         async create(params, options) {
@@ -555,6 +612,7 @@ export function fromAnthropic(
             nativeStructuredOutputModels,
             effortTokenTable,
             adaptiveOnlyModels,
+            forcedToolChoiceUnsupportedModels,
           );
 
           let responseHeaders: Response['headers'] | undefined;
@@ -580,6 +638,8 @@ export function fromAnthropic(
 
           let text: string;
           let wireToolCalls: WireToolCall[] | undefined;
+          const thinking = toThinkingBlocks(response.content);
+
           if (toolName) {
             const toolUse = response.content.find(
               (block) => block.type === 'tool_use' && block.name === toolName,
@@ -610,15 +670,19 @@ export function fromAnthropic(
           const result = {
             choices: [
               {
-                message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
+                message: {
+                  content: text,
+                  ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
+                  ...(thinking.length ? { thinking } : {}),
+                },
                 ...(response.stop_reason === 'max_tokens' ? { finish_reason: 'length' } : {}),
               },
             ],
             usage: {
-              prompt_tokens: response.usage?.input_tokens,
+              prompt_tokens: promptTokens(response.usage),
               completion_tokens: response.usage?.output_tokens,
               total_tokens:
-                (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
+                (promptTokens(response.usage) ?? 0) + (response.usage?.output_tokens ?? 0),
               ...(response.usage?.output_tokens_details?.thinking_tokens !== undefined
                 ? {
                     completion_tokens_details: {
@@ -642,6 +706,7 @@ export function fromAnthropic(
             nativeStructuredOutputModels,
             effortTokenTable,
             adaptiveOnlyModels,
+            forcedToolChoiceUnsupportedModels,
           );
 
           let stream: AsyncIterable<AnthropicStreamEvent>;
@@ -688,12 +753,15 @@ export function fromAnthropic(
           // finalizeResponse's `content` path exactly like the
           // non-streaming `create` branch above unwraps it.
           const blockKinds = new Map<number, 'text' | 'tool_use' | 'json-tool'>();
+          // Reasoning arrives as deltas and is only usable once whole, so it
+          // is gathered per block and yielded at that block's stop event.
+          const thinkingBlocks = new Map<number, ThinkingBlock>();
           let inputTokens = 0;
           let sawJsonTool = false;
 
           for await (const event of stream) {
             if (event.type === 'message_start') {
-              inputTokens = event.message.usage?.input_tokens ?? 0;
+              inputTokens = promptTokens(event.message.usage) ?? 0;
             } else if (event.type === 'content_block_start') {
               if (event.content_block.type === 'tool_use') {
                 const kind = event.content_block.name === toolName ? 'json-tool' : 'tool_use';
@@ -716,6 +784,17 @@ export function fromAnthropic(
                     name: event.content_block.name,
                   };
                 }
+              } else if (event.content_block.type === 'thinking') {
+                thinkingBlocks.set(event.index, {
+                  type: 'thinking',
+                  thinking: event.content_block.thinking ?? '',
+                  signature: event.content_block.signature ?? '',
+                });
+              } else if (event.content_block.type === 'redacted_thinking') {
+                thinkingBlocks.set(event.index, {
+                  type: 'redacted_thinking',
+                  data: event.content_block.data ?? '',
+                });
               } else {
                 blockKinds.set(event.index, 'text');
               }
@@ -736,6 +815,12 @@ export function fromAnthropic(
                 if (!toolName) {
                   yield { type: 'text-delta', delta: event.delta.text };
                 }
+              } else if (event.delta.type === 'thinking_delta') {
+                const block = thinkingBlocks.get(event.index);
+                if (block?.type === 'thinking') block.thinking += event.delta.thinking;
+              } else if (event.delta.type === 'signature_delta') {
+                const block = thinkingBlocks.get(event.index);
+                if (block?.type === 'thinking') block.signature += event.delta.signature;
               } else if (event.delta.type === 'input_json_delta') {
                 const kind = blockKinds.get(event.index);
 
@@ -748,6 +833,13 @@ export function fromAnthropic(
                     argumentsDelta: event.delta.partial_json,
                   };
                 }
+              }
+            } else if (event.type === 'content_block_stop') {
+              const block = thinkingBlocks.get(event.index);
+
+              if (block) {
+                thinkingBlocks.delete(event.index);
+                yield { type: 'thinking_block', block };
               }
             } else if (event.type === 'message_delta') {
               const outputTokens = event.usage?.output_tokens ?? 0;
@@ -776,6 +868,47 @@ export function fromAnthropic(
       },
     },
   };
+}
+
+/**
+ * Input tokens that count toward Anthropic's input rate limit.
+ * `input_tokens` leaves out cache writes, which Anthropic still counts,
+ * so they are added back. Cache reads stay out: Anthropic doesn't count
+ * them toward the limit. `undefined` when the response reports neither,
+ * so a missing count isn't passed off as a real 0. A non finite value
+ * counts as 0 rather than poisoning the sum.
+ */
+function promptTokens(
+  usage: { input_tokens?: number; cache_creation_input_tokens?: number | null } | undefined,
+): number | undefined {
+  const input = usage?.input_tokens;
+  const cacheWrites = usage?.cache_creation_input_tokens;
+
+  if (input === undefined && (cacheWrites === undefined || cacheWrites === null)) return undefined;
+
+  const finite = (value: number | null | undefined) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : 0;
+
+  return finite(input) + finite(cacheWrites);
+}
+
+/** The reasoning blocks of a response, in order, in VernLLM's shape. */
+function toThinkingBlocks(
+  content: Awaited<ReturnType<AnthropicClient['messages']['create']>>['content'],
+): ThinkingBlock[] {
+  return content.flatMap((block): ThinkingBlock[] => {
+    if (block.type === 'thinking') {
+      return [
+        { type: 'thinking', thinking: block.thinking ?? '', signature: block.signature ?? '' },
+      ];
+    }
+
+    if (block.type === 'redacted_thinking') {
+      return [{ type: 'redacted_thinking', data: block.data ?? '' }];
+    }
+
+    return [];
+  });
 }
 
 /**
@@ -841,12 +974,17 @@ function toAnthropicMessage(
     };
   }
 
-  if (m.role === 'assistant' && m.tool_calls?.length) {
-    const blocks: AnthropicContentBlock[] = [];
+  if (m.role === 'assistant' && (m.tool_calls?.length || m.thinking?.length)) {
+    // Claude requires its reasoning ahead of the text and tool calls it led to.
+    const blocks: AnthropicContentBlock[] = (m.thinking ?? []).map((block) =>
+      block.type === 'thinking'
+        ? { type: 'thinking', thinking: block.thinking, signature: block.signature }
+        : { type: 'redacted_thinking', data: block.data },
+    );
 
     if (m.content) blocks.push({ type: 'text', text: m.content });
 
-    for (const tc of m.tool_calls) {
+    for (const tc of m.tool_calls ?? []) {
       let input: unknown;
 
       try {

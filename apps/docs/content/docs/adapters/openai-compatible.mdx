@@ -109,6 +109,30 @@ sent as `max_completion_tokens` and `temperature` is dropped, since those models
 `-chat` models are not reasoning models and are left unchanged. Only bare model ids match, so a
 gateway id such as `openai/gpt-6-sol` is sent as is.
 
+### Tools on GPT-6 and later
+
+These models accept `tools` on Chat Completions only with `reasoning_effort: "none"`:
+
+| Request                                                                      | Result                                                                               |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Tools, no reasoning asked for                                                | Sends `reasoning_effort: "none"`, logged at `debug`.                                 |
+| Tools with `reasoningEffort` or `budgetTokens`, an instance default included | Throws `LLMError('invalid_params')`, code `unsupported_capability`, before dispatch. |
+| No tools                                                                     | Unchanged.                                                                           |
+
+Pass `reasoningEffort: null` (and `budgetTokens: null`) on that call to clear an instance default,
+or use the Responses API for reasoning with tools. The rule covers bare `gpt-` ids of major 6 and
+later, except `-chat` ids. `noReasoningToolModels` replaces it:
+
+```ts
+fromOpenAI(openai, { noReasoningToolModels: ['my-azure-deployment'] });
+```
+
+## Provider identity
+
+`AttemptContext.adapter.provider` is read off a well known `baseURL` host (OpenAI, Azure OpenAI,
+Groq, Mistral, DeepSeek, xAI, Perplexity) and left unset for anything else. Set it yourself with
+the `provider` option, for example `fromTogether(client, { provider: 'together_ai' })`.
+
 ## Streaming
 
 `fromOpenAICompatible` implements `createStream` by calling the same endpoint as `create` with

@@ -12,6 +12,7 @@ import {
   recoverDelay,
   retryWithBackoff,
   shouldRetry,
+  validateMaxRetryAfterMs,
   waitForRetry,
   withChunkIdleTimeout,
   withTimeout,
@@ -45,6 +46,7 @@ function baseRecoverDelayParams(overrides: Partial<RecoverDelayParams> = {}): Re
       stage: 'attempt',
       requestId,
       requestedProvider: 'openai',
+      adapter: { name: 'custom' },
       requestedModel: model,
       isFallbackAttempt: false,
       attempt: attempt + 1,
@@ -53,6 +55,7 @@ function baseRecoverDelayParams(overrides: Partial<RecoverDelayParams> = {}): Re
       state,
       own: {},
       registeredMiddlewareNames: [],
+      transformMiddlewareNames: [],
     }),
     extractStatus,
     normalizeError,
@@ -167,6 +170,13 @@ describe('extractRetryAfterMs', () => {
   it('caps an oversized retry-after-ms value at maxDelayMs', () => {
     const err = { headers: headersOf({ 'retry-after-ms': '999999' }) };
     expect(extractRetryAfterMs(err, 10_000)).toBe(10_000);
+  });
+
+  it('honors a cap above the default, a cap of 0, and no cap at all', () => {
+    const err = { headers: headersOf({ 'retry-after': '30' }) };
+    expect(extractRetryAfterMs(err, 60_000)).toBe(30_000);
+    expect(extractRetryAfterMs(err, 0)).toBe(0);
+    expect(extractRetryAfterMs(err, Infinity)).toBe(30_000);
   });
 
   it('treats a negative retry-after-ms value as absent instead of 0', () => {
@@ -587,7 +597,101 @@ describe('recoverDelay', () => {
   });
 });
 
+describe('recoverDelay, maxRetryAfterMs', () => {
+  function retryAfter(seconds: string) {
+    return Object.assign(new Error('slow down'), {
+      status: 429,
+      headers: headersOf({ 'retry-after': seconds }),
+    });
+  }
+
+  it('waits past the 10s default when the cap allows it', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportEvent = vi.fn();
+      let resolved = false;
+
+      void recoverDelay(
+        baseRecoverDelayParams({ error: retryAfter('30'), maxRetryAfterMs: 60_000, reportEvent }),
+      ).then(() => (resolved = true));
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(resolved).toBe(true);
+      expect(reportEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'retry', delayMs: 30_000, retryAfterHonored: true }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the 10s default when the cap is omitted', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportEvent = vi.fn();
+      const done = recoverDelay(baseRecoverDelayParams({ error: retryAfter('30'), reportEvent }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await done;
+
+      expect(reportEvent).toHaveBeenCalledWith(expect.objectContaining({ delayMs: 10_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries without waiting when the cap is 0', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportEvent = vi.fn();
+      const done = recoverDelay(
+        baseRecoverDelayParams({ error: retryAfter('30'), maxRetryAfterMs: 0, reportEvent }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await done;
+
+      expect(reportEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ delayMs: 0, retryAfterHonored: true }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('validateMaxRetryAfterMs', () => {
+  it('keeps 0, a positive value, and Infinity', () => {
+    expect(validateMaxRetryAfterMs(0, 'primary')).toBe(0);
+    expect(validateMaxRetryAfterMs(60_000, 'primary')).toBe(60_000);
+    expect(validateMaxRetryAfterMs(Infinity, 'primary')).toBe(Infinity);
+  });
+
+  it.each([-1, NaN, '5000' as unknown as number])('throws for %s, naming the target', (value) => {
+    expect(() => validateMaxRetryAfterMs(value, 'fallback[0]')).toThrow(
+      /^fallback\[0\]: maxRetryAfterMs must be 0 or more/,
+    );
+  });
+});
+
 describe('waitForRetry', () => {
+  it('clamps a delay beyond the setTimeout range instead of firing almost at once', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolved = false;
+      void waitForRetry(Infinity).then(() => (resolved = true));
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_147_483_647);
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects immediately with an aborted LLMError when the signal is already aborted', async () => {
     const controller = new AbortController();
     controller.abort();

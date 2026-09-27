@@ -1,4 +1,5 @@
 import { LLMError } from '../../types/errors.js';
+import { isToolCallResult } from '../../types/tools.js';
 import { normalizeError } from './utils/errors.utils.js';
 import { shapeResponse } from './utils/response/responseShape.utils.js';
 
@@ -8,6 +9,7 @@ import type {
   CallWithToolsResult,
   DetectSoftFailure,
   MiddlewareStateBag,
+  ThinkingBlock,
   TokenUsage,
   WireToolCall,
 } from '../../types/index.js';
@@ -47,6 +49,9 @@ export interface FinalizeResponseDeps {
  * `truncated` is set when the provider stopped at `max_tokens`. A parse
  * failure on such a response is reported as `response_truncated`, which
  * is retryable, instead of a plain parse error.
+ *
+ * `thinking` is the model's reasoning blocks. Kept only on a tool call
+ * result, the one place the caller has to send them back.
  */
 export function finalizeResponse<T>(
   rawContent: string | null | undefined,
@@ -59,20 +64,24 @@ export function finalizeResponse<T>(
   state: MiddlewareStateBag,
   deps: FinalizeResponseDeps,
   truncated = false,
+  thinking?: ThinkingBlock[],
 ): T | CallWithToolsResult<T> {
   const { gateway, usageReporter, logger, redactText, parseJson, detectSoftFailure } = deps;
 
   try {
-    const result = shapeResponse<T>({
-      rawContent,
-      wireToolCalls,
-      params,
-      useJson,
-      parseJson,
-      requestId,
-      logger,
-      redactText,
-    });
+    const result = withThinking(
+      shapeResponse<T>({
+        rawContent,
+        wireToolCalls,
+        params,
+        useJson,
+        parseJson,
+        requestId,
+        logger,
+        redactText,
+      }),
+      thinking,
+    );
 
     const softFailureCode = detectSoftFailureSafely(
       detectSoftFailure,
@@ -123,6 +132,16 @@ export function finalizeResponse<T>(
 
     throw normalized;
   }
+}
+
+/** Adds `thinking` to a tool call result. Any other result is returned as is. */
+function withThinking<T>(
+  result: T | CallWithToolsResult<T>,
+  thinking: ThinkingBlock[] | undefined,
+): T | CallWithToolsResult<T> {
+  if (!thinking?.length || !isToolCallResult(result)) return result;
+
+  return { ...result, thinking };
 }
 
 /**

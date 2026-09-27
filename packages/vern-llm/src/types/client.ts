@@ -1,4 +1,5 @@
-import type { ContentBlock } from './call.js';
+import type { Logger } from '../logger.js';
+import type { ContentBlock, ThinkingBlock } from './call.js';
 import type { WireStreamChunk } from './stream.js';
 
 /** A tool call as it appears on the wire, OpenAI's `function`-wrapped shape. */
@@ -21,6 +22,8 @@ export type WireMessage =
       /** Optional: an assistant turn that only requested tools has no text. */
       content?: string;
       tool_calls?: WireToolCall[];
+      /** Reasoning blocks to send back ahead of the text and tool calls. Adapters without the concept drop it. */
+      thinking?: ThinkingBlock[];
     }
   | {
       role: 'tool';
@@ -36,6 +39,22 @@ export type WireToolChoice =
   | 'none'
   | 'required'
   | { type: 'function'; function: { name: string } };
+
+/**
+ * Which adapter built an `LLMClient`, and which provider it talks to.
+ * Read by middleware through `AttemptContext.adapter`, so telemetry can
+ * name the provider without guessing from the model id.
+ */
+export interface AdapterInfo {
+  /** Adapter family, e.g. `'anthropic'`, `'openai-compatible'`, or `'custom'` for a client that sets none. */
+  name: string;
+  /**
+   * The provider this client talks to, in the OpenTelemetry
+   * `gen_ai.provider.name` vocabulary (`'openai'`, `'anthropic'`,
+   * `'aws.bedrock'`, ...). Only set when the adapter knows it for certain.
+   */
+  provider?: string;
+}
 
 /**
  * Minimal shape similar to the OpenAI SDK's chat.completions.create API,
@@ -58,6 +77,16 @@ export interface LLMClient {
    * a caller deliberately asking for a guarantee the client can't provide.
    */
   supportsJsonObjectMode?: boolean;
+
+  /** Which adapter built this client. Every built in adapter sets it; a hand written client may leave it out. */
+  adapter?: AdapterInfo;
+
+  /**
+   * Hands the client the `VernLLM` instance's logger, once per target at
+   * construction, for adapter log lines. A client shared by several
+   * instances keeps the last one it was given.
+   */
+  setLogger?(logger: Logger): void;
 
   chat: {
     completions: {
@@ -106,7 +135,12 @@ export interface LLMClient {
         options: { signal: AbortSignal },
       ): Promise<{
         choices?: Array<{
-          message?: { content?: string | null; tool_calls?: WireToolCall[] };
+          message?: {
+            content?: string | null;
+            tool_calls?: WireToolCall[];
+            /** Reasoning blocks the model produced, in order. Only Claude adapters report them. */
+            thinking?: ThinkingBlock[];
+          };
           /**
            * Why generation stopped, in OpenAI's vocabulary. Only `'length'`
            * (cut off at `max_tokens`) is read: output that then fails to

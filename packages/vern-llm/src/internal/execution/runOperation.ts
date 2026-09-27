@@ -80,7 +80,7 @@ export async function runOperation(
    */
   skipWrap = false,
 ): Promise<CallResult> {
-  const { wrapOrder, transformOrder, names } = dependencies.pipeline;
+  const { wrapOrder, transformOrder, names, transformNames } = dependencies.pipeline;
 
   if (wrapOrder.length === 0 || skipWrap) {
     return coreOperation();
@@ -109,12 +109,14 @@ export async function runOperation(
         stage: 'pre-dispatch',
         requestId,
         primaryProvider: primary.providerName,
+        primaryAdapter: primary.adapter,
         primaryModel: model,
         capabilities: { supportsJsonObjectMode: primary.jsonObjectModeSupported },
         signal: params.signal,
         state,
         own: {},
         registeredMiddlewareNames: names,
+        transformMiddlewareNames: transformNames,
       };
 
       const isEnabled = await resolveEnabled(

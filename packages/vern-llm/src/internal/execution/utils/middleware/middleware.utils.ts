@@ -11,6 +11,7 @@ import {
 import { middlewareLabel } from '../../../resolveMiddlewareOrder.js';
 import { logHookError } from '../../../utils/logger.utils.js';
 import { normalizeError } from '../errors.utils.js';
+import { createOnceAsync } from '../once.utils.js';
 
 import type { Logger } from '../../../../logger.js';
 
@@ -262,6 +263,12 @@ export interface ApplyMiddlewareTransformsParams {
     signal: AbortSignal | undefined,
     state: MiddlewareStateBag,
   ) => AttemptContext;
+  /**
+   * Filled with every entry whose `enabled` resolved true for this
+   * attempt, so `dispatch` reuses the same decision instead of asking a
+   * predicate twice and possibly getting a different answer.
+   */
+  enabledEntries?: Set<VernLLMMiddleware>;
 }
 
 /**
@@ -288,6 +295,7 @@ export async function applyMiddlewareTransforms(
     logger,
     reportEvent,
     buildContext,
+    enabledEntries,
   } = params;
 
   if (middleware.length === 0) return request;
@@ -321,6 +329,8 @@ export async function applyMiddlewareTransforms(
       }
       continue;
     }
+
+    enabledEntries?.add(middlewareEntry);
 
     if (!middlewareEntry.transform) continue;
 
@@ -383,6 +393,78 @@ export async function runTransform(
   } catch (error) {
     throw reclassifyMiddlewareThrow(error, label, ctx.signal);
   }
+}
+
+/** One `dispatch` hook to run, with the label logs and errors use for it. */
+export interface DispatchHook {
+  entry: VernLLMMiddleware & { dispatch: NonNullable<VernLLMMiddleware['dispatch']> };
+  label: string;
+}
+
+/** Everything `runDispatch` needs. */
+export interface RunDispatchParams {
+  /** The final request, after every `transform`. Each hook gets its own copy. */
+  request: WireCallRequest;
+  /** Outermost first. Already filtered to entries enabled for this attempt. */
+  hooks: readonly DispatchHook[];
+  ctx: AttemptContext;
+  /** Sends the provider request. Rejects with an `LLMError`. */
+  send: () => Promise<void>;
+  logger: Logger;
+}
+
+/**
+ * Runs `send` inside every `dispatch` hook, outermost first, and settles
+ * with `send`'s own outcome. A hook observes the provider request, it
+ * can't replace or hide its result: once `next()` was called, a throw
+ * from that hook is logged and the provider's outcome stands. Only a hook
+ * that never called `next()` fails the attempt, since no request was
+ * sent and there is no outcome to keep.
+ */
+export async function runDispatch(params: RunDispatchParams): Promise<void> {
+  const { request, hooks, ctx, send, logger } = params;
+
+  if (hooks.length === 0) return send();
+
+  const provider = createOnceAsync(send);
+
+  const runLayer = async (index: number): Promise<void> => {
+    if (index === hooks.length) return provider.call();
+
+    const { entry, label } = hooks[index]!;
+    const inner = createOnceAsync(() => runLayer(index + 1));
+    let hookFailure: { error: unknown } | undefined;
+
+    try {
+      await entry.dispatch(structuredClone(request), inner.call, withOwn(ctx, entry));
+    } catch (error) {
+      hookFailure = { error };
+    }
+
+    if (!inner.wasCalled()) {
+      if (hookFailure) throw reclassifyMiddlewareThrow(hookFailure.error, label, ctx.signal);
+
+      throw new LLMError(
+        `middleware "${label}".dispatch returned without calling next(), so no request was sent`,
+        'invalid_params',
+        { code: 'middleware_threw' },
+      );
+    }
+
+    try {
+      await inner.call();
+    } catch (error) {
+      // A hook rethrowing the provider's own error is the normal path, not a hook bug.
+      if (hookFailure && hookFailure.error !== error) {
+        logHookError(logger, `middleware "${label}".dispatch`, hookFailure.error);
+      }
+      throw error;
+    }
+
+    if (hookFailure) logHookError(logger, `middleware "${label}".dispatch`, hookFailure.error);
+  };
+
+  return runLayer(0);
 }
 
 /**

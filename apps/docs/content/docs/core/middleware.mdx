@@ -32,10 +32,10 @@ const llm = new VernLLM({
 ```
 
 `middleware` is an ordered array of `VernLLMMiddleware` entries. Each one can transform a request,
-wrap a whole call, filter which calls it applies to, and observe events. Defaults to an empty
+wrap a whole call, wrap each provider request, filter which calls it applies to, and observe events. Defaults to an empty
 array; nothing changes if you never add one.
 
-## The four hooks
+## The hooks
 
 <Cards>
   <Card title="transform" href="#transform">
@@ -43,6 +43,9 @@ array; nothing changes if you never add one.
   </Card>
   <Card title="wrap" href="#wrap">
     Observe or short-circuit one whole logical call.
+  </Card>
+  <Card title="dispatch" href="#dispatch">
+    Observe each provider request, exactly as sent.
   </Card>
   <Card title="enabled" href="#enabled">
     Filter which calls a middleware applies to.
@@ -125,6 +128,39 @@ wrap: async (request, next, ctx) => {
 ```
 
 Useful for serving a canned answer, or testing against a fake `VernLLM` with no real client.
+
+### `dispatch`
+
+Wraps the provider request of one attempt, after the rate limiter granted capacity and every
+`transform` ran. `request` is exactly what the adapter receives:
+
+```ts title="dispatch-signature.ts"
+dispatch?: (
+  request: Readonly<WireCallRequest>,
+  next: () => Promise<void>,
+  ctx: AttemptContext,
+) => Promise<void>;
+```
+
+```ts title="dispatch-timing.ts"
+dispatch: async (request, next, ctx) => {
+  const timer = startTimer(ctx.adapter.provider);
+  try {
+    await next();
+  } finally {
+    timer.end();
+  }
+};
+```
+
+It runs once per attempt, retries included, and nests in `wrap` order, so `position` applies.
+`next()` resolves once the response arrives, or for a stream once it opens, and rejects with the
+attempt's `LLMError`. Calling it twice sends one request.
+
+`dispatch` observes, it can't change the outcome. A hook that returns or throws without calling
+`next()` fails the attempt with `LLMError('invalid_params')`, code `middleware_threw`, and nothing
+is sent. Once `next()` was called, the provider's outcome stands: a throw is logged, and a
+swallowed rejection still fails the attempt. Like `wrap`, it has no timeout of its own.
 
 ### `enabled`
 
@@ -397,7 +433,7 @@ priority-only setup keeps its exact current order regardless of which band anyth
 
 ### `ctx.registeredMiddlewareNames`
 
-Every `transform`/`wrap`/`onEvent` hook's `ctx` carries `registeredMiddlewareNames`: every
+Every hook's `ctx` carries `registeredMiddlewareNames`: every
 registered middleware's resolved label (`name`, or its bracketed `transformOrder` position such as
 `[0]` if unnamed, the same label logs and the `'middleware'` event use),
 frozen, in `transformOrder`. Labels are unique: a `name` that matches another entry's `[i]` label
@@ -412,6 +448,26 @@ know anything else about that middleware's own configuration:
   wrap: async (request, next, ctx) => next(), // only runs if the app hasn't already added tracing
 }
 ```
+
+`ctx.transformMiddlewareNames` is the same list narrowed to entries that define a `transform`. It
+tells a middleware whether anything after it can still change the request.
+
+### `ctx.adapter`
+
+`AttemptContext.adapter` names the adapter behind the target, and `PreDispatchContext.primaryAdapter`
+the one behind the primary:
+
+| Adapter                | `name`                          | `provider`                                                                       |
+| ---------------------- | ------------------------------- | -------------------------------------------------------------------------------- |
+| `fromAnthropic`        | `anthropic`                     | `anthropic`                                                                      |
+| `fromBedrock`          | `bedrock`                       | `aws.bedrock`                                                                    |
+| `fromGemini`           | `gemini`                        | `gcp.vertex_ai` or `gcp.gemini` from the top level client, unset for `ai.models` |
+| `fromOpenAICompatible` | `openai-compatible`             | The `provider` option, else inferred from a well known `baseURL` host            |
+| `fromFetch`            | `fetch`                         | The `provider` config field                                                      |
+| Hand written client    | its `adapter.name`, or `custom` | its `adapter.provider`                                                           |
+
+`provider` uses the OpenTelemetry `gen_ai.provider.name` values and is only set when the adapter
+knows it for certain.
 
 `transform` and a function `enabled` are bounded by `middlewareTimeoutMs` on `VernLLMOptions`
 (default `5000`), overridable per middleware via `timeoutMs`. A value `<= 0` disables the
@@ -441,6 +497,7 @@ default. `wrap` is never bounded this way: it spans the whole call, so `call()`'
 3. An error thrown by `wrap` strictly after `next()` already resolved successfully is caught,
    logged like a failing `onUsage`, and the original result is returned instead.
 4. A throwing, rejecting, or timed out `enabled` predicate is logged and treated as not applying.
+5. `dispatch` follows its own rules, see [`dispatch`](#dispatch).
 
 ## Interaction with `cachedCall`
 
