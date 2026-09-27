@@ -402,7 +402,7 @@ describe('VernLLM.call, validation', () => {
     );
   });
 
-  it('returns tool call arguments after argumentsSchema validation succeeds', async () => {
+  it('returns the argumentsSchema output as the tool call arguments, not the raw parsed arguments', async () => {
     const { client } = createMockClient([
       toolCallResponse([{ id: 'call_1', name: 'get_weather', arguments: { city: 'New York' } }]),
     ]);
@@ -437,10 +437,69 @@ describe('VernLLM.call, validation', () => {
           id: 'call_1',
           name: 'get_weather',
           arguments: {
-            city: 'New York',
+            city: 'NEW YORK',
           },
         },
       ],
+    });
+  });
+
+  it('applies zod defaults, coercion and transforms per tool, leaving a tool without a schema as parsed', async () => {
+    const searchTool = defineTool({
+      name: 'search',
+      description: 'Searches',
+      parameters: { type: 'object' },
+      argumentsSchema: z.object({
+        query: z.string().transform((q) => q.trim()),
+        limit: z.coerce.number().default(10),
+      }),
+    });
+    const logTool = { name: 'log', description: 'Logs', parameters: { type: 'object' } };
+
+    const { client } = createMockClient([
+      toolCallResponse([
+        { id: 'call_1', name: 'search', arguments: { query: '  cats  ' } },
+        { id: 'call_2', name: 'search', arguments: { query: 'dogs', limit: '3' } },
+        { id: 'call_3', name: 'log', arguments: { raw: ' kept ' } },
+      ]),
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    const result = await llm.call({ userContent: 'hi', tools: [searchTool, logTool] });
+
+    expect(result).toEqual({
+      type: 'tool_calls',
+      toolCalls: [
+        { id: 'call_1', name: 'search', arguments: { query: 'cats', limit: 10 } },
+        { id: 'call_2', name: 'search', arguments: { query: 'dogs', limit: 3 } },
+        { id: 'call_3', name: 'log', arguments: { raw: ' kept ' } },
+      ],
+    });
+  });
+
+  it('resolves a streamed finalResult with the argumentsSchema output', async () => {
+    const { client } = createMockStreamingClient([
+      [
+        { type: 'tool_call_delta', index: 0, id: 'call_1', name: 'get_weather' },
+        { type: 'tool_call_delta', index: 0, argumentsDelta: '{"city":" denver "}' },
+      ],
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+    const trimmingTool = {
+      ...weatherTool,
+      argumentsSchema: z.object({ city: z.string().trim().toUpperCase() }),
+    };
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      tools: [trimmingTool],
+      stream: true,
+    });
+    await drain(chunks);
+
+    expect(await finalResult).toEqual({
+      type: 'tool_calls',
+      toolCalls: [{ id: 'call_1', name: 'get_weather', arguments: { city: 'DENVER' } }],
     });
   });
 });

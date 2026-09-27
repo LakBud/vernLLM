@@ -12,6 +12,7 @@ import {
   withReservedUsage,
   withReservedUsageForStream,
 } from './internal/execution/utils/response/usage.utils.js';
+import { onEarlyExit } from './internal/execution/utils/stream/earlyExit.utils.js';
 import { buildExecutors } from './internal/executorFactory.js';
 import {
   buildMiddlewarePipeline,
@@ -332,9 +333,22 @@ export class VernLLM {
     // downstream (shouldRetry, waitForRetry, withTimeout, the top of
     // withReservedUsage) automatically also stops a deadline-exceeded
     // call, no per-site change needed.
+    //
+    // A stream also gets its own controller, aborted when the caller stops
+    // reading `chunks` early, so the provider stream is cancelled rather
+    // than left running with nobody reading it. Not on `cachedCall()`'s
+    // inner call: that stream is shared, so leaving it is the cache's job.
+    const breakController =
+      params.stream && !skipCachedCallWrap ? new AbortController() : undefined;
+    const callerSignal = breakController
+      ? params.signal
+        ? AbortSignal.any([params.signal, breakController.signal])
+        : breakController.signal
+      : params.signal;
+
     const { signal: effectiveSignal, timer: deadlineTimer } = setupDeadline(
       params.deadlineMs,
-      params.signal,
+      callerSignal,
     );
 
     const effectiveParams =
@@ -446,7 +460,9 @@ export class VernLLM {
                 (logMessage, error) => this.logRefundError(logMessage, error),
               );
 
-              return { value, meta };
+              // Wrapped here, inside `wrap`, so middleware hands back the
+              // same cancelling `chunks` the caller reads.
+              return { value: cancelOnBreak(value, breakController), meta };
             }
 
             const value = await withReservedUsage(
@@ -931,4 +947,30 @@ export class VernLLM {
       state: createMiddlewareStateBag(),
     });
   }
+}
+
+/**
+ * Aborts `controller` when the last active reader of `chunks` stops
+ * early, see `onEarlyExit`. A no-op without a controller (`cachedCall()`'s inner call).
+ */
+function cancelOnBreak<R>(
+  stream: { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<R> },
+  controller: AbortController | undefined,
+): { chunks: AsyncIterable<StreamChunk>; finalResult: Promise<R> } {
+  if (!controller) return stream;
+
+  // Once the stream has settled there is nothing left to cancel, and
+  // aborting would only flip the signal middleware still holds.
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  void stream.finalResult.then(markSettled, markSettled);
+
+  return {
+    chunks: onEarlyExit(stream.chunks, () => {
+      if (!settled) controller.abort();
+    }),
+    finalResult: stream.finalResult,
+  };
 }

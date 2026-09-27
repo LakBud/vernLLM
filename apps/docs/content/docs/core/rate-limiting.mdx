@@ -274,8 +274,8 @@ const llm = new VernLLM({
 ```
 
 `increaseBy` is added to the ceiling on every clean release. `decreaseFactor` is multiplied in on
-a rate-limit signal, bounded to `[minCapacity, maxCapacity]`. Requires `requestsPerMinute` to be
-set; ignored otherwise.
+a rate-limit signal, bounded to `[minCapacity, maxCapacity]`. Requires `requestsPerMinute`, and
+throws without it.
 
 **Reactive**, on a real 429, works for every adapter with no configuration beyond `aimd` itself:
 the ceiling shrinks by `decreaseFactor` before the retry/`Retry-After` handling above runs.
@@ -479,6 +479,12 @@ each target's capacity separate.
 | `estimateTokens`    | chars/4 + images + `max_tokens` | Pre-flight estimator for `tokensPerMinute`. Reconciled against real usage after the call completes. |
 | `estimateFraction`  | `1`                             | Scales the estimate down before it's reserved. See [estimateFraction](#estimatefraction).           |
 | `aimd`              | unset (fixed ceiling)           | Grows/shrinks `requestsPerMinute`'s ceiling instead of keeping it fixed. See [AIMD](#aimd).         |
+
+Invalid limits throw `LLMError('invalid_params')` when the instance is built.
+`requestsPerMinute` and `tokensPerMinute` take `0` (unlimited) or a finite number of at least 1.
+`maxConcurrent` and `maxQueueSize` take a non-negative integer. `maxQueueMs` takes `0` up to
+`2147483647`, the longest timer delay. `aimd.proactiveFloor` takes a finite number that is not
+negative.
 
 See [Configuration](/docs/API-reference/configuration#rate-limiting) for how `rateLimit`
 sits alongside every other constructor option.

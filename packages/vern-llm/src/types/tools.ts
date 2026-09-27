@@ -17,7 +17,9 @@ export interface ToolDefinition<Name extends string = string, Args = unknown> {
    * pattern already used for response validation (see `types/schema.ts`).
    * Reuses that zero-dependency, `safeParse`-compatible shape instead of
    * requiring a JSON Schema validator (e.g. ajv) as a new dependency.
-   * Failed validation throws `LLMError('validation')`. If omitted, VernLLM
+   * Failed validation throws `LLMError('validation')`. On success the
+   * returned `ToolCall.arguments` is the schema's output, so defaults,
+   * coercions and transforms apply, matching `schema`. If omitted, VernLLM
    * parses arguments as JSON but does not validate them further.
    *
    * When set, `Args` (and therefore `Name`) flow into the `ToolCall`s

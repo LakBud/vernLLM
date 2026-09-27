@@ -258,6 +258,10 @@ const weatherTool = {
 };
 ```
 
+On success, `ToolCall.arguments` is the schema's output, so defaults, coercion and transforms
+apply, just like `schema` does for content. Streamed `tool_call_delta` chunks still carry the raw
+argument text.
+
 <Callout type="warn">
   If validation fails, `call()` throws `LLMError('validation')` before returning a result. If the
   model requests a tool name that was not in the `tools` array, `call()` throws

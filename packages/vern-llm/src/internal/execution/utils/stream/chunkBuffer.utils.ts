@@ -214,9 +214,9 @@ export function createBackpressureChannel<T>(
             pending.push({ owner, resolve, reject });
           });
         },
-        // A `break` out of `for await` detaches this reader rather than
-        // cancelling the producer, since `finalResult` still settles from
-        // it. Buffered items are kept, so a later loop continues from here.
+        // Detaches this reader without stopping the producer. Cancelling
+        // on a `break` happens a layer up (see `onEarlyExit`), since only
+        // the caller knows whether anyone else still needs the stream.
         return(): Promise<IteratorResult<T>> {
           if (active) {
             active = false;

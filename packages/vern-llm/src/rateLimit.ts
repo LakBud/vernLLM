@@ -12,23 +12,23 @@ export type WireRequest = Parameters<LLMClient['chat']['completions']['create']>
 export type RateLimitReason = 'concurrency' | 'rpm' | 'tpm';
 
 export interface RateLimitOptions {
-  /** Max requests per minute. Omit for unlimited. */
+  /** Max requests per minute. Omit or pass 0 for unlimited. Otherwise a finite number of at least 1. */
   requestsPerMinute?: number;
   /**
    * Max tokens per minute. Enforced against a pre-flight estimate, then
-   * reconciled against reported usage once the call completes. Omit for
-   * unlimited.
+   * reconciled against reported usage once the call completes. Omit or
+   * pass 0 for unlimited. Otherwise a finite number of at least 1.
    */
   tokensPerMinute?: number;
-  /** Max requests in flight at once. Default 0, meaning unlimited. */
+  /** Max requests in flight at once, as a non-negative integer. Default 0, meaning unlimited. */
   maxConcurrent?: number;
   /**
    * Max time a call may sit queued waiting for capacity, in ms. Exceeding
    * it throws rather than hanging forever. Default 30000. Pass 0 to wait
-   * indefinitely.
+   * indefinitely. At most 2147483647, the longest timer delay.
    */
   maxQueueMs?: number;
-  /** Max queued calls before new ones reject immediately instead of queueing. Default 0, unbounded. */
+  /** Max queued calls before new ones reject immediately instead of queueing, as a non-negative integer. Default 0, unbounded. */
   maxQueueSize?: number;
   /**
    * Pre-flight token estimate for `tokensPerMinute`. Defaults to a
@@ -48,7 +48,8 @@ export interface RateLimitOptions {
   estimateFraction?: number;
   /**
    * AIMD against the `requestsPerMinute` bucket. Omit for a fixed
-   * ceiling, today's behavior. Requires `requestsPerMinute`.
+   * ceiling, today's behavior. Requires `requestsPerMinute`; throws
+   * without it.
    */
   aimd?: AimdOptions;
 }
@@ -221,6 +222,63 @@ function buildAimdOptions(option: AimdOptions | undefined): AimdOptions | undefi
   };
 }
 
+/**
+ * Validates the bucket and queue limits at construction. Each one is a
+ * config mistake that would otherwise misbehave silently: `NaN` reads as
+ * unlimited, a negative ceiling blocks every call, `Infinity` or a
+ * `maxQueueMs` past the timer range times the queue out at once, and a
+ * ceiling between 0 and 1 can never be met, since every acquire takes at
+ * least 1. `0` stays valid wherever it already meant unlimited or no
+ * timeout.
+ */
+function assertValidLimits(options: RateLimitOptions): void {
+  const invalid = (message: string): never => {
+    throw new LLMError(message, 'invalid_params');
+  };
+
+  for (const name of ['requestsPerMinute', 'tokensPerMinute'] as const) {
+    const value = options[name];
+    if (value === undefined || value === 0) continue;
+
+    if (!Number.isFinite(value) || value < 1) {
+      invalid(`${name} (${value}) must be 0 (unlimited) or a finite number of at least 1.`);
+    }
+  }
+
+  // A fractional slot count can't describe calls in flight.
+  for (const name of ['maxConcurrent', 'maxQueueSize'] as const) {
+    const value = options[name];
+    if (value === undefined) continue;
+
+    if (!Number.isInteger(value) || value < 0) {
+      invalid(`${name} (${value}) must be a non-negative integer (0 means unlimited).`);
+    }
+  }
+
+  const { maxQueueMs } = options;
+  if (
+    maxQueueMs !== undefined &&
+    (!Number.isFinite(maxQueueMs) || maxQueueMs < 0 || maxQueueMs > MAX_WAKE_DELAY_MS)
+  ) {
+    invalid(
+      `maxQueueMs (${maxQueueMs}) must be a finite number from 0 to ${MAX_WAKE_DELAY_MS}. Pass 0 to wait indefinitely.`,
+    );
+  }
+
+  const { aimd } = options;
+  if (!aimd) return;
+
+  // Without it there is no ceiling to adjust, so AIMD would do nothing.
+  if (!options.requestsPerMinute) {
+    invalid('aimd requires requestsPerMinute to be set.');
+  }
+
+  const floor = aimd.proactiveFloor;
+  if (floor !== undefined && (!Number.isFinite(floor) || floor < 0)) {
+    invalid(`aimd.proactiveFloor (${floor}) must be a finite number that is not negative.`);
+  }
+}
+
 /** Same amount used by `tryAcquireBuckets` and `scheduleWake`, stated once so the two can't drift apart. tpm spends `estimatedTokens`, everything else spends 1. */
 function amountFor(reason: RateLimitReason, estimatedTokens: number): number {
   return reason === 'tpm' ? estimatedTokens : 1;
@@ -314,6 +372,8 @@ export class RateLimiter implements RateLimiterAdapter {
   private lastShrinkAt?: number;
 
   constructor(options: RateLimitOptions) {
+    assertValidLimits(options);
+
     this.requests = buildPerMinuteBucket(options.requestsPerMinute);
     this.tokens = buildPerMinuteBucket(options.tokensPerMinute);
 
@@ -333,7 +393,7 @@ export class RateLimiter implements RateLimiterAdapter {
     this.maxQueueSize = options.maxQueueSize ?? 0;
     this.estimateTokensFn = options.estimateTokens ?? defaultEstimateTokens;
     this.estimateFraction = buildEstimateFraction(options.estimateFraction);
-    this.aimd = this.requests ? buildAimdOptions(options.aimd) : undefined;
+    this.aimd = buildAimdOptions(options.aimd);
   }
 
   /**
@@ -539,6 +599,10 @@ export class RateLimiter implements RateLimiterAdapter {
     const bucket = this.buckets.find((entry) => entry.reason === reason)?.bucket;
     const ms = bucket?.msUntilAvailable(amountFor(reason, estimatedTokens));
 
+    // Defensive: validation keeps every per minute ceiling at 1 or more, so
+    // refill never stops and the wait is always finite. Guards a timer
+    // with an Infinity/NaN delay, which fires at once, if that changes.
+    /* v8 ignore next */
     if (ms === undefined || !Number.isFinite(ms)) return;
 
     // Capped, not just clamped-by-omission: `drain()` re-derives the

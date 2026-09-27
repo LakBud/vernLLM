@@ -784,7 +784,7 @@ describe('VernLLM.cachedCall, stream: true, call.meta out-parameter', () => {
 });
 
 describe('VernLLM.cachedCall, stream: true, trigger breaks out early', () => {
-  it('keeps the shared stream running for a joiner and caches the result', async () => {
+  it('keeps the shared stream running for a joiner and caches the result, while the trigger itself rejects as aborted', async () => {
     let releaseTail!: () => void;
     const tail = new Promise<void>((resolve) => {
       releaseTail = resolve;
@@ -811,10 +811,76 @@ describe('VernLLM.cachedCall, stream: true, trigger breaks out early', () => {
     for await (const _ of trigger.chunks) break;
     releaseTail();
 
+    await expect(trigger.finalResult).rejects.toMatchObject({ type: 'aborted' });
     await expect(joiner.finalResult).resolves.toBe('ab');
-    await expect(trigger.finalResult).resolves.toBe('ab');
     expect(createStream).toHaveBeenCalledTimes(1);
 
+    const hit = await llm.cachedCall(params);
+    await expect(hit.finalResult).resolves.toBe('ab');
+    expect(createStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the provider stream when no joiner is waiting, and caches nothing', async () => {
+    const signals: AbortSignal[] = [];
+    const { client, createStream } = createMockStreamingClient([[]]);
+    createStream.mockImplementation((_params, opts) => {
+      signals.push(opts.signal);
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', delta: 'a' } as WireStreamChunk;
+          await new Promise<void>((_, reject) =>
+            opts.signal.addEventListener('abort', () => reject(new Error('aborted')), {
+              once: true,
+            }),
+          );
+        },
+      };
+    });
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0 });
+    const params = {
+      cacheKey: 'solo',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false as const, stream: true as const },
+    };
+
+    const trigger = await llm.cachedCall(params);
+    for await (const _ of trigger.chunks) break;
+
+    await expect(trigger.finalResult).rejects.toMatchObject({ type: 'aborted' });
+    await vi.waitFor(() => expect(signals[0]!.aborted).toBe(true));
+
+    createStream.mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'text-delta', delta: 'fresh' } as WireStreamChunk;
+      },
+    }));
+    const next = await llm.cachedCall(params);
+    await expect(next.finalResult).resolves.toBe('fresh');
+    expect(createStream).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a trigger that finished reading alone, with no cancel and a cached result', async () => {
+    const { client, createStream } = createMockStreamingClient([
+      [
+        { type: 'text-delta', delta: 'a' },
+        { type: 'text-delta', delta: 'b' },
+      ],
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+    const params = {
+      cacheKey: 'done',
+      ttl: 60,
+      call: { userContent: 'hi', jsonMode: false as const, stream: true as const },
+    };
+
+    const trigger = await llm.cachedCall(params);
+    const seen: string[] = [];
+    for await (const chunk of trigger.chunks) {
+      if (chunk.type === 'text-delta') seen.push(chunk.delta);
+    }
+
+    expect(seen).toEqual(['a', 'b']);
+    await expect(trigger.finalResult).resolves.toBe('ab');
     const hit = await llm.cachedCall(params);
     await expect(hit.finalResult).resolves.toBe('ab');
     expect(createStream).toHaveBeenCalledTimes(1);

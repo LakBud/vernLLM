@@ -634,6 +634,118 @@ describe('RateLimiter, estimateFraction', () => {
   });
 });
 
+describe('RateLimiter, limit validation', () => {
+  const invalidParams = (name: string) =>
+    expect.objectContaining({ type: 'invalid_params', message: expect.stringContaining(name) });
+
+  it.each(['requestsPerMinute', 'tokensPerMinute'] as const)(
+    'rejects a %s that is negative, NaN, infinite, or between 0 and 1',
+    (name) => {
+      for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, 0.5, 1e-320]) {
+        expect(() => new RateLimiter({ [name]: value })).toThrow(invalidParams(name));
+      }
+    },
+  );
+
+  it.each(['requestsPerMinute', 'tokensPerMinute'] as const)(
+    'accepts a %s of 0 (unlimited), exactly 1, or a fraction above 1',
+    (name) => {
+      for (const value of [0, 1, 1.5, 500]) {
+        expect(() => new RateLimiter({ [name]: value })).not.toThrow();
+      }
+    },
+  );
+
+  it('still treats a requestsPerMinute of 0 as unlimited', async () => {
+    const limiter = new RateLimiter({ requestsPerMinute: 0 });
+
+    for (let i = 0; i < 100; i++) (await limiter.acquire(0)).release();
+
+    expect(limiter.getState().requestsRemaining).toBeUndefined();
+  });
+
+  it('blocks at a requestsPerMinute of exactly 1 and admits the next call once it refills', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const limiter = new RateLimiter({ requestsPerMinute: 1, maxQueueMs: 0 });
+
+      (await limiter.acquire(0)).release();
+      const second = limiter.acquire(0);
+
+      await vi.advanceTimersByTimeAsync(59_999);
+      let settled = false;
+      void second.then(() => (settled = true));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      (await second).release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['maxConcurrent', 'maxQueueSize'] as const)(
+    'rejects a %s that is negative, fractional, NaN, or infinite',
+    (name) => {
+      for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(() => new RateLimiter({ [name]: value })).toThrow(invalidParams(name));
+      }
+    },
+  );
+
+  it.each(['maxConcurrent', 'maxQueueSize'] as const)(
+    'accepts a %s of 0 (unlimited) or a positive integer',
+    (name) => {
+      for (const value of [0, 1, 20]) {
+        expect(() => new RateLimiter({ [name]: value })).not.toThrow();
+      }
+    },
+  );
+
+  it('rejects a maxQueueMs that is negative, NaN, infinite, or past the longest timer delay', () => {
+    for (const maxQueueMs of [-1, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+      expect(() => new RateLimiter({ maxConcurrent: 1, maxQueueMs })).toThrow(
+        invalidParams('maxQueueMs'),
+      );
+    }
+  });
+
+  it('accepts a maxQueueMs of 0 (wait indefinitely) up to the longest timer delay', () => {
+    for (const maxQueueMs of [0, 1, 2_147_483_647]) {
+      expect(() => new RateLimiter({ maxConcurrent: 1, maxQueueMs })).not.toThrow();
+    }
+  });
+
+  it('keeps a queued call waiting for the full maxQueueMs at the longest timer delay, instead of timing out at once', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const limiter = new RateLimiter({ maxConcurrent: 1, maxQueueMs: 2_147_483_647 });
+      const held = await limiter.acquire(0);
+      const queued = limiter.acquire(0);
+      let settled = false;
+      queued.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+
+      held.release();
+      (await queued).release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts every limit left unset', () => {
+    expect(() => new RateLimiter({})).not.toThrow();
+  });
+});
+
 describe('RateLimiter, AIMD', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -721,26 +833,6 @@ describe('RateLimiter, AIMD', () => {
     expect(await isPending(fourth)).toBe(true);
 
     for (const h of held) h.release();
-  });
-
-  it('never schedules a wake timer when the bucket reports a non-finite wait (refillPerMs underflows to 0)', async () => {
-    // requestsPerMinute this tiny makes TokenBucket's own
-    // `capacityPerMinute / 60_000` refill rate underflow to exactly 0,
-    // which msUntilAvailable treats as "never refills" and reports as
-    // Infinity. scheduleWake must recognize that as non-finite and bail
-    // out rather than scheduling a timer with an Infinity/NaN delay.
-    // maxQueueMs: 0 disables the unrelated queue-timeout rejection, so
-    // only a genuine wake (or its absence) can settle this promise.
-    vi.useFakeTimers();
-    const limiter = new RateLimiter({ requestsPerMinute: 1e-320, maxQueueMs: 0 });
-
-    const blocked = limiter.acquire(0);
-    expect(await isPending(blocked)).toBe(true);
-
-    // No wake was scheduled, so advancing time (even a lot) never
-    // re-drains the queue on its own; it stays pending indefinitely.
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(await isPending(blocked)).toBe(true);
   });
 
   it('signalRateLimit shrinks the ceiling by decreaseFactor, confirmed via a full-window refill', async () => {
@@ -1160,13 +1252,40 @@ describe('RateLimiter, AIMD', () => {
     for (const h of held) h.release();
   });
 
-  it('aimd is ignored entirely when requestsPerMinute is not set', () => {
-    const limiter = new RateLimiter({
-      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 },
-    });
+  it('throws at construction when aimd is set without requestsPerMinute, since there is no ceiling to adjust', () => {
+    const aimd = { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 };
 
-    expect(() => limiter.signalRateLimit()).not.toThrow();
-    expect(() => limiter.reactToRateLimitHint({ remainingRequests: 0 })).not.toThrow();
+    for (const requestsPerMinute of [undefined, 0]) {
+      expect(() => new RateLimiter({ requestsPerMinute, tokensPerMinute: 100, aimd })).toThrow(
+        expect.objectContaining({
+          type: 'invalid_params',
+          message: expect.stringMatching(/aimd requires requestsPerMinute/),
+        }),
+      );
+    }
+  });
+
+  it('throws at construction when aimd.proactiveFloor is negative, NaN or infinite', () => {
+    for (const proactiveFloor of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        () =>
+          new RateLimiter({
+            requestsPerMinute: 10,
+            aimd: {
+              increaseBy: 1,
+              decreaseFactor: 0.5,
+              minCapacity: 1,
+              maxCapacity: 10,
+              proactiveFloor,
+            },
+          }),
+      ).toThrow(
+        expect.objectContaining({
+          type: 'invalid_params',
+          message: expect.stringMatching(/proactiveFloor/),
+        }),
+      );
+    }
   });
 });
 
