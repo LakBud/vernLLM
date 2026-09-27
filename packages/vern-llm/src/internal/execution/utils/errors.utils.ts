@@ -248,6 +248,12 @@ export function normalizeError(
       error.attempts = attempts;
     }
 
+    // Same cap a header parsed below gets, so a thrown LLMError can't
+    // outwait the target's maxRetryAfterMs. `!== undefined` keeps a 0 cap.
+    if (maxRetryAfterMs !== undefined && error.retryAfterMs !== undefined) {
+      error.retryAfterMs = Math.min(error.retryAfterMs, maxRetryAfterMs);
+    }
+
     return error;
   }
 

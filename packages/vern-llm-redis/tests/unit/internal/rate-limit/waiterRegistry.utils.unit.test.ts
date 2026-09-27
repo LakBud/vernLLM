@@ -3,9 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { createWaiterRegistry } from '../../../../src/internal/rate-limit/waiterRegistry.utils.js';
 
 describe('createWaiterRegistry', () => {
-  it('wake() is a no-op for a key with no registered waiters', () => {
+  it('wake() is delivered to the next waiter if no waiter is registered yet', () => {
     const registry = createWaiterRegistry();
-    expect(() => registry.wake('never-registered')).not.toThrow();
+    const waiter = vi.fn();
+
+    registry.wake('k');
+    registry.register('k', waiter);
+
+    expect(waiter).toHaveBeenCalledTimes(1);
+    expect(registry.has('k')).toBe(false);
+
+    registry.register('k', vi.fn());
+    expect(registry.has('k')).toBe(true);
   });
 
   it('wake() fires every waiter registered for that key', () => {

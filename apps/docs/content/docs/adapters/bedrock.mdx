@@ -238,11 +238,12 @@ With thinking on, a tool call result carries Claude's reasoning on `thinking`, s
 Claude Fable 5.1 and later, Opus 5.5 and later, and every Claude major 6 and later reject a
 `tool_choice` that forces tool use. On those models `fromBedrock`:
 
-| Request                                | Result                                                                               |
-| -------------------------------------- | ------------------------------------------------------------------------------------ |
-| `toolChoice: 'required'` or `{ name }` | Throws `LLMError('invalid_params')`, code `unsupported_capability`, before dispatch. |
-| `toolChoice: 'auto'` or `'none'`       | Sent unchanged.                                                                      |
-| `jsonSchema`                           | Uses native structured output, even without `nativeStructuredOutputModels`.          |
+| Request                                | Result                                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `toolChoice: 'required'` or `{ name }` | Throws `LLMError('invalid_params')`, code `unsupported_capability`, before dispatch.        |
+| `toolChoice: 'auto'`                   | Sent unchanged.                                                                             |
+| `toolChoice: 'none'`                   | Throws `LLMError('invalid_params')`, code `unsupported_capability`, when tools are present. |
+| `jsonSchema`                           | Uses native structured output, even without `nativeStructuredOutputModels`.                 |
 
 The rule matches Bedrock ids, region prefixed inference profiles, and ARNs containing one. `forcedToolChoiceUnsupportedModels` replaces it with your own list or
 predicate:

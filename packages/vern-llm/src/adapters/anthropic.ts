@@ -818,9 +818,13 @@ export function fromAnthropic(
               } else if (event.delta.type === 'thinking_delta') {
                 const block = thinkingBlocks.get(event.index);
                 if (block?.type === 'thinking') block.thinking += event.delta.thinking;
+                // Reasoning reaches the caller only at content_block_stop,
+                // so a ping keeps a long thinking block from idling out.
+                yield { type: 'ping' };
               } else if (event.delta.type === 'signature_delta') {
                 const block = thinkingBlocks.get(event.index);
                 if (block?.type === 'thinking') block.signature += event.delta.signature;
+                yield { type: 'ping' };
               } else if (event.delta.type === 'input_json_delta') {
                 const kind = blockKinds.get(event.index);
 

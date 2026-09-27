@@ -778,7 +778,7 @@ export class CallExecutor {
             providerName: this.providerName,
             isFallback: this.isFallback,
           });
-          const normalized = normalizeError(error, params.signal);
+          const normalized = normalizeError(error, params.signal, undefined, this.maxRetryAfterMs);
 
           if (normalized.type !== 'aborted') {
             this.usageReporter.reportFailure(
@@ -822,6 +822,7 @@ export class CallExecutor {
         streamController,
         logger: this.logger,
         signal: params.signal,
+        maxRetryAfterMs: this.maxRetryAfterMs,
         onRateLimitHint: (hint) => {
           this.limiter?.reactToRateLimitHint(hint);
         },

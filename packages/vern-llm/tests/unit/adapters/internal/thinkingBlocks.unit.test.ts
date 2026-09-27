@@ -193,6 +193,11 @@ describe('fromAnthropic, thinking blocks', () => {
       { type: 'thinking_block', block: { type: 'redacted_thinking', data: '' } },
       { type: 'thinking_block', block: { type: 'thinking', thinking: '', signature: '' } },
     ]);
+    // One ping per reasoning delta, before the block stops, so the idle
+    // timeout sees activity while reasoning is still being accumulated.
+    const firstBlock = chunks.findIndex((chunk) => chunk.type === 'thinking_block');
+    expect(chunks.slice(0, firstBlock).filter((chunk) => chunk.type === 'ping')).toHaveLength(3);
+    expect(chunks.filter((chunk) => chunk.type === 'ping')).toHaveLength(5);
   });
 });
 
@@ -324,6 +329,10 @@ describe('fromBedrock, thinking blocks', () => {
       { type: 'thinking_block', block: { type: 'redacted_thinking', data: 'AAEC' } },
     ]);
     expect(chunks).toContainEqual({ type: 'text-delta', delta: 'done' });
+    // One ping per reasoning delta, before the block stops.
+    const firstBlock = chunks.findIndex((chunk) => chunk.type === 'thinking_block');
+    expect(chunks.slice(0, firstBlock).filter((chunk) => chunk.type === 'ping')).toHaveLength(3);
+    expect(chunks.filter((chunk) => chunk.type === 'ping')).toHaveLength(4);
   });
 });
 

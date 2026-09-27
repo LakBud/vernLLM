@@ -1085,6 +1085,9 @@ export function fromBedrock(
                 block.signature += part.signature ?? '';
                 if (part.redactedContent) block.redacted = part.redactedContent;
                 reasoning.set(contentBlockIndex, block);
+                // Reasoning reaches the caller only at contentBlockStop,
+                // so a ping keeps a long reasoning block from idling out.
+                yield { type: 'ping' };
               } else if (delta && 'toolUse' in delta && delta.toolUse?.input !== undefined) {
                 const kind = blockKinds.get(contentBlockIndex);
 

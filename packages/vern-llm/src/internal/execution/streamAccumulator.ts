@@ -31,6 +31,8 @@ export interface StreamAccumulatorOptions<T> {
   logger: Logger;
   /** External signal, forwarded to `normalizeError` so a transport error during an already-aborted call is reported as `'aborted'`, not whatever the transport itself threw. */
   signal?: AbortSignal;
+  /** The target's `maxRetryAfterMs`, forwarded to `normalizeError` so a mid-stream failure gets the same retry cap. */
+  maxRetryAfterMs?: number;
   /**
    * Fires once, synchronously, right after the transport-level loop
    * finishes successfully, before `finalize` runs. Lets the caller record
@@ -142,6 +144,7 @@ export function buildStreamResult<T>(
     streamController,
     logger,
     signal,
+    maxRetryAfterMs,
     onRateLimitHint,
   } = options;
 
@@ -230,7 +233,7 @@ export function buildStreamResult<T>(
     } catch (error) {
       await closeIterator(iterator, streamController);
 
-      const normalized = normalizeError(error, signal);
+      const normalized = normalizeError(error, signal, undefined, maxRetryAfterMs);
 
       try {
         options.onStreamFailure(normalized, usage);

@@ -15,7 +15,7 @@ export interface WaiterRegistry {
    * call is a no-op.
    */
   register(key: string, wake: () => void): () => void;
-  /** Fires and removes every waiter currently registered for key. A key with no registered waiters is a no-op. */
+  /** Fires and removes registered waiters for key, or saves one wake for its next registration. */
   wake(key: string): void;
   /** True if key currently has at least one registered waiter. */
   has(key: string): boolean;
@@ -23,6 +23,7 @@ export interface WaiterRegistry {
 
 export function createWaiterRegistry(): WaiterRegistry {
   const waitersByKey = new Map<string, Set<() => void>>();
+  const pendingWakes = new Set<string>();
 
   function unregister(key: string, waiter: () => void): void {
     const set = waitersByKey.get(key);
@@ -41,12 +42,20 @@ export function createWaiterRegistry(): WaiterRegistry {
       }
       set.add(waiter);
 
+      if (pendingWakes.delete(key)) {
+        unregister(key, waiter);
+        waiter();
+      }
+
       return () => unregister(key, waiter);
     },
 
     wake(key) {
       const waiters = waitersByKey.get(key);
-      if (!waiters) return;
+      if (!waiters) {
+        pendingWakes.add(key);
+        return;
+      }
 
       for (const waiter of [...waiters]) {
         unregister(key, waiter);

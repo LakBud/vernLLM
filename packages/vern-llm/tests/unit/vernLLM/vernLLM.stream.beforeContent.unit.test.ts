@@ -289,6 +289,41 @@ describe('stream failure before the first content chunk', () => {
     expect(returned).toHaveBeenCalled();
   });
 
+  it.each([
+    ['before content', [ping] as Step[]],
+    ['after content', [ping, text('partial')] as Step[]],
+  ])(
+    "caps a stream failure's retryAfterMs at the target's maxRetryAfterMs %s",
+    async (_label, lead) => {
+      const usage: WireStreamChunk = {
+        type: 'usage',
+        usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+      };
+      const onUsageFailure = vi.fn();
+      const { client } = createMockStreamingClient([
+        scripted([...lead, usage, new FakeApiError('slow down', 429, { 'retry-after': '60' })]),
+      ]);
+
+      const llm = new VernLLM({
+        client,
+        model: 'm',
+        maxRetries: 0,
+        maxRetryAfterMs: 2_000,
+        onUsageFailure,
+      });
+      const { chunks, finalResult } = await llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+      });
+      void collect(chunks).catch(() => {});
+
+      await expect(finalResult).rejects.toMatchObject({ status: 429 });
+      expect(onUsageFailure).toHaveBeenCalledOnce();
+      expect(onUsageFailure.mock.calls[0]![1]).toMatchObject({ retryAfterMs: 2_000 });
+    },
+  );
+
   it('reopens on a fallback with its own model, not the per call override', async () => {
     const primary = createMockStreamingClient([scripted([ping, new FakeApiError('down', 503)])]);
     const fallback = createMockStreamingClient([scripted([text('ok')])]);
