@@ -30,6 +30,20 @@ describe('providerName', () => {
     expect(providerName('', '')).toBe(UNKNOWN_PROVIDER);
   });
 
+  it('uses the provider the adapter names before guessing from the model', () => {
+    const { providerName } = normalizeOptions({ providerNames: { primary: 'azure.ai.openai' } });
+
+    expect(providerName('fallback[0]', 'gpt-oss-120b', 'groq')).toBe('groq');
+    // The mapping is the user's own statement, so it still wins.
+    expect(providerName('primary', 'gpt-4o', 'openai')).toBe('azure.ai.openai');
+  });
+
+  it.each([undefined, '', '   '])('ignores an adapter provider of %j', (adapterProvider) => {
+    const { providerName } = normalizeOptions({});
+
+    expect(providerName('primary', 'claude-sonnet-5', adapterProvider)).toBe('anthropic');
+  });
+
   it('never resolves object prototype keys', () => {
     const { providerName, targetName } = normalizeOptions({});
 

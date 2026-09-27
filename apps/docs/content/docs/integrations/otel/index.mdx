@@ -96,8 +96,8 @@ particular order. Spans nest under whatever span is active when the call starts,
 request or agent span adopts them with no configuration.
 
 `providerNames` maps a VernLLM target to `gen_ai.provider.name`, see
-[Configuration](/docs/integrations/otel/API-reference/configuration#providernames). Without it the target's own
-label, `primary` for a lone target, is used.
+[Configuration](/docs/integrations/otel/API-reference/configuration#providernames). Without it the
+provider the adapter names is used, else a guess from the model id.
 
 Register the middleware once per `VernLLM`: two entries in one `middleware` array throw at
 construction. The same `otelMiddleware()` object can be shared by several `VernLLM` instances.

@@ -227,6 +227,90 @@ describe('middleware dispatch', () => {
   });
 });
 
+describe('middleware dispatch on a stream that opens with pings', () => {
+  it('resolves next() at the first content chunk, while call() already resolved on the ping', async () => {
+    let releaseContent!: () => void;
+    const contentReady = new Promise<void>((resolve) => (releaseContent = resolve));
+    const { client } = createMockStreamingClient([
+      async function* () {
+        yield { type: 'ping' as const };
+        await contentReady;
+        yield { type: 'text-delta' as const, delta: 'a' };
+      },
+    ]);
+    const order: string[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      middleware: [
+        {
+          dispatch: async (_request, next) => {
+            await next();
+            order.push('dispatch settled');
+          },
+        },
+      ],
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hello',
+      stream: true,
+      jsonMode: false,
+    });
+    order.push('call resolved');
+    releaseContent();
+    await drain(chunks);
+
+    await expect(finalResult).resolves.toBe('a');
+    expect(order).toEqual(['call resolved', 'dispatch settled']);
+  });
+
+  it('rejects next() with the attempt error when the stream fails after a ping, before content', async () => {
+    const { client } = createMockStreamingClient([
+      async function* () {
+        yield { type: 'ping' as const };
+        throw new FakeApiError('broke before content', 503);
+      },
+      [{ type: 'text-delta', delta: 'recovered' }],
+    ]);
+    const outcomes: string[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'gpt-4o',
+      maxRetries: 1,
+      baseDelayMs: 1,
+      logger: 'silent',
+      middleware: [
+        {
+          dispatch: async (_request, next, ctx) => {
+            try {
+              await next();
+              outcomes.push(`${ctx.attempt}:ok`);
+            } catch (error) {
+              outcomes.push(
+                `${ctx.attempt}:${(error as LLMError).type}:${(error as LLMError).status}`,
+              );
+              throw error;
+            }
+          },
+        },
+      ],
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hello',
+      stream: true,
+      jsonMode: false,
+    });
+    await drain(chunks);
+
+    await expect(finalResult).resolves.toBe('recovered');
+    expect(outcomes).toEqual(['1:api:503', '2:ok']);
+  });
+});
+
 describe('middleware context, adapter and transform names', () => {
   it('reports each target adapter and the entries with a transform', async () => {
     const { client: primaryClient } = createMockClient([new FakeApiError('down', 500)]);

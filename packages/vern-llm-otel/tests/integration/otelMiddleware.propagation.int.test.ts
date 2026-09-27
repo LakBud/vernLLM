@@ -98,20 +98,53 @@ describe('context propagation', () => {
       expect(parentIdOf(callSpan!)).toBe(spanId(agent!));
     });
 
-    it('makes work started during the call, like an HTTP client span, a child of the call span', async () => {
+    it('makes the provider request, like an HTTP client span, a child of its attempt span', async () => {
       const client = createMockClient([
+        async () => {
+          trace_.tracer.startSpan('http.client POST').end();
+          throw new FakeApiError('down', 500);
+        },
         async () => {
           trace_.tracer.startSpan('http.client POST').end();
           return textResponse('ok', USAGE);
         },
       ]).client;
-      const llm = new VernLLM({ ...BASE, client, middleware: [middleware()] });
+      const llm = new VernLLM({ ...BASE, maxRetries: 1, client, middleware: [middleware()] });
 
       await llm.call(call);
 
-      const [http] = named('http.client POST');
+      const requests = named('http.client POST');
+      const attempts = named('chat gpt-4o');
       const [callSpan] = named('vernllm.call');
-      expect(parentIdOf(http!)).toBe(spanId(callSpan!));
+
+      // Each request nests under the attempt that sent it, not a neighbour or the call.
+      expect(requests.map(parentIdOf)).toEqual(attempts.map(spanId));
+      for (const attempt of attempts) expect(parentIdOf(attempt)).toBe(spanId(callSpan!));
+    });
+
+    it('keeps middleware work that runs before dispatch outside the attempt span', async () => {
+      const client = createMockClient([textResponse('ok', USAGE)]).client;
+      const llm = new VernLLM({
+        ...BASE,
+        client,
+        middleware: [
+          middleware(),
+          {
+            name: 'late-transform',
+            priority: 10,
+            transform: () => {
+              trace_.tracer.startSpan('transform work').end();
+              return {};
+            },
+          },
+        ],
+      });
+
+      await llm.call(call);
+
+      const [work] = named('transform work');
+      const [callSpan] = named('vernllm.call');
+      expect(parentIdOf(work!)).toBe(spanId(callSpan!));
     });
 
     it('keeps concurrent calls in their own trees', async () => {
@@ -212,8 +245,11 @@ describe('context propagation', () => {
       const [callSpan] = named('vernllm.call');
       const [attempt] = named('chat gpt-4o');
       expect(parentIdOf(attempt!)).toBe(spanId(callSpan!));
-      expect(errors).toHaveLength(1);
-      expect((errors[0] as string[])[0]).toBe('[VernLLM] otel: activateContext failed');
+      // Once for the call span and once for the attempt span, each falling back to a plain call.
+      expect(errors.map((args) => (args as string[])[0])).toEqual([
+        '[VernLLM] otel: activateContext failed',
+        '[VernLLM] otel: activateContext failed',
+      ]);
       expect(trace_.openSpans()).toEqual([]);
     });
   });

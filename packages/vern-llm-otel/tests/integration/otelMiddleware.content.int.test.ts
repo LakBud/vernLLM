@@ -99,31 +99,33 @@ describe('content capture end to end', () => {
     expect(callSpans()[0]!.attributes['vernllm.content.captured']).toBe(true);
   });
 
-  it('skips input capture and warns once when another transform runs after it', async () => {
-    const client = createMockClient([textResponse('a', USAGE), textResponse('b', USAGE)]).client;
+  it('captures the request as sent, even when a redacting transform sorts after it', async () => {
+    const client = createMockClient([textResponse('a', USAGE)]).client;
     const redactor: VernLLMMiddleware = {
       name: 'late-redactor',
       priority: 5000,
-      transform: () => ({}),
+      transform: (request) => ({
+        messages: request.messages.map((message) =>
+          typeof message.content === 'string'
+            ? { ...message, content: message.content.replaceAll('SECRET', '[redacted]') }
+            : message,
+        ),
+      }),
     };
     const llm = new VernLLM({
       ...BASE,
       client,
-      middleware: [otel({ captureContent: true }), redactor],
+      middleware: [otel({ captureContent: true, priority: -5000 }), redactor],
     });
 
-    await llm.call({ userContent: 'SECRET', jsonMode: false });
-    await llm.call({ userContent: 'SECRET', jsonMode: false });
+    await llm.call({ userContent: 'my SECRET', jsonMode: false });
 
-    for (const attempt of attemptSpans()) {
-      expect(attempt.attributes['gen_ai.input.messages']).toBeUndefined();
-      expect(attempt.attributes['vernllm.content.skipped_reason']).toBe('not_last_transform');
-    }
-    const warnings = warnLog.mock.calls.filter(([message]) =>
-      String(message).includes('input capture skipped'),
-    );
-    expect(warnings).toHaveLength(1);
-    // A configuration warning, not a failure.
+    const [attempt] = attemptSpans();
+    expect(parsed(attempt!.attributes['gen_ai.input.messages'])).toEqual([
+      { role: 'user', parts: [{ type: 'text', content: 'my [redacted]' }] },
+    ]);
+    expect(attempt!.attributes).not.toHaveProperty('vernllm.content.skipped_reason');
+    expect(warnLog).not.toHaveBeenCalled();
     expect(errorLog).not.toHaveBeenCalled();
   });
 

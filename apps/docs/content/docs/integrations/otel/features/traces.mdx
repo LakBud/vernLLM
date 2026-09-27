@@ -7,10 +7,10 @@ Every call produces two kinds of span. The call span covers the whole logical op
 and fallbacks included, which is what the GenAI conventions ask of a span. Each attempt inside it
 gets its own span, and that one is the inference span.
 
-| Span    | Name                    | Kind     | Starts                 | Ends                                                                                                  |
-| ------- | ----------------------- | -------- | ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| Call    | `vernllm.call`          | INTERNAL | When the call starts   | When the call settles, for a stream when `finalResult` settles                                        |
-| Attempt | `chat {requestedModel}` | CLIENT   | When an attempt begins | A failed attempt when its retry or fallback is announced, the answering attempt when the call settles |
+| Span    | Name                    | Kind     | Starts                   | Ends                                                                        |
+| ------- | ----------------------- | -------- | ------------------------ | --------------------------------------------------------------------------- |
+| Call    | `vernllm.call`          | INTERNAL | When the call starts     | When the call settles, for a stream when `finalResult` settles              |
+| Attempt | `chat {requestedModel}` | CLIENT   | When the request is sent | A failed attempt when it fails, the answering attempt when the call settles |
 
 The call span has no `gen_ai.operation.name`, so a backend that counts inference spans counts
 attempts only. Every attempt uses the `chat` operation, including on Gemini, since each VernLLM
@@ -25,13 +25,13 @@ call is a chat style request.
 | `gen_ai.output.type`                                                                              | At start, `json` when the request has a response format, else `text`   |
 | `gen_ai.request.reasoning.level`                                                                  | At start, the reasoning effort sent to the provider                    |
 | `gen_ai.request.stream`                                                                           | `true` when the call turned out to be a stream                         |
-| `gen_ai.response.time_to_first_chunk`                                                             | Seconds, streams only                                                  |
+| `gen_ai.response.time_to_first_chunk`                                                             | Seconds to the first content chunk, streams only                       |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.reasoning.output_tokens` | After the attempt, when the provider reported them                     |
 | `error.type`, `http.response.status_code`                                                         | On failure, the status only when the error has one                     |
 | `vernllm.target`                                                                                  | The raw target label, `primary` or `fallback[0]` or your `name`        |
 | `vernllm.attempt`, `vernllm.is_fallback`                                                          | Attempt number within its target, and whether the target is a fallback |
 | `vernllm.request.reasoning_effort`, `vernllm.request.budget_tokens`                               | At start, when the request sets them                                   |
-| `vernllm.rate_limit.wait_ms`                                                                      | Time spent waiting for local rate limit capacity                       |
+| `vernllm.rate_limit.wait_ms`                                                                      | Time waited for local rate limit capacity before the request was sent  |
 | `vernllm.usage.failed`                                                                            | `true` when the attempt spent tokens and then failed                   |
 
 Attempts across targets are ordered by span start time.
@@ -77,7 +77,15 @@ Events go on the call span:
 
 A rate limit wait is not an event. It is the `vernllm.rate_limit.wait_ms` attribute on the
 attempt and the `vernllm.rate_limit.wait` [metric](/docs/integrations/otel/features/metrics). The attempt
-span still covers the wait, while the duration metric leaves it out.
+starts after the wait, so neither its span nor its duration includes it.
+
+## Attempts that never reach the provider
+
+An attempt span starts when the request goes to the adapter, after the rate limiter and every
+`transform`. A call rejected before that, by an open circuit, a full rate limit queue, or a
+throwing `transform`, has a call span with the error and no attempt span. So does a request the
+adapter refuses before sending, such as a forced `toolChoice` on a Claude model that rejects it.
+None of these record a duration or count toward `vernllm.total_attempts`.
 
 ## Status and errors
 
@@ -103,9 +111,9 @@ this middleware.
 For a stream, the call span and the answering attempt span stay open until `finalResult` settles,
 so the span covers the whole response and the output can still be recorded.
 
-The core opens a stream only after its first chunk has arrived, so the time to first chunk is
-taken at that moment: seconds since the attempt started, minus any local rate limit wait. It is
-recorded as the `gen_ai.response.time_to_first_chunk` attribute and the
+The time to first chunk runs from sending the request to the first content chunk. Keep-alive
+pings, including the ones Claude sends while reasoning, do not count. It is recorded on the
+attempt that answered, as the `gen_ai.response.time_to_first_chunk` attribute and the
 `gen_ai.client.operation.time_to_first_chunk` metric, from one measurement.
 
 There is no per chunk metric. `chunks` is buffered and read at the consumer's pace, so middleware
@@ -117,6 +125,5 @@ replaces it or `chunks`, so stream behavior is identical with and without it.
 The call span's parent is whatever context is active when the call starts. Attempt spans are
 parented to the call span explicitly, so parenting works even with no context manager installed.
 
-An attempt starts before the request is dispatched, so it cannot be the active span while the
-provider request runs. Auto instrumented HTTP client spans therefore nest under the call span,
-next to the attempt spans.
+The attempt span is the active span while its request runs, so an auto instrumented HTTP client
+span nests under the attempt that sent it.

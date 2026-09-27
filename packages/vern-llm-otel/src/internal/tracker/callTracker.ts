@@ -1,5 +1,6 @@
 import {
   context as contextApi,
+  INVALID_SPAN_CONTEXT,
   SpanKind,
   SpanStatusCode,
   trace,
@@ -30,6 +31,7 @@ import {
   errorAttributes,
   errorTypeOf,
   exceptionOf,
+  isLocalRejection,
   lastAttemptErrorOf,
   statusMessageOf,
 } from '../errors/errorMapping.utils.js';
@@ -44,19 +46,29 @@ import {
   SPAN_EVENT,
   VERNLLM_ATTR,
 } from '../semconv.js';
+import { DeferredSpan } from './deferredSpan.js';
 
 import type { Failure, Outcome, TrackerDeps } from '../../types/index.js';
 
 interface Attempt {
-  span: Span | undefined;
+  /** Started on first use, see `DeferredSpan`. */
+  span: DeferredSpan;
+  /** When the request was handed to the adapter, after the rate limiter and every transform. */
   startedAtMs: number;
-  /** Local rate limit waiting, which the duration metric leaves out. */
-  waitedMs: number;
+  /** The same moment on the wall clock, which dates the span if it starts later. */
+  startedAtEpochMs: number;
+  /** When the response arrived, or for a stream its first content chunk. */
+  respondedAtMs: number | undefined;
   provider: string;
   model: string;
   /** Status and duration are final. The span itself may stay open, see `applyUsage`. */
   settled: boolean;
+  /** Time to first chunk was recorded. */
+  firstChunkRecorded: boolean;
 }
+
+// Stands in for an attempt span that could not be created, so the code after it needs no checks.
+const NON_RECORDING_SPAN = trace.wrapSpanContext(INVALID_SPAN_CONTEXT);
 
 /**
  * All the state for one logical call. Everything stateful in the package lives here, so a call
@@ -70,6 +82,8 @@ export class CallTracker {
   private shortCircuitedBy: string | undefined;
   private meta: CallMeta | undefined;
   private ended = false;
+  /** Local rate limit waiting reported for the attempt about to be dispatched. */
+  private pendingWaitMs = 0;
 
   private constructor(
     private readonly deps: TrackerDeps,
@@ -132,18 +146,50 @@ export class CallTracker {
 
   /** Runs `next` with the call span active, so anything it starts nests under the call. */
   run<T>(fn: () => Promise<T>): Promise<T> {
-    // `fn` is the core's memoized `next`, so a failed `context.with` falling back to calling
-    // it directly cannot dispatch the request twice.
+    return this.withActive(this.context, fn);
+  }
+
+  /**
+   * Wraps one attempt's provider request. The attempt span is active while it runs, so an HTTP
+   * client span nests under it, and it covers only the provider: the rate limit wait and every
+   * transform are already behind it. Rethrows the exact error `next` threw.
+   */
+  async dispatch(
+    ctx: AttemptContext,
+    request: Readonly<WireCallRequest>,
+    next: () => Promise<void>,
+  ): Promise<void> {
+    const attempt = this.deps.guard<Attempt | undefined>(
+      'startAttempt',
+      () => this.startAttempt(ctx, request),
+      undefined,
+    );
+    if (!attempt) return next();
+
+    let failure: Failure | undefined;
+    try {
+      await this.withActive(trace.setSpan(this.context, attempt.span), next);
+    } catch (error) {
+      failure = { error };
+    }
+
+    this.deps.guard('endDispatch', () => this.endDispatch(attempt, failure), undefined);
+    if (failure) throw failure.error;
+  }
+
+  private withActive<T>(context: Context, fn: () => Promise<T>): Promise<T> {
+    // `fn` is always one of the core's memoized `next` functions, so a failed `context.with`
+    // falling back to calling it directly cannot send the request twice.
     const activated = this.deps.guard<Promise<T> | undefined>(
       'activateContext',
-      () => contextApi.with(this.context, fn),
+      () => contextApi.with(context, fn),
       undefined,
     );
     return activated ?? fn();
   }
 
-  startAttempt(ctx: AttemptContext, request: Readonly<WireCallRequest>): void {
-    if (this.ended) return;
+  startAttempt(ctx: AttemptContext, request: Readonly<WireCallRequest>): Attempt | undefined {
+    if (this.ended) return undefined;
 
     // A new attempt while one is still open means a closing signal was missed, so how that
     // attempt ended is unknown. It is closed without a status or a duration measurement rather
@@ -151,9 +197,44 @@ export class CallTracker {
     this.abandonAttempt();
     this.attemptCount++;
 
+    const waitedMs = this.pendingWaitMs;
+    this.pendingWaitMs = 0;
+
+    // A hand built context can predate `adapter`, so its absence is not an error.
+    const provider = this.deps.config.providerName(
+      ctx.requestedProvider,
+      ctx.requestedModel,
+      ctx.adapter?.provider,
+    );
+    const startedAtMs = nowMs();
+    const startedAtEpochMs = Date.now();
+
+    const attempt: Attempt = {
+      span: new DeferredSpan(() =>
+        this.startAttemptSpan(ctx, request, provider, startedAtEpochMs, waitedMs),
+      ),
+      startedAtMs,
+      startedAtEpochMs,
+      respondedAtMs: undefined,
+      provider,
+      model: ctx.requestedModel,
+      settled: false,
+      firstChunkRecorded: false,
+    };
+    this.current = attempt;
+    return attempt;
+  }
+
+  /** Creates the attempt span once something needs it. Never throws. */
+  private startAttemptSpan(
+    ctx: AttemptContext,
+    request: Readonly<WireCallRequest>,
+    provider: string,
+    startedAtEpochMs: number,
+    waitedMs: number,
+  ): Span {
     const { config, guard } = this.deps;
     const genAi = config.genAiConventions;
-    const provider = config.providerName(ctx.requestedProvider, ctx.requestedModel);
 
     const span = guard<Span | undefined>(
       'startAttemptSpan',
@@ -162,6 +243,10 @@ export class CallTracker {
           genAi ? `${OPERATION_CHAT} ${ctx.requestedModel}` : SPAN.attemptFallbackName,
           {
             kind: genAi ? SpanKind.CLIENT : SpanKind.INTERNAL,
+            // The span can start after the request did, so it is dated to when it was sent. Whole
+            // wall clock milliseconds, like a span started without a time, so the two order the
+            // same way.
+            startTime: startedAtEpochMs,
             attributes: attemptStartAttributes(
               {
                 provider,
@@ -178,37 +263,42 @@ export class CallTracker {
         ),
       undefined,
     );
+    if (!span) return NON_RECORDING_SPAN;
 
-    // Set even when the span could not be created, so timing and metrics still work.
-    this.current = {
-      span,
-      startedAtMs: nowMs(),
-      waitedMs: 0,
-      provider,
-      model: ctx.requestedModel,
-      settled: false,
-    };
-
-    if (span && this.captureContent && this.deps.content) {
-      const { content } = this.deps;
-      if (this.isLastTransform(ctx)) {
-        guard('captureInput', () => content.captureInput(span, request), undefined);
-      } else {
-        // Another middleware sorts after this one, and it may be a redactor, so the request
-        // seen here may not be what gets sent. Fails closed instead of recording it. The core
-        // does not say which entries have a `transform`, so an entry without one also counts.
-        this.safely('markContentSkipped', () =>
-          span.setAttribute(VERNLLM_ATTR.contentSkippedReason, CONTENT_SKIPPED_NOT_LAST),
-        );
-        warnCaptureOrderOnce(this.deps);
-      }
+    if (waitedMs > 0) {
+      this.safely('markRateLimit', () => span.setAttribute(VERNLLM_ATTR.rateLimitWaitMs, waitedMs));
     }
+
+    // `request` is what the adapter received, after every transform, so a redacting transform
+    // has always run by now, whatever the middleware order.
+    if (this.captureContent && this.deps.content) {
+      const { content } = this.deps;
+      guard('captureInput', () => content.captureInput(span, request), undefined);
+    }
+
+    return span;
   }
 
-  /** `registeredMiddlewareNames` is in transform order, so the last name runs last. */
-  private isLastTransform(ctx: AttemptContext): boolean {
-    const names = ctx.registeredMiddlewareNames;
-    return names.length > 0 && names[names.length - 1] === this.deps.config.name;
+  private endDispatch(attempt: Attempt, failure: Failure | undefined): void {
+    // Superseded, or already closed by the end of the call.
+    if (attempt !== this.current) return;
+
+    if (!failure) {
+      attempt.respondedAtMs = nowMs();
+      this.applyStreaming(attempt);
+      return;
+    }
+
+    // Rejected before anything was sent, such as a capability the model does not have. That is
+    // not an inference operation, so it leaves no span, no duration, and no attempt count,
+    // unless something already started the span.
+    if (!attempt.span.started && isLocalRejection(failure.error)) {
+      this.current = undefined;
+      this.attemptCount--;
+      return;
+    }
+
+    this.closeAttempt(failure);
   }
 
   /** Span work for one event. Metrics are recorded separately, before this runs. */
@@ -224,6 +314,7 @@ export class CallTracker {
           [EVENT_ATTR.retryAfterHonored]: event.retryAfterHonored,
           [ATTR.errorType]: errorTypeOf(event.error),
         });
+        this.pendingWaitMs = 0;
         this.closeAttempt({ error: event.error });
         return;
       case 'fallback':
@@ -233,6 +324,7 @@ export class CallTracker {
           [EVENT_ATTR.elapsedMs]: event.elapsedMs,
           [ATTR.errorType]: errorTypeOf(event.error),
         });
+        this.pendingWaitMs = 0;
         this.closeAttempt({ error: event.error });
         return;
       case 'rate_limited':
@@ -292,36 +384,13 @@ export class CallTracker {
   private openStream(stream: { finalResult: PromiseLike<unknown> }): void {
     this.streaming = true;
 
-    const { genAiConventions } = this.deps.config;
-    const attempt = this.current;
-
-    if (genAiConventions) {
-      this.safely('markStream', () => {
-        this.span.setAttribute(ATTR.requestStream, true);
-        attempt?.span?.setAttribute(ATTR.requestStream, true);
-      });
+    if (this.deps.config.genAiConventions) {
+      this.safely('markStream', () => this.span.setAttribute(ATTR.requestStream, true));
     }
 
-    // The core opens a stream only once the first chunk has arrived, so this is when the
-    // client first saw data. Per chunk timing is not observable from middleware, because chunks
-    // are buffered and read at the consumer's pace.
-    if (attempt) {
-      const seconds = elapsedMs(attempt.startedAtMs, attempt.waitedMs) / 1000;
-
-      this.deps.metrics.record(
-        'timeToFirstChunk',
-        seconds,
-        this.attemptMetricAttributes(attempt),
-        this.measurementContext(),
-      );
-
-      // The same measurement as the metric, so the two can never disagree.
-      if (genAiConventions) {
-        this.safely('markFirstChunk', () =>
-          attempt.span?.setAttribute(ATTR.responseTimeToFirstChunk, seconds),
-        );
-      }
-    }
+    // The core resolves a stream on a keep-alive ping, before content. The first chunk is timed
+    // when the answering attempt's dispatch settles, which is here if that already happened.
+    if (this.current) this.applyStreaming(this.current);
 
     // Observed on the side and never replaced: a derived promise that rethrows would create an
     // unhandled rejection the core deliberately avoids, and swapping `chunks` would change its
@@ -346,14 +415,40 @@ export class CallTracker {
     }
   }
 
+  /** The wait comes before its attempt is dispatched, so it is held for that attempt. */
   private applyRateLimit(waitedMs: number): void {
-    const attempt = this.current;
-    if (!attempt || !Number.isFinite(waitedMs) || waitedMs <= 0) return;
+    if (!Number.isFinite(waitedMs) || waitedMs <= 0) return;
+    this.pendingWaitMs += waitedMs;
+  }
 
-    attempt.waitedMs += waitedMs;
-    this.safely('markRateLimit', () =>
-      attempt.span?.setAttribute(VERNLLM_ATTR.rateLimitWaitMs, attempt.waitedMs),
+  /**
+   * Time to first chunk: from sending the request to the first content chunk, so keep-alive
+   * pings never count. Needs both the stream and the attempt's response, which arrive in either
+   * order, so it runs from both sides and records once.
+   */
+  private applyStreaming(attempt: Attempt): void {
+    if (!this.streaming || attempt.respondedAtMs === undefined || attempt.firstChunkRecorded) {
+      return;
+    }
+    attempt.firstChunkRecorded = true;
+
+    const seconds = elapsedMs(attempt.startedAtMs, attempt.respondedAtMs) / 1000;
+    this.deps.metrics.record(
+      'timeToFirstChunk',
+      seconds,
+      this.attemptMetricAttributes(attempt),
+      trace.setSpan(this.context, attempt.span),
     );
+
+    // The same measurement as the metric, so the two can never disagree.
+    if (this.deps.config.genAiConventions) {
+      this.safely('markFirstChunk', () =>
+        attempt.span.setAttributes({
+          [ATTR.requestStream]: true,
+          [ATTR.responseTimeToFirstChunk]: seconds,
+        }),
+      );
+    }
   }
 
   private applyUsage(
@@ -371,7 +466,7 @@ export class CallTracker {
     };
 
     this.safely('markUsage', () =>
-      attempt.span?.setAttributes(
+      attempt.span.setAttributes(
         failed
           ? usageFailureAttributes(usage, genAiConventions)
           : usageAttributes(usage, genAiConventions),
@@ -420,17 +515,14 @@ export class CallTracker {
     if (attempt.settled) return;
     attempt.settled = true;
 
-    const span = attempt.span;
-    const context = span ? trace.setSpan(this.context, span) : this.context;
+    const { span } = attempt;
 
     this.deps.metrics.record(
       'operationDuration',
-      elapsedMs(attempt.startedAtMs, attempt.waitedMs) / 1000,
+      elapsedMs(attempt.startedAtMs) / 1000,
       this.attemptMetricAttributes(attempt, failure),
-      context,
+      trace.setSpan(this.context, span),
     );
-
-    if (!span) return;
 
     this.safely('settleSpan', () => {
       if (failure) {
@@ -451,9 +543,9 @@ export class CallTracker {
     attempt.settled = true;
     this.current = undefined;
     this.safely('abandonAttempt', () =>
-      attempt.span?.setAttribute(VERNLLM_ATTR.attemptOutcome, ATTEMPT_OUTCOME_UNKNOWN),
+      attempt.span.setAttribute(VERNLLM_ATTR.attemptOutcome, ATTEMPT_OUTCOME_UNKNOWN),
     );
-    attempt.span?.end();
+    this.safely('endAttemptSpan', () => attempt.span.end());
   }
 
   /** The single place an attempt ends. */
@@ -465,7 +557,7 @@ export class CallTracker {
       this.settle(attempt, failure);
     } finally {
       this.current = undefined;
-      attempt.span?.end();
+      this.safely('endAttemptSpan', () => attempt.span.end());
     }
   }
 
@@ -483,9 +575,9 @@ export class CallTracker {
         const attemptFailure = failure && { error: lastAttemptErrorOf(failure.error) };
         guard('settleAttempt', () => this.settle(attempt, attemptFailure), undefined);
 
-        if (!failure && attempt.span && this.captureContent && deps.content) {
+        if (!failure && this.captureContent && deps.content) {
           const { content } = deps;
-          guard('captureOutput', () => content.captureOutput(attempt.span!, value), undefined);
+          guard('captureOutput', () => content.captureOutput(attempt.span, value), undefined);
         }
         this.closeAttempt(attemptFailure);
       }
@@ -538,18 +630,6 @@ export class CallTracker {
       span.end();
     }
   }
-}
-
-const CONTENT_SKIPPED_NOT_LAST = 'not_last_transform';
-const captureOrderWarned = new WeakSet<TrackerDeps>();
-
-function warnCaptureOrderOnce(deps: TrackerDeps): void {
-  if (captureOrderWarned.has(deps)) return;
-  captureOrderWarned.add(deps);
-  deps.guard.warn(
-    `input capture skipped: middleware sorted after "${deps.config.name}" may change the ` +
-      'request. Give this entry a higher priority, or runsAfter the others, so it runs last.',
-  );
 }
 
 function outcomeOf(reason: ReturnType<typeof noAttemptReasonOf>): string {

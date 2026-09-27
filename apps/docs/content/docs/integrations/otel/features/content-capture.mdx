@@ -115,12 +115,11 @@ delivery, see [Configuration](/docs/integrations/otel/API-reference/configuratio
 
 ## Ordering
 
-Capture has to see the request after your redaction middleware has run. It does by default: with
-capture on, the entry takes the last transform slot, so it sees the request as it is sent, after
-every other transform.
+Input is captured from the request as it is sent, after every `transform`, so a redaction
+middleware always runs first, whatever its priority.
 
-Adding `runsAfter` is still worth it, because it states the dependency and can enforce it. Give the
-redaction middleware a `ref` and wrap it in `requireRef`:
+`runsAfter` with `requireRef` is still worth adding when capture depends on redaction, since it
+makes a missing redaction middleware throw at construction:
 
 ```ts title="otel-capture-after-redaction.ts"
 import { VernLLM, createMiddlewareRef, requireRef } from 'vern-llm';
@@ -144,10 +143,6 @@ const llm = new VernLLM({
   ],
 });
 ```
-
-With `requireRef`, a missing redaction middleware throws at construction instead of running with
-nothing to redact. A bare ref that matches nothing is only dropped with a warning, but the order
-stays safe either way, since it does not lower the default slot.
 
 The call span stays outside every middleware that is not `outermost`, and outside another
 `outermost` entry when this one is registered first, since priority does not decide wrap order. See

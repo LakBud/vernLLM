@@ -13,7 +13,7 @@ global meter.
 | --------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------- |
 | `gen_ai.client.token.usage`                   | `{token}` | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.token.type`     | Per attempt, input and output separately      |
 | `gen_ai.client.operation.duration`            | `s`       | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `error.type` on failure | Per attempt, without local rate limit waiting |
-| `gen_ai.client.operation.time_to_first_chunk` | `s`       | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`                          | Streams only, when the stream opens           |
+| `gen_ai.client.operation.time_to_first_chunk` | `s`       | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`                          | Streams only, at the first content chunk      |
 
 Token usage is recorded for an attempt that spent tokens and then failed too, since spent tokens
 are spent. `gen_ai.client.operation.time_per_output_chunk` is not emitted, see
@@ -54,9 +54,9 @@ override them.
 
 ## Duration excludes rate limit waiting
 
-`gen_ai.client.operation.duration` and the time to first chunk subtract time spent waiting for
-local rate limit capacity, so they measure the provider, not your own queue. The attempt span
-still covers the wait, and `vernllm.rate_limit.wait_ms` on it says how long it was.
+An attempt starts once rate limit capacity is granted, so `gen_ai.client.operation.duration` and
+the time to first chunk measure the provider, not your own queue. `vernllm.rate_limit.wait_ms` on
+the attempt span says how long the wait was.
 
 ## Model names
 
