@@ -17,6 +17,12 @@ flags:
   vern-llm-otel-integration:
     paths:
       - 'packages/vern-llm-otel/**'
+  vern-llm-bedrock-unit:
+    paths:
+      - 'packages/vern-llm-bedrock/**'
+  vern-llm-bedrock-integration:
+    paths:
+      - 'packages/vern-llm-bedrock/**'
 
 coverage:
   status:
@@ -36,6 +42,11 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/vern-llm-otel/**'
+      vern-llm-bedrock:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/vern-llm-bedrock/**'
     patch:
       default:
         target: 80%
@@ -49,6 +60,10 @@ coverage:
         target: 80%
         paths:
           - 'packages/vern-llm-otel/**'
+      vern-llm-bedrock:
+        target: 80%
+        paths:
+          - 'packages/vern-llm-bedrock/**'
 
 ignore:
   - '**/index.ts'

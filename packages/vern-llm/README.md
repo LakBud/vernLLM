@@ -35,7 +35,8 @@ npm i vern-llm
 ```ts
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { fromAnthropic, fromOpenAI, VernLLM } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
 
 const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }));
@@ -69,7 +70,7 @@ const result = await llm.call({ userContent: "What's the weather in New York?" }
 - **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back, independent per fallback target too
 - **Observability**: one `onEvent` stream reports retries, fallovers, circuit transitions, and rate-limit waits
 - **Usage tracking**: `onUsage` and `onUsageFailure` report token spend on success and on failure, so nothing goes unaccounted for when a call fails after the provider already responded
-- **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock, or raw HTTP via `fromFetch`
+- **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock (via `vern-llm-bedrock`), or raw HTTP via `fromFetch`
 - **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; vern-llm relies on compatible interfaces rather than specific implementations.
 
 ### Why not a gateway?

@@ -84,13 +84,14 @@ export const providers = [
   { name: 'Infermatic', Icon: Infermatic, href: '/docs/adapters/openai-compatible' },
   { name: 'AtlasCloud', Icon: AtlasCloud, href: '/docs/adapters/openai-compatible' },
   { name: '01.AI (Yi)', Icon: Yi, href: '/docs/adapters/openai-compatible' },
-  { name: 'AWS Bedrock', Icon: Bedrock, href: '/docs/adapters/bedrock' },
+  { name: 'AWS Bedrock', Icon: Bedrock, href: '/docs/integrations/bedrock' },
   { name: 'Custom HTTPS API', Icon: Globe, href: '/docs/adapters/custom-fetch' },
 ];
 
 export const codeExample = `import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { fromAnthropic, fromOpenAI, VernLLM } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
 
 const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }));

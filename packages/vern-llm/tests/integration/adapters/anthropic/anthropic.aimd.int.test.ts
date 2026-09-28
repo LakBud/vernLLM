@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fromAnthropic } from '../../../../src/adapters/anthropic.js';
+import { fromAnthropic } from '../../../../src/adapters/claude/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 

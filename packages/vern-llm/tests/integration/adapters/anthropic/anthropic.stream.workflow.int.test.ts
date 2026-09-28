@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  type AnthropicClient,
-  fromAnthropic,
-  type StreamChunk,
-  VernLLM,
-} from '../../../../src/index.js';
+import { type AnthropicClient, fromAnthropic } from '../../../../src/adapters/index.js';
+import { type StreamChunk, VernLLM } from '../../../../src/index.js';
 
 /** A fake Anthropic SSE stream, as `messages.create({ stream: true })` returns. */
 function fakeAnthropicStream(events: unknown[]): AsyncIterable<unknown> {

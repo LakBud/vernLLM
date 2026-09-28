@@ -1,5 +1,5 @@
 {
   "title": "Adapters",
   "icon": "Plug",
-  "pages": ["index", "openai-compatible", "anthropic", "gemini", "bedrock", "custom-fetch"]
+  "pages": ["index", "openai-compatible", "anthropic", "gemini", "custom-fetch"]
 }

@@ -1,5 +1,6 @@
-import { LLMError, type WireToolChoice } from '../../types/index.js';
+import { unsupportedCapability } from './errors.js';
 
+import type { WireToolChoice } from '../../types/index.js';
 import type { ModelCapabilityOverride } from './nativeStructuredOutput.js';
 
 /**
@@ -64,11 +65,8 @@ export function rejectsForcedToolChoice(
 }
 
 /**
- * Throws `LLMError('invalid_params')`, code `unsupported_capability`,
- * when `toolChoice` forces tool use on a model that rejects it. Thrown
- * before dispatch, so it is never retried and never counts toward the
- * circuit breaker, and fallback may still try a target that accepts it.
- * `'auto'`, `'none'`, and an unset choice pass.
+ * Throws `unsupported_capability` when `toolChoice` forces tool use on a
+ * model that rejects it. `'auto'`, `'none'` and an unset choice pass.
  */
 export function assertForcedToolChoiceSupported(
   provider: string,
@@ -84,11 +82,10 @@ export function assertForcedToolChoiceSupported(
       ? "toolChoice: 'required'"
       : `toolChoice: { name: '${toolChoice.function.name}' }`;
 
-  throw new LLMError(
+  throw unsupportedCapability(
     `${provider} model "${model}" rejects a tool_choice that forces tool use, so ${described} ` +
       "can't be sent. Use toolChoice: 'auto' and ask for the tool in the prompt instead. If " +
       'this model does accept it, list the models that reject it in forcedToolChoiceUnsupportedModels.',
-    'invalid_params',
-    { code: 'unsupported_capability', issues: { capability: 'forced_tool_choice' } },
+    'forced_tool_choice',
   );
 }

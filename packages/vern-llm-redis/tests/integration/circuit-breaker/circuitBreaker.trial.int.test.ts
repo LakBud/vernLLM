@@ -19,11 +19,18 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
     makeBreaker,
     newConnection,
   }) => {
-    const options = {
+    let resolveClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    const options: Parameters<typeof redisCircuitBreaker>[1] = {
       keyPrefix: uniquePrefix('cb'),
       threshold: 1,
       cooldownMs: 150,
       probeLeaseMs: 300,
+      onStateChange: (from, to) => {
+        if (from === 'half-open' && to === 'closed') resolveClosed();
+      },
     };
     const holder = makeBreaker(options);
     const other = makeBreaker(options, newConnection());
@@ -37,7 +44,8 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
     await expect(claimTrial(other, { timeoutMs: 900 })).rejects.toThrow('admitted 0 of 1');
 
     holder.recordSuccess('m', slow);
-    await waitUntil(() => holder.getState?.('m') === 'closed');
+    await closed;
+    expect(holder.getState?.('m')).toBe('closed');
   });
 
   it('a process spending its slot leaves the other slot for another process', async ({

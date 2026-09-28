@@ -1,8 +1,20 @@
-export { fromAnthropic, type AnthropicClient } from './anthropic.js';
-export { fromGemini, type GeminiClient } from './gemini.js';
-export { fromBedrock, type BedrockConverseClient } from './bedrock.js';
-export { fromFetch, type FetchAdapterConfig } from './fetch.js';
 export {
+  fromAnthropic,
+  type AnthropicClient,
+  type AnthropicAdapterOptions,
+} from './claude/index.js';
+export { fromGemini, type GeminiClient, type GeminiAdapterOptions } from './gemini/index.js';
+export {
+  fromFetch,
+  type FetchAdapterConfig,
+  type RequestLike,
+  type ResponseLike,
+  type StreamRequestLike,
+} from './fetch/index.js';
+export { parseSseStream, SSE_PING } from './internal/sse.js';
+
+export {
+  type OpenAICompatibleAdapterOptions,
   fromOpenAICompatible,
   fromOpenAI,
   fromGroq,
@@ -42,4 +54,4 @@ export {
   fromInfermatic,
   fromAtlasCloud,
   from01AI,
-} from './openaiCompatible.js';
+} from './openai/index.js';

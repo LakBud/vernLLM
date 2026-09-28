@@ -1,12 +1,13 @@
 ---
-title: Custom Providers - fromFetch
-description: Raw HTTP escape hatch for providers with no SDK
+title: Custom Providers
+description: Raw HTTP escape hatch for providers with no SDK with fromFetch
 ---
 
 For a provider with no SDK, or where pulling one in isn't worth it, `fromFetch` is a raw HTTP escape hatch; supply the URL, headers, and two small mapping functions, and retries/timeouts/circuit-breaker/JSON handling all still apply.
 
 ```ts title="fromfetch-basic-setup.ts"
-import { VernLLM, fromFetch } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromFetch } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromFetch({
@@ -49,7 +50,8 @@ the same wire format every other adapter produces, VernLLM parses (and validates
 `argumentsSchema` was set) that string internally:
 
 ```ts title="fromfetch-tool-calling.ts"
-import { VernLLM, fromFetch } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromFetch } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromFetch({
@@ -118,7 +120,8 @@ blocks separated by a blank line, with the `[DONE]` sentinel honored, which cove
 majority of LLM providers' streaming endpoints:
 
 ```ts title="fromfetch-streaming-sse.ts"
-import { VernLLM, fromFetch } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromFetch } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromFetch({
@@ -173,7 +176,8 @@ If your provider frames its stream differently, newline-delimited JSON (NDJSON) 
 envelope, for example, override `parseStreamFrames` to split the raw bytes into events yourself:
 
 ```ts title="fromfetch-streaming-ndjson.ts"
-import { VernLLM, fromFetch } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromFetch } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromFetch({
@@ -221,7 +225,8 @@ satisfies this with no extra glue code:
 
 ```ts title="fromfetch-streaming-custom-transport.ts"
 import axios from 'axios';
-import { VernLLM, fromFetch } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromFetch } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromFetch({
@@ -269,7 +274,8 @@ By default `fromFetch` uses the global `fetch`. Pass `request` to swap in `axios
 
 ```ts title="fromfetch-custom-request.ts"
 import axios from 'axios';
-import { VernLLM, fromFetch } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromFetch } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromFetch({

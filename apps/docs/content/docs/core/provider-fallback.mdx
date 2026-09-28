@@ -8,7 +8,8 @@ If your primary provider fails, VernLLM tries your backups in the order you decl
 ```ts title="provider-fallback-setup.ts"
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { VernLLM, fromAnthropic, fromOpenAI } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY })),

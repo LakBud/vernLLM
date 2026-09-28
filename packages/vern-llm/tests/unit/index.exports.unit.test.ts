@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest';
 
 import {
   fromAnthropic,
-  fromBedrock,
   fromOpenAICompatible,
-  NormalizedCacheAdapter,
-  TieredCacheAdapter,
   parseSseStream,
   SSE_PING,
+  type AnthropicClient,
+  type GeminiClient,
+} from '../../src/adapters/index.js';
+import * as adapters from '../../src/adapters/index.js';
+import {
+  NormalizedCacheAdapter,
+  TieredCacheAdapter,
   isLLMError,
   hasIssues,
   isFallbackExhaustedError,
@@ -16,9 +20,6 @@ import {
   createMiddleware,
   createStateKey,
   createMiddlewareStateBag,
-  type AnthropicClient,
-  type BedrockConverseClient,
-  type GeminiClient,
   type LLMClient,
   type JsonSchemaSpec,
   type RetryAttempt,
@@ -33,13 +34,26 @@ import {
   type CircuitBreakerAdapter,
   type CircuitBreakerCallContext,
 } from '../../src/index.js';
+import * as root from '../../src/index.js';
 
 describe('package entrypoint exports', () => {
-  it('exports adapters at runtime', () => {
+  it('keeps adapters off the root entry', () => {
+    const adapterNames = Object.keys(root).filter(
+      (name) => /^from[A-Z0-9]/.test(name) || name === 'parseSseStream' || name === 'SSE_PING',
+    );
+    expect(adapterNames).toEqual([]);
+  });
+
+  it('keeps the adapters entry to the factories and the SSE helpers', () => {
+    const names = Object.keys(adapters).filter(
+      (name) => !/^from[A-Z0-9]/.test(name) && name !== 'parseSseStream' && name !== 'SSE_PING',
+    );
+    expect(names).toEqual([]);
+  });
+
+  it('exports adapters from the adapters entry at runtime', () => {
     expect(fromAnthropic).toBeDefined();
     expect(fromOpenAICompatible).toBeDefined();
-    expect(fromBedrock).toBeDefined();
-    expect(typeof fromBedrock).toBe('function');
   });
 
   it('exports cache adapters at runtime', () => {
@@ -47,7 +61,7 @@ describe('package entrypoint exports', () => {
     expect(TieredCacheAdapter).toBeDefined();
   });
 
-  it('exports parseSseStream and SSE_PING from the package root, not just internal/sse.js', () => {
+  it('exports parseSseStream and SSE_PING from the adapters entry, not just internal/sse.js', () => {
     expect(parseSseStream).toBeDefined();
     expect(typeof parseSseStream).toBe('function');
     expect(SSE_PING).toBeDefined();
@@ -92,14 +106,12 @@ describe('package entrypoint exports', () => {
     const assertClient = (_client: LLMClient) => _client;
     const assertAnthropicClient = (_client: AnthropicClient) => _client;
     const assertGeminiClient = (_client: GeminiClient) => _client;
-    const assertBedrockClient = (_client: BedrockConverseClient) => _client;
     const assertSchema = (_schema: JsonSchemaSpec) => _schema;
     const assertRetryAttempt = (_attempt: RetryAttempt) => _attempt;
 
     expect(assertClient).toBeDefined();
     expect(assertAnthropicClient).toBeDefined();
     expect(assertGeminiClient).toBeDefined();
-    expect(assertBedrockClient).toBeDefined();
     expect(assertSchema).toBeDefined();
     expect(assertRetryAttempt).toBeDefined();
   });

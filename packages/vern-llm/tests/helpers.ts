@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import { type AnthropicClient } from '../src/adapters/anthropic.js';
+import { type AnthropicClient } from '../src/adapters/claude/index.js';
 import { type InternalCacheParams } from '../src/internal/cache/utils/cache.utils.js';
 import { type StreamChunk, type LLMClient, type WireStreamChunk } from '../src/types/index.js';
 import { type VernLLM } from '../src/vernLLM.js';

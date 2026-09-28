@@ -303,7 +303,8 @@ If you don't care about `isolateByModel`, ignore `key` entirely and track one fl
 simplest version:
 
 ```ts title="slow-call-tripping.ts"
-import { VernLLM, type TrippingPolicy, fromOpenAI } from 'vern-llm';
+import { VernLLM, type TrippingPolicy } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
 import { openai } from './openai-client'; // your configured OpenAI client
 
 const slowCallTripping: TrippingPolicy = (() => {

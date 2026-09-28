@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fromFetch } from '../../../../src/adapters/fetch.js';
+import { fromFetch } from '../../../../src/adapters/fetch/index.js';
 import { type WireStreamChunk } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';

@@ -75,7 +75,7 @@ export function parseAnyRateLimitHeaders(headers: HeaderReader): ProviderRateLim
   return undefined;
 }
 
-/** Not exported: lets a hint travel attached to a response without appearing on its declared shape. Mirrors `fetch.ts`'s `err.headers`, for the success path. */
+/** Not exported: lets a hint travel attached to a response without appearing on its declared shape. Mirrors the fetch adapter's `err.headers`, for the success path. */
 const RATE_LIMIT_HINT = Symbol('vernLLMProviderRateLimitHint');
 
 /** Attaches a parsed hint onto a successful response value. No-op if `hint` is undefined. */

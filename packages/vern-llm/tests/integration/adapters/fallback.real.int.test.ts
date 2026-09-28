@@ -1,47 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
-import {
-  BedrockRuntimeClient,
-  ConverseCommand,
-  ConverseStreamCommand,
-} from '@aws-sdk/client-bedrock-runtime';
 import { GoogleGenAI } from '@google/genai';
-import { NodeHttpHandler } from '@smithy/node-http-handler';
 import OpenAI from 'openai';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fromAnthropic } from '../../../src/adapters/anthropic.js';
-import { type BedrockConverseClient, fromBedrock } from '../../../src/adapters/bedrock.js';
-import { fromGemini } from '../../../src/adapters/gemini.js';
-import { fromOpenAICompatible } from '../../../src/adapters/openaiCompatible.js';
+import { fromAnthropic } from '../../../src/adapters/claude/index.js';
+import { fromGemini } from '../../../src/adapters/gemini/index.js';
+import { fromOpenAICompatible } from '../../../src/adapters/openai/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import { drain } from '../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../realSdkServer.js';
-
-/** Same `.send(command)` -> `.converse()` bridge the Bedrock real-SDK adapter tests use. */
-function wrapBedrockClient(client: BedrockRuntimeClient): BedrockConverseClient {
-  return {
-    converse: async (params, options) => {
-      const response = await client.send(
-        new ConverseCommand(params as unknown as ConstructorParameters<typeof ConverseCommand>[0]),
-        { abortSignal: options.signal },
-      );
-
-      return response as unknown as Awaited<ReturnType<BedrockConverseClient['converse']>>;
-    },
-    converseStream: async (params, options) => {
-      const response = await client.send(
-        new ConverseStreamCommand(
-          params as unknown as ConstructorParameters<typeof ConverseStreamCommand>[0],
-        ),
-        { abortSignal: options.signal },
-      );
-
-      return response as unknown as Awaited<
-        ReturnType<NonNullable<BedrockConverseClient['converseStream']>>
-      >;
-    },
-  };
-}
 
 /**
  * Exercises `VernLLMOptions.fallback` end to end against *real* SDK client
@@ -71,7 +38,7 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
   }
 
   it(
-    'falls over OpenAI -> Anthropic -> Gemini -> Bedrock, each a real SDK client, and ' +
+    'falls over OpenAI -> Anthropic -> Gemini, each a real SDK client, and ' +
       'answers from whichever target actually succeeds',
     async () => {
       // Primary: real OpenAI SDK client, fails.
@@ -96,32 +63,21 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
         maxRetries: 0,
       });
 
-      // Fallback 2: real Google GenAI SDK client, fails.
+      // Fallback 2: real Google GenAI SDK client, succeeds.
       const geminiServer = await mockServer({
-        status: 500,
-        body: { error: { code: 500, message: 'gemini down', status: 'INTERNAL' } },
+        body: {
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'answer from Gemini' }] },
+              finishReason: 'STOP',
+            },
+          ],
+          usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 4, totalTokenCount: 16 },
+        },
       });
       const gemini = new GoogleGenAI({
         apiKey: 'test-key',
         httpOptions: { baseUrl: geminiServer.url },
-      });
-
-      // Fallback 3: real Bedrock SDK client, succeeds.
-      const bedrockServer = await mockServer({
-        body: {
-          output: {
-            message: { role: 'assistant', content: [{ text: 'answer from Bedrock' }] },
-          },
-          stopReason: 'end_turn',
-          usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
-        },
-      });
-      const bedrock = new BedrockRuntimeClient({
-        region: 'us-east-1',
-        endpoint: bedrockServer.url,
-        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
-        requestHandler: new NodeHttpHandler(),
-        maxAttempts: 1,
       });
 
       const meta: { current?: import('../../../src/types/index.js').CallMeta } = {};
@@ -134,33 +90,27 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
         fallback: [
           { client: fromAnthropic(anthropic), model: 'claude-test', name: 'anthropic' },
           {
-            client: fromGemini(gemini.models),
+            client: fromGemini(gemini),
             model: 'gemini-test',
             name: 'gemini',
-          },
-          {
-            client: fromBedrock(wrapBedrockClient(bedrock)),
-            model: 'anthropic.claude-test',
-            name: 'bedrock',
           },
         ],
       });
 
       const result = await llm.call({ userContent: "What's the answer?", jsonMode: false, meta });
 
-      expect(result).toBe('answer from Bedrock');
+      expect(result).toBe('answer from Gemini');
 
       // Every earlier target was actually tried, exactly once each, real
-      // wire round-trip and all, before the chain reached Bedrock.
+      // wire round-trip and all, before the chain reached Gemini.
       expect(openaiServer.requests).toHaveLength(1);
       expect(anthropicServer.requests).toHaveLength(1);
       expect(geminiServer.requests).toHaveLength(1);
-      expect(bedrockServer.requests).toHaveLength(1);
 
       expect(meta.current).toMatchObject({
-        provider: 'bedrock',
-        model: 'anthropic.claude-test',
-        fallbackIndex: 2,
+        provider: 'gemini',
+        model: 'gemini-test',
+        fallbackIndex: 1,
         usedFallback: true,
       });
     },
@@ -291,7 +241,7 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
     expect(anthropicServer.requests).toHaveLength(1);
   });
 
-  it('FallbackExhaustedError.attempts carries every real provider error, in order, when all four fail', async () => {
+  it('FallbackExhaustedError.attempts carries every real provider error, in order, when all three fail', async () => {
     const openaiServer = await mockServer({
       status: 500,
       body: { error: { message: 'openai down', type: 'server_error' } },
@@ -321,19 +271,6 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
       httpOptions: { baseUrl: geminiServer.url },
     });
 
-    const bedrockServer = await mockServer({
-      status: 500,
-      headers: { 'x-amzn-errortype': 'InternalServerException' },
-      body: { message: 'bedrock down' },
-    });
-    const bedrock = new BedrockRuntimeClient({
-      region: 'us-east-1',
-      endpoint: bedrockServer.url,
-      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
-      requestHandler: new NodeHttpHandler(),
-      maxAttempts: 1,
-    });
-
     const llm = new VernLLM({
       client: fromOpenAICompatible(openai),
       model: 'gpt-test',
@@ -342,14 +279,9 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
       fallback: [
         { client: fromAnthropic(anthropic), model: 'claude-test', name: 'anthropic' },
         {
-          client: fromGemini(gemini.models),
+          client: fromGemini(gemini),
           model: 'gemini-test',
           name: 'gemini',
-        },
-        {
-          client: fromBedrock(wrapBedrockClient(bedrock)),
-          model: 'anthropic.claude-test',
-          name: 'bedrock',
         },
       ],
     });
@@ -365,12 +297,7 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
     expect(caught).toBeInstanceOf(FallbackExhaustedError);
 
     const exhausted = caught as InstanceType<typeof FallbackExhaustedError>;
-    expect(exhausted.attempts.map((a) => a.provider)).toEqual([
-      'openai',
-      'anthropic',
-      'gemini',
-      'bedrock',
-    ]);
+    expect(exhausted.attempts.map((a) => a.provider)).toEqual(['openai', 'anthropic', 'gemini']);
     expect(exhausted.attempts.every((a) => a.error.type === 'api')).toBe(true);
   });
 });

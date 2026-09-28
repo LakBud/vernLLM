@@ -1,0 +1,5 @@
+{
+  "title": "AWS Bedrock",
+  "icon": "Bedrock",
+  "pages": ["index", "contributing", "changelog"]
+}

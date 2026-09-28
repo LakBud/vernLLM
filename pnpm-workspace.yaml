@@ -11,9 +11,15 @@ allowBuilds:
   sharp: false
   workerd: false
 
+ignoredBuiltDependencies:
+  - protobufjs
+  - workerd
+
 minimumReleaseAge: 1440
 
 onlyBuiltDependencies:
+  - '@google/genai'
+  - esbuild
   - nx
 
 overrides:

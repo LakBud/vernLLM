@@ -52,6 +52,18 @@ Reliability code such as `circuitBreaker.ts`, `rateLimit.ts`, and `retry.utils.t
 
 Keep types precise. `any` is a final escape hatch, not a shortcut. Reach for it only when a provider SDK genuinely gives you no usable type (see the Gemini adapter's `thinkingLevel`), and when you do, leave a comment explaining why it's there instead of a narrower type.
 
+## Upstream SDKs
+
+The built in adapters mirror what each provider's own SDK accepts and returns. Before changing a request or response mapping, an error path, or a supported version range, read the SDK's source and types, and use its own types wherever it has them.
+
+| Adapter                      | Upstream repository                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| OpenAI and OpenAI compatible | [openai/openai-node](https://github.com/openai/openai-node)                                   |
+| Anthropic                    | [anthropics/anthropic-sdk-typescript](https://github.com/anthropics/anthropic-sdk-typescript) |
+| Gemini                       | [googleapis/js-genai](https://github.com/googleapis/js-genai)                                 |
+
+Each integration lists its own upstream repositories on its Contributing page.
+
 ## Logging consistency
 
 New log calls must prefix `[VernLLM]` (or `[VernLLM:<requestId>]`). For a caught hook error, use `logHookError` from `internal/utils/logger.utils.ts`, never drop the `stack` (append it to the message string for `warn`, since `Logger.warn` takes no `meta`), and keep `apps/docs/content/docs/core/logging.mdx`'s table in sync.

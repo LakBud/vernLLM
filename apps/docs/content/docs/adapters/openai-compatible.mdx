@@ -77,7 +77,8 @@ Adding a named adapter is just a convenience alias around the same implementatio
 
 ```ts title="openai-compatible-setup.ts"
 import OpenAI from 'openai';
-import { VernLLM, fromOpenAICompatible } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromOpenAICompatible } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromOpenAICompatible(
@@ -162,6 +163,13 @@ const llm = new VernLLM({
   model: 'some-model',
 });
 ```
+
+<Callout type="warn">
+  This adapter reads the SDK's parsed stream, not raw SSE, so it can't see keep-alive pings. A
+  reasoning model can stay silent longer than `chunkIdleTimeoutMs` (30 seconds by default) while
+  still working. Raise or disable `chunkIdleTimeoutMs` per call for those routes, see [Per-chunk
+  idle timeout](/docs/core/streaming#per-chunk-idle-timeout).
+</Callout>
 
 `fromOpenAICompatible`'s second argument also accepts `reasoningEffortTokens`, an override for the
 token counts `budgetTokens` buckets into when `reasoningEffort` isn't set directly. See the

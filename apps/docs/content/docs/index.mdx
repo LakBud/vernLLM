@@ -76,7 +76,8 @@ bun add openai # [!code word:add]
 
 ```ts title="getting-started.ts"
 import OpenAI from 'openai';
-import { VernLLM, fromOpenAI } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
 
 const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 

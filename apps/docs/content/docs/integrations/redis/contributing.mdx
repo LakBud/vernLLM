@@ -109,6 +109,12 @@ pnpm nx run vern-llm-redis:changeset
 `vern-llm-redis` versions and releases independently of `vern-llm`, on its own changelog. See
 [Development](/docs/development#ci) for what drives the release itself.
 
+## Redis clients
+
+This package builds on two Redis clients, [ioredis](https://github.com/redis/ioredis) and
+[node-redis](https://github.com/redis/node-redis). Check them for command and reply behavior before
+working around something here, and keep both working when a change touches a Redis call.
+
 ## Code of Conduct and Security
 
 Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and

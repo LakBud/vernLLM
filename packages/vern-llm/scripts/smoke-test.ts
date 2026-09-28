@@ -57,7 +57,18 @@ try {
       model: 'smoke-test-model',
     });
     assert.ok(llm, 'VernLLM failed to construct from the installed ESM entry');
-    console.log('ESM entry point ok');
+    assert.equal(esm.fromOpenAI, undefined, 'ESM: adapters must not be on the root entry');
+
+    const adapters = await import('vern-llm/adapters');
+    for (const name of ['fromOpenAI', 'fromAnthropic', 'fromGemini', 'fromFetch', 'parseSseStream']) {
+      assert.equal(typeof adapters[name], 'function', 'ESM: adapters subpath missing ' + name);
+    }
+    assert.equal(typeof adapters.SSE_PING, 'symbol', 'ESM: adapters subpath missing SSE_PING');
+    // Both entries must share one LLMError class, or instanceof breaks for adapter errors.
+    const frames = adapters.parseSseStream((async function* () { yield 'data: {bad\\n\\n'; })());
+    const err = await frames.next().catch((e) => e);
+    assert.ok(err instanceof esm.LLMError, 'ESM: adapter errors must be the root LLMError');
+    console.log('ESM entry points ok');
   `;
   const esmFile = path.join(consumerDir, 'esm-check.mjs');
   writeFileSync(esmFile, esmScript);
@@ -76,7 +87,13 @@ try {
       model: 'smoke-test-model',
     });
     assert.ok(llm, 'VernLLM failed to construct from the installed CJS entry');
-    console.log('CJS entry point ok');
+    assert.equal(cjs.fromOpenAI, undefined, 'CJS: adapters must not be on the root entry');
+
+    const adapters = require('vern-llm/adapters');
+    for (const name of ['fromOpenAI', 'fromAnthropic', 'fromGemini', 'fromFetch', 'parseSseStream']) {
+      assert.equal(typeof adapters[name], 'function', 'CJS: adapters subpath missing ' + name);
+    }
+    console.log('CJS entry points ok');
   `;
   const cjsFile = path.join(consumerDir, 'cjs-check.cjs');
   writeFileSync(cjsFile, cjsScript);
@@ -88,6 +105,15 @@ try {
   const shipped = readdirSync(installedTypesDir);
   assert.ok(shipped.includes('index.d.mts'), 'index.d.mts missing from installed package');
   assert.ok(shipped.includes('index.d.cts'), 'index.d.cts missing from installed package');
+  const shippedAdapters = readdirSync(path.join(installedTypesDir, 'adapters'));
+  assert.ok(
+    shippedAdapters.includes('index.d.mts'),
+    'adapters/index.d.mts missing from installed package',
+  );
+  assert.ok(
+    shippedAdapters.includes('index.d.cts'),
+    'adapters/index.d.cts missing from installed package',
+  );
 
   console.log(
     'smoke test passed: installed ESM and CJS entry points, types, and construction all work',

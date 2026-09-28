@@ -1,0 +1,100 @@
+{
+  "name": "vern-llm-bedrock",
+  "version": "0.0.0",
+  "description": "AWS Bedrock Converse adapter for vern-llm, built on the AWS SDK's BedrockRuntimeClient",
+  "keywords": [
+    "vern-llm",
+    "bedrock",
+    "aws",
+    "converse",
+    "llm",
+    "ai",
+    "claude",
+    "adapter",
+    "typescript"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "smoke-test": "node scripts/smoke-test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:unit:coverage": "vitest run --project unit --coverage",
+    "test:int": "vitest run --project integration",
+    "test:int:coverage": "vitest run --project integration --coverage",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+    "size": "size-limit"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
+    "vern-llm": "workspace:^"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
+    "@size-limit/file": "13.1.1",
+    "@smithy/eventstream-serde-node": "^4.5.2",
+    "@smithy/node-http-handler": "^4.12.1",
+    "@smithy/util-utf8": "^4.5.2",
+    "@types/node": "^26.4.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "publint": "^0.3.24",
+    "size-limit": "13.1.1",
+    "tsdown": "^0.23.0",
+    "typescript": "^5.9.3",
+    "unplugin-unused": "^0.6.0",
+    "vern-llm": "workspace:^",
+    "vitest": "^4.1.11"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@11.27.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LakBud/vernLLM.git",
+    "directory": "packages/vern-llm-bedrock"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "size-limit": [
+    {
+      "path": "dist/index.mjs",
+      "limit": "5 KB"
+    },
+    {
+      "path": "dist/index.cjs",
+      "limit": "5 KB"
+    }
+  ]
+}

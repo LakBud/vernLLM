@@ -3,8 +3,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   type AnthropicClient,
   fromAnthropic,
-  type BedrockConverseClient,
-  fromBedrock,
   fromGemini,
   type GeminiClient,
   fromOpenAICompatible,
@@ -36,13 +34,13 @@ function fakeAsyncIterable(events: unknown[]): AsyncIterable<unknown> {
 }
 
 function makeFakeStreamingGeminiClient(chunks: unknown[]) {
-  const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
+  const generateContent = vi.fn<GeminiClient['models']['generateContent']>(async () => ({}));
   const generateContentStream = vi.fn((_params: unknown) =>
     Promise.resolve(fakeAsyncIterable(chunks)),
   );
 
   return {
-    client: { generateContent, generateContentStream } as unknown as GeminiClient,
+    client: { models: { generateContent, generateContentStream } } as unknown as GeminiClient,
     generateContentStream,
   };
 }
@@ -432,116 +430,5 @@ describe('fromOpenAICompatible().chat.completions.createStream reasoning budget'
     expect(usageChunk).toMatchObject({
       usage: { completion_tokens_details: { reasoning_tokens: 30 } },
     });
-  });
-});
-
-describe('fromBedrock().chat.completions.createStream reasoning budget', () => {
-  function makeFakeStreamingBedrockClient(events: unknown[]) {
-    const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({}));
-    const converseStream = vi.fn(async (_params: unknown, _options: unknown) => ({
-      stream: fakeAsyncIterable(events),
-    }));
-
-    return {
-      client: { converse, converseStream } as unknown as BedrockConverseClient,
-      converseStream,
-    };
-  }
-
-  it('forwards budget_tokens as additionalModelRequestFields for a Claude model', async () => {
-    const { client, converseStream } = makeFakeStreamingBedrockClient([
-      { messageStop: { stopReason: 'end_turn' } },
-    ]);
-    const adapted = fromBedrock(client);
-
-    await collect(
-      adapted.chat.completions.createStream!(
-        {
-          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-          max_tokens: 100000,
-          budget_tokens: 9000,
-          messages: [{ role: 'user', content: 'hi' }],
-        },
-        { signal: new AbortController().signal },
-      ),
-    );
-
-    expect(converseStream.mock.calls[0]![0]).toMatchObject({
-      additionalModelRequestFields: { thinking: { type: 'enabled', budget_tokens: 9000 } },
-    });
-  });
-
-  it('sends adaptive thinking plus outputConfig.effort on an adaptive-only Claude model', async () => {
-    const { client, converseStream } = makeFakeStreamingBedrockClient([
-      { messageStop: { stopReason: 'end_turn' } },
-    ]);
-    const adapted = fromBedrock(client);
-
-    await collect(
-      adapted.chat.completions.createStream!(
-        {
-          model: 'anthropic.claude-sonnet-5-20260101-v1:0',
-          max_tokens: 100000,
-          reasoning_effort: 'high',
-          messages: [{ role: 'user', content: 'hi' }],
-        },
-        { signal: new AbortController().signal },
-      ),
-    );
-
-    expect(converseStream.mock.calls[0]![0]).toMatchObject({
-      additionalModelRequestFields: { thinking: { type: 'adaptive' } },
-      outputConfig: { effort: 'high' },
-    });
-  });
-
-  it('omits temperature on the stream path whenever thinking is present for a Claude model', async () => {
-    const { client, converseStream } = makeFakeStreamingBedrockClient([
-      { messageStop: { stopReason: 'end_turn' } },
-    ]);
-    const adapted = fromBedrock(client);
-
-    await collect(
-      adapted.chat.completions.createStream!(
-        {
-          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-          max_tokens: 100000,
-          temperature: 0.2,
-          budget_tokens: 9000,
-          messages: [{ role: 'user', content: 'hi' }],
-        },
-        { signal: new AbortController().signal },
-      ),
-    );
-
-    expect(
-      'temperature' in
-        ((converseStream.mock.calls[0]![0] as { inferenceConfig?: Record<string, unknown> })
-          .inferenceConfig ?? {}),
-    ).toBe(false);
-  });
-
-  it('drops budget_tokens for a non-Claude model on the stream path too', async () => {
-    const { client, converseStream } = makeFakeStreamingBedrockClient([
-      { messageStop: { stopReason: 'end_turn' } },
-    ]);
-    const adapted = fromBedrock(client);
-
-    await collect(
-      adapted.chat.completions.createStream!(
-        {
-          model: 'amazon.titan-text-premier-v1:0',
-          max_tokens: 100000,
-          budget_tokens: 9000,
-          messages: [{ role: 'user', content: 'hi' }],
-        },
-        { signal: new AbortController().signal },
-      ),
-    );
-
-    expect(
-      'additionalModelRequestFields' in
-        (converseStream.mock.calls[0]![0] as Record<string, unknown>),
-    ).toBe(false);
   });
 });

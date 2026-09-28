@@ -7,12 +7,16 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
-## 3.0.0: Streaming, tools, rate limits, usage, and provider request changes
+## 3.0.0: Adapters, streaming, tools, rate limits, usage, and provider request changes
 
-Three changes affect code that works today: a `break` out of `chunks` cancels the stream, tool
-arguments come back as the `argumentsSchema` output, and invalid rate limits throw. The rest is
-type level, one usage count, and requests the provider already rejects. Skip to what applies to
-you:
+Six changes affect code that works today: adapters import from `vern-llm/adapters`, `fromGemini`
+takes the top level client only, `fromBedrock` moved to `vern-llm-bedrock`, a `break` out of
+`chunks` cancels the stream, tool arguments come back as the `argumentsSchema` output, and invalid
+rate limits throw. The rest is type level, one usage count, and requests the provider
+already rejects. Skip to what applies to you:
+[adapters import from `vern-llm/adapters`](#300-adapters-import-from-vern-llmadapters),
+[`fromGemini` takes `ai`](#300-fromgemini-takes-ai),
+[Bedrock moved to `vern-llm-bedrock`](#300-bedrock-moved-to-vern-llm-bedrock),
 [stopping a stream early cancels it](#300-stopping-a-stream-early-cancels-it),
 [tool arguments are the `argumentsSchema` output](#300-tool-arguments-are-the-argumentsschema-output),
 [invalid rate limits throw](#300-invalid-rate-limits-throw),
@@ -20,6 +24,63 @@ you:
 [Anthropic prompt tokens include cache writes](#300-anthropic-prompt-tokens-include-cache-writes),
 [Claude forced `tool_choice`](#300-claude-models-that-reject-a-forced-tool_choice), and
 [GPT-6 tools on Chat Completions](#300-gpt-6-tools-on-chat-completions).
+
+### 3.0.0: Adapters import from `vern-llm/adapters`
+
+Every adapter moved off the root entry. Import the `from*` factories, their option types,
+`parseSseStream` and `SSE_PING` from `vern-llm/adapters`:
+
+```ts
+// Before
+import { VernLLM, fromOpenAI } from 'vern-llm';
+
+// After
+import { VernLLM } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
+```
+
+`LLMClient`, the wire types and everything else stay on `vern-llm`.
+
+### 3.0.0: `fromGemini` takes `ai`
+
+`fromGemini` takes the top level `GoogleGenAI` client only. Passing `ai.models` now throws
+`LLMError('invalid_params')` at construction, and no longer type-checks:
+
+```ts
+// Before
+fromGemini(ai.models);
+
+// After
+fromGemini(ai);
+```
+
+Only the top level client says whether it talks to Vertex AI or the Gemini API, so this also
+reports the provider on every call. A hand-built client passes its methods under `models`:
+`fromGemini({ models: { generateContent } })`.
+
+### 3.0.0: Bedrock moved to `vern-llm-bedrock`
+
+`fromBedrock` now ships in its own package, with the AWS SDK as a peer dependency:
+
+```bash
+npm install vern-llm-bedrock @aws-sdk/client-bedrock-runtime
+```
+
+It takes a `BedrockRuntimeClient` only. A hand-written `{ converse, converseStream }` client and
+the `BedrockConverseClient` type are gone, so pass the SDK client itself:
+
+```ts
+// Before
+import { fromBedrock } from 'vern-llm';
+fromBedrock({ converse: (params, options) => client.send(new ConverseCommand(params), ...) });
+
+// After
+import { fromBedrock } from 'vern-llm-bedrock';
+fromBedrock(new BedrockRuntimeClient({ region: 'us-east-1' }));
+```
+
+Options and behavior are unchanged. `toolChoice: 'none'` with tools still throws, since Converse
+has no equivalent. See [AWS Bedrock](/docs/integrations/bedrock).
 
 ### 3.0.0: Stopping a stream early cancels it
 

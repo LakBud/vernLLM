@@ -138,7 +138,8 @@ Pass an embedding function, any provider works, this example uses OpenAI's:
 
 ```ts title="use-semantic-cache.ts"
 import OpenAI from 'openai';
-import { VernLLM, fromOpenAI } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
 import { SemanticCacheAdapter } from './semantic-cache-adapter.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

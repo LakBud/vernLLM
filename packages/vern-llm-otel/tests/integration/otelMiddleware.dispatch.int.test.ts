@@ -1,13 +1,8 @@
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import {
-  fromAnthropic,
-  fromOpenAICompatible,
-  LLMError,
-  VernLLM,
-  type Logger,
-  type LLMClient,
-  type WireStreamChunk,
-} from 'vern-llm';
+import { LLMError, VernLLM, type Logger, type LLMClient, type WireStreamChunk } from 'vern-llm';
+import { fromBedrock } from 'vern-llm-bedrock';
+import { fromAnthropic, fromOpenAICompatible } from 'vern-llm/adapters';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { otelMiddleware } from '../../src/otelMiddleware.js';
@@ -256,6 +251,29 @@ describe('attempt spans follow the provider request', () => {
       await llm.call({ userContent: 'hi', jsonMode: false });
 
       expect(clientSpans()[0]!.attributes['gen_ai.provider.name']).toBe('azure.ai.openai');
+    });
+
+    it('names Bedrock from its adapter when the model id gives no hint', async () => {
+      const bedrock = new BedrockRuntimeClient({
+        region: 'us-east-1',
+        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+      });
+      vi.spyOn(bedrock, 'send').mockImplementation((async () => ({
+        output: { message: { content: [{ text: 'ok' }] } },
+        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      })) as unknown as BedrockRuntimeClient['send']);
+
+      const llm = new VernLLM({
+        ...BASE,
+        client: fromBedrock(bedrock),
+        // An application inference profile ARN names no vendor or model.
+        model: 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3',
+        middleware: [otel()],
+      });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      expect(clientSpans()[0]!.attributes['gen_ai.provider.name']).toBe('aws.bedrock');
     });
 
     it('falls back to the model id when the adapter names no provider', async () => {
