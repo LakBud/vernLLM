@@ -4,6 +4,13 @@ description: Plug in your own cache adapter
 ---
 
 <Callout type="info">
+  This page covers writing a custom `CacheAdapter`. See [Caching](/docs/core/caching) in Core for
+  the full behavior: concurrent-miss coalescing, `resolveKey` for fuzzy/semantic matching, the
+  built-in `NormalizedCacheAdapter` and `TieredCacheAdapter`, and how failures in a custom adapter
+  are handled.
+</Callout>
+
+<Callout type="info">
   The Redis example below is illustrative, showing the adapter shape.
   [vern-llm-redis](/docs/integrations/redis) is the production Redis backed cache.
 </Callout>
@@ -68,10 +75,4 @@ const llm = new VernLLM({ client: openai, model: 'gpt-4o', cache: new UpstashCac
   the call: a broken `get` is treated as a miss and falls through to a real provider call, and a
   broken `set`/`delete` is swallowed. Either way the failure is reported via `logger.warn`, not
   silently ignored, so configure a `logger` if you want visibility into a misbehaving adapter.
-</Callout>
-
-<Callout>
-  See [Caching](/docs/core/caching) for the full behavior: concurrent-miss coalescing, `resolveKey`
-  for fuzzy/semantic matching, the built-in `NormalizedCacheAdapter` and `TieredCacheAdapter`, and
-  how failures in a custom adapter are handled.
 </Callout>

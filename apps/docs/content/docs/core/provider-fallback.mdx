@@ -96,9 +96,10 @@ const llm = new VernLLM({
 });
 ```
 
+### Fields that don't inherit
+
 `circuitBreaker` and `rateLimit` are the exception: they are never inherited from the parent
 instance. Each target's breaker and limiter, if any, are entirely its own. See
-
 [Circuit Breaker](/docs/core/circuit-breaker#scope) and
 [Rate Limiting](/docs/core/rate-limiting) for their individual behavior.
 

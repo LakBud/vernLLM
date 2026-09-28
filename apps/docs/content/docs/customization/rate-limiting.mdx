@@ -4,6 +4,12 @@ description: Plug in your own rate limiter
 ---
 
 <Callout type="info">
+  This page covers writing a custom `RateLimiterAdapter`. See [Rate
+  Limiting](/docs/core/rate-limiting) in Core for the full behavior: the three buckets, queueing,
+  token estimation, AIMD, and how the limiter interacts with retries and the circuit breaker.
+</Callout>
+
+<Callout type="info">
   The `RedisRateLimiter` example below is illustrative, showing the adapter shape.
   [vern-llm-redis](/docs/integrations/redis) is the production Redis backed limiter.
 </Callout>

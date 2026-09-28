@@ -27,7 +27,7 @@ const result = await llm.call({
 <Cards>
   <Card title="userContent">
     `string | ContentBlock[]`, **required**. The current user message. Supports text and image
-    blocks. See [Multimodal Input](/docs/core/multimodal).
+    blocks. See [Multimodal input](#multimodal-input).
   </Card>
   <Card title="systemPrompt">
     `string`, optional. The system message. Omit to use the provider's default behavior.
@@ -37,6 +37,11 @@ const result = await llm.call({
     [Multi-turn Conversations](/docs/guides/multi-turn-conversations).
   </Card>
 </Cards>
+
+`history` must follow VernLLM's conversation ordering rules. Invalid history fails with
+`LLMError('validation')` before a provider request is made. See [Multi-turn Conversations](/docs/guides/multi-turn-conversations).
+
+### Multimodal input
 
 For multimodal input, pass an array of text and image blocks:
 
@@ -58,9 +63,6 @@ const result = await llm.call({
 
 Supported image MIME types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. Image data
 is base64-encoded without a `data:` URL prefix.
-
-`history` must follow VernLLM's conversation ordering rules. Invalid history fails with
-`LLMError('validation')` before a provider request is made. See [Multi-turn Conversations](/docs/guides/multi-turn-conversations).
 
 ## Tool calling
 
@@ -107,6 +109,8 @@ See [Tool Calling](/docs/core/tool-calling) for the complete workflow and [Error
 | `maxTokens`       | `number`                                           | Instance `defaultMaxTokens`, otherwise `1000`         | Maximum response length.                                                                                                                                                                                                                    |
 | `reasoningEffort` | `'minimal' \| 'low' \| 'medium' \| 'high' \| null` | Instance `defaultReasoningEffort`, otherwise not sent | Native on OpenAI compatible clients, converted on others. See below.                                                                                                                                                                        |
 | `budgetTokens`    | `number \| null`                                   | Instance `defaultBudgetTokens`, otherwise not sent    | Native on Anthropic and Gemini, except on adaptive-only Claude models, where it's converted into Anthropic's own effort parameter instead (see below). Converted on OpenAI compatible clients, forwarded only for Claude models on Bedrock. |
+
+### Reasoning budget
 
 <Callout>
   Pass `null` to either field to explicitly skip an instance-level `defaultReasoningEffort`/

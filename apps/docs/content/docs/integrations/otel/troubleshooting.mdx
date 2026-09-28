@@ -17,13 +17,13 @@ You can also pass `tracer` and `meter` explicitly, which skips the global lookup
 Unmapped targets use the provider their adapter names, else a guess from the model id, and `_OTHER`
 when that fails. Gateways and
 proxies need an explicit mapping. Add
-[`providerNames`](/docs/integrations/otel/configuration#providernames).
+[`providerNames`](/docs/integrations/otel/API-reference/configuration#providernames).
 
 ## Two inference spans, or doubled token counts
 
 A provider SDK's own OpenTelemetry instrumentation is also emitting GenAI telemetry. Set
 `genAiConventions: false`, see
-[Semantic Conventions](/docs/integrations/otel/semantic-conventions#avoid-double-counting).
+[Semantic Conventions](/docs/integrations/otel/API-reference/semantic-conventions#avoid-double-counting).
 
 ## Token attributes are missing
 
@@ -36,7 +36,7 @@ an `enabled` function to this entry, which makes its events arrive late too.
 ## Content attributes are missing
 
 Read `vernllm.content.captured` on the call span, see
-[Content Capture](/docs/integrations/otel/content-capture#when-content-is-missing).
+[Content Capture](/docs/integrations/otel/features/content-capture#when-content-is-missing).
 
 ## Spans are lost on serverless
 

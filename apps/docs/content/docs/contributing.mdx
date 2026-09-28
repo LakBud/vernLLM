@@ -69,6 +69,17 @@ reference and test layout. When a workflow's name, trigger, or behavior changes,
 Development first, since that's the source of truth, then check whether this page's checklist
 still lines up.
 
+`core/` and `customization/` pages that cover the same feature (caching, circuit breaker, logging,
+middleware, rate limiting) split it the same way: the Core page explains the concept and default
+behavior, the Customization page explains how to bring your own implementation. Every such
+Customization page opens with a `<Callout type="info">` directly after the frontmatter that names
+what the page covers and links back to the matching Core page for the full behavior. Follow that
+pattern for any new pair.
+
+Write internal links as absolute `/docs/...` paths (or `#anchor` for the same page).
+`pnpm --filter vern-llm-docs run links:check` verifies that every one resolves to a real page and
+heading, and CI runs it on every docs change.
+
 ## Tests
 
 Add or update tests alongside any change to `packages/vern-llm`:
@@ -86,17 +97,17 @@ Before a change is merged, expect a personal canary test on a simple real app, l
 
 Every PR runs the following checks in CI. Run the equivalent commands locally first so nothing surprises you:
 
-| Check                                       | CI job or workflow          | Local command                                                                                                                  |
-| ------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Lint                                        | `ci.yml` `lint`             | `pnpm run lint`                                                                                                                |
-| Typecheck source, tests, and docs           | `ci.yml` `typecheck`        | `pnpm run typecheck`                                                                                                           |
-| Unit tests + coverage                       | `ci.yml` `test-unit`        | `pnpm run test:unit:coverage`                                                                                                  |
-| Integration tests + coverage                | `ci.yml` `test-integration` | `pnpm run test:int:coverage`                                                                                                   |
-| Build, bundle size, smoke test              | `ci.yml` `build`            | `pnpm run build && pnpm exec nx run vern-llm:size && pnpm exec nx run vern-llm:smoke-test`                                     |
-| Changeset present                           | `changeset.yml`             | `pnpm changeset status --since=origin/main`                                                                                    |
-| Docs build (only if `apps/docs/**` changed) | `ci.yml` `docs`             | `pnpm --filter vern-llm-docs run lint && pnpm --filter vern-llm-docs run types:check && pnpm --filter vern-llm-docs run build` |
-| Coverage thresholds                         | Codecov                     | `pnpm run test:coverage`                                                                                                       |
-| Static analysis                             | `codeql.yml`                | runs on GitHub only                                                                                                            |
+| Check                                       | CI job or workflow          | Local command                                                                                                                                                                                                         |
+| ------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lint                                        | `ci.yml` `lint`             | `pnpm run lint`                                                                                                                                                                                                       |
+| Typecheck source, tests, and docs           | `ci.yml` `typecheck`        | `pnpm run typecheck`                                                                                                                                                                                                  |
+| Unit tests + coverage                       | `ci.yml` `test-unit`        | `pnpm run test:unit:coverage`                                                                                                                                                                                         |
+| Integration tests + coverage                | `ci.yml` `test-integration` | `pnpm run test:int:coverage`                                                                                                                                                                                          |
+| Build, bundle size, smoke test              | `ci.yml` `build`            | `pnpm run build && pnpm exec nx run vern-llm:size && pnpm exec nx run vern-llm:smoke-test`                                                                                                                            |
+| Changeset present                           | `changeset.yml`             | `pnpm changeset status --since=origin/main`                                                                                                                                                                           |
+| Docs build (only if `apps/docs/**` changed) | `ci.yml` `docs`             | `pnpm --filter vern-llm-docs run lint && pnpm --filter vern-llm-docs run types:check && pnpm --filter vern-llm-docs run links:check && pnpm --filter vern-llm-docs run test && pnpm --filter vern-llm-docs run build` |
+| Coverage thresholds                         | Codecov                     | `pnpm run test:coverage`                                                                                                                                                                                              |
+| Static analysis                             | `codeql.yml`                | runs on GitHub only                                                                                                                                                                                                   |
 
 The quickest local pass before pushing:
 

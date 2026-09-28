@@ -6,6 +6,8 @@
     "dev": "next dev",
     "start": "next start",
     "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
+    "links:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-links.ts",
+    "test": "vitest run",
     "postinstall": "fumadocs-mdx",
     "lint": "oxlint"
   },
@@ -47,7 +49,11 @@
     "@types/react-dom": "^19.2.5",
     "oxlint": "^1.80.0",
     "postcss": "^8.5.26",
+    "remark": "^15.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-mdx": "^3.1.1",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "unist-util-visit": "^5.1.0"
   }
 }

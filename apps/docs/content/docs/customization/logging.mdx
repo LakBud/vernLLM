@@ -3,6 +3,12 @@ title: Logging
 description: Plug in your own logger
 ---
 
+<Callout type="info">
+  This page covers plugging in your own `Logger`. See [Pluggable Logger](/docs/core/logging) in Core
+  for the full behavior: exactly what gets logged at each level (with a table of every internal log
+  site), how `debug` interacts with a custom logger, and where `redact` does and doesn't apply.
+</Callout>
+
 Pass a `logger` implementing the `Logger` interface to route VernLLM's internal logs through your
 own stack instead of the default console logger:
 
@@ -54,12 +60,6 @@ const llm = new VernLLM({
   redact: (text) => text.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED]'),
 });
 ```
-
-<Callout>
-  See [Pluggable Logger](/docs/core/logging) for the full behavior: exactly what gets logged at each
-  level (with a table of every internal log site), how `debug` interacts with a custom logger, and
-  where `redact` does and doesn't apply.
-</Callout>
 
 The same logger reaches any circuit breaker or rate limiter adapter that implements `setLogger`, so
 their background failures follow your logger and `logger: 'silent'` too.

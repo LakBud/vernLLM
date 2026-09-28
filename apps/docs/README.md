@@ -6,7 +6,6 @@
 
 <p align="center">
   <a href="https://vernllm.dev"><img src="https://img.shields.io/website?url=https%3A%2F%2Fvernllm.dev&label=docs%20site" alt="docs site status" /></a>
-  <a href="https://vernllm.dev"><img src="https://img.shields.io/badge/deployed%20on-Vercel-000000?logo=vercel&logoColor=white" alt="Deployed on Vercel" /></a>
   <img src="https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white" alt="Next.js" />
   <img src="https://img.shields.io/badge/Fumadocs-16-6366F1" alt="Fumadocs" />
 </p>
@@ -58,13 +57,15 @@ Each folder has a `meta.json` controlling sidebar ordering. Edit or add `.mdx` f
 
 ## Scripts
 
-| Command            | Description                                                        |
-| ------------------ | ------------------------------------------------------------------ |
-| `pnpm dev`         | Start the dev server.                                              |
-| `pnpm build`       | Production build.                                                  |
-| `pnpm start`       | Serve the production build.                                        |
-| `pnpm types:check` | Regenerate Fumadocs MDX types and Next types, then `tsc --noEmit`. |
-| `pnpm lint`        | Lint with oxlint.                                                  |
+| Command            | Description                                                            |
+| ------------------ | ---------------------------------------------------------------------- |
+| `pnpm dev`         | Start the dev server.                                                  |
+| `pnpm build`       | Production build.                                                      |
+| `pnpm start`       | Serve the production build.                                            |
+| `pnpm types:check` | Regenerate Fumadocs MDX types and Next types, then `tsc --noEmit`.     |
+| `pnpm links:check` | Verify every internal `/docs/...` link resolves to a page and heading. |
+| `pnpm test`        | Run the link checker's tests.                                          |
+| `pnpm lint`        | Lint with oxlint.                                                      |
 
 ## Learn more
 
