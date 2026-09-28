@@ -41,6 +41,8 @@ export function createPermits(options: {
 
   return {
     grant(context, key, model, token) {
+      // A repeat grant replaces the entry, so its old renewal must stop first.
+      permits.get(context.state)?.stopHeartbeat();
       permits.set(context.state, {
         key,
         token,

@@ -12,4 +12,4 @@ Both: a Redis failure in `acquire`, `prepare` or `readState` rejects with `LLMEr
 
 Requires `vern-llm` 3.0.0 as a peer. See the Redis migration notes.
 
-Breaking: `redisRateLimit` validates limits with core's rules and messages, and `redisCircuitBreaker` throws `LLMError('invalid_params')` for every bad option, including a rolling window mistake that used to throw `RangeError` and a `threshold` that is not an integer of at least 1. Calls with no model under `isolateByModel`, and the AIMD ceiling, start fresh once after upgrading.
+Breaking: `fromIoredis`, `fromIoredisSubscriber`, `fromNodeRedis` and `fromNodeRedisSubscriber` are exported from `vern-llm-redis/clients`, no longer from the root entry. `redisRateLimit` validates limits with core's rules and messages, and `redisCircuitBreaker` throws `LLMError('invalid_params')` for every bad option, including a rolling window mistake that used to throw `RangeError` and a `threshold` that is not an integer of at least 1. Calls with no model under `isolateByModel`, and the AIMD ceiling, start fresh once after upgrading.

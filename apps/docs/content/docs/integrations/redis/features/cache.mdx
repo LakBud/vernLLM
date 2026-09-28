@@ -9,7 +9,8 @@ description: redisCache reference
 
 ```ts title="redis-cache-full.ts"
 import Redis from 'ioredis';
-import { redisCache, fromIoredis } from 'vern-llm-redis';
+import { redisCache } from 'vern-llm-redis';
+import { fromIoredis } from 'vern-llm-redis/clients';
 
 const client = fromIoredis(new Redis());
 

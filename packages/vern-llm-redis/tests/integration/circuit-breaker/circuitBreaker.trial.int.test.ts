@@ -15,7 +15,10 @@ import { it } from '../../fixtures.js';
 import { connect, spyOnScripts, uniquePrefix, waitUntil } from '../../helpers.js';
 
 describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
-  it('a trial call running longer than the lease keeps its trial', async ({ makeBreaker }) => {
+  it('a trial call running longer than the lease keeps its trial', async ({
+    makeBreaker,
+    newConnection,
+  }) => {
     const options = {
       keyPrefix: uniquePrefix('cb'),
       threshold: 1,
@@ -23,7 +26,7 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
       probeLeaseMs: 300,
     };
     const holder = makeBreaker(options);
-    const other = makeBreaker(options);
+    const other = makeBreaker(options, newConnection());
 
     await trip(holder);
     await learn(other);

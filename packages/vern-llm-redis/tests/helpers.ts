@@ -122,6 +122,14 @@ export async function waitUntil(
   throw new Error(`waitUntil: condition not met within ${timeoutMs}ms`);
 }
 
+/** Waits until `channel` has at least `count` subscribers, so a publish can't miss a SUBSCRIBE still in flight. */
+export async function waitForSubscribers(redis: Redis, channel: string, count = 1): Promise<void> {
+  await waitUntil(async () => {
+    const reply = (await redis.pubsub('NUMSUB', channel)) as unknown[];
+    return Number(reply[1]) >= count;
+  });
+}
+
 /**
  * Polls a Redis-backed read until it satisfies a predicate. This is the
  * integration-test equivalent of waitUntil for server state, and it avoids

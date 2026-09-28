@@ -3,17 +3,9 @@ import { describe, expect, it } from 'vitest';
 import * as clientsEntry from '../../src/clients/index.js';
 import * as entry from '../../src/index.js';
 import {
-  fromIoredis,
-  fromIoredisSubscriber,
-  fromNodeRedis,
-  fromNodeRedisSubscriber,
   redisCache,
   redisCircuitBreaker,
   redisRateLimit,
-  type IoredisLike,
-  type IoredisSubscriberLike,
-  type NodeRedisLike,
-  type NodeRedisSubscriberLike,
   type RedisCacheOptions,
   type RedisCircuitBreakerAdapter,
   type RedisCircuitBreakerOptions,
@@ -28,10 +20,6 @@ import {
 describe('package entrypoint exports', () => {
   it('exports exactly the documented runtime surface', () => {
     expect(Object.keys(entry).sort()).toEqual([
-      'fromIoredis',
-      'fromIoredisSubscriber',
-      'fromNodeRedis',
-      'fromNodeRedisSubscriber',
       'redisCache',
       'redisCircuitBreaker',
       'redisRateLimit',
@@ -39,10 +27,6 @@ describe('package entrypoint exports', () => {
   });
 
   it('exports the factory functions and adapter types', () => {
-    expect(typeof fromIoredis).toBe('function');
-    expect(typeof fromIoredisSubscriber).toBe('function');
-    expect(typeof fromNodeRedis).toBe('function');
-    expect(typeof fromNodeRedisSubscriber).toBe('function');
     expect(typeof redisCache).toBe('function');
     expect(typeof redisCircuitBreaker).toBe('function');
     expect(typeof redisRateLimit).toBe('function');
@@ -61,33 +45,6 @@ describe('package entrypoint exports', () => {
 
     expect(redisCache(client, cacheOptions)).toBeDefined();
     expect(subscriber.on).toBeDefined();
-
-    const ioredisClient: IoredisLike = {
-      get: async () => null,
-      set: async () => undefined,
-      del: async () => undefined,
-      eval: async () => undefined,
-    };
-    const ioredisSubscriber: IoredisSubscriberLike = {
-      subscribe: async () => undefined,
-      unsubscribe: async () => undefined,
-      on: () => undefined,
-    };
-    const nodeRedisClient: NodeRedisLike = {
-      get: async () => null,
-      set: async (_key, _value, _options) => undefined,
-      del: async () => undefined,
-      eval: async () => undefined,
-    };
-    const nodeRedisSubscriber: NodeRedisSubscriberLike = {
-      subscribe: async () => undefined,
-      unsubscribe: async () => undefined,
-    };
-
-    expect(ioredisClient).toBeDefined();
-    expect(ioredisSubscriber).toBeDefined();
-    expect(nodeRedisClient).toBeDefined();
-    expect(nodeRedisSubscriber).toBeDefined();
   });
 
   it('exports the public types used in the Redis adapter API', () => {
@@ -119,9 +76,9 @@ describe('clients subpath exports', () => {
     ]);
   });
 
-  it('exports the same functions as the root entry', () => {
-    expect(clientsEntry.fromIoredis).toBe(entry.fromIoredis);
-    expect(clientsEntry.fromNodeRedisSubscriber).toBe(entry.fromNodeRedisSubscriber);
+  it('is the only entry that exports the client adapters', () => {
+    expect(entry).not.toHaveProperty('fromIoredis');
+    expect(entry).not.toHaveProperty('fromNodeRedis');
   });
 
   it('exports the client types', () => {

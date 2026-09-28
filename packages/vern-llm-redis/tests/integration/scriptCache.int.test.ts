@@ -7,10 +7,9 @@ import { connectNodeRedis, uniquePrefix } from '../helpers.js';
 
 const SCRIPT = "return redis.call('INCR', KEYS[1])";
 
-// Not concurrent: SCRIPT FLUSH empties the server wide cache. Other suites
-// only ever see a NOSCRIPT they already recover from, but the call counts
-// asserted here need this file's own calls to be the only ones in play.
-describe('withScriptCache, real Redis', () => {
+// Concurrent is safe: the NOSCRIPT miss is simulated on this test's own client,
+// so nothing here touches the server wide script cache other suites share.
+describe.concurrent('withScriptCache, real Redis', () => {
   it('runs through EVALSHA after the first call on ioredis', async ({ redis }) => {
     const key = uniquePrefix('sc');
     const evalsha = vi.spyOn(redis, 'evalsha');
@@ -29,7 +28,10 @@ describe('withScriptCache, real Redis', () => {
     const cached = withScriptCache(redis);
 
     await cached.eval(SCRIPT, 1, key);
-    await redis.script('FLUSH');
+    // The next EVALSHA misses, as if Redis had dropped its script cache.
+    vi.spyOn(redis, 'evalsha').mockRejectedValueOnce(
+      new Error('NOSCRIPT No matching script. Please use EVAL.'),
+    );
 
     expect(await cached.eval(SCRIPT, 1, key)).toBe(2);
     expect(await cached.eval(SCRIPT, 1, key)).toBe(3);

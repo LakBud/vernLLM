@@ -4,8 +4,8 @@ description: Wrapping a Redis client other than ioredis or node-redis
 ---
 
 `ioredis` and `node-redis` already have first-party wrappers, `fromIoredis`/`fromIoredisSubscriber`
-and `fromNodeRedis`/`fromNodeRedisSubscriber`, exported from `vern-llm-redis` and, on their own,
-from `vern-llm-redis/clients`. For anything else, Upstash, a custom proxy, wrap it
+and `fromNodeRedis`/`fromNodeRedisSubscriber`, exported from
+`vern-llm-redis/clients`, not from the root entry. For anything else, Upstash, a custom proxy, wrap it
 yourself to match `RedisClient` and, optionally, `RedisSubscriber`.
 
 ```ts title="redis-client-interface.ts"

@@ -67,7 +67,7 @@ against Redis 8.10, the newest release.
 
 Every adapter takes a Redis client as its first argument, wrapped through `fromIoredis` or
 `fromNodeRedis` so both clients present the same shape internally, and an options object as its
-second. The wrappers are also exported on their own from `vern-llm-redis/clients`:
+second. The wrappers come from `vern-llm-redis/clients`:
 
 <Tabs items={['ioredis', 'node-redis']}>
   <Tab value="ioredis">
@@ -76,7 +76,8 @@ second. The wrappers are also exported on their own from `vern-llm-redis/clients
 import Redis from 'ioredis';
 import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
-import { redisCircuitBreaker, redisRateLimit, redisCache, fromIoredis } from 'vern-llm-redis';
+import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
+import { fromIoredis } from 'vern-llm-redis/clients';
 
 const client = fromIoredis(new Redis());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -97,7 +98,8 @@ const llm = new VernLLM({
 import { createClient } from 'redis';
 import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
-import { redisCircuitBreaker, redisRateLimit, redisCache, fromNodeRedis } from 'vern-llm-redis';
+import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
+import { fromNodeRedis } from 'vern-llm-redis/clients';
 
 const raw = createClient();
 await raw.connect();

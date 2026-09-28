@@ -12,8 +12,14 @@ interface RedisFixtures {
   redis: Redis;
   /** Opens another connection, for a test that stands in for several processes. Closed once the test is done. */
   newConnection: () => Redis;
-  /** Builds a breaker on `redis`, quiet and without a background poll unless told otherwise. Disposed once the test is done. */
-  makeBreaker: (options?: Parameters<typeof redisCircuitBreaker>[1]) => RedisCircuitBreakerAdapter;
+  /**
+   * Builds a breaker, quiet and without a background poll unless told otherwise, on `redis`
+   * or on the connection you pass (one per simulated process). Disposed once the test is done.
+   */
+  makeBreaker: (
+    options?: Parameters<typeof redisCircuitBreaker>[1],
+    connection?: Redis,
+  ) => RedisCircuitBreakerAdapter;
   /**
    * Builds a limiter, quiet unless told otherwise, on `redis` or on the
    * connection you pass (one per simulated process). Disposed once the test is done.
@@ -59,8 +65,8 @@ export const it = base.extend<RedisFixtures>({
 
   makeBreaker: async ({ redis }, use) => {
     const made: RedisCircuitBreakerAdapter[] = [];
-    await use((options = {}) => {
-      const breaker = redisCircuitBreaker(fromIoredis(redis), {
+    await use((options = {}, connection = redis) => {
+      const breaker = redisCircuitBreaker(fromIoredis(connection), {
         pollIntervalMs: 0,
         logger: 'silent',
         ...options,

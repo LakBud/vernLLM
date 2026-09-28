@@ -104,8 +104,8 @@ try {
     assert.equal(typeof main.redisCache, 'function', 'ESM: redisCache missing from main entry');
     assert.equal(typeof main.redisCircuitBreaker, 'function', 'ESM: redisCircuitBreaker missing from main entry');
     assert.equal(typeof main.redisRateLimit, 'function', 'ESM: redisRateLimit missing from main entry');
-    assert.equal(typeof main.fromIoredis, 'function', 'ESM: fromIoredis missing from main entry');
-    assert.equal(typeof main.fromNodeRedis, 'function', 'ESM: fromNodeRedis missing from main entry');
+    assert.equal(main.fromIoredis, undefined, 'ESM: fromIoredis must not be on the main entry');
+    assert.equal(main.fromNodeRedis, undefined, 'ESM: fromNodeRedis must not be on the main entry');
 
     const cb = await import('vern-llm-redis/circuitBreaker');
     assert.equal(typeof cb.redisCircuitBreaker, 'function', 'ESM: circuitBreaker subpath missing its export');
@@ -147,8 +147,8 @@ try {
     assert.equal(typeof main.redisCache, 'function', 'CJS: redisCache missing from main entry');
     assert.equal(typeof main.redisCircuitBreaker, 'function', 'CJS: redisCircuitBreaker missing from main entry');
     assert.equal(typeof main.redisRateLimit, 'function', 'CJS: redisRateLimit missing from main entry');
-    assert.equal(typeof main.fromIoredis, 'function', 'CJS: fromIoredis missing from main entry');
-    assert.equal(typeof main.fromNodeRedis, 'function', 'CJS: fromNodeRedis missing from main entry');
+    assert.equal(main.fromIoredis, undefined, 'CJS: fromIoredis must not be on the main entry');
+    assert.equal(main.fromNodeRedis, undefined, 'CJS: fromNodeRedis must not be on the main entry');
 
     const cb = require('vern-llm-redis/circuitBreaker');
     assert.equal(typeof cb.redisCircuitBreaker, 'function', 'CJS: circuitBreaker subpath missing its export');

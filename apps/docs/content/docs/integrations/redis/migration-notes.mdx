@@ -37,6 +37,16 @@ circuit starts closed. A model named `default` keeps its own circuit. The AIMD c
 `{keyPrefix:rpm}:aimd` and starts again from `requestsPerMinute`, capped at `aimd.maxCapacity`.
 From then on it shrinks at most once a minute across every process, like core.
 
+### 0.3.0: Client adapters moved off the root
+
+`fromIoredis`, `fromIoredisSubscriber`, `fromNodeRedis` and `fromNodeRedisSubscriber` are no longer
+exported from `vern-llm-redis`. Import them from `vern-llm-redis/clients` instead:
+
+```ts
+import { redisCircuitBreaker } from 'vern-llm-redis';
+import { fromIoredis } from 'vern-llm-redis/clients';
+```
+
 ### 0.3.0: Custom clients
 
 `RedisClient` gains an optional `evalsha`, which must reject with a message starting `NOSCRIPT` for

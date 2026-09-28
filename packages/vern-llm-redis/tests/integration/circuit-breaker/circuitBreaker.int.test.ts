@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
 import { fromIoredis, fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
-import { connect, uniquePrefix, waitUntil } from '../../helpers.js';
+import { connect, uniquePrefix, waitForSubscribers, waitUntil } from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
 
@@ -183,11 +183,10 @@ describe('redisCircuitBreaker, real Redis, two processes sharing state', () => {
       onStateChange: (from, to) => events.push({ from, to }),
     });
 
-    // Give both SUBSCRIBE commands time to actually reach Redis before
-    // the transition fires; subscribe() isn't awaited by the adapter
-    // itself (fire-and-forget, matching production usage), so a message
-    // published before the subscription lands would otherwise be missed.
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // subscribe() isn't awaited by the adapter (fire-and-forget, as in
+    // production), so wait for both SUBSCRIBEs to land before the transition
+    // fires, or its message would be missed.
+    await waitForSubscribers(redisA, `${keyPrefix}:events`, 2);
 
     breakerA.recordFailure('m');
 
@@ -219,7 +218,7 @@ describe('redisCircuitBreaker, real Redis, two processes sharing state', () => {
       });
     const breakerA = make(redisA, subscriberA, eventsA);
     const breakerB = make(redisB, subscriberB, eventsB);
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitForSubscribers(redisA, `${keyPrefix}:events`, 2);
 
     breakerA.recordFailure('m');
     breakerA.recordFailure('m');

@@ -27,13 +27,8 @@ npm i vern-llm-redis
 ```ts
 import Redis from 'ioredis';
 import { VernLLM } from 'vern-llm';
-import {
-  redisCircuitBreaker,
-  redisRateLimit,
-  redisCache,
-  fromIoredis,
-  fromIoredisSubscriber,
-} from 'vern-llm-redis';
+import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
+import { fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis/clients';
 
 const redis = new Redis();
 const client = fromIoredis(redis);
@@ -55,13 +50,8 @@ const llm = new VernLLM({
 ```ts
 import { createClient } from 'redis';
 import { VernLLM } from 'vern-llm';
-import {
-  redisCircuitBreaker,
-  redisRateLimit,
-  redisCache,
-  fromNodeRedis,
-  fromNodeRedisSubscriber,
-} from 'vern-llm-redis';
+import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
+import { fromNodeRedis, fromNodeRedisSubscriber } from 'vern-llm-redis/clients';
 
 const raw = await createClient().connect();
 const client = fromNodeRedis(raw);

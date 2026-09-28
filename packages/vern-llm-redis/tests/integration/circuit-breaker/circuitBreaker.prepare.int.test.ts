@@ -61,13 +61,17 @@ describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () 
 
   it('a new adapter seeds its own open circuits, the no model bucket included', async ({
     makeBreaker,
+    newConnection,
   }) => {
     const prefix = uniquePrefix('cb');
     const first = makeBreaker({ keyPrefix: prefix, isolateByModel: true, threshold: 1 });
     first.recordFailure(undefined);
     await trip(first);
 
-    const fresh = makeBreaker({ keyPrefix: prefix, isolateByModel: true, threshold: 1 });
+    const fresh = makeBreaker(
+      { keyPrefix: prefix, isolateByModel: true, threshold: 1 },
+      newConnection(),
+    );
     await waitUntil(() => fresh.getState?.('m') === 'open' && fresh.getState?.() === 'open');
   });
 
