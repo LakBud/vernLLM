@@ -1,0 +1,54 @@
+---
+title: Migration Notes
+description: Breaking changes in vern-llm-redis, and what to update
+icon: TriangleAlert
+---
+
+This page tracks breaking changes in `vern-llm-redis`. For `vern-llm` itself, see
+[Migration Notes](/docs/migration-notes).
+
+## 0.3.0: Stricter options, network errors, shared state
+
+Released alongside `vern-llm` 3.0.0, which it now requires as a peer.
+
+### 0.3.0: New throws at construction
+
+`redisRateLimit` validates limits with core's rules and messages, see
+[invalid rate limits throw](/docs/migration-notes#300-invalid-rate-limits-throw).
+`redisCircuitBreaker` throws `LLMError('invalid_params')` for every bad option: a rolling window
+mistake that used to throw `RangeError`, a `threshold` that is not an integer of at least 1, and an
+unknown `tripping.kind`.
+
+### 0.3.0: Redis failures are network errors
+
+A Redis failure inside `acquire`, `prepare` or `readState` rejects with `LLMError('network')` and
+code `connection_failed`, the original error as `cause`. Match on the code instead of the Redis
+client's own error. `vern-llm` retries it and never counts it toward the circuit breaker.
+
+### 0.3.0: `maxQueueSize` counts every process
+
+`maxQueueSize` now counts waiters across every process, not per process. Lower it if you had sized
+it per process.
+
+### 0.3.0: State that resets once on upgrade
+
+With `isolateByModel`, calls with no model move from `keyPrefix:default` to `keyPrefix`, so that
+circuit starts closed. A model named `default` keeps its own circuit. The AIMD ceiling moves to
+`{keyPrefix:rpm}:aimd` and starts again from `requestsPerMinute`, capped at `aimd.maxCapacity`.
+From then on it shrinks at most once a minute across every process, like core.
+
+### 0.3.0: Client adapters moved off the root
+
+`fromIoredis`, `fromIoredisSubscriber`, `fromNodeRedis` and `fromNodeRedisSubscriber` are no longer
+exported from `vern-llm-redis`. Import them from `vern-llm-redis/clients` instead:
+
+```ts
+import { redisCircuitBreaker } from 'vern-llm-redis';
+import { fromIoredis } from 'vern-llm-redis/clients';
+```
+
+### 0.3.0: Custom clients
+
+`RedisClient` gains an optional `evalsha`, which must reject with a message starting `NOSCRIPT` for
+an uncached script. `RedisSubscriber` gains an optional `off`. `ioredis` and the node-redis
+wrappers already provide both.

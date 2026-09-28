@@ -1,11 +1,12 @@
 import { LLMError, type RateLimitAcquireResult } from 'vern-llm';
 
+import { toRedisError } from '../shared/errors/redisError.utils.js';
 import { sleepOrAbort, waitForWakeOrPoll } from './sleep.utils.js';
 
 import type { Bucket } from './buckets.utils.js';
 import type { WaiterRegistry } from './waiterRegistry.utils.js';
 
-/** Longest a single computed wait is ever slept before re-checking, so a very low rate never schedules a multi-minute timer that can't react to a meanwhile AIMD grow. */
+/** Cap on one sleep, so a slow rate still reacts to an AIMD grow. */
 const MAX_WAKE_DELAY_MS = 5_000;
 
 function queueTimeout(): LLMError {
@@ -16,7 +17,7 @@ function queueTimeout(): LLMError {
 
 export type TakeAttempt = { ok: true } | { ok: false; bucket: Bucket; waitMs: number };
 
-/** Everything `acquire` needs from its adapter, passed in so the wait loop stays a plain function of its inputs. */
+/** What `acquire` needs from its adapter. */
 export interface AcquirerDeps {
   buckets: Bucket[];
   tokensPerMinute: number | undefined;
@@ -26,15 +27,15 @@ export interface AcquirerDeps {
   queueLeaseMs: number;
   fairQueue: boolean;
   hasSubscriber: boolean;
-  /** Settles once the wake subscription is live. Waiting for it stops a release from being missed right after startup. */
+  /** Settles once the wake subscription is live. */
   subscriptionReady?: Promise<void>;
   queueKey: string;
   waiterRegistry: WaiterRegistry;
-  /** One op against the shared FIFO line, `id` being this call's own lease id. */
+  /** One op against the shared line. */
   queueOp(
     op: 'peek' | 'enter' | 'check' | 'leave',
     id: string,
-  ): Promise<{ isHead: boolean; depth: number }>;
+  ): Promise<{ isHead: boolean; depth: number; full: boolean }>;
   tryTakeAll(estimatedTokens: number, leaseId: string): Promise<TakeAttempt>;
   startHeartbeat(bucket: Bucket, leaseId: string): () => void;
   makeRelease(
@@ -45,31 +46,19 @@ export interface AcquirerDeps {
   reportRejection(operation: string, error: unknown): void;
 }
 
-/**
- * Builds the `acquire` an adapter hands to VernLLM: waits, in the shared
- * fair line when there is one, until every bucket has capacity, then
- * returns the release for the slot it took.
- *
- * Every failure is an `LLMError` a caller can branch on: `invalid_params`
- * for a bad estimate, `aborted` for the caller's signal, and `rate_limited`
- * with `rate_limit_capacity_exceeded`, `rate_limit_queue_full` or
- * `rate_limit_queue_timeout`.
- */
+/** Builds `acquire`: waits, in the shared line if fair, until every bucket has room. Fails with an LLMError. */
 export function createAcquirer(
   deps: AcquirerDeps,
 ): (estimatedTokens: number, signal?: AbortSignal) => Promise<RateLimitAcquireResult> {
   const { buckets, maxQueueMs, maxQueueSize, pollIntervalMs, fairQueue, queueKey } = deps;
 
-  /** Calls waiting for capacity in this process right now, for `maxQueueSize`. */
-  let waiting = 0;
-
-  /** True once the wake subscription has settled, so later calls skip the wait entirely. */
+  /** True once the subscription has settled. */
   let subscribed = deps.subscriptionReady === undefined;
   void deps.subscriptionReady?.then(() => {
     subscribed = true;
   });
 
-  /** Longest any single sleep may last, so a waiter always renews its place in line well inside `queueLeaseMs`. */
+  /** Longest sleep, so a waiter renews its place well inside `queueLeaseMs`. */
   const maxSleepMs = Math.max(1, Math.floor(deps.queueLeaseMs / 3));
 
   return async function acquire(estimatedTokens, signal): Promise<RateLimitAcquireResult> {
@@ -80,9 +69,7 @@ export function createAcquirer(
       );
     }
 
-    // A release published before the subscription is live is lost, and the
-    // waiter would then only wake on the poll. Wait for it, bounded by the
-    // poll interval so a hung subscribe can never stall a call.
+    // A release published before subscribing is lost. Wait, bounded by the poll.
     if (!subscribed && deps.subscriptionReady) {
       await Promise.race([
         deps.subscriptionReady,
@@ -90,10 +77,7 @@ export function createAcquirer(
       ]);
     }
 
-    // tokensPerMinute is a fixed cap, never grown by AIMD (only rpm
-    // is), so a request estimated above it can never succeed no
-    // matter how long it waits. Fail fast instead of retrying it
-    // silently until maxQueueMs times out.
+    // tokensPerMinute never grows, so an estimate above it can never fit.
     if (
       deps.tokensPerMinute !== undefined &&
       deps.tokensPerMinute > 0 &&
@@ -110,20 +94,17 @@ export function createAcquirer(
     const leaseId = globalThis.crypto.randomUUID();
     const call = {
       lastReason: undefined as Bucket['reason'] | undefined,
-      queued: false,
       inLine: false,
     };
 
-    /** Counts this call as waiting, rejecting it if this process already has `maxQueueSize` waiting. Runs once, the first time the call actually has to wait. */
-    function startWaiting(): void {
-      if (call.queued) return;
-      if (maxQueueSize > 0 && waiting >= maxQueueSize) {
+    /** Joins the shared line, which also counts toward `maxQueueSize`. */
+    async function enterLine(): Promise<void> {
+      if ((await deps.queueOp('enter', leaseId)).full) {
         throw new LLMError('Rate limit queue is full', 'rate_limited', {
           code: 'rate_limit_queue_full',
         });
       }
-      call.queued = true;
-      waiting += 1;
+      call.inLine = true;
     }
 
     try {
@@ -134,20 +115,14 @@ export function createAcquirer(
 
         if (fairQueue) {
           if (!call.inLine) {
-            // Anyone already waiting goes first: join behind them rather
-            // than taking capacity out from under them.
-            if ((await deps.queueOp('peek', leaseId)).depth > 0) {
-              startWaiting();
-              await deps.queueOp('enter', leaseId);
-              call.inLine = true;
-            }
+            // Join behind anyone already waiting.
+            if ((await deps.queueOp('peek', leaseId)).depth > 0) await enterLine();
           }
 
           if (call.inLine) {
             const { isHead } = await deps.queueOp('check', leaseId);
 
             if (!isHead) {
-              // Woken when the line advances, or by the poll as a backstop.
               const wait = Math.min(pollIntervalMs, maxSleepMs);
               if (deps.hasSubscriber) {
                 await waitForWakeOrPoll(deps.waiterRegistry, queueKey, wait, signal);
@@ -161,6 +136,9 @@ export function createAcquirer(
               continue;
             }
           }
+        } else if (call.inLine) {
+          // In line only to be counted: keep the place from lapsing.
+          await deps.queueOp('check', leaseId);
         }
 
         const attempt = await deps.tryTakeAll(estimatedTokens, leaseId);
@@ -177,15 +155,11 @@ export function createAcquirer(
 
         call.lastReason = attempt.bucket.reason;
 
-        // Only a call that actually has to wait counts against the
-        // queue, an uncontended one never does.
-        startWaiting();
-        if (fairQueue && !call.inLine) {
-          await deps.queueOp('enter', leaseId);
-          call.inLine = true;
-          // A release may have landed during that round trip, before this
-          // call was listening for its wake. Look again instead of sleeping.
-          continue;
+        // Only a waiting call joins the line, and without fairQueue only to be counted.
+        if (!call.inLine && (fairQueue || maxQueueSize > 0)) {
+          await enterLine();
+          // A release may have landed meanwhile: look again.
+          if (fairQueue) continue;
         }
 
         const elapsed = Date.now() - startedAt;
@@ -193,15 +167,11 @@ export function createAcquirer(
           throw queueTimeout();
         }
 
-        // Cap every wait by the remaining maxQueueMs budget too, not
-        // just MAX_WAKE_DELAY_MS, so a timeout is caught within one
-        // short beat of the deadline instead of only after a full
-        // capped sleep has already elapsed past it.
+        // Also capped by the remaining maxQueueMs, so a timeout is caught promptly.
         const remainingBudget = maxQueueMs > 0 ? maxQueueMs - elapsed : Infinity;
 
         if (attempt.waitMs >= 0) {
-          // requests/min or tokens/min: refill time is deterministic,
-          // sleep exactly that long instead of polling blind.
+          // Per minute buckets refill on a schedule: sleep exactly that long.
           const delay = Math.min(
             Math.max(1, Math.ceil(attempt.waitMs)),
             MAX_WAKE_DELAY_MS,
@@ -210,8 +180,7 @@ export function createAcquirer(
           );
           await sleepOrAbort(delay, signal);
         } else if (deps.hasSubscriber) {
-          // concurrency: only an external release clears this, wake on
-          // that release's notification (or pollIntervalMs, whichever first).
+          // Concurrency only frees on a release: wake on it, or the poll.
           await waitForWakeOrPoll(
             deps.waiterRegistry,
             attempt.bucket.key,
@@ -225,8 +194,9 @@ export function createAcquirer(
           );
         }
       }
+    } catch (error) {
+      throw toRedisError('acquire', error);
     } finally {
-      if (call.queued) waiting -= 1;
       // Best effort: a lapsed lease clears the place anyway if this fails.
       if (call.inLine) {
         await deps

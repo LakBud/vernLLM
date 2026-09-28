@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://vernllm.dev/docs/integrations/redis">Documentation</a> ·
   <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm-redis">Package</a> ·
-  <a href="https://www.npmjs.com/package/vern-llm-otel">npm</a>
+  <a href="https://www.npmjs.com/package/vern-llm-redis">npm</a>
 </p>
 
 <h1 align="center">vern-llm-redis</h1>
@@ -27,13 +27,8 @@ npm i vern-llm-redis
 ```ts
 import Redis from 'ioredis';
 import { VernLLM } from 'vern-llm';
-import {
-  redisCircuitBreaker,
-  redisRateLimit,
-  redisCache,
-  fromIoredis,
-  fromIoredisSubscriber,
-} from 'vern-llm-redis';
+import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
+import { fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis/clients';
 
 const redis = new Redis();
 const client = fromIoredis(redis);
@@ -55,13 +50,8 @@ const llm = new VernLLM({
 ```ts
 import { createClient } from 'redis';
 import { VernLLM } from 'vern-llm';
-import {
-  redisCircuitBreaker,
-  redisRateLimit,
-  redisCache,
-  fromNodeRedis,
-  fromNodeRedisSubscriber,
-} from 'vern-llm-redis';
+import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
+import { fromNodeRedis, fromNodeRedisSubscriber } from 'vern-llm-redis/clients';
 
 const raw = await createClient().connect();
 const client = fromNodeRedis(raw);

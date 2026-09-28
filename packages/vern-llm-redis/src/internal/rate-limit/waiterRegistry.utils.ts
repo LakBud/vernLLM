@@ -1,23 +1,10 @@
-/**
- * Tracks callers waiting for a specific Redis key's capacity to free up.
- * Used for the concurrency bucket, which only clears via an external
- * release, unlike requests/min or tokens/min which have a deterministic
- * refill time.
- *
- * Centralized here so wake() always removes a waiter as it fires it,
- * instead of relying on every call site to remember cleanup, which
- * previously leaked a waiter's entry whenever a message resolved it.
- */
+/** Callers waiting for a concurrency key to free. `wake` removes each waiter it fires. */
 export interface WaiterRegistry {
-  /**
-   * Registers wake for key. Returns a function that removes that
-   * specific registration again. Safe to call more than once, a second
-   * call is a no-op.
-   */
+  /** Registers `wake` for `key`. Returns an idempotent unregister. */
   register(key: string, wake: () => void): () => void;
-  /** Fires and removes registered waiters for key, or saves one wake for its next registration. */
+  /** Fires and removes the waiters for `key`, or keeps one wake for the next registration. */
   wake(key: string): void;
-  /** True if key currently has at least one registered waiter. */
+  /** Whether `key` has a waiter. */
   has(key: string): boolean;
 }
 

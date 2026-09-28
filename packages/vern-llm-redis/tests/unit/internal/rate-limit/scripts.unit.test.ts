@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseTakeResult } from '../../../../src/internal/rate-limit/scripts.js';
+import { parseQueueResult, parseTakeResult } from '../../../../src/internal/rate-limit/scripts.js';
 
 describe('parseTakeResult', () => {
   it('parses a successful take, ok true and no wait', () => {
@@ -34,5 +34,16 @@ describe('parseTakeResult', () => {
     const result = parseTakeResult([1, '123.5', '456', '-1']);
     expect(result.avail).toBe(123.5);
     expect(result.cap).toBe(456);
+  });
+});
+
+describe('parseQueueResult', () => {
+  it('parses the head flag, the depth and a full line', () => {
+    expect(parseQueueResult([1, 3, 0])).toEqual({ isHead: true, depth: 3, full: false });
+    expect(parseQueueResult([0, 2, 1])).toEqual({ isHead: false, depth: 2, full: true });
+  });
+
+  it('reads a reply without the full flag as not full', () => {
+    expect(parseQueueResult([0, 1]).full).toBe(false);
   });
 });

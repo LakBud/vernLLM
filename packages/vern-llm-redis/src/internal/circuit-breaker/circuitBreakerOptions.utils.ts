@@ -1,4 +1,8 @@
-import { assertNonNegativeFinite, assertPositiveFinite, invalidParams } from '../validate.utils.js';
+import {
+  assertNonNegativeFinite,
+  assertPositiveFinite,
+  invalidParams,
+} from '../shared/errors/validate.utils.js';
 
 import type {
   RedisCircuitBreakerOptions,
@@ -8,7 +12,7 @@ import type {
 
 type RollingTripping = Extract<RedisTrippingOption, { kind: 'rolling' }>;
 
-/** `redisCircuitBreaker`'s options after defaults are applied and every value is checked. */
+/** Options after defaults and validation. */
 export interface ResolvedCircuitBreakerOptions {
   cooldownMs: number;
   isolateByModel: boolean;
@@ -20,12 +24,12 @@ export interface ResolvedCircuitBreakerOptions {
   halfOpenProbes: number;
   halfOpenSuccessRatio: number;
   backoff: RedisCooldownBackoff | undefined;
-  /** The consecutive failure count that opens the circuit, or 0 when a rolling window decides instead. */
+  /** Consecutive failures that open, or 0 with a rolling window. */
   threshold: number;
   rolling: RollingTripping | undefined;
 }
 
-/** Finite numbers are floored and clamped, anything else falls back to `fallback`. Never throws: these two options are clamped, not rejected. */
+/** Floors and clamps a finite number, else `fallback`. Never throws. */
 function clampedInteger(value: number | undefined, min: number, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.max(min, Math.floor(value))
@@ -54,33 +58,34 @@ function assertValidBackoff(backoff: RedisCooldownBackoff | undefined): void {
   }
 }
 
-/**
- * Rolling window mistakes throw `RangeError`, not `LLMError`, on purpose:
- * core's own CircuitBreaker throws the same for the same mistakes, and the
- * two are meant to be interchangeable. It is a construction time config
- * mistake, caught once, never something a running call can hit.
- */
 function assertValidRolling(tripping: RollingTripping): void {
   if (!Number.isFinite(tripping.windowMs) || tripping.windowMs <= 0) {
-    throw new RangeError(`tripping.windowMs must be a finite number > 0, got ${tripping.windowMs}`);
+    invalidParams(
+      `tripping.windowMs must be a finite number greater than 0 (got ${tripping.windowMs}).`,
+    );
   }
   if (!Number.isInteger(tripping.minCalls) || tripping.minCalls < 0) {
-    throw new RangeError(
-      `tripping.minCalls must be a non-negative integer, got ${tripping.minCalls}`,
-    );
+    invalidParams(`tripping.minCalls must be a non-negative integer (got ${tripping.minCalls}).`);
   }
   if (
     !Number.isFinite(tripping.failureRatio) ||
     tripping.failureRatio < 0 ||
     tripping.failureRatio > 1
   ) {
-    throw new RangeError(
-      `tripping.failureRatio must be finite and within [0, 1], got ${tripping.failureRatio}`,
+    invalidParams(
+      `tripping.failureRatio must be a finite number from 0 to 1 (got ${tripping.failureRatio}).`,
     );
   }
 }
 
-/** Applies defaults and throws `LLMError('invalid_params')` (or `RangeError` for a bad rolling window) on the first bad value. */
+/** A threshold below 1, fractional or NaN matches no count of failures. */
+function assertValidThreshold(name: string, threshold: number): void {
+  if (!Number.isInteger(threshold) || threshold < 1) {
+    invalidParams(`${name} must be an integer of at least 1 (got ${threshold}).`);
+  }
+}
+
+/** Applies defaults and throws `LLMError('invalid_params')` on the first bad value. */
 export function resolveCircuitBreakerOptions(
   options: RedisCircuitBreakerOptions,
 ): ResolvedCircuitBreakerOptions {
@@ -100,13 +105,20 @@ export function resolveCircuitBreakerOptions(
     kind: 'consecutive',
     threshold: options.threshold ?? 5,
   };
-  // `null` never gets here: `??` above already turned it into the default.
   if (typeof tripping !== 'object' || !('kind' in tripping)) {
     invalidParams(
       'tripping must be { kind: "consecutive", threshold } or { kind: "rolling", ... }. A custom TrippingPolicy cannot run inside Redis.',
     );
   }
-  if (tripping.kind === 'rolling') assertValidRolling(tripping);
+  if (tripping.kind === 'rolling') {
+    assertValidRolling(tripping);
+  } else if (tripping.kind === 'consecutive') {
+    assertValidThreshold(options.tripping ? 'tripping.threshold' : 'threshold', tripping.threshold);
+  } else {
+    invalidParams(
+      `tripping.kind must be "consecutive" or "rolling" (got ${String((tripping as { kind: unknown }).kind)}).`,
+    );
+  }
 
   return {
     cooldownMs,

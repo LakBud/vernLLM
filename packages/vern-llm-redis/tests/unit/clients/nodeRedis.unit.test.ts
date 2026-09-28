@@ -56,6 +56,29 @@ describe('fromNodeRedis', () => {
     });
   });
 
+  it("maps evalsha onto node-redis's evalSha, split the same way as eval", async () => {
+    const client = {
+      get: vi.fn(),
+      set: vi.fn(),
+      del: vi.fn(),
+      eval: vi.fn(),
+      evalSha: vi.fn().mockResolvedValue('ok'),
+    };
+    const wrapped = fromNodeRedis(client);
+
+    await wrapped.evalsha!('abc', 1, 'key1', 'arg1', 7);
+
+    expect(client.evalSha).toHaveBeenCalledWith('abc', {
+      keys: ['key1'],
+      arguments: ['arg1', '7'],
+    });
+  });
+
+  it('leaves evalsha undefined for a client without evalSha', () => {
+    const wrapped = fromNodeRedis({ get: vi.fn(), set: vi.fn(), del: vi.fn(), eval: vi.fn() });
+    expect(wrapped.evalsha).toBeUndefined();
+  });
+
   it('handles zero keys correctly', async () => {
     const client = {
       get: vi.fn(),
@@ -99,6 +122,31 @@ describe('fromNodeRedis', () => {
 });
 
 describe('fromNodeRedisSubscriber', () => {
+  it('off removes a listener so it no longer receives messages', async () => {
+    let deliver: ((message: string, channel: string) => void) | undefined;
+    const client = {
+      subscribe: vi.fn(
+        async (_channel: string, listener: (message: string, channel: string) => void) => {
+          deliver = listener;
+        },
+      ),
+    };
+    const subscriber = fromNodeRedisSubscriber(client);
+    const kept = vi.fn();
+    const removed = vi.fn();
+    subscriber.on('message', kept);
+    subscriber.on('message', removed);
+    await subscriber.subscribe('chan');
+
+    subscriber.off!('message', removed);
+    subscriber.off!('message', removed); // removing twice is harmless
+    subscriber.off!('other' as 'message', kept); // not a message listener, nothing to remove
+    deliver!('hi', 'chan');
+
+    expect(kept).toHaveBeenCalledWith('chan', 'hi');
+    expect(removed).not.toHaveBeenCalled();
+  });
+
   it('subscribes with a translated per-channel callback and re-emits as (channel, message)', async () => {
     let capturedListener: ((message: string, channel: string) => void) | undefined;
     const client = {

@@ -1,5 +1,5 @@
 import { Cluster } from 'ioredis';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { redisCache } from '../../src/cache.js';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
@@ -204,6 +204,29 @@ describe.skipIf(nodes.length === 0)('against a real Redis Cluster', () => {
 
     expect(order).toEqual(['B', 'C', 'D']);
     limiters.forEach((l) => l.dispose());
+  });
+
+  it('AIMD reads and resizes its ceiling alongside the bucket on one node', async () => {
+    const options = {
+      keyPrefix: uniquePrefix('rl'),
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 20 },
+      logger: 'silent' as const,
+    };
+    const errors = vi.fn();
+    const a = mkLimiter(fromIoredis(connect()), {
+      ...options,
+      logger: { debug: vi.fn(), warn: vi.fn(), error: errors },
+    });
+    const b = mkLimiter(fromIoredis(connect()), options);
+
+    (await a.acquire(1)).release(1, true);
+    a.signalRateLimit();
+    // Grown to 11 by the success, then halved: under the 10 it started at.
+    await waitUntil(async () => (await b.readState()).requestsRemaining! < 6, { timeoutMs: 3000 });
+
+    // A cross slot script would have failed and been logged, not thrown.
+    expect(errors).not.toHaveBeenCalled();
   });
 
   it('a crashed holder frees its concurrency slot after the lease', async () => {

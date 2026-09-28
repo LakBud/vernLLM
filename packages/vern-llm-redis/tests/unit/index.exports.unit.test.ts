@@ -1,18 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import * as clientsEntry from '../../src/clients/index.js';
 import * as entry from '../../src/index.js';
 import {
-  fromIoredis,
-  fromIoredisSubscriber,
-  fromNodeRedis,
-  fromNodeRedisSubscriber,
   redisCache,
   redisCircuitBreaker,
   redisRateLimit,
-  type IoredisLike,
-  type IoredisSubscriberLike,
-  type NodeRedisLike,
-  type NodeRedisSubscriberLike,
   type RedisCacheOptions,
   type RedisCircuitBreakerAdapter,
   type RedisCircuitBreakerOptions,
@@ -27,10 +20,6 @@ import {
 describe('package entrypoint exports', () => {
   it('exports exactly the documented runtime surface', () => {
     expect(Object.keys(entry).sort()).toEqual([
-      'fromIoredis',
-      'fromIoredisSubscriber',
-      'fromNodeRedis',
-      'fromNodeRedisSubscriber',
       'redisCache',
       'redisCircuitBreaker',
       'redisRateLimit',
@@ -38,10 +27,6 @@ describe('package entrypoint exports', () => {
   });
 
   it('exports the factory functions and adapter types', () => {
-    expect(typeof fromIoredis).toBe('function');
-    expect(typeof fromIoredisSubscriber).toBe('function');
-    expect(typeof fromNodeRedis).toBe('function');
-    expect(typeof fromNodeRedisSubscriber).toBe('function');
     expect(typeof redisCache).toBe('function');
     expect(typeof redisCircuitBreaker).toBe('function');
     expect(typeof redisRateLimit).toBe('function');
@@ -60,33 +45,6 @@ describe('package entrypoint exports', () => {
 
     expect(redisCache(client, cacheOptions)).toBeDefined();
     expect(subscriber.on).toBeDefined();
-
-    const ioredisClient: IoredisLike = {
-      get: async () => null,
-      set: async () => undefined,
-      del: async () => undefined,
-      eval: async () => undefined,
-    };
-    const ioredisSubscriber: IoredisSubscriberLike = {
-      subscribe: async () => undefined,
-      unsubscribe: async () => undefined,
-      on: () => undefined,
-    };
-    const nodeRedisClient: NodeRedisLike = {
-      get: async () => null,
-      set: async (_key, _value, _options) => undefined,
-      del: async () => undefined,
-      eval: async () => undefined,
-    };
-    const nodeRedisSubscriber: NodeRedisSubscriberLike = {
-      subscribe: async () => undefined,
-      unsubscribe: async () => undefined,
-    };
-
-    expect(ioredisClient).toBeDefined();
-    expect(ioredisSubscriber).toBeDefined();
-    expect(nodeRedisClient).toBeDefined();
-    expect(nodeRedisSubscriber).toBeDefined();
   });
 
   it('exports the public types used in the Redis adapter API', () => {
@@ -105,5 +63,47 @@ describe('package entrypoint exports', () => {
     expect(assertRateLimitOptions).toBeDefined();
     expect(assertRateLimiterAdapter).toBeDefined();
     expect(assertTrippingOption).toBeDefined();
+  });
+});
+
+describe('clients subpath exports', () => {
+  it('exports exactly both client adapters', () => {
+    expect(Object.keys(clientsEntry).sort()).toEqual([
+      'fromIoredis',
+      'fromIoredisSubscriber',
+      'fromNodeRedis',
+      'fromNodeRedisSubscriber',
+    ]);
+  });
+
+  it('is the only entry that exports the client adapters', () => {
+    expect(entry).not.toHaveProperty('fromIoredis');
+    expect(entry).not.toHaveProperty('fromNodeRedis');
+  });
+
+  it('exports the client types', () => {
+    const client: clientsEntry.RedisClient = {
+      get: async () => null,
+      set: async () => undefined,
+      del: async () => undefined,
+      eval: async () => undefined,
+    };
+    const subscriber: clientsEntry.RedisSubscriber = {
+      subscribe: async () => undefined,
+      on: () => undefined,
+    };
+    const node: clientsEntry.NodeRedisLike = {
+      get: async () => null,
+      set: async () => undefined,
+      del: async () => undefined,
+      eval: async () => undefined,
+    };
+    const nodeSubscriber: clientsEntry.NodeRedisSubscriberLike = {
+      subscribe: async () => undefined,
+    };
+    const io: clientsEntry.IoredisLike = client;
+    const ioSubscriber: clientsEntry.IoredisSubscriberLike = subscriber;
+
+    expect([client, subscriber, node, nodeSubscriber, io, ioSubscriber]).toHaveLength(6);
   });
 });

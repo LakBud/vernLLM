@@ -4,6 +4,7 @@ import { fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
 import { it } from '../../fixtures.js';
 import { expectNearInstant, uniquePrefix, waitForRedisValue, waitUntil } from '../../helpers.js';
 
+import type { RedisRateLimiterAdapter, RedisRateLimitOptions } from '../../../src/rateLimit.js';
 import type { Redis } from 'ioredis';
 
 describe.concurrent('redisRateLimit, real Redis, single process', () => {
@@ -125,6 +126,146 @@ describe.concurrent('redisRateLimit, real Redis, single process', () => {
 });
 
 describe.concurrent('redisRateLimit, real Redis, AIMD shared across two processes', () => {
+  it.for([true, false])(
+    'maxQueueSize counts waiters across processes (fairQueue %s)',
+    async (fairQueue, { makeLimiter, newConnection }) => {
+      const shared = {
+        keyPrefix: uniquePrefix('rl'),
+        maxConcurrent: 1,
+        maxQueueSize: 1,
+        maxQueueMs: 5000,
+        pollIntervalMs: 50,
+        fairQueue,
+      };
+      const processA = makeLimiter(shared, newConnection());
+      const processB = makeLimiter(shared, newConnection());
+      const held = await processA.acquire(1);
+
+      const controller = new AbortController();
+      const waiting = processA.acquire(1, controller.signal).catch((e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // processB has no waiter of its own, but the line is full.
+      await expect(processB.acquire(1)).rejects.toMatchObject({ code: 'rate_limit_queue_full' });
+
+      controller.abort();
+      await waiting;
+      held.release();
+      await expect(processB.acquire(1)).resolves.toBeDefined();
+    },
+  );
+
+  describe('AIMD shrinks once per window across processes', () => {
+    const aimd = { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 };
+
+    /** Two limiters on one prefix, as two processes, and the ceiling key they share. */
+    function twoProcesses(
+      makeLimiter: (options: RedisRateLimitOptions, connection?: Redis) => RedisRateLimiterAdapter,
+      newConnection: () => Redis,
+    ) {
+      const keyPrefix = uniquePrefix('rl');
+      const options = { requestsPerMinute: 16, aimd, keyPrefix };
+      return {
+        a: makeLimiter(options, newConnection()),
+        b: makeLimiter(options, newConnection()),
+        capKey: `{${keyPrefix}:rpm}:aimd`,
+      };
+    }
+
+    /** Redis's clock in ms, the one the shrink window is measured on. */
+    async function redisNow(redis: Redis): Promise<number> {
+      const [seconds, micros] = await redis.time();
+      return Number(seconds) * 1000 + Math.floor(Number(micros) / 1000);
+    }
+
+    const cap = async (redis: Redis, key: string) => Number(await redis.hget(key, 'cap'));
+
+    it('a burst of signals from two processes shrinks the ceiling once', async ({
+      redis,
+      makeLimiter,
+      newConnection,
+    }) => {
+      const { a, b, capKey } = twoProcesses(makeLimiter, newConnection);
+
+      for (let i = 0; i < 4; i++) {
+        a.signalRateLimit();
+        b.signalRateLimit();
+      }
+      await waitUntil(async () => (await cap(redis, capKey)) === 8);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      expect(await cap(redis, capKey)).toBe(8);
+    });
+
+    it('shrinks again once the window has passed', async ({
+      redis,
+      makeLimiter,
+      newConnection,
+    }) => {
+      const { a, b, capKey } = twoProcesses(makeLimiter, newConnection);
+      a.signalRateLimit();
+      await waitUntil(async () => (await cap(redis, capKey)) === 8);
+
+      // As if the last shrink were just over a window ago.
+      await redis.hset(capKey, 'shrunkAt', (await redisNow(redis)) - 60_001);
+      b.signalRateLimit();
+
+      await waitUntil(async () => (await cap(redis, capKey)) === 4);
+    });
+
+    it('a last shrink stamped in the future does not block the next one', async ({
+      redis,
+      makeLimiter,
+      newConnection,
+    }) => {
+      const { a, capKey } = twoProcesses(makeLimiter, newConnection);
+      await redis.hset(capKey, 'cap', 16, 'shrunkAt', (await redisNow(redis)) + 3_600_000);
+
+      a.signalRateLimit();
+
+      await waitUntil(async () => (await cap(redis, capKey)) === 8);
+    });
+
+    it('growth is never held back by the window', async ({ redis, makeLimiter, newConnection }) => {
+      const { a, b, capKey } = twoProcesses(makeLimiter, newConnection);
+      a.signalRateLimit();
+      await waitUntil(async () => (await cap(redis, capKey)) === 8);
+
+      (await b.acquire(1)).release(1, true);
+
+      await waitUntil(async () => (await cap(redis, capKey)) === 9);
+    });
+  });
+
+  it('a shrunk ceiling survives the bucket expiring while idle', async ({ redis, makeLimiter }) => {
+    const keyPrefix = uniquePrefix('rl');
+    const limiter = makeLimiter({
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 100 },
+      keyPrefix,
+    });
+
+    limiter.signalRateLimit(); // 10 -> 5
+    await waitUntil(async () => Number(await redis.hget(`{${keyPrefix}:rpm}:aimd`, 'cap')) === 5);
+
+    // What two idle minutes do to the bucket's own hash.
+    await redis.del(`${keyPrefix}:rpm`);
+
+    expect((await limiter.readState()).requestsRemaining).toBe(5);
+    expect(await redis.pttl(`{${keyPrefix}:rpm}:aimd`)).toBe(-1);
+  });
+
+  it('starts the AIMD ceiling no higher than maxCapacity', async ({ makeLimiter }) => {
+    const limiter = makeLimiter({
+      requestsPerMinute: 50,
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 20 },
+      keyPrefix: uniquePrefix('rl'),
+    });
+
+    expect(limiter.getState?.().requestsRemaining).toBe(20);
+    expect((await limiter.readState()).requestsRemaining).toBe(20);
+  });
+
   it('a shrink signaled by one process lowers the ceiling every process reads', async ({
     newConnection,
     makeLimiter,
@@ -148,7 +289,7 @@ describe.concurrent('redisRateLimit, real Redis, AIMD shared across two processe
     // proving the write landed in the one key both processes read,
     // rather than relying on real-time refill to observe the effect.
     await waitUntil(async () => {
-      const cap = await redisB.hget(`${keyPrefix}:rpm`, 'cap');
+      const cap = await redisB.hget(`{${keyPrefix}:rpm}:aimd`, 'cap');
       return Number(cap) === 5;
     });
   });
@@ -167,7 +308,7 @@ describe.concurrent('redisRateLimit, real Redis, AIMD shared across two processe
     first.release(undefined, true); // grows 1 -> 6
 
     await waitUntil(async () => {
-      const cap = await redisB.hget(`${keyPrefix}:rpm`, 'cap');
+      const cap = await redisB.hget(`{${keyPrefix}:rpm}:aimd`, 'cap');
       return Number(cap) === 6;
     });
   });

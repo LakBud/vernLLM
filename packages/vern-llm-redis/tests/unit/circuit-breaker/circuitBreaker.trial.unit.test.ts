@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
 import { callContext, waitFor } from '../../breakerHelpers.js';
-import { fakeRedisClient, fakeSubscriber, transitionMessage } from '../../helpers.js';
+import { fakeRedisClient, fakeSubscriber, nextVersion, transitionMessage } from '../../helpers.js';
 
 function result(
   from: string,
@@ -23,6 +23,7 @@ function result(
     '30000',
     '0',
     '0',
+    String(nextVersion()),
   ];
 }
 
@@ -119,7 +120,7 @@ describe('redisCircuitBreaker trial tokens', () => {
     expect(redis.eval).not.toHaveBeenCalled();
   });
 
-  it('releaseTrial gives the slot back once, then asks for one again', async () => {
+  it('releaseTrial gives the slot back once and does not ask for another', async () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValue(result('open', 'half-open', 1, true, '7'));
     const breaker = redisCircuitBreaker(redis, { pollIntervalMs: 0 });
@@ -129,14 +130,73 @@ describe('redisCircuitBreaker trial tokens', () => {
 
     const c = callContext();
     breaker.assertClosed('m', c);
+    await waitFor(() => expect(callsFor(redis, 'check')).toHaveLength(2));
     redis.eval.mockClear();
 
     breaker.releaseTrial?.('m', c);
     breaker.releaseTrial?.('m', c);
 
     await waitFor(() => expect(callsFor(redis, 'release')).toHaveLength(1));
-    await waitFor(() => expect(callsFor(redis, 'check')).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(callsFor(redis, 'check')).toHaveLength(0);
     expect(callsFor(redis, 'release')[0]![TOKEN_ARG]).toBe('7');
+  });
+
+  it('the check behind a call let through never asks for a slot, one behind a rejected call does', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValue(result('closed', 'closed'));
+    const breaker = redisCircuitBreaker(redis, { pollIntervalMs: 0 });
+
+    breaker.assertClosed('m', callContext());
+    await waitFor(() => expect(callsFor(redis, 'check')).toHaveLength(1));
+    expect(callsFor(redis, 'check')[0]![GRANT_ARG]).toBe('0');
+
+    redis.eval.mockResolvedValue(result('closed', 'open', 5));
+    breaker.recordFailure('m');
+    await waitFor(() => expect(breaker.getState?.('m')).toBe('open'));
+    redis.eval.mockClear();
+
+    expect(() => breaker.assertClosed('m', callContext())).toThrow();
+    await waitFor(() => expect(callsFor(redis, 'check')).toHaveLength(1));
+    expect(callsFor(redis, 'check')[0]![GRANT_ARG]).toBe('1');
+  });
+
+  it('asks for one slot at a time, however many rejected calls come in meanwhile', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(result('closed', 'open', 5));
+    const breaker = redisCircuitBreaker(redis, { pollIntervalMs: 0 });
+    breaker.recordFailure('m');
+    await waitFor(() => expect(breaker.getState?.('m')).toBe('open'));
+
+    let answer!: (value: unknown) => void;
+    redis.eval.mockClear();
+    redis.eval
+      .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+      .mockResolvedValue(result('open', 'open', 5));
+
+    for (let i = 0; i < 3; i++) expect(() => breaker.assertClosed('m', callContext())).toThrow();
+    const grants = () => callsFor(redis, 'check').map((call) => call[GRANT_ARG]);
+    await waitFor(() => expect(grants()).toEqual(['1', '0', '0']));
+
+    answer(result('open', 'open', 5));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(() => breaker.assertClosed('m', callContext())).toThrow();
+    await waitFor(() => expect(grants()).toEqual(['1', '0', '0', '1']));
+  });
+
+  it('a call spending a held slot does not take a spare one behind it', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValue(result('open', 'half-open', 1, true, '7'));
+    const breaker = redisCircuitBreaker(redis, { pollIntervalMs: 0 });
+
+    // The first call is rejected, so its check wins the slot.
+    expect(() => breaker.assertClosed('m')).not.toThrow();
+    await waitFor(() => expect(breaker.getState?.('m')).toBe('half-open'));
+    redis.eval.mockClear();
+
+    breaker.assertClosed('m', callContext());
+    await waitFor(() => expect(callsFor(redis, 'check')).toHaveLength(1));
+    expect(callsFor(redis, 'check')[0]![GRANT_ARG]).toBe('0');
   });
 });
 
@@ -185,16 +245,17 @@ describe('redisCircuitBreaker option validation', () => {
     ).toThrowError(/cannot run inside Redis/);
   });
 
-  it('validates rolling tripping like core does, as RangeErrors', () => {
+  it('rejects a bad rolling window or threshold at construction as invalid_params', () => {
     const rolling = (patch: object) =>
       redisCircuitBreaker(redis(), {
         tripping: { kind: 'rolling', windowMs: 1000, minCalls: 1, failureRatio: 0.5, ...patch },
       });
+    const invalid = expect.objectContaining({ name: 'LLMError', type: 'invalid_params' });
 
-    expect(() => rolling({ windowMs: 0 })).toThrow(RangeError);
-    expect(() => rolling({ minCalls: -1 })).toThrow(RangeError);
-    expect(() => rolling({ minCalls: 1.5 })).toThrow(RangeError);
-    expect(() => rolling({ failureRatio: 2 })).toThrow(RangeError);
+    expect(() => rolling({ windowMs: 0 })).toThrow(invalid);
+    expect(() => rolling({ minCalls: 1.5 })).toThrow(invalid);
+    expect(() => rolling({ failureRatio: 2 })).toThrow(invalid);
+    expect(() => redisCircuitBreaker(redis(), { threshold: 0 })).toThrow(invalid);
     expect(() => rolling({})).not.toThrow();
   });
 
@@ -391,5 +452,144 @@ describe('redisCircuitBreaker startup scan edge cases', () => {
 
     expect(() => breaker.dispose()).not.toThrow();
     await new Promise((r) => setTimeout(r, 10));
+  });
+});
+
+describe('redisCircuitBreaker slots from an abandoned trial', () => {
+  /** A breaker holding one slot of epoch '7', with a subscriber to push messages at it. */
+  async function holdingSlot() {
+    const redis = fakeRedisClient();
+    const subscriber = fakeSubscriber();
+    redis.eval.mockResolvedValueOnce(result('open', 'half-open', 1, true, '7'));
+    const breaker = redisCircuitBreaker(redis, {
+      keyPrefix: 'cb',
+      pollIntervalMs: 0,
+      logger: 'silent',
+      subscriber,
+    });
+    // Rejected checks after this win nothing, so only the slot above is held.
+    redis.eval.mockResolvedValue(result('half-open', 'half-open', 1));
+
+    breaker.recordFailure('m');
+    await waitFor(() => expect(breaker.getState?.('m')).toBe('half-open'));
+    return { redis, subscriber, breaker };
+  }
+
+  const halfOpenMessage = (epoch: number) =>
+    transitionMessage({
+      key: 'cb',
+      from: 'open',
+      state: 'half-open',
+      failures: 1,
+      openedAt: 1,
+      epoch,
+    });
+
+  it('keeps the slot when a message names its own epoch', async () => {
+    const { subscriber, breaker } = await holdingSlot();
+
+    subscriber.emit('cb:events', halfOpenMessage(7));
+
+    expect(() => breaker.assertClosed('m', callContext())).not.toThrow();
+  });
+
+  it('drops the slot when a message names a newer epoch', async () => {
+    const { subscriber, breaker } = await holdingSlot();
+
+    // This process missed the trial failing and a new one starting.
+    subscriber.emit('cb:events', halfOpenMessage(8));
+
+    expect(() => breaker.assertClosed('m', callContext())).toThrowError(
+      expect.objectContaining({ code: 'circuit_trial_in_flight' }),
+    );
+  });
+
+  it('drops the slot when a reply shows the lease was reclaimed under a new epoch', async () => {
+    const { redis, breaker } = await holdingSlot();
+    redis.eval.mockResolvedValueOnce([...result('half-open', 'half-open', 1).slice(0, 12), '8']);
+
+    breaker.recordSuccess('m');
+    await waitFor(() => expect(callsFor(redis, 'success')).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(() => breaker.assertClosed('m', callContext())).toThrowError(
+      expect.objectContaining({ code: 'circuit_trial_in_flight' }),
+    );
+  });
+});
+
+describe('redisCircuitBreaker trial lease heartbeat', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A breaker whose next call spends a slot of epoch '7', with fake timers running. */
+  async function spendingSlot() {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(result('open', 'half-open', 1, true, '7'));
+    const breaker = redisCircuitBreaker(redis, {
+      pollIntervalMs: 0,
+      probeLeaseMs: 3000,
+      logger: 'silent',
+    });
+    redis.eval.mockResolvedValue(result('half-open', 'half-open', 1));
+
+    breaker.recordFailure('m');
+    await waitFor(() => expect(breaker.getState?.('m')).toBe('half-open'));
+    vi.useFakeTimers();
+
+    const context = callContext();
+    breaker.assertClosed('m', context);
+    return { redis, breaker, context };
+  }
+
+  it('renews the lease with the slot token about three times per lease while the call runs', async () => {
+    const { redis } = await spendingSlot();
+
+    await vi.advanceTimersByTimeAsync(3000);
+
+    const renewals = callsFor(redis, 'renew');
+    expect(renewals).toHaveLength(3);
+    expect(renewals.every((call) => call[TOKEN_ARG] === '7')).toBe(true);
+  });
+
+  it.each([
+    [
+      'recordSuccess',
+      (b: ReturnType<typeof redisCircuitBreaker>, c: object) => b.recordSuccess('m', c as never),
+    ],
+    [
+      'recordFailure',
+      (b: ReturnType<typeof redisCircuitBreaker>, c: object) => b.recordFailure('m', c as never),
+    ],
+    [
+      'releaseTrial',
+      (b: ReturnType<typeof redisCircuitBreaker>, c: object) => b.releaseTrial?.('m', c as never),
+    ],
+    ['dispose', (b: ReturnType<typeof redisCircuitBreaker>) => b.dispose()],
+  ])('stops renewing once %s ends the call', async (_name, end) => {
+    const { redis, breaker, context } = await spendingSlot();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(callsFor(redis, 'renew')).toHaveLength(1);
+
+    end(breaker, context);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(callsFor(redis, 'renew')).toHaveLength(1);
+  });
+
+  it('a call without a context holds no permit, so nothing renews', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce(result('open', 'half-open', 1, true, '7'));
+    const breaker = redisCircuitBreaker(redis, { pollIntervalMs: 0, probeLeaseMs: 300 });
+    redis.eval.mockResolvedValue(result('half-open', 'half-open', 1));
+    breaker.recordFailure('m');
+    await waitFor(() => expect(breaker.getState?.('m')).toBe('half-open'));
+    vi.useFakeTimers();
+
+    breaker.assertClosed('m');
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(callsFor(redis, 'renew')).toHaveLength(0);
   });
 });

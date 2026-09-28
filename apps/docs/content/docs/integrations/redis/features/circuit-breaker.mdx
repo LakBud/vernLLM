@@ -11,7 +11,8 @@ with the built-in one. The differences are listed under [Differences from core](
 
 ```ts title="redis-circuit-breaker-full.ts"
 import Redis from 'ioredis';
-import { redisCircuitBreaker, fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis';
+import { redisCircuitBreaker } from 'vern-llm-redis';
+import { fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis/clients';
 
 const connection = new Redis();
 const client = fromIoredis(connection);
@@ -28,20 +29,20 @@ const breaker = redisCircuitBreaker(client, {
 
 | Option                 | Default               | Notes                                                                                                                                                                              |
 | ---------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `threshold`            | `5`                   | Consecutive failures before the circuit opens.                                                                                                                                     |
+| `threshold`            | `5`                   | Consecutive failures before the circuit opens. An integer of at least 1.                                                                                                           |
 | `cooldownMs`           | `30000`               | How long the circuit stays open before a trial request is allowed.                                                                                                                 |
-| `isolateByModel`       | `false`               | Track a separate circuit per model instead of one shared bucket.                                                                                                                   |
+| `isolateByModel`       | `false`               | Track a separate circuit per model under `keyPrefix:model`. A call with no model uses `keyPrefix` itself, apart from any model named `default`.                                    |
 | `keyPrefix`            | `'vernllm:cb'`        | Prefix for every Redis key this adapter writes.                                                                                                                                    |
-| `onStateChange`        | none                  | Called on every real state transition, the same handler shape as the built-in in-process breaker.                                                                                  |
+| `onStateChange`        | none                  | Called once per real state transition in each process, the same handler shape as the built-in in-process breaker.                                                                  |
 | `subscriber`           | none                  | A dedicated pub or sub connection (`fromIoredisSubscriber`/`fromNodeRedisSubscriber`). Enables push based state updates.                                                           |
 | `pollIntervalMs`       | `5000`                | Poll bound for a transition on an idle key. Skipped while `subscriber` is connected, used as a fallback if it fails to connect. Set `0` to disable.                                |
 | `halfOpenProbes`       | `1`                   | Trial calls allowed per half-open cycle, shared across every process.                                                                                                              |
 | `halfOpenSuccessRatio` | `1`                   | Fraction of the probes that must succeed to close the circuit.                                                                                                                     |
-| `cooldownBackoff`      | none                  | `{ multiplier, maxMs }`. Grows the cooldown on each repeat open, with full jitter.                                                                                                 |
+| `cooldownBackoff`      | none                  | `{ multiplier, maxMs }`. Grows the cooldown on each repeat open. Jitter only spreads the growth, so no cooldown is shorter than `cooldownMs` unless `maxMs` is.                    |
 | `tripping`             | consecutive           | `{ kind: 'consecutive', threshold }` or `{ kind: 'rolling', windowMs, minCalls, failureRatio }`. Shared by every process.                                                          |
 | `logger`               | the instance's logger | Where background failures are reported. Defaults to the `logger` of the `VernLLM` it is passed to, or the one created last if several share the adapter. `'silent'` discards them. |
 | `prepareTimeoutMs`     | `250`                 | How long a call waits for the refresh described in [Refreshing before a check](#refreshing-before-a-check) before it carries on with local state.                                  |
-| `probeLeaseMs`         | `60000`               | How long a trial slot may go unreported before Redis hands the trial to someone else. Set it above your slowest call.                                                              |
+| `probeLeaseMs`         | `60000`               | How long a trial slot may go unreported before Redis hands the trial to someone else. A running trial call renews it, so it only matters for a holder that crashed or lost Redis.  |
 
 ## Behavior with and without a subscriber
 
@@ -59,18 +60,30 @@ message arrives, typically within a few ms, so `subscriber` is strongly recommen
   with `fromIoredisSubscriber`/`fromNodeRedisSubscriber`.
 </Callout>
 
+At startup a new process seeds its local copy with the circuits already open in Redis, reading only
+`keyPrefix` and keys under `keyPrefix:`. That needs the client's `scan`. Without it, each key's
+first `prepare` finds out instead.
+
 ## Half-open trials
 
-A trial slot is won in Redis, so exactly one process gets each slot. The winner receives a token for
+A trial slot is won in Redis, so exactly one process gets each slot. A call that is let through never
+takes a second slot behind it, and a burst of rejected calls asks for one slot at a time, so with
+several `halfOpenProbes` the others stay free for other processes. The winner receives a token for
 that trial, and only an outcome carrying it counts. A late success from a call that started before
 the circuit opened, or from a holder whose slot was reclaimed, is ignored instead of settling a trial
 it was never part of. A slot whose holder never reports (a crash, or a process that stopped calling)
 is reclaimed after `probeLeaseMs`, and a new trial begins. A background poll only asks for a slot
 when this process has made a call recently, so an idle process never holds one.
 
-When a call that claimed a trial ends without a success or failure being recorded (an error that
-does not count toward the breaker, an abort), `vern-llm` calls `releaseTrial`, which returns the
-slot immediately.
+A call spending a slot renews its lease about three times per `probeLeaseMs` until it records an
+outcome, so a slow trial is never handed over mid call. When a call that claimed a trial ends
+without a success or failure being recorded (an error that does not count toward the breaker, an
+abort), `vern-llm` calls `releaseTrial`, which returns the slot immediately. The next call wins it
+again through `prepare`.
+
+Each change is reported once per process, however many replies, messages or polls carry it: Redis
+keeps a version on every bucket that keeps rising even after an idle key expires, and a reply older
+than what a process already knows is ignored.
 
 All timestamps come from Redis, so a process with a skewed clock cannot shorten or pin a cooldown.
 Redis 5 or newer is required.
@@ -102,15 +115,17 @@ not at all. A slot won by `prepare` for a call that is then aborted is reclaimed
 ## Differences from core
 
 Core accepts a function for `cooldownBackoff` and a custom `TrippingPolicy`. Neither can run inside
-Redis, so this adapter accepts only the shapes in the options table and throws at construction for
-the others. The rolling window is split into 10 sub buckets, the same as core's. `open()`, `close()`
+Redis, so this adapter accepts only the shapes in the options table. Every bad option throws
+`LLMError('invalid_params')` at construction, a bad rolling window included, where core throws
+`RangeError`. The rolling window is split into 10 sub buckets, the same as core's. `open()`, `close()`
 and `getFailureBreakdown()` are supported, and like `getState()` they reflect this process's local
 cache, which converges through the subscriber or the poll. `readState()`, used by
 `llm.readCircuitStates()`, asks Redis for the live state instead and refreshes that cache.
 
 ## Shutting down
 
-`dispose()` stops the background poll and detaches from the subscriber. Call it before closing the
+`dispose()` stops the background poll and trial lease renewals, and detaches from the subscriber. A
+channel shared with another adapter stays subscribed until the last one is disposed. Call it before closing the
 Redis client, otherwise a leftover timer keeps hitting a closed connection. State already in Redis is
 untouched.
 
@@ -125,7 +140,8 @@ no slot free. These match the built-in breaker, so error handling written agains
 
 Writes fail closed: a failed `recordFailure`, `recordSuccess`, or background transition attempt is
 caught, logged, and swallowed rather than thrown, so a Redis outage does not itself take down every
-call through VernLLM.
+call through VernLLM. `prepare` and `readState` reject with `LLMError('network')` and code
+`connection_failed`, the original error as its `cause`.
 
 <Callout type="warn">
   `assertClosed` itself never calls Redis, it decides from the local copy, and `prepare` does the

@@ -29,6 +29,8 @@ export function fakeRedisClient(): RedisClient & {
 export function fakeSubscriber(): RedisSubscriber & {
   subscribe: ReturnType<typeof vi.fn>;
   emit: (channel: string, message: string) => void;
+  /** How many message listeners are attached right now. */
+  listenerCount: () => number;
 } {
   const listeners: Array<(channel: string, message: string) => void> = [];
 
@@ -38,10 +40,49 @@ export function fakeSubscriber(): RedisSubscriber & {
       if (event === 'message') listeners.push(listener);
       return this;
     },
-    emit(channel, message) {
-      for (const listener of listeners) listener(channel, message);
+    off(event, listener) {
+      const index = event === 'message' ? listeners.indexOf(listener) : -1;
+      if (index !== -1) listeners.splice(index, 1);
+      return this;
     },
+    emit(channel, message) {
+      for (const listener of [...listeners]) listener(channel, message);
+    },
+    listenerCount: () => listeners.length,
   };
+}
+
+/** Which command a script call went out as. */
+export type ScriptCommand = 'eval' | 'evalsha';
+
+/**
+ * Routes both script commands on `redis` through one mock, so a test can
+ * count, delay or fail every script call however it is sent: the adapters
+ * send a script's source once and its SHA1 after that. Calls pass through
+ * to Redis until the mock is given another implementation; `real` sends
+ * one on unchanged, for an implementation that only adds to it.
+ */
+export function spyOnScripts(redis: Redis) {
+  const realEval = redis.eval.bind(redis) as (...args: unknown[]) => Promise<unknown>;
+  const realEvalsha = redis.evalsha.bind(redis) as (...args: unknown[]) => Promise<unknown>;
+  const real = (command: ScriptCommand, ...args: unknown[]): Promise<unknown> =>
+    command === 'eval' ? realEval(...args) : realEvalsha(...args);
+
+  const scripts = vi.fn(real);
+  const evalSpy = vi
+    .spyOn(redis, 'eval')
+    .mockImplementation(((...args: unknown[]) => scripts('eval', ...args)) as never);
+  const evalshaSpy = vi
+    .spyOn(redis, 'evalsha')
+    .mockImplementation(((...args: unknown[]) => scripts('evalsha', ...args)) as never);
+
+  /** Puts both commands back on `redis`, leaving every other spy alone. */
+  const restore = () => {
+    evalSpy.mockRestore();
+    evalshaSpy.mockRestore();
+  };
+
+  return Object.assign(scripts, { real, restore });
 }
 
 /** A fresh ioredis connection to the local Redis instance the integration suite runs against. */
@@ -79,6 +120,14 @@ export async function waitUntil(
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error(`waitUntil: condition not met within ${timeoutMs}ms`);
+}
+
+/** Waits until `channel` has at least `count` subscribers, so a publish can't miss a SUBSCRIBE still in flight. */
+export async function waitForSubscribers(redis: Redis, channel: string, count = 1): Promise<void> {
+  await waitUntil(async () => {
+    const reply = (await redis.pubsub('NUMSUB', channel)) as unknown[];
+    return Number(reply[1]) >= count;
+  });
 }
 
 /**
@@ -169,19 +218,45 @@ export function createMockClient(script: Array<{ content: string } | Error>): {
   return { client, create };
 }
 
+let lastVersion = 0;
+
+/**
+ * A transition version newer than any handed out before, the way Redis
+ * raises one on every real change. Fake replies and messages default to
+ * it, so each reads as news unless a test pins `ver` itself.
+ */
+export function nextVersion(): number {
+  lastVersion += 1;
+  return lastVersion;
+}
+
 /**
  * A pub/sub message as TRANSITION_SCRIPT publishes it, with the clock,
- * cooldown and slot fields filled in. Override only what a test cares about.
+ * cooldown, slot, version and epoch fields filled in. Override only what a test
+ * cares about. `from` defaults to `state`, a message that only says where
+ * the bucket is now.
  */
 export function transitionMessage(
   fields: { key: string; state: string; failures: number; openedAt: number } & Partial<{
+    from: string;
     now: number;
     cooldown: number;
     slots: number;
     grantAt: number;
+    ver: number;
+    epoch: number;
   }>,
 ): string {
-  return JSON.stringify({ now: 1000, cooldown: 30_000, slots: 0, grantAt: 0, ...fields });
+  return JSON.stringify({
+    from: fields.state,
+    now: 1000,
+    cooldown: 30_000,
+    slots: 0,
+    grantAt: 0,
+    ver: nextVersion(),
+    epoch: 0,
+    ...fields,
+  });
 }
 
 /**

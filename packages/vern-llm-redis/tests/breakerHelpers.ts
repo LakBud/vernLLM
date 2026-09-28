@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import { waitUntil } from './helpers.js';
+import { nextVersion, waitUntil } from './helpers.js';
 
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from 'vern-llm';
 
@@ -45,9 +45,15 @@ export async function trip(breaker: CircuitBreakerAdapter, model = 'm'): Promise
  * A process that has never touched a key treats it as closed (documented:
  * assertClosed is synchronous, Redis isn't). One call, whose background
  * check pulls Redis's real state into the local cache, teaches it.
+ * The startup scan can win that race, so a call already rejected as open
+ * means the breaker has learned, which is all this waits for.
  */
 export async function learn(breaker: CircuitBreakerAdapter, model = 'm'): Promise<void> {
-  breaker.assertClosed(model);
+  try {
+    breaker.assertClosed(model);
+  } catch {
+    // Already learned, from the startup scan.
+  }
   await waitUntil(() => breaker.getState?.(model) !== 'closed');
 }
 
@@ -103,8 +109,9 @@ export async function claimTrial(
 /**
  * TRANSITION_SCRIPT's reply as a fake Redis would return it: [from, to,
  * failures, wonProbe, openedAt, wonToken, breakdown, now, cooldown,
- * grantAt, slots], all strings. Pass `token` to make it a reply that won
- * a half-open slot of that epoch.
+ * grantAt, slots, ver, epoch], all strings. Pass `token` to make it a
+ * reply that won a half-open slot of that epoch. `ver` defaults to a fresh
+ * version. `epoch` defaults to `token`, or none at all.
  */
 export function transitionReply(
   from: string,
@@ -117,6 +124,8 @@ export function transitionReply(
     cooldown?: number;
     grantAt?: number;
     slots?: number;
+    ver?: number;
+    epoch?: string;
   } = {},
 ): string[] {
   return [
@@ -131,5 +140,7 @@ export function transitionReply(
     String(fields.cooldown ?? 30_000),
     String(fields.grantAt ?? 0),
     String(fields.slots ?? 0),
+    String(fields.ver ?? nextVersion()),
+    fields.epoch ?? fields.token ?? '',
   ];
 }

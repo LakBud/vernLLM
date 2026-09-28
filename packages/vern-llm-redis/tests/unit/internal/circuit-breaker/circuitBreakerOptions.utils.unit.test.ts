@@ -134,19 +134,61 @@ describe('resolveCircuitBreakerOptions validation', () => {
     );
   });
 
-  it('throws RangeError for a bad rolling window, matching core', () => {
-    const rolling = (over: object) =>
+  it.each([
+    [{ windowMs: 0 }, 'tripping.windowMs must be a finite number greater than 0 (got 0).'],
+    [
+      { windowMs: Infinity },
+      'tripping.windowMs must be a finite number greater than 0 (got Infinity).',
+    ],
+    [{ minCalls: -1 }, 'tripping.minCalls must be a non-negative integer (got -1).'],
+    [{ minCalls: 1.5 }, 'tripping.minCalls must be a non-negative integer (got 1.5).'],
+    [{ failureRatio: 2 }, 'tripping.failureRatio must be a finite number from 0 to 1 (got 2).'],
+    [
+      { failureRatio: -0.1 },
+      'tripping.failureRatio must be a finite number from 0 to 1 (got -0.1).',
+    ],
+    [
+      { failureRatio: Number.NaN },
+      'tripping.failureRatio must be a finite number from 0 to 1 (got NaN).',
+    ],
+  ])('rejects a rolling window with %j as invalid_params', (over, message) => {
+    expect(() =>
       resolveCircuitBreakerOptions({
         tripping: { kind: 'rolling', windowMs: 1000, minCalls: 1, failureRatio: 0.5, ...over },
-      });
+      }),
+    ).toThrow(expect.objectContaining({ name: 'LLMError', type: 'invalid_params', message }));
+  });
 
-    expect(() => rolling({ windowMs: 0 })).toThrow(RangeError);
-    expect(() => rolling({ windowMs: Infinity })).toThrow(RangeError);
-    expect(() => rolling({ minCalls: -1 })).toThrow(RangeError);
-    expect(() => rolling({ minCalls: 1.5 })).toThrow(RangeError);
-    expect(() => rolling({ failureRatio: 2 })).toThrow(RangeError);
-    expect(() => rolling({ failureRatio: -0.1 })).toThrow(RangeError);
-    expect(() => rolling({ failureRatio: Number.NaN })).toThrow(RangeError);
+  it.each([0, -1, 2.5, Number.NaN, Infinity])('rejects threshold %s', (threshold) => {
+    expect(() => resolveCircuitBreakerOptions({ threshold })).toThrow(
+      expect.objectContaining({
+        type: 'invalid_params',
+        message: `threshold must be an integer of at least 1 (got ${threshold}).`,
+      }),
+    );
+  });
+
+  it('names tripping.threshold when the bad count came from tripping', () => {
+    expect(() =>
+      resolveCircuitBreakerOptions({ tripping: { kind: 'consecutive', threshold: 0 } }),
+    ).toThrow(
+      expect.objectContaining({
+        message: 'tripping.threshold must be an integer of at least 1 (got 0).',
+      }),
+    );
+  });
+
+  it('accepts a threshold of 1', () => {
+    expect(resolveCircuitBreakerOptions({ threshold: 1 }).threshold).toBe(1);
+  });
+
+  it('rejects an unknown tripping kind', () => {
+    expect(() => resolveCircuitBreakerOptions({ tripping: { kind: 'sliding' } as never })).toThrow(
+      expect.objectContaining({
+        type: 'invalid_params',
+        message: 'tripping.kind must be "consecutive" or "rolling" (got sliding).',
+      }),
+    );
   });
 
   it('treats a null tripping as unset and falls back to the default', () => {

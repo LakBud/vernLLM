@@ -20,6 +20,7 @@ import {
   createMockClient,
   expectNearInstant,
   fakeSubscriber,
+  spyOnScripts,
   waitForRedisValue,
   uniquePrefix,
   waitForCluster,
@@ -27,6 +28,21 @@ import {
 } from '../../helpers.js';
 
 describe('fakeSubscriber', () => {
+  it('off removes only a message listener it was given', () => {
+    const subscriber = fakeSubscriber();
+    const kept = vi.fn();
+    subscriber.on('message', kept);
+
+    subscriber.off!('other' as 'message', kept); // not a message listener
+    subscriber.off!('message', vi.fn()); // never added
+    expect(subscriber.listenerCount()).toBe(1);
+
+    subscriber.off!('message', kept);
+    subscriber.emit('chan', 'hi');
+    expect(subscriber.listenerCount()).toBe(0);
+    expect(kept).not.toHaveBeenCalled();
+  });
+
   it('ignores a registration for an event other than "message"', () => {
     const subscriber = fakeSubscriber();
     const onMessage = vi.fn();
@@ -297,5 +313,67 @@ describe('waitForCluster', () => {
     });
 
     await expect(waitForCluster(nodes, 30)).rejects.toThrow(/within 30ms/);
+  });
+});
+
+describe('spyOnScripts', () => {
+  /**
+   * Just the two script commands, as plain functions like ioredis's own.
+   * A `vi.fn` would not do: spying on a mock reuses that same mock.
+   */
+  function fakeConnection() {
+    const sent: unknown[][] = [];
+    const connection = {
+      async eval(...args: unknown[]) {
+        sent.push(['eval', ...args]);
+        return 'from eval';
+      },
+      async evalsha(...args: unknown[]) {
+        sent.push(['evalsha', ...args]);
+        return 'from evalsha';
+      },
+    };
+    return { sent, redis: connection as unknown as Redis };
+  }
+
+  it('passes both commands through by default, recording which one went out', async () => {
+    const { sent, redis } = fakeConnection();
+    const scripts = spyOnScripts(redis);
+
+    await expect(redis.eval('script', 1, 'k')).resolves.toBe('from eval');
+    await expect(redis.evalsha('sha', 0)).resolves.toBe('from evalsha');
+
+    const expected = [
+      ['eval', 'script', 1, 'k'],
+      ['evalsha', 'sha', 0],
+    ];
+    expect(scripts.mock.calls).toEqual(expected);
+    expect(sent).toEqual(expected);
+  });
+
+  it('lets a test replace both at once, and still reach Redis through real', async () => {
+    const { sent, redis } = fakeConnection();
+    const scripts = spyOnScripts(redis);
+    scripts.mockRejectedValue(new Error('down'));
+
+    await expect(redis.eval('script', 0)).rejects.toThrow('down');
+    await expect(redis.evalsha('sha', 0)).rejects.toThrow('down');
+    await expect(scripts.real('evalsha', 'sha', 0)).resolves.toBe('from evalsha');
+    expect(sent).toEqual([['evalsha', 'sha', 0]]);
+  });
+
+  it('restore puts both commands back and leaves other spies alone', async () => {
+    const { sent, redis } = fakeConnection();
+    const other = vi.spyOn(Date, 'now').mockReturnValue(5);
+    const scripts = spyOnScripts(redis);
+
+    scripts.restore();
+    await redis.eval('script', 0);
+    await redis.evalsha('sha', 0);
+
+    expect(scripts).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(2);
+    expect(Date.now()).toBe(5);
+    other.mockRestore();
   });
 });

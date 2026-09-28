@@ -2,8 +2,10 @@ export interface Bucket {
   reason: 'concurrency' | 'rpm' | 'tpm';
   key: string;
   initialCapacity: number;
-  /** 'permin' refills on a clock (requests/min, tokens/min). 'lease' is the concurrency bucket, held as expiring leases that only an explicit release (or a lapsed lease) frees. */
+  /** 'permin' refills per minute. 'lease' is concurrency, held as expiring leases. */
   rateMode: 'permin' | 'lease';
+  /** The AIMD ceiling key, rpm bucket only. Never expires, same cluster slot as the bucket. */
+  capKey?: string;
 }
 
 export interface BuildBucketsOptions {
@@ -11,15 +13,17 @@ export interface BuildBucketsOptions {
   maxConcurrent?: number;
   requestsPerMinute?: number;
   tokensPerMinute?: number;
+  /** Set when AIMD resizes the rpm bucket. Its start is clamped to maxCapacity. */
+  aimd?: { maxCapacity: number };
 }
 
 export interface BuiltBuckets {
   buckets: Bucket[];
-  /** The requests/min bucket specifically, or undefined if not configured. AIMD only ever resizes this one. */
+  /** The requests per minute bucket, the one AIMD resizes. */
   rpmBucket: Bucket | undefined;
 }
 
-/** Builds the (up to three) buckets a RedisRateLimitOptions config asks for, in a fixed order: concurrency, then requests/min, then tokens/min. */
+/** The buckets asked for, in order: concurrency, requests, tokens. */
 export function buildBuckets(options: BuildBucketsOptions): BuiltBuckets {
   const buckets: Bucket[] = [];
   let rpmBucket: Bucket | undefined;
@@ -34,11 +38,15 @@ export function buildBuckets(options: BuildBucketsOptions): BuiltBuckets {
   }
 
   if (options.requestsPerMinute) {
+    const key = `${options.keyPrefix}:rpm`;
     rpmBucket = {
       reason: 'rpm',
-      key: `${options.keyPrefix}:rpm`,
-      initialCapacity: options.requestsPerMinute,
+      key,
+      initialCapacity: options.aimd
+        ? Math.min(options.requestsPerMinute, options.aimd.maxCapacity)
+        : options.requestsPerMinute,
       rateMode: 'permin',
+      ...(options.aimd ? { capKey: sameSlotKey(key, ':aimd') } : {}),
     };
     buckets.push(rpmBucket);
   }
@@ -55,7 +63,27 @@ export function buildBuckets(options: BuildBucketsOptions): BuiltBuckets {
   return { buckets, rpmBucket };
 }
 
-/** How much of a bucket's capacity one call consumes: estimated tokens for tpm, one unit for everything else. */
+/** One call's share: estimated tokens for tpm, else 1. */
 export function amountFor(bucket: Bucket, estimatedTokens: number): number {
   return bucket.reason === 'tpm' ? estimatedTokens : 1;
+}
+
+/** A script's keys for `bucket`: the bucket, then its ceiling key if any. */
+export function keysFor(bucket: Bucket): string[] {
+  return bucket.capKey ? [bucket.key, bucket.capKey] : [bucket.key];
+}
+
+/** Redis Cluster's hash tag, if the key has one. */
+function hashTag(key: string): string | undefined {
+  const open = key.indexOf('{');
+  if (open === -1) return undefined;
+
+  const close = key.indexOf('}', open + 1);
+  return close > open + 1 ? key.slice(open + 1, close) : undefined;
+}
+
+/** A key in the same cluster slot as `key`. With a stray `}` and no tag it can't be, and a cluster rejects the pair. */
+export function sameSlotKey(key: string, suffix: string): string {
+  if (hashTag(key) !== undefined || key.includes('}')) return `${key}${suffix}`;
+  return `{${key}}${suffix}`;
 }

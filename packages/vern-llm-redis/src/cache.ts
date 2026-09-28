@@ -4,15 +4,11 @@ import type { RedisClient } from './types.js';
 import type { CacheAdapter } from 'vern-llm';
 
 export interface RedisCacheOptions {
-  /** Prefix for every Redis key this adapter writes. Default "vernllm:cache". */
+  /** Prefix for every key. Default "vernllm:cache". */
   keyPrefix?: string;
 }
 
-/**
- * A CacheAdapter backed by Redis. Matches vern-llm's own CacheAdapter
- * interface directly, drop it in wherever InMemoryCacheAdapter is used
- * today for a cache shared across every process.
- */
+/** A CacheAdapter backed by Redis, shared by every process. */
 export function redisCache<T = unknown>(
   redis: RedisClient,
   options: RedisCacheOptions = {},
@@ -31,9 +27,7 @@ export function redisCache<T = unknown>(
       try {
         return { hit: true, value: JSON.parse(raw) as T };
       } catch {
-        // A corrupted or foreign value under this key is treated as a
-        // miss rather than thrown, since a bad cache entry should never
-        // break the call it was meant to speed up.
+        // A corrupt entry is a miss, never an error.
         return { hit: false, value: null };
       }
     },
@@ -46,10 +40,7 @@ export function redisCache<T = unknown>(
         );
       }
 
-      // A spent TTL means "expired on arrival", as it does for
-      // InMemoryCacheAdapter: nothing is stored and any older value under
-      // the key is dropped. Redis would reject it with "invalid expire
-      // time" instead.
+      // A spent TTL expires on arrival, as in InMemoryCacheAdapter.
       const px = ttlToPx(ttl);
       if (px === undefined) {
         await redis.del(fullKey(key));

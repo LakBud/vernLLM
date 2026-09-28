@@ -2,7 +2,12 @@ import { expect } from 'vitest';
 
 import { fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
 import { it } from '../../fixtures.js';
-import { uniquePrefix, waitForRedisValue } from '../../helpers.js';
+import {
+  expectNearInstant,
+  uniquePrefix,
+  waitForRedisValue,
+  waitForSubscribers,
+} from '../../helpers.js';
 
 it('a release right after a slow SUBSCRIBE still wakes the waiter promptly', async ({
   redis,
@@ -34,4 +39,41 @@ it('a release right after a slow SUBSCRIBE still wakes the waiter promptly', asy
   held.release();
   await waiting;
   expect(acquiredAt - releasedAt).toBeLessThan(1500);
+});
+
+it('disposing one limiter leaves the others on the same subscriber and channel woken', async ({
+  redis,
+  makeLimiter,
+  newConnection,
+}) => {
+  const prefix = uniquePrefix('rl');
+  const shared = { keyPrefix: prefix, maxConcurrent: 1, pollIntervalMs: 5000, maxQueueMs: 8000 };
+  const subscriberConnection = newConnection();
+  const subscriber = fromIoredisSubscriber(subscriberConnection);
+
+  const leaving = makeLimiter({ ...shared, subscriber }, newConnection());
+  const staying = makeLimiter({ ...shared, subscriber }, newConnection());
+  // The subscription is live before one of the limiters leaves.
+  await waitForSubscribers(redis, `${prefix}:wake`);
+  const held = await staying.acquire(1);
+
+  leaving.dispose();
+  expect(subscriberConnection.listenerCount('message')).toBe(1);
+
+  let acquiredAt = 0;
+  const waiting = staying.acquire(1).then(() => (acquiredAt = Date.now()));
+  await waitForRedisValue(
+    () => redis.hlen(`${prefix}:queue`),
+    (n) => n > 0,
+    { timeoutMs: 1000, intervalMs: 10 },
+  );
+
+  const releasedAt = Date.now();
+  held.release();
+  await waiting;
+  // A poll would take 5000ms. Only the release's message wakes it this fast.
+  expectNearInstant(acquiredAt - releasedAt);
+
+  staying.dispose();
+  expect(subscriberConnection.listenerCount('message')).toBe(0);
 });

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
 import { fromIoredis, fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
-import { connect, uniquePrefix, waitUntil } from '../../helpers.js';
+import { connect, uniquePrefix, waitForSubscribers, waitUntil } from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
 
@@ -183,28 +183,65 @@ describe('redisCircuitBreaker, real Redis, two processes sharing state', () => {
       onStateChange: (from, to) => events.push({ from, to }),
     });
 
-    // Give both SUBSCRIBE commands time to actually reach Redis before
-    // the transition fires; subscribe() isn't awaited by the adapter
-    // itself (fire-and-forget, matching production usage), so a message
-    // published before the subscription lands would otherwise be missed.
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // subscribe() isn't awaited by the adapter (fire-and-forget, as in
+    // production), so wait for both SUBSCRIBEs to land before the transition
+    // fires, or its message would be missed.
+    await waitForSubscribers(redisA, `${keyPrefix}:events`, 2);
 
     breakerA.recordFailure('m');
 
     // breakerB never called recordFailure itself, pub/sub alone should
-    // deliver the transition and make assertClosed throw. Poll on
-    // events itself, not by repeatedly calling assertClosed: each such
-    // call fires its own background 'check' against Redis (see
-    // redisCircuitBreaker's own docs on the no-subscriber fallback
-    // path), which can race ahead of the pub/sub message and observe
-    // the state as already open directly, a no-op from breakerB's own
-    // perspective that steals the transition observation away from
-    // pub/sub before it ever arrives, exactly the failure this test
-    // exists to catch. Waiting on events avoids introducing that
-    // competing check in the first place.
+    // deliver the transition. Waiting on events rather than polling
+    // assertClosed keeps its own checks out of the way, so this proves
+    // the message path specifically.
     await waitUntil(() => events.length > 0);
 
     expect(() => breakerB.assertClosed('m')).toThrow();
     expect(events).toContainEqual({ from: 'closed', to: 'open' });
+  });
+
+  it('each process reports one change once, however many checks, replies and messages carry it', async () => {
+    const keyPrefix = uniquePrefix('cb');
+    const eventsA: string[] = [];
+    const eventsB: string[] = [];
+    const subscriberA = redisA.duplicate();
+    const subscriberB = redisB.duplicate();
+    const make = (redis: Redis, subscriber: Redis, events: string[]) =>
+      redisCircuitBreaker(fromIoredis(redis), {
+        threshold: 1,
+        cooldownMs: 10_000,
+        keyPrefix,
+        pollIntervalMs: 0,
+        logger: 'silent',
+        subscriber: fromIoredisSubscriber(subscriber),
+        onStateChange: (from, to) => events.push(`${from}->${to}`),
+      });
+    const breakerA = make(redisA, subscriberA, eventsA);
+    const breakerB = make(redisB, subscriberB, eventsB);
+    await waitForSubscribers(redisA, `${keyPrefix}:events`, 2);
+
+    breakerA.recordFailure('m');
+    breakerA.recordFailure('m');
+    // Checks on both sides race the reply and the pub/sub message.
+    for (let i = 0; i < 10; i++) {
+      for (const breaker of [breakerA, breakerB]) {
+        try {
+          breaker.assertClosed('m');
+        } catch {
+          // Rejected once the trip is known, which is fine here.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await waitUntil(() => eventsA.length > 0 && eventsB.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(eventsA).toEqual(['closed->open']);
+    expect(eventsB).toEqual(['closed->open']);
+
+    breakerA.dispose();
+    breakerB.dispose();
+    await subscriberA.quit();
+    await subscriberB.quit();
   });
 });
