@@ -646,7 +646,7 @@ you were given.
   Claude major 6 and later, `'required'` and `{ name }` throw `LLMError('invalid_params')`, code
   `unsupported_capability`, before dispatch, so fallback can still try another target. Adjust the
   list with `forcedToolChoiceUnsupportedModels` on [`fromAnthropic`](/docs/adapters/anthropic) or
-  [`fromBedrock`](/docs/adapters/bedrock).
+  [`fromBedrock`](/docs/integrations/bedrock).
 
 GPT-6 and later accept tools on Chat Completions only with `reasoning_effort: "none"`.
 `fromOpenAICompatible` sends it when no reasoning was asked for, and throws the same error when

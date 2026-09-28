@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/adapters/index.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,
@@ -10,11 +10,5 @@ export default defineConfig({
   publint: true,
   unused: true,
 
-  external: [
-    '@aws-sdk/client-bedrock-runtime',
-    '@anthropic-ai/sdk',
-    '@google/genai',
-    'groq-sdk',
-    'openai',
-  ],
+  external: ['@anthropic-ai/sdk', '@google/genai', 'groq-sdk', 'openai'],
 });

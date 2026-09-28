@@ -1,31 +1,12 @@
 import { LLMError } from '../../types/errors.js';
 
 /**
- * Parses a Server-Sent-Events byte/text stream into the JSON payload of
- * each `data:` frame, in arrival order. Generic over transport: works with
- * anything that hands back progressively-arriving `Uint8Array` or `string`
- * chunks via async iteration: native `fetch`'s `response.body` (wrapped
- * to be iterable, see `webStreamToAsyncIterable` in `fetch.ts`), axios's
- * Node `Readable` (already async-iterable, no wrapping needed), etc, so
- * this framing layer doesn't care which transport produced the bytes.
- *
- * Follows the SSE spec's frame-delimiting rules closely enough for LLM
- * streaming responses: frames are separated by a blank line, each frame
- * may carry one or more `data:` lines (joined with `\n` per spec when
- * there's more than one), `:`-prefixed lines are comments and ignored, and
- * other SSE fields (`event:`, `id:`, `retry:`) are ignored since VernLLM
- * only needs the payload. A frame whose data is exactly `[DONE]` (the
- * sentinel several providers, notably OpenAI, send to mark stream end)
- * ends iteration without yielding it.
- *
- * Line endings: `\r\n` and bare `\r` (both legal per the SSE spec, alongside `\n`) are normalized
- * to `\n` before frame splitting. A `\r` at the very end of the currently-buffered text is left
- * alone until either more text arrives (in case it's the first half of a split `\r\n` pair) or the
- * stream ends, so a `\r\n` pair split across two transport chunks is never misread as two blank
- * lines.
- *
- * Malformed JSON in a frame throws `LLMError('parse')`, consistent with
- * how malformed JSON is handled elsewhere in VernLLM.
+ * Parses a Server-Sent-Events stream of bytes or text into each frame's
+ * JSON `data:` payload, in order, over any transport. Multi-line data is
+ * joined with `\n`, comment-only frames yield `SSE_PING`, other fields are
+ * ignored, and a `[DONE]` frame ends iteration. `\r\n` and bare `\r` count
+ * as line endings, including a `\r\n` split across two chunks. Malformed
+ * JSON throws `LLMError('parse')`.
  */
 export async function* parseSseStream(
   source: AsyncIterable<Uint8Array | string>,
@@ -163,10 +144,8 @@ const DONE = Symbol('sse-stream-done');
 const NO_DATA = Symbol('sse-frame-no-data');
 
 /**
- * Sentinel yielded by `parseSseStream` for a comment-only frame (no
- * `data:` payload), the mechanism providers use for SSE keep-alive
- * pings. Exported so a consumer (e.g. `fromFetch`) can react to "still
- * alive" separately from a genuinely empty frame (`NO_DATA`, kept internal).
+ * Yielded for a comment-only frame, the SSE keep-alive ping, so a consumer
+ * can tell "still alive" apart from an empty frame.
  */
 export const SSE_PING = Symbol('sse-frame-ping');
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { fromAnthropic, type AnthropicClient } from '../../../../src/adapters/anthropic.js';
+import { fromAnthropic, type AnthropicClient } from '../../../../src/adapters/claude/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, makeFakeAnthropicClient } from '../../../helpers.js';
 

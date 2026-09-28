@@ -26,7 +26,8 @@
 ```ts
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { fromAnthropic, fromOpenAI, VernLLM } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
 
 const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }));
@@ -46,18 +47,19 @@ const llm = new VernLLM({
 const result = await llm.call({ userContent: "What's the weather in New York?" });
 ```
 
-Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, Ollama, Anthropic, Gemini, AWS Bedrock, or any provider reachable over HTTP via a `fromFetch` adapter.
+Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, Ollama, Anthropic, Gemini, AWS Bedrock (via `vern-llm-bedrock`), or any provider reachable over HTTP via a `fromFetch` adapter.
 
 ## Repository layout
 
-This is a pnpm monorepo with four workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
+This is a pnpm monorepo with five workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
 
-| Path                                                   | Description                                                                                                      |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| [`packages/vern-llm`](./packages/vern-llm)             | The `vern-llm` npm package: source, tests, and its own README with the full API reference.                       |
-| [`packages/vern-llm-redis`](./packages/vern-llm-redis) | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`. |
-| [`packages/vern-llm-otel`](./packages/vern-llm-otel)   | The `vern-llm-otel` npm package: OpenTelemetry traces and metrics for `vern-llm`.                                |
-| [`apps/docs`](./apps/docs)                             | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                 |
+| Path                                                       | Description                                                                                                       |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| [`packages/vern-llm`](./packages/vern-llm)                 | The `vern-llm` npm package: source, tests, and its own README with the full API reference.                        |
+| [`packages/vern-llm-redis`](./packages/vern-llm-redis)     | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`.  |
+| [`packages/vern-llm-otel`](./packages/vern-llm-otel)       | The `vern-llm-otel` npm package: OpenTelemetry traces and metrics for `vern-llm`.                                 |
+| [`packages/vern-llm-bedrock`](./packages/vern-llm-bedrock) | The `vern-llm-bedrock` npm package: the AWS Bedrock Converse adapter for `vern-llm`, built on the AWS SDK client. |
+| [`apps/docs`](./apps/docs)                                 | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                  |
 
 ## License
 

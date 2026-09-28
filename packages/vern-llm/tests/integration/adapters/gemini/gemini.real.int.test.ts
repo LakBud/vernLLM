@@ -1,20 +1,15 @@
 import { GoogleGenAI } from '@google/genai';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fromGemini } from '../../../../src/adapters/gemini.js';
+import { fromGemini } from '../../../../src/adapters/gemini/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
 /**
- * `GeminiClient` now matches the real `@google/genai` SDK's types precisely
- * enough that no cast is needed at all: `fromGemini(ai.models)` and
- * `fromGemini(ai)` both type-check directly against the real `GoogleGenAI`
- * instance below, with no `as GeminiClient`/`as unknown as` anywhere in
- * this file. `GeminiClient` covers both shapes itself (an optional
- * self-referencing `models` field), so there's nothing else to import.
- * That's the specific thing this test file exists to prove, see the
- * `type-checks with no cast` test at the bottom.
+ * `GeminiClient` matches the real `@google/genai` SDK's types precisely
+ * enough that `fromGemini(ai)` type-checks against the real `GoogleGenAI`
+ * instance below with no cast anywhere in this file.
  */
 describe('Gemini adapter integration (real @google/genai client)', () => {
   let server: RealSdkServer | undefined;
@@ -42,7 +37,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
 
     const llm = new VernLLM({
-      client: fromGemini(ai.models),
+      client: fromGemini(ai),
       model: 'gemini-test',
     });
 
@@ -82,7 +77,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     ]);
 
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
-    const client = fromGemini(ai.models);
+    const client = fromGemini(ai);
 
     const result = await client.chat.completions.create(
       {
@@ -149,7 +144,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
 
     const llm = new VernLLM({
-      client: fromGemini(ai.models),
+      client: fromGemini(ai),
       model: 'gemini-test',
       maxRetries: 1,
       baseDelayMs: 1,
@@ -183,7 +178,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
 
     const llm = new VernLLM({
-      client: fromGemini(ai.models),
+      client: fromGemini(ai),
       model: 'gemini-test',
     });
 
@@ -216,7 +211,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     });
 
     const llm = new VernLLM({
-      client: fromGemini(ai.models),
+      client: fromGemini(ai),
       model: 'gemini-test',
       maxRetries: 0,
     });
@@ -268,9 +263,6 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
 
     const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
 
-    // fromGemini(ai) here, NOT fromGemini(ai.models): the whole top-level
-    // client, unwrapped internally. No `.models` and no cast at the call
-    // site, which is the entire point of this test.
     const llm = new VernLLM({
       client: fromGemini(ai),
       model: 'gemini-test',
@@ -289,21 +281,14 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     expect(sent.url).toBe('/v1beta/models/gemini-test:generateContent');
   });
 
-  it('type-checks with no cast: fromGemini(ai.models) and fromGemini(ai) both accept the real GoogleGenAI client', () => {
-    // This test's value is entirely at compile time. If either call below
-    // needed `as GeminiClient` / `as unknown as GeminiClient` to satisfy
-    // TypeScript, `pnpm typecheck:test` would fail, which is exactly the
-    // signal this test exists to catch. There's nothing meaningful to
-    // assert at runtime beyond "these functions exist and return an
-    // LLMClient", so the assertions below are a formality; the compiler
-    // doing the checking is the actual test.
+  it('type-checks with no cast against the real GoogleGenAI client, and rejects ai.models', () => {
+    // The first half is checked at compile time: `pnpm typecheck:test`
+    // fails if `fromGemini(ai)` needs a cast.
     const ai = new GoogleGenAI({ apiKey: 'test-key' });
 
-    const fromModels = fromGemini(ai.models);
-    const fromTopLevel = fromGemini(ai);
-
-    expect(typeof fromModels.chat.completions.create).toBe('function');
-    expect(typeof fromTopLevel.chat.completions.create).toBe('function');
+    expect(typeof fromGemini(ai).chat.completions.create).toBe('function');
+    // @ts-expect-error ai.models is not a GeminiClient
+    expect(() => fromGemini(ai.models)).toThrow('fromGemini takes the top level client: pass ai');
   });
 
   it('reports a timeout against a real Google GenAI SDK client that never responds', async () => {
@@ -315,7 +300,7 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     });
 
     const llm = new VernLLM({
-      client: fromGemini(ai.models),
+      client: fromGemini(ai),
       model: 'gemini-test',
       maxRetries: 0,
       timeoutMs: 100,
@@ -339,8 +324,5 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
       fromGemini(new GoogleGenAI({ vertexai: true, project: 'p', location: 'us-central1' }))
         .adapter,
     ).toEqual({ name: 'gemini', provider: 'gcp.vertex_ai' });
-    expect(fromGemini(new GoogleGenAI({ apiKey: 'test-key' }).models).adapter).toEqual({
-      name: 'gemini',
-    });
   });
 });

@@ -67,7 +67,7 @@ const result = await llm.call({
   Bedrock, which don't support `json_object` as a real constraint, `schema` without `jsonSchema`
   throws the same way even without an explicit `jsonMode: false`: an implicit request for JSON (via
   `schema`) isn't silently downgraded into skipping validation the way a schema-less call is. See
-  [Anthropic](/docs/adapters/anthropic) and [Bedrock](/docs/adapters/bedrock) for details.
+  [Anthropic](/docs/adapters/anthropic) and [Bedrock](/docs/integrations/bedrock) for details.
 </Callout>
 
 ## Provider-native JSON Schema mode
@@ -142,7 +142,8 @@ verified support the mechanism, or a predicate function:
 
 ```ts title="native-structured-output.ts"
 import Anthropic from '@anthropic-ai/sdk';
-import { VernLLM, fromAnthropic } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }), {

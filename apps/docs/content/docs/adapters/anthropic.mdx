@@ -5,7 +5,8 @@ description: Use the fromAnthropic adapter with the Anthropic API
 
 ```ts title="anthropic-basic-setup.ts"
 import Anthropic from '@anthropic-ai/sdk';
-import { VernLLM, fromAnthropic } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })),

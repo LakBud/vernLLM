@@ -183,6 +183,10 @@ conversion table above.
   over the built-in threshold, same shape as `reasoningEffortTokens` above.
 </Callout>
 
+Gemini 3 Pro tier models accept fewer levels, so the level is clamped rather than left to fail per
+call: Gemini 3 Pro takes only `LOW` and `HIGH`, and Gemini 3.1 Pro and later take no `MINIMAL`,
+which becomes `LOW`. Flash tier models take all four.
+
 The conversion table itself is overridable per adapter instance, not just per call. Pass
 `reasoningEffortTokens` as part of the second argument to `fromAnthropic`, `fromGemini`,
 `fromOpenAICompatible`, or `fromBedrock`:
@@ -193,7 +197,10 @@ const client = fromAnthropic(anthropic, {
 });
 ```
 
-Only the tiers you list are changed, any tier left out keeps its built-in value. This affects every
+Only the tiers you list are changed, any tier left out keeps its built-in value. The resulting tiers
+must stay strictly ascending (`minimal < low < medium < high`), or the adapter throws
+`LLMError('invalid_params')` at construction, since an unordered table makes some tiers
+unreachable. This affects every
 call through that adapter instance, in whichever conversion direction that adapter actually needs
 (Anthropic and Gemini convert `reasoningEffort` into a budget; OpenAI compatible clients convert
 `budgetTokens` into a tier; Bedrock converts `reasoningEffort` into a budget for Claude models).

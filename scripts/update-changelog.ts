@@ -4,6 +4,7 @@ const packages: Record<string, string> = {
   'vern-llm': 'apps/docs/content/docs/changelog.mdx',
   'vern-llm-redis': 'apps/docs/content/docs/integrations/redis/changelog.mdx',
   'vern-llm-otel': 'apps/docs/content/docs/integrations/otel/changelog.mdx',
+  'vern-llm-bedrock': 'apps/docs/content/docs/integrations/bedrock/changelog.mdx',
 };
 
 for (const [pkg, docPath] of Object.entries(packages)) {

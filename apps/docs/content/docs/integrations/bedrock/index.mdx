@@ -1,0 +1,342 @@
+---
+title: AWS Bedrock Overview
+description: The fromBedrock adapter for the AWS Bedrock Converse API, built on the AWS SDK client
+---
+
+`vern-llm-bedrock` adapts the AWS SDK's `BedrockRuntimeClient` to VernLLM. It uses Bedrock's
+Converse API, one request and response shape across the model families Converse supports
+(Anthropic, Titan, Llama, Mistral, and others).
+
+<Callout>
+  Amazon Bedrock is a trademark of Amazon.com, Inc. This is an unofficial community integration, not
+  affiliated with or endorsed by Amazon Web Services.
+</Callout>
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-bedrock @aws-sdk/client-bedrock-runtime # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-bedrock @aws-sdk/client-bedrock-runtime # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-bedrock @aws-sdk/client-bedrock-runtime # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-bedrock @aws-sdk/client-bedrock-runtime # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` and `@aws-sdk/client-bedrock-runtime` are peer dependencies, so the package shares the
+copies your app already uses.
+
+## Setup
+
+Pass a `BedrockRuntimeClient` to `fromBedrock`. It sends `ConverseCommand` and
+`ConverseStreamCommand` through the client's own `send`:
+
+```ts title="bedrock-client-setup.ts"
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { VernLLM } from 'vern-llm';
+import { fromBedrock } from 'vern-llm-bedrock';
+
+const client = new BedrockRuntimeClient({ region: 'us-east-1', maxAttempts: 1 });
+
+const llm = new VernLLM({
+  client: fromBedrock(client),
+  model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+});
+```
+
+<Callout title="The AWS SDK retries on its own too">
+  AWS SDK v3's standard retry mode retries transient failures, including `ThrottlingException`,
+  internally by default (`maxAttempts: 3`), before VernLLM's own retry loop ever sees them. Pass
+  `maxAttempts: 1` to `BedrockRuntimeClient` if you want VernLLM to be the sole retry authority. See
+  [SDK-internal retries](/docs/core/retries#sdk-internal-retries).
+</Callout>
+
+A `ConverseStreamCommand` response missing `stream`, which the SDK types as optional, throws
+`LLMError('api')`. Stream events the adapter doesn't model, including the SDK's generated
+`$unknown` member, are skipped.
+
+## Options
+
+`fromBedrock(client, options)` takes these, all optional:
+
+| Option                              | Default                                                  | Purpose                                                                                                                             |
+| ----------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `nativeStructuredOutputModels`      | none                                                     | Models that send `jsonSchema` as `outputConfig.textFormat`, see [Combining tools with jsonSchema](#combining-tools-with-jsonschema) |
+| `toolUseSupportedModels`            | none, no preflight                                       | Models known to support tool use, see [Preflighting tool-use support](#preflighting-tool-use-support)                               |
+| `forcedToolChoiceUnsupportedModels` | Fable 5.1+, Opus 5.5+, Claude 6+                         | Models that reject a forced `tool_choice`, see [below](#models-that-reject-a-forced-tool_choice)                                    |
+| `adaptiveOnlyModels`                | Opus 4.7+, every Claude 5 tier                           | Adds models that only accept adaptive thinking, see [Reasoning](#reasoning)                                                         |
+| `reasoningEffortTokens`             | `minimal` 1024, `low` 4096, `medium` 16000, `high` 32000 | Token count each `reasoningEffort` tier maps onto                                                                                   |
+
+Each model option takes a list of model ids or a `(model) => boolean` predicate.
+
+## Telemetry and rate limits
+
+The adapter names itself `bedrock` with provider `aws.bedrock` on `AttemptContext.adapter`, so
+middleware such as [OpenTelemetry](/docs/integrations/otel) reports `gen_ai.provider.name` correctly
+even for an inference profile ARN. Bedrock sends no remaining-capacity headers, so an AIMD rate
+limiter only reacts to throttling, see [Rate Limiting](/docs/core/rate-limiting).
+
+## JSON handling
+
+- `json_object` is **not supported** as a real constraint. Converse has no field that mechanically guarantees valid JSON output for this mode. A plain call (`llm.call({ userContent })`, no `schema`, no explicit `jsonMode`) is silently treated as plain text. An explicit `jsonMode: true`, or `schema` without `jsonSchema`, throws `LLMError('invalid_params')`. Use `jsonSchema` instead.
+- `json_schema` uses native structured output on covered models, and a forced Converse tool call elsewhere. The forced tool carries the schema name, description, and strict setting. Strict enforcement depends on the model's tool-use capabilities.
+
+Tool-based structured output needs a model that supports tool use. `fromBedrock` doesn't guess this from a failed call, since AWS's error text isn't a stable contract. By default Bedrock's own error surfaces unchanged; pass `toolUseSupportedModels` for an earlier, clearer failure.
+
+## Structured output via tool use
+
+When `jsonSchema` is set, `fromBedrock` builds a single Converse tool from the schema, forwards its name, description, and strict setting, and forces the model to call it via `toolChoice`, rather than instructing for JSON via prompt text. This is the default behavior for every model; see [Combining tools with jsonSchema](#combining-tools-with-jsonschema) below for the native alternative available on models covered by `nativeStructuredOutputModels`, which uses `outputConfig.textFormat` instead and composes with real `tools`.
+
+```ts title="bedrock-structured-output.ts"
+import { z } from 'zod';
+
+const CandidateSchema = z.object({
+  name: z.string(),
+  skills: z.array(z.string()),
+});
+
+const result = await llm.call({
+  systemPrompt: 'Extract the candidate name and skills.',
+  userContent: resumeText,
+  jsonSchema: {
+    name: 'Candidate',
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        skills: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'skills'],
+    },
+  },
+  schema: CandidateSchema,
+});
+```
+
+Without `jsonSchema`, behavior depends on whether the call is also asking for validated output. A plain call with no `schema` and no explicit `jsonMode` is silently treated as plain text: Converse can't enforce `json_object`, so it's never sent, and `fromBedrock`'s response is returned unparsed. Setting `jsonMode: true` _explicitly_, or passing `schema` on its own (with or without an explicit `jsonMode`), throws `LLMError('invalid_params')` instead: the former is a caller deliberately asking for a JSON guarantee this adapter can't provide, and the latter needs JSON output to validate `schema` against, so it isn't silently downgraded into skipping validation either. Use `jsonSchema` for anything that needs guaranteed-structured output.
+
+## Preflighting tool-use support
+
+`toolUseSupportedModels`, passed as the second argument to `fromBedrock`, lets you reject `jsonSchema` calls to models you know don't support Converse tool use, before the request is ever sent, with `LLMError('invalid_params')`, code `unsupported_capability`, instead of Bedrock's raw error:
+
+```ts title="bedrock-preflight.ts"
+const llm = new VernLLM({
+  client: fromBedrock(client, {
+    // A static allowlist...
+    toolUseSupportedModels: [
+      'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      'anthropic.claude-3-haiku-20240307-v1:0',
+    ],
+    // ...or a predicate, e.g. by model family:
+    // toolUseSupportedModels: (modelId) => modelId.startsWith('anthropic.'),
+  }),
+  model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+});
+```
+
+This is opt-in and only affects calls that set `jsonSchema`; plain text calls are never preflight-checked, and by default (no `toolUseSupportedModels` configured) no preflight check runs at all.
+
+The same preflight also runs when a `jsonSchema` call ends up sending `toolConfig` for any reason, including the native-structured-output path below when real `tools` are sent alongside `outputConfig`, since that still requires Converse tool-use support even though `outputConfig` itself doesn't.
+
+## Combining tools with jsonSchema
+
+By default, `jsonSchema` and `tools` cannot be used in the same call: `jsonSchema` is emulated as
+a forced single tool call via `toolConfig`, which occupies the same field real tools need.
+
+On unsupported models, this throws `LLMError('invalid_params')` with `code: 'unsupported_capability'`
+and `issues.capability: 'tools_with_json_schema'`, so the default fallback policy can try the next
+target.
+
+Bedrock Converse also supports native, schema-constrained output, `outputConfig.textFormat`, a
+request field independent of `toolConfig`, so it composes with real `tools` on models that support
+it. This is opt-in, pass `nativeStructuredOutputModels` as part of the second argument to
+`fromBedrock`:
+
+```ts title="bedrock-native-structured-output.ts"
+const llm = new VernLLM({
+  client: fromBedrock(client, {
+    nativeStructuredOutputModels: ['anthropic.claude-native-model-id'],
+    // ...or a predicate:
+    // nativeStructuredOutputModels: (modelId) => modelId.startsWith('anthropic.claude-4'),
+  }),
+  model: 'anthropic.claude-native-model-id',
+});
+```
+
+There is no built-in default list, see [Structured Output → Combining with tools](/docs/core/structured-output#combining-with-tools) for why, and for a link to Anthropic's current compatibility list. On Bedrock specifically, Anthropic's compatibility page documents native structured output as available for a narrower model subset than the Claude API's own list, so check the linked page rather than assuming parity with `fromAnthropic`. On a covered model, `jsonSchema` is sent as `outputConfig.textFormat` instead of a forced
+tool call, and the schema-conforming JSON arrives as ordinary text content, no unwrapping needed,
+while any real `tools` you pass are built and sent exactly as they would be without `jsonSchema`
+present. On a model not covered by `nativeStructuredOutputModels`, combining `tools` with
+`jsonSchema` throws `LLMError('invalid_params')` with `code: 'unsupported_capability'` and
+`issues.capability: 'tools_with_json_schema'`, naming the model and pointing at this option. The
+default fallback policy can then try the next target.
+
+<Callout type="warn">
+  `outputConfig.textFormat`'s shape is not flat, and not the parsed-object schema every other part
+  of this adapter builds. The real Bedrock Converse API nests the schema one level deeper, under
+  `structure.jsonSchema`, and requires `schema` there as a JSON-encoded *string*:
+
+```json title="outputConfig-shape.json"
+{
+  "outputConfig": {
+    "textFormat": {
+      "type": "json_schema",
+      "structure": {
+        "jsonSchema": {
+          "schema": "{\"type\":\"object\",\"properties\":{...}}",
+          "name": "WeatherReport",
+          "description": "optional"
+        }
+      }
+    }
+  }
+}
+```
+
+`name` and `description` are accepted here, unlike Anthropic's native mechanism, but there is no
+`strict` field, unlike Bedrock's own tool-based schema (`toolSpec.inputSchema.json`, used on the
+legacy path), which takes a parsed object and does have `strict`.
+
+</Callout>
+
+## Reasoning
+
+Converse has no reasoning field, so `budgetTokens` and `reasoningEffort` reach Claude models only,
+as Claude's own `thinking` inside `additionalModelRequestFields`. Other models get neither.
+
+| Claude model                                            | Sent                                                                                |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Accepts a manual budget                                 | `thinking: { type: 'enabled', budget_tokens }`, at least 1024 and below `maxTokens` |
+| Adaptive only (Opus 4.7 and later, every Claude 5 tier) | `thinking: { type: 'adaptive' }` plus `outputConfig.effort`                         |
+
+`temperature` is dropped whenever thinking goes out, since Claude rejects both together. Add models
+to the adaptive-only rule with `adaptiveOnlyModels`, and change the token count each tier maps onto
+with `reasoningEffortTokens`. See the
+[Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the conversion table.
+
+While a reasoning block streams, `fromBedrock` yields a keep-alive ping per delta, so a long
+thinking phase doesn't trip `chunkIdleTimeoutMs`. With thinking on, a tool call result carries
+Claude's reasoning on `thinking`, sent back as `reasoningContent`. See
+[Claude thinking in a tool loop](/docs/core/tool-calling#claude-thinking-in-a-tool-loop).
+
+## Models that reject a forced tool_choice
+
+Claude Fable 5.1 and later, Opus 5.5 and later, and every Claude major 6 and later reject a
+`tool_choice` that forces tool use. On those models `fromBedrock`:
+
+| Request                                | Result                                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `toolChoice: 'required'` or `{ name }` | Throws `LLMError('invalid_params')`, code `unsupported_capability`, before dispatch.        |
+| `toolChoice: 'auto'`                   | Sent unchanged.                                                                             |
+| `toolChoice: 'none'`                   | Throws `LLMError('invalid_params')`, code `unsupported_capability`, when tools are present. |
+| `jsonSchema`                           | Uses native structured output, even without `nativeStructuredOutputModels`.                 |
+
+The rule matches Bedrock ids, region prefixed inference profiles, and ARNs containing one. `forcedToolChoiceUnsupportedModels` replaces it with your own list or
+predicate:
+
+```ts
+fromBedrock(client, { forcedToolChoiceUnsupportedModels: (model) => model.includes('opus-5-5') });
+```
+
+## Streaming
+
+`fromBedrock` implements `createStream` on top of `ConverseStreamCommand`. `contentBlockDelta`
+events map onto `text-delta` chunks, and `toolUse` deltas map onto `tool_call_delta` chunks, no
+extra setup is needed beyond the client already passed to `fromBedrock`:
+
+```ts title="bedrock-streaming.ts"
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Write a short poem about the ocean.',
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+```
+
+<Callout>
+  Just like the non-streaming path, when `jsonSchema` forces a single tool call, `fromBedrock`
+  streams the tool's JSON payload as `text-delta` chunks and suppresses genuine preamble text.
+</Callout>
+
+<Callout>
+  A mid-stream AWS exception event, `throttlingException`, `validationException`,
+  `internalServerException`, `serviceUnavailableException`, or `modelStreamErrorException`, is
+  surfaced as a correctly-typed `LLMError` (with a real HTTP status where AWS provides one) rather
+  than being silently dropped. See [Error Handling](/docs/core/error-handling) for the `LLMError`
+  shape.
+</Callout>
+
+See [Streaming](/docs/core/streaming) for the full `stream: true` contract.
+
+## Tool calling
+
+<Callout type="warn">
+  On Claude models, Bedrock doesn't support tool calling and thinking at the same time when
+  `toolChoice` forces tool use, the same restriction as the underlying Claude API itself (see
+  [Anthropic → Tool calling](/docs/adapters/anthropic#tool-calling)). Setting
+  `budgetTokens`/`reasoningEffort` alongside a forced `toolChoice` (a specific tool, or
+  `'required'`) throws `LLMError('invalid_params')` locally before the request is sent, Bedrock
+  rejects the combination outright otherwise. `toolChoice: 'auto'` (the default when `tools` is set)
+  works fine alongside thinking. Pass `budgetTokens: null`/`reasoningEffort: null` to opt one call
+  out of an instance-level reasoning default when it needs a forced choice. This only applies to
+  Claude models, non-Claude models on Bedrock don't support `budgetTokens`/`reasoningEffort` at all
+  (see the reasoning note above). See [Call Params →
+  Reasoning](/docs/API-reference/call-params#reasoning-budget) for the full detail.
+</Callout>
+
+`tools` and `tool_calls` map onto Converse's native `toolUse` / `toolResult` content blocks, the
+same mechanism used internally for `jsonSchema`. Converse requires alternating roles, so
+consecutive same-role turns are merged into one, such as tool results followed by a user message. Converse
+has no `toolChoice` equivalent to `'none'` while tools are still offered, so `fromBedrock` throws
+`LLMError('invalid_params')`, code `unsupported_capability`, for that case rather than silently falling back to `'auto'`. See [Tool Calling](/docs/core/tool-calling) for the full reference.
+
+## Multimodal input
+
+`fromBedrock` supports VernLLM's provider-independent `ContentBlock[]` format for image input.
+Image blocks are translated into Bedrock Converse's native image content blocks automatically. The
+selected Bedrock model must support image input for multimodal requests to succeed.
+
+```ts title="bedrock-multimodal-input.ts"
+const result = await llm.call({
+  userContent: [
+    {
+      type: 'text',
+      text: 'Describe this image.',
+    },
+    {
+      type: 'image',
+      mimeType: 'image/png',
+      data: imageBase64,
+    },
+  ],
+});
+```
+
+Image data must be base64-encoded bytes without a `data:` URL prefix. Supported image types are
+`image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
+
+Plain string `userContent` remains unchanged for text-only requests.

@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 
+import { Bedrock } from '@lobehub/icons';
 import { icons } from 'lucide-react';
 import { siOpentelemetry, siRedis } from 'simple-icons';
 
@@ -10,6 +11,12 @@ import { siOpentelemetry, siRedis } from 'simple-icons';
 const brandIcons: Record<string, { path: string }> = {
   Redis: siRedis,
   OpenTelemetry: siOpentelemetry,
+};
+
+// Brand logos simple-icons doesn't carry, such as AWS, taken from the same
+// @lobehub/icons set the home page uses, in the same muted grey.
+const componentIcons = {
+  Bedrock,
 };
 
 function BrandIcon({ path }: { path: string }) {
@@ -36,6 +43,11 @@ export function resolveDocsIcon(icon?: string) {
 
   const brand = brandIcons[icon];
   if (brand) return <BrandIcon path={brand.path} />;
+
+  if (icon in componentIcons) {
+    const Icon = componentIcons[icon as keyof typeof componentIcons];
+    return <Icon size="1em" className="text-fd-muted-foreground" aria-hidden="true" />;
+  }
 
   if (icon in icons) {
     return createElement(icons[icon as keyof typeof icons]);

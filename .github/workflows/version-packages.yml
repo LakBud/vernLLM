@@ -30,6 +30,7 @@ jobs:
               - 'packages/vern-llm/**'
               - 'packages/vern-llm-redis/**'
               - 'packages/vern-llm-otel/**'
+              - 'packages/vern-llm-bedrock/**'
               - '.changeset/**'
               - 'package.json'
               - 'pnpm-lock.yaml'

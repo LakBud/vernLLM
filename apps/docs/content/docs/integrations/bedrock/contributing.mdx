@@ -1,0 +1,108 @@
+---
+title: Contributing
+description: How to set up, test, and open a PR for vern-llm-bedrock
+icon: GitPullRequest
+---
+
+This page covers `packages/vern-llm-bedrock` specifically. For the coding standard and PR checklist
+that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+No external service or AWS account is needed. Unit tests drive a real `BedrockRuntimeClient` whose
+`send` is stubbed, and the real SDK suite talks over HTTP to a local loopback server standing in for
+Bedrock, including its binary event stream. No test ever calls a live provider.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
+explain non obvious decisions with a short comment, and keep `any` as a last resort. Bedrock quirks
+stay inside `packages/vern-llm-bedrock`. Type requests and responses against the AWS SDK's own
+types, and narrow stream events one member at a time, since the SDK's union has a generated
+`$unknown` member. Rules shared with other Claude adapters, such as the forced `tool_choice` model
+check or the reasoning budget, come from `vern-llm/adapters` rather than being copied.
+
+## Scripts
+
+These are `packages/vern-llm-bedrock`'s own scripts, exactly as they appear in its `package.json`.
+Run them with `pnpm run <script>` from inside `packages/vern-llm-bedrock`, or `pnpm nx run
+vern-llm-bedrock:<script>` from the repo root:
+
+```json title="packages/vern-llm-bedrock/package.json"
+"scripts": {
+  "build": "tsdown",
+  "dev": "tsdown --watch",
+  "smoke-test": "node scripts/smoke-test.ts",
+  "typecheck": "tsc -p tsconfig.json --noEmit",
+  "typecheck:test": "tsc -p tsconfig.test.json",
+  "lint": "oxlint .",
+  "lint:fix": "oxlint . --fix",
+  "test": "vitest run",
+  "test:unit": "vitest run --project unit",
+  "test:unit:coverage": "vitest run --project unit --coverage",
+  "test:int": "vitest run --project integration",
+  "test:int:coverage": "vitest run --project integration --coverage",
+  "test:watch": "vitest",
+  "test:coverage": "vitest run --coverage",
+  "changeset": "changeset",
+  "version-packages": "changeset version",
+  "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+  "size": "size-limit"
+}
+```
+
+`prepublishOnly` runs automatically before publish and isn't something you need to run by hand,
+it's listed here since it shows the exact sequence a release goes through: typecheck, build, size,
+smoke test.
+
+## Tests
+
+Unit tests live in `tests/unit/` and integration tests in `tests/integration/`. Build `vern-llm`
+first, since this package resolves it from its `dist`:
+
+```bash
+pnpm nx run vern-llm:build
+```
+
+## Before opening a PR
+
+Every PR touching `packages/vern-llm-bedrock` runs through the same CI workflows described in
+[Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                          | Local command                                                                                                        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Lint                           | `pnpm nx run vern-llm-bedrock:lint`                                                                                  |
+| Typecheck source               | `pnpm nx run vern-llm-bedrock:typecheck`                                                                             |
+| Typecheck tests                | `pnpm nx run vern-llm-bedrock:typecheck:test`                                                                        |
+| Unit tests + coverage          | `pnpm nx run vern-llm-bedrock:test:unit:coverage`                                                                    |
+| Integration tests              | `pnpm nx run vern-llm-bedrock:test:int:coverage`                                                                     |
+| Build, bundle size, smoke test | `pnpm nx run vern-llm-bedrock:build && pnpm nx run vern-llm-bedrock:size && pnpm nx run vern-llm-bedrock:smoke-test` |
+| Changeset present              | `pnpm changeset status --since=origin/main`                                                                          |
+
+## Changesets
+
+Record your change with:
+
+```bash
+pnpm nx run vern-llm-bedrock:changeset
+```
+
+`vern-llm-bedrock` versions and releases independently of `vern-llm`, on its own changelog. See
+[Development](/docs/development#ci) for what drives the release itself.
+
+## AWS SDK
+
+This package builds on the
+[AWS SDK for JavaScript v3](https://github.com/aws/aws-sdk-js-v3/tree/main/clients/client-bedrock-runtime).
+Check it for client and command behavior before working around something here.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

@@ -1,10 +1,8 @@
 import { LLMError } from '../../types/index.js';
 
 /**
- * MIME types accepted for `ImageBlock.mimeType` across all adapters. This is
- * the intersection of what Anthropic, Gemini, OpenAI-compatible, and Bedrock
- * Converse all natively support, so a `ContentBlock[]` that validates for
- * one provider validates for all of them.
+ * `ImageBlock.mimeType` values every adapter accepts: the types all
+ * supported providers share, so content valid for one is valid for all.
  */
 export const SUPPORTED_IMAGE_MIME_TYPES = [
   'image/png',
@@ -15,13 +13,7 @@ export const SUPPORTED_IMAGE_MIME_TYPES = [
 
 export type SupportedImageMimeType = (typeof SUPPORTED_IMAGE_MIME_TYPES)[number];
 
-/**
- * Validates an `ImageBlock.mimeType` against the shared supported set.
- * Throws a non-retryable `LLMError('invalid_params')`, since an unsupported
- * mimeType is a bug in the caller's own input, deterministic before any
- * request is built, the same class of failure as every other check in
- * `RequestBuilder`.
- */
+/** Throws a non-retryable `LLMError('invalid_params')` for a MIME type outside the shared set. */
 export function assertSupportedImageMimeType(mimeType: string): SupportedImageMimeType {
   if ((SUPPORTED_IMAGE_MIME_TYPES as readonly string[]).includes(mimeType)) {
     return mimeType as SupportedImageMimeType;

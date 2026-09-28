@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fromOpenAI } from '../../../../src/adapters/openaiCompatible.js';
+import { fromOpenAI } from '../../../../src/adapters/openai/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 

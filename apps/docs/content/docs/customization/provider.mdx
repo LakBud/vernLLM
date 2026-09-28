@@ -18,7 +18,8 @@ small mapping functions, retries, timeouts, the circuit breaker, and JSON handli
 apply on top:
 
 ```ts title="fromfetch-provider.ts"
-import { VernLLM, fromFetch } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromFetch } from 'vern-llm/adapters';
 
 const llm = new VernLLM({
   client: fromFetch({

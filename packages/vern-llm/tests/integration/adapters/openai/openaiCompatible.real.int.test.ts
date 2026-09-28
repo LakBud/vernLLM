@@ -2,7 +2,7 @@ import Groq from 'groq-sdk';
 import OpenAI from 'openai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fromGroq, fromOpenAICompatible } from '../../../../src/adapters/openaiCompatible.js';
+import { fromGroq, fromOpenAICompatible } from '../../../../src/adapters/openai/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';

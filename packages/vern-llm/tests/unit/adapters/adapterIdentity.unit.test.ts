@@ -2,12 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   fromAnthropic,
-  fromBedrock,
   fromFetch,
   fromGemini,
   fromOpenAICompatible,
   type AnthropicClient,
-  type BedrockConverseClient,
   type GeminiClient,
 } from '../../../src/adapters/index.js';
 
@@ -18,7 +16,7 @@ function openAIClient(baseURL?: unknown) {
   };
 }
 
-const models = { generateContent: async () => ({}) } as unknown as GeminiClient;
+const models = { generateContent: async () => ({}) } as unknown as GeminiClient['models'];
 
 describe('adapter identity', () => {
   it('names the fixed provider adapters', () => {
@@ -29,21 +27,18 @@ describe('adapter identity', () => {
       name: 'anthropic',
       provider: 'anthropic',
     });
-    expect(
-      fromBedrock({ converse: async () => ({}) } as unknown as BedrockConverseClient).adapter,
-    ).toEqual({ name: 'bedrock', provider: 'aws.bedrock' });
   });
 
-  it('reads Vertex AI or the Gemini API off the top level client, and claims nothing for ai.models', () => {
-    expect(fromGemini({ models, vertexai: true } as GeminiClient).adapter).toEqual({
+  it('reads Vertex AI or the Gemini API off the client, and claims nothing when vertexai is unset', () => {
+    expect(fromGemini({ models, vertexai: true }).adapter).toEqual({
       name: 'gemini',
       provider: 'gcp.vertex_ai',
     });
-    expect(fromGemini({ models, vertexai: false } as GeminiClient).adapter).toEqual({
+    expect(fromGemini({ models, vertexai: false }).adapter).toEqual({
       name: 'gemini',
       provider: 'gcp.gemini',
     });
-    expect(fromGemini(models).adapter).toEqual({ name: 'gemini' });
+    expect(fromGemini({ models }).adapter).toEqual({ name: 'gemini' });
   });
 
   it.each([

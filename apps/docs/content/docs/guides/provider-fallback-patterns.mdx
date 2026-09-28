@@ -14,7 +14,8 @@ wrapped for `fallback`.
 ```ts title="provider-fallback-patterns-setup.ts"
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { VernLLM, fromAnthropic, fromOpenAI, fromOpenAICompatible } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic, fromOpenAI, fromOpenAICompatible } from 'vern-llm/adapters';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });

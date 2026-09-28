@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fromAnthropic, type AnthropicClient } from '../../../src/adapters/anthropic.js';
-import { fromBedrock, type BedrockConverseClient } from '../../../src/adapters/bedrock.js';
-import { fromGemini, type GeminiClient } from '../../../src/adapters/gemini.js';
-import { fromOpenAICompatible } from '../../../src/adapters/openaiCompatible.js';
+import { fromAnthropic, type AnthropicClient } from '../../../src/adapters/claude/index.js';
+import { fromGemini, type GeminiClient } from '../../../src/adapters/gemini/index.js';
+import { fromOpenAICompatible } from '../../../src/adapters/openai/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import { createMockClient, jsonResponse } from '../../helpers.js';
 
@@ -26,7 +25,7 @@ describe('Reasoning budget integration', () => {
     // `createMockClient` builds a raw `LLMClient`, matching the wire shape
     // directly, no adapter in front of it. The budget_tokens -> reasoning_effort
     // conversion for OpenAI-compatible providers lives in `fromOpenAICompatible`
-    // itself (see applyReasoningBudget in adapters/openaiCompatible.ts), not in
+    // itself (see applyReasoningBudget in adapters/openai/reasoning.ts), not in
     // `requestBuilder`, so this test needs the real adapter wrapping the mock
     // to exercise that conversion, unlike the other three providers below,
     // whose adapters vernLLM constructs directly.
@@ -84,7 +83,7 @@ describe('Reasoning budget integration', () => {
   it('Gemini 3: reasoningEffort maps directly onto thinkingConfig.thinkingLevel, thoughtsTokenCount comes back as reasoningTokens', async () => {
     const onUsage = vi.fn();
 
-    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+    const generateContent = vi.fn<GeminiClient['models']['generateContent']>(async () => ({
       candidates: [{ content: { parts: [{ text: 'ok' }] } }],
       usageMetadata: {
         promptTokenCount: 5,
@@ -95,7 +94,7 @@ describe('Reasoning budget integration', () => {
     }));
 
     const llm = new VernLLM({
-      client: fromGemini({ generateContent }),
+      client: fromGemini({ models: { generateContent } }),
       model: 'gemini-3.1-flash-lite',
       onUsage,
     });
@@ -116,7 +115,7 @@ describe('Reasoning budget integration', () => {
   it('Gemini 2.5: reasoningEffort still converts to thinkingConfig.thinkingBudget, unchanged', async () => {
     const onUsage = vi.fn();
 
-    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({
+    const generateContent = vi.fn<GeminiClient['models']['generateContent']>(async () => ({
       candidates: [{ content: { parts: [{ text: 'ok' }] } }],
       usageMetadata: {
         promptTokenCount: 5,
@@ -127,7 +126,7 @@ describe('Reasoning budget integration', () => {
     }));
 
     const llm = new VernLLM({
-      client: fromGemini({ generateContent }),
+      client: fromGemini({ models: { generateContent } }),
       model: 'gemini-2.5-flash',
       onUsage,
     });
@@ -143,54 +142,5 @@ describe('Reasoning budget integration', () => {
     expect(onUsage).toHaveBeenCalledWith(
       expect.objectContaining({ completionTokens: 35, reasoningTokens: 18 }),
     );
-  });
-
-  it('Bedrock: budgetTokens reaches additionalModelRequestFields for a Claude model, reasoningTokens stays undefined (no native field)', async () => {
-    const onUsage = vi.fn();
-
-    const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
-      output: { message: { content: [{ text: 'ok' }] } },
-      usage: { inputTokens: 10, outputTokens: 30, totalTokens: 40 },
-    }));
-
-    const llm = new VernLLM({
-      client: fromBedrock({ converse }),
-      model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-      onUsage,
-    });
-
-    await llm.call({
-      userContent: 'hello',
-      budgetTokens: 12000,
-      maxTokens: 16000,
-      jsonMode: false,
-    });
-
-    expect(converse).toHaveBeenCalledWith(
-      expect.objectContaining({
-        additionalModelRequestFields: { thinking: { type: 'enabled', budget_tokens: 12000 } },
-      }),
-      expect.anything(),
-    );
-
-    const reported = onUsage.mock.calls[0]![0];
-    expect(reported.completionTokens).toBe(30);
-    expect(reported.reasoningTokens).toBeUndefined();
-  });
-
-  it('Bedrock: budgetTokens dropped for a non-Claude model, end to end through VernLLM.call()', async () => {
-    const converse = vi.fn<BedrockConverseClient['converse']>(async () => ({
-      output: { message: { content: [{ text: 'ok' }] } },
-      usage: { inputTokens: 10, outputTokens: 30, totalTokens: 40 },
-    }));
-
-    const llm = new VernLLM({
-      client: fromBedrock({ converse }),
-      model: 'amazon.titan-text-premier-v1:0',
-    });
-
-    await llm.call({ userContent: 'hello', budgetTokens: 12000, jsonMode: false });
-
-    expect('additionalModelRequestFields' in converse.mock.calls[0]![0]).toBe(false);
   });
 });

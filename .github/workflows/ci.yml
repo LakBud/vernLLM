@@ -187,6 +187,15 @@ jobs:
           flags: vern-llm-otel-unit
           fail_ci_if_error: true
 
+      - name: Upload vern-llm-bedrock coverage to Codecov
+        if: hashFiles('packages/vern-llm-bedrock/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm-bedrock/coverage/lcov.info
+          flags: vern-llm-bedrock-unit
+          fail_ci_if_error: true
+
   # No Nx cache here, deliberately: this job runs against a real Redis
   # service container. A cached "pass" from a previous run could hide a
   # real regression in how an adapter behaves against actual Redis state
@@ -273,6 +282,15 @@ jobs:
           flags: vern-llm-otel-integration
           fail_ci_if_error: true
 
+      - name: Upload vern-llm-bedrock coverage to Codecov
+        if: hashFiles('packages/vern-llm-bedrock/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/vern-llm-bedrock/coverage/lcov.info
+          flags: vern-llm-bedrock-integration
+          fail_ci_if_error: true
+
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -316,15 +334,15 @@ jobs:
       # targets have no ordering guarantee within the same project and
       # can run concurrently, racing on that file.
       - name: Lint affected docs
-        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel --verbose
+        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose
 
       - name: Typecheck affected docs
-        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel --verbose
+        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose
 
       # Fails on any internal /docs/... link whose page or #anchor doesn't
       # exist. The test target covers the checker itself.
       - name: Check affected docs links
-        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel --verbose
+        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose
 
       - name: Build affected docs
-        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel --verbose
+        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose

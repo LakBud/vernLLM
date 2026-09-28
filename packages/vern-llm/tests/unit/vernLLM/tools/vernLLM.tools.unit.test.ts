@@ -1,10 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
-import {
-  type AnthropicClient,
-  type ContentResult,
-  type StreamCallResult,
-} from '../../../../src/index.js';
+import { type AnthropicClient } from '../../../../src/adapters/index.js';
+import { type ContentResult, type StreamCallResult } from '../../../../src/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import {
   at,

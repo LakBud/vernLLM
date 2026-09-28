@@ -40,8 +40,8 @@ Docs pages live in [`content/docs`](./content/docs) as MDX, organized by section
 | [`customization/`](./content/docs/customization) | Custom middleware, breakers, caches, rate limiters, tokenizers, schemas, providers, and loggers. |
 | [`guides/`](./content/docs/guides)               | End to end walkthroughs: fallback patterns, tuning, caching methods, streaming, tool loops.      |
 | [`API-reference/`](./content/docs/API-reference) | Call params, instance configuration, and reference notes.                                        |
-| [`adapters/`](./content/docs/adapters)           | OpenAI-compatible providers, Anthropic, Gemini, Bedrock, and the raw fetch escape hatch.         |
-| [`integrations/`](./content/docs/integrations)   | Companion packages such as `vern-llm-redis`.                                                     |
+| [`adapters/`](./content/docs/adapters)           | OpenAI-compatible providers, Anthropic, Gemini, and the raw fetch escape hatch.                  |
+| [`integrations/`](./content/docs/integrations)   | Companion packages such as `vern-llm-redis` and `vern-llm-bedrock`.                              |
 | `development`, `migration-notes`, `changelog`    | Dev setup, upgrade notes, and release notes.                                                     |
 | `contributing`, `security`, `code-of-conduct`    | Community pages.                                                                                 |
 

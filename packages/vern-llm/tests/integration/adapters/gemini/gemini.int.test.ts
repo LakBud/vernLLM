@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { fromGemini, type GeminiClient } from '../../../../src/index.js';
+import { fromGemini, type GeminiClient } from '../../../../src/adapters/index.js';
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
@@ -33,13 +33,13 @@ function fakeGeminiStream(
 }
 
 function makeFakeStreamingGeminiClient(chunks: unknown[], onReturn?: () => void | Promise<void>) {
-  const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
+  const generateContent = vi.fn<GeminiClient['models']['generateContent']>(async () => ({}));
   const generateContentStream = vi.fn((_params: unknown) =>
     Promise.resolve(fakeGeminiStream(chunks, onReturn) as AsyncIterable<never>),
   );
 
   return {
-    client: { generateContent, generateContentStream } as unknown as GeminiClient,
+    client: { models: { generateContent, generateContentStream } } as unknown as GeminiClient,
     generateContentStream,
   };
 }
@@ -143,8 +143,8 @@ describe('fromGemini().chat.completions.createStream', () => {
   });
 
   it('throws LLMError(validation) when the client has no generateContentStream', async () => {
-    const generateContent = vi.fn<NonNullable<GeminiClient['generateContent']>>(async () => ({}));
-    const adapted = fromGemini({ generateContent });
+    const generateContent = vi.fn<GeminiClient['models']['generateContent']>(async () => ({}));
+    const adapted = fromGemini({ models: { generateContent } });
 
     await expect(
       collect(

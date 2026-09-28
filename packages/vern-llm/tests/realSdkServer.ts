@@ -29,7 +29,7 @@ export interface RealSdkServer {
  *   non-streaming case).
  *
  * - `{ status?, raw }`: full control over the response, for streaming wire
- *   formats (SSE, AWS's binary event-stream) that aren't a single JSON
+ *   formats (SSE) that aren't a single JSON
  *   body. `raw` writes headers and body itself via the given
  *   `http.ServerResponse`.
  *
@@ -66,65 +66,6 @@ export function sseRaw(
       // JSON-encoded, as every provider's actual event payloads are.
       const dataLine = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
       res.write(`data: ${dataLine}\n\n`);
-    }
-    res.end();
-  };
-}
-
-/**
- * Builds a `raw` response function that writes AWS's binary
- * `application/vnd.amazon.eventstream` format: Bedrock's real
- * `ConverseStream` wire format, structurally nothing like SSE.
- *
- * Note on `EventStreamMarshaller`'s constructor option names: they're
- * inverted from what `@smithy/util-utf8`'s own `fromUtf8`/`toUtf8` naming
- * suggests (confirmed empirically) - `utf8Encoder` must be `toUtf8` (bytes
- * -> string) and `utf8Decoder` must be `fromUtf8` (string -> bytes), the
- * reverse of what those names would suggest from `@smithy/util-utf8`
- * itself. Passing them the "obvious" way throws `RangeError: Offset is
- * outside the bounds of the DataView` deep inside header encoding.
- */
-export async function bedrockEventStreamRaw(
-  events: Array<{ eventType: string; payload: unknown }>,
-): Promise<(res: http.ServerResponse) => Promise<void>> {
-  const { EventStreamMarshaller } = await import('@smithy/eventstream-serde-node');
-  const { fromUtf8, toUtf8 } = await import('@smithy/util-utf8');
-
-  const marshaller = new EventStreamMarshaller({
-    utf8Encoder: toUtf8,
-    utf8Decoder: fromUtf8,
-  });
-
-  return async (res) => {
-    res.writeHead(200, {
-      'content-type': 'application/vnd.amazon.eventstream',
-    });
-
-    const encoded = marshaller.serialize(
-      (async function* () {
-        yield* events;
-      })(),
-      (event: { eventType: string; payload: unknown }) => ({
-        headers: {
-          ':event-type': {
-            type: 'string' as const,
-            value: event.eventType,
-          },
-          ':message-type': {
-            type: 'string' as const,
-            value: 'event',
-          },
-          ':content-type': {
-            type: 'string' as const,
-            value: 'application/json',
-          },
-        },
-        body: new TextEncoder().encode(JSON.stringify(event.payload)),
-      }),
-    );
-
-    for await (const chunk of encoded) {
-      res.write(Buffer.from(chunk));
     }
     res.end();
   };

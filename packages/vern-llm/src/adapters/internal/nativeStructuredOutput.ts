@@ -1,21 +1,8 @@
 /**
- * A static allow-list or predicate naming which models support native,
- * schema-constrained output as its own request field. Anthropic's
- * `output_config.format` and Bedrock's `outputConfig.textFormat` separate
- * from `tools`/`tool_choice`, so it can be combined with real,
- * caller-supplied `tools` in the same request.
- *
- * There is no built-in default list here. Which models support this is
- * Anthropic's and Bedrock's call to make, not this package's, and it
- * changes over time; hardcoding a guessed list would risk silently
- * routing a request onto a field a given model doesn't actually support,
- * trading a clear `LLMError('invalid_params')` with
- * `code: 'unsupported_capability'` for a confusing error from the provider
- * instead. So this is opt-in: pass the model IDs you've verified against the
- * provider's own docs (or a predicate). Left unset, no model is treated as
- * native-capable, `jsonSchema` keeps using the older forced-single-tool-call
- * emulation, and combining it with `tools` throws the coded capability error,
- * exactly this package's behavior before native support was added.
+ * A list of model ids, or a predicate, naming models with a capability.
+ * Native structured output has no built in list: which models support it
+ * is the provider's call and changes over time, and a wrong guess would
+ * trade a clear local error for a confusing provider one.
  */
 export type ModelCapabilityOverride = string[] | ((model: string) => boolean);
 

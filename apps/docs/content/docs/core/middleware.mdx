@@ -5,7 +5,8 @@ description: Transform outgoing requests and observe or wrap the outcome of a ca
 
 ```ts title="middleware-setup.ts"
 import OpenAI from 'openai';
-import { createStateKey, fromOpenAI, VernLLM } from 'vern-llm';
+import { createStateKey, VernLLM } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
 
 const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 const spanIdKey = createStateKey<string>('tracing.spanId');
@@ -462,7 +463,7 @@ the one behind the primary:
 | ---------------------- | ------------------------------- | -------------------------------------------------------------------------------- |
 | `fromAnthropic`        | `anthropic`                     | `anthropic`                                                                      |
 | `fromBedrock`          | `bedrock`                       | `aws.bedrock`                                                                    |
-| `fromGemini`           | `gemini`                        | `gcp.vertex_ai` or `gcp.gemini` from the top level client, unset for `ai.models` |
+| `fromGemini`           | `gemini`                        | `gcp.vertex_ai` or `gcp.gemini` from the client's `vertexai`, unset when missing |
 | `fromOpenAICompatible` | `openai-compatible`             | The `provider` option, else inferred from a well known `baseURL` host            |
 | `fromFetch`            | `fetch`                         | The `provider` config field                                                      |
 | Hand written client    | its `adapter.name`, or `custom` | its `adapter.provider`                                                           |

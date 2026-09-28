@@ -9,6 +9,23 @@ closely enough to need no adapter; others need one that translates their native 
 few fields (`ContentBlock[]` multimodal input, `is_error` on tool messages) are VernLLM's own
 additions with no OpenAI equivalent, adapters translate those as needed per provider too.
 
+Adapters live on their own entry, `vern-llm/adapters`, so the core entry stays provider free:
+
+```ts
+import { VernLLM } from 'vern-llm';
+import { fromOpenAI, parseSseStream } from 'vern-llm/adapters';
+```
+
+It holds every `from*` factory, their option types, `ModelCapabilityOverride`, `parseSseStream`
+and `SSE_PING`. The types an adapter implements, such as `LLMClient` and the wire types, stay in
+`vern-llm`.
+
+<Callout type="info">
+  AWS Bedrock ships separately, as `fromBedrock` in
+  [`vern-llm-bedrock`](/docs/integrations/bedrock), with `@aws-sdk/client-bedrock-runtime` as a peer
+  dependency.
+</Callout>
+
 <Cards>
   <Card title="OpenAI-Compatible" href="/docs/adapters/openai-compatible">
     Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, OpenRouter, Perplexity,
@@ -21,8 +38,8 @@ additions with no OpenAI equivalent, adapters translate those as needed per prov
   <Card title="Gemini" href="/docs/adapters/gemini">
     fromGemini
   </Card>
-  <Card title="AWS Bedrock" href="/docs/adapters/bedrock">
-    fromBedrock
+  <Card title="AWS Bedrock" href="/docs/integrations/bedrock">
+    fromBedrock, in the vern-llm-bedrock package
   </Card>
   <Card title="Custom / fromFetch" href="/docs/adapters/custom-fetch">
     Raw HTTP escape hatch

@@ -1,11 +1,11 @@
 ---
 title: Gemini
-description: fromGemini adapter
+description: Access the Gemini API using the fromGemini adapter
 ---
 
 `fromGemini` wraps the raw Gemini client, not a pre-configured model instance, since the adapter passes `model` through on every call rather than baking it in up front.
 
-`GeminiClient` is the public client type exported by `VernLLM` and accepted by `fromGemini`. It allows TypeScript users to type their Gemini client without depending on adapter internals. It covers both the callable model methods directly and the whole top-level SDK client (via an optional `models` field), so both of the forms below type-check with no cast.
+`GeminiClient` is the public client type exported by `vern-llm/adapters` and accepted by `fromGemini`. It matches the top level `GoogleGenAI` client, so passing `ai` type-checks with no cast.
 
 <Callout title="The Gemini SDK can retry on its own too">
   `@google/genai` only retries transient failures, including 429s, when `httpOptions.retryOptions`
@@ -15,11 +15,12 @@ description: fromGemini adapter
 
 ## New SDK (`@google/genai`)
 
-The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it. Pass the whole client straight through, `fromGemini` unwraps `.models` internally:
+The current SDK's `ai.models.generateContent({ model, ... })` takes `model` per call, which lines up directly with how `fromGemini` forwards it. Pass the top level client, `ai`:
 
 ```ts title="gemini-new-sdk-setup.ts"
 import { GoogleGenAI } from '@google/genai';
-import { VernLLM, fromGemini } from 'vern-llm';
+import { VernLLM } from 'vern-llm';
+import { fromGemini } from 'vern-llm/adapters';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -29,14 +30,9 @@ const llm = new VernLLM({
 });
 ```
 
-`fromGemini(ai.models)` still works exactly as before, if you'd rather pass the narrower client:
-
-```ts title="gemini-new-sdk-setup-models.ts"
-const llm = new VernLLM({
-  client: fromGemini(ai.models),
-  model: 'gemini-3.1-flash-lite',
-});
-```
+Pass `ai`, not `ai.models`. Only the top level client says whether it talks to Vertex AI or the
+Gemini API, which `fromGemini` reports as the provider. `fromGemini(ai.models)` throws at
+construction.
 
 <Callout>
   `jsonSchema` uses Gemini's native `responseSchema` + `responseMimeType: 'application/json'`.
