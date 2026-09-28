@@ -1,36 +1,39 @@
 import type { RedisClient, RedisSubscriber } from '../types.js';
 
-/** The minimal node-redis (the "redis" package, v4+) shape this package actually calls. */
+/** The node-redis (v4+) shape this package calls. */
 export interface NodeRedisLike {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, options: { PX: number }): Promise<unknown>;
   del(keys: string[]): Promise<unknown>;
   eval(script: string, options: { keys?: string[]; arguments?: string[] }): Promise<unknown>;
-  /** node-redis's own scan shape. Optional, same reasoning as RedisClient.scan. */
+  /** Optional, as RedisClient.evalsha. */
+  evalSha?(sha: string, options: { keys?: string[]; arguments?: string[] }): Promise<unknown>;
+  /** Optional, as RedisClient.scan. */
   scan?(
     cursor: number,
     options: { MATCH: string; COUNT: number },
   ): Promise<{ cursor: number; keys: string[] }>;
 }
 
-/**
- * Translates node-redis's option-object call shapes (set's { PX }, eval's
- * { keys, arguments }, scan's numeric cursor and { MATCH, COUNT }) onto
- * RedisClient's ioredis-shaped, positional one. Pass an already-connected
- * node-redis client.
- */
+/** Adapts a connected node-redis client to RedisClient. */
 export function fromNodeRedis(client: NodeRedisLike): RedisClient {
-  const base = {
+  const split = (numKeys: number, args: (string | number)[]) => ({
+    keys: args.slice(0, numKeys).map(String),
+    arguments: args.slice(numKeys).map(String),
+  });
+
+  const base: RedisClient = {
     get: (key: string) => client.get(key),
     set: (key: string, value: string, _mode: 'PX', durationMs: number) =>
       client.set(key, value, { PX: durationMs }),
     del: (...keys: string[]) => client.del(keys),
-    eval: (script: string, numKeys: number, ...args: (string | number)[]) => {
-      const keys = args.slice(0, numKeys).map(String);
-      const argv = args.slice(numKeys).map(String);
-      return client.eval(script, { keys, arguments: argv });
-    },
+    eval: (script: string, numKeys: number, ...args: (string | number)[]) =>
+      client.eval(script, split(numKeys, args)),
   };
+
+  if (client.evalSha) {
+    base.evalsha = (sha, numKeys, ...args) => client.evalSha!(sha, split(numKeys, args));
+  }
 
   if (!client.scan) return base;
 
@@ -51,16 +54,7 @@ export interface NodeRedisSubscriberLike {
   unsubscribe?(channel: string): Promise<unknown>;
 }
 
-/**
- * node-redis has no generic 'message' event, subscribe() instead takes a
- * per-channel callback. This shims that into RedisSubscriber's
- * subscribe + on('message') shape, so the rest of this package never
- * needs to know which client it's talking to.
- *
- * Pass an already-connected, duplicated client (`client.duplicate()`,
- * then `await connect()`), never the same connection used for regular
- * commands.
- */
+/** Adapts a connected, duplicated node-redis client to RedisSubscriber. */
 export function fromNodeRedisSubscriber(client: NodeRedisSubscriberLike): RedisSubscriber {
   const listeners: Array<(channel: string, message: string) => void> = [];
   const subscribed = new Set<string>();
@@ -73,9 +67,7 @@ export function fromNodeRedisSubscriber(client: NodeRedisSubscriberLike): RedisS
         await client.subscribe(channel, (message, ch) => {
           for (const listener of listeners) listener(ch, message);
         });
-        // Only marked subscribed once the subscription has actually
-        // succeeded, so a failed attempt can be retried instead of
-        // being silently treated as already subscribed forever.
+        // Marked only on success, so a failed subscribe can be retried.
         subscribed.add(channel);
       } catch (error) {
         subscribed.delete(channel);
@@ -85,12 +77,16 @@ export function fromNodeRedisSubscriber(client: NodeRedisSubscriberLike): RedisS
     async unsubscribe(channel) {
       if (!subscribed.has(channel)) return;
       subscribed.delete(channel);
-      // Listeners stay: another adapter may share this subscriber, and
-      // node-redis stops delivering this channel once it is unsubscribed.
+      // Listeners stay: another adapter may still use this subscriber.
       await client.unsubscribe?.(channel);
     },
     on(event, listener) {
       if (event === 'message') listeners.push(listener);
+      return this;
+    },
+    off(event, listener) {
+      const index = event === 'message' ? listeners.indexOf(listener) : -1;
+      if (index !== -1) listeners.splice(index, 1);
       return this;
     },
   };

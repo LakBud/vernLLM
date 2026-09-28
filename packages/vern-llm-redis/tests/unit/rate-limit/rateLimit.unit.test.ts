@@ -302,13 +302,15 @@ describe('redisRateLimit', () => {
 
     expect(redis.eval).toHaveBeenCalledWith(
       expect.stringContaining("if op == 'grow'"),
-      1,
+      2,
       'vernllm:rl:rpm',
+      '{vernllm:rl:rpm}:aimd',
       'grow',
       1,
       1,
       20,
       10,
+      60_000,
     );
   });
 
@@ -341,13 +343,15 @@ describe('redisRateLimit', () => {
 
     expect(redis.eval).toHaveBeenCalledWith(
       expect.stringContaining("if op == 'grow'"),
-      1,
+      2,
       'vernllm:rl:rpm',
+      '{vernllm:rl:rpm}:aimd',
       'shrink',
       0.5,
       1,
       20,
       10,
+      60_000,
     );
   });
 
@@ -378,13 +382,15 @@ describe('redisRateLimit', () => {
 
     expect(redis.eval).toHaveBeenCalledWith(
       expect.stringContaining("if op == 'grow'"),
-      1,
+      2,
       'vernllm:rl:rpm',
+      '{vernllm:rl:rpm}:aimd',
       'shrink',
       0.5,
       1,
       20,
       10,
+      60_000,
     );
   });
 

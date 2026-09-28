@@ -1,5 +1,5 @@
 {
   "title": "Redis",
   "icon": "Redis",
-  "pages": ["index", "features", "custom-clients", "contributing", "changelog"]
+  "pages": ["index", "features", "custom-clients", "migration-notes", "contributing", "changelog"]
 }

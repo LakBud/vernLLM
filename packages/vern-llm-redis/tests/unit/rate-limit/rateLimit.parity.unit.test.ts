@@ -1,3 +1,4 @@
+import { RateLimiter } from 'vern-llm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { QUEUE_SCRIPT } from '../../../src/internal/rate-limit/scripts.js';
@@ -8,10 +9,34 @@ import { fakeRedisClient, fakeSubscriber } from '../../helpers.js';
 const ok = (avail = 1, cap = 10) => [1, String(avail), String(cap), '-1'];
 const miss = (waitMs = -1) => [0, '0', '10', String(waitMs)];
 
+/** Every QUEUE_SCRIPT call with the given op. */
+const queueOps = (redis: ReturnType<typeof fakeRedisClient>, op: string) =>
+  redis.eval.mock.calls.filter((call) => call[0] === QUEUE_SCRIPT && call[3] === op);
+
 describe('redisRateLimit maxQueueSize', () => {
-  it('rejects a further waiter once this process already has that many waiting', async () => {
+  /**
+   * A fake Redis whose takes always miss and whose shared line refuses
+   * an `enter` once it holds `size` waiters, counting only the waiters
+   * this test adds, the way QUEUE_SCRIPT counts every process's.
+   */
+  function fullAfter(size: number) {
     const redis = fakeRedisClient();
-    redis.eval.mockResolvedValue(miss(50));
+    const line = new Set<string>();
+    redis.eval.mockImplementation(async (script, _numKeys, _key, op, id) => {
+      if (script !== QUEUE_SCRIPT) return miss(50);
+      const waiter = String(id);
+      if (op === 'enter' && !line.has(waiter)) {
+        if (line.size >= size) return [0, line.size, 1];
+        line.add(waiter);
+      }
+      if (op === 'leave') line.delete(waiter);
+      return [0, line.size, 0];
+    });
+    return { redis, line };
+  }
+
+  it('rejects a further waiter once the shared line holds maxQueueSize, even without fairQueue', async () => {
+    const { redis } = fullAfter(1);
     const limiter = redisRateLimit(redis, {
       fairQueue: false,
       requestsPerMinute: 1,
@@ -21,12 +46,62 @@ describe('redisRateLimit maxQueueSize', () => {
 
     const controller = new AbortController();
     const first = limiter.acquire(1, controller.signal).catch((e: unknown) => e);
-    await waitFor(() => expect(redis.eval.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(queueOps(redis, 'enter')).toHaveLength(1));
 
     await expect(limiter.acquire(1)).rejects.toMatchObject({ code: 'rate_limit_queue_full' });
 
     controller.abort();
     await first;
+  });
+
+  it('sends maxQueueSize to the shared line, where every process is counted', async () => {
+    const { redis } = fullAfter(5);
+    const limiter = redisRateLimit(redis, {
+      requestsPerMinute: 1,
+      maxQueueSize: 3,
+      maxQueueMs: 1000,
+    });
+
+    const controller = new AbortController();
+    const waiter = limiter.acquire(1, controller.signal).catch((e: unknown) => e);
+    await waitFor(() => expect(queueOps(redis, 'enter')).toHaveLength(1));
+    controller.abort();
+    await waiter;
+
+    expect(queueOps(redis, 'enter')[0]!.at(-1)).toBe(3);
+  });
+
+  it('without fairQueue or maxQueueSize, a waiting call never touches the line', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValue(miss(50));
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 1 });
+
+    const controller = new AbortController();
+    const waiter = limiter.acquire(1, controller.signal).catch((e: unknown) => e);
+    await waitFor(() => expect(redis.eval.mock.calls.length).toBeGreaterThan(1));
+    controller.abort();
+    await waiter;
+
+    expect(redis.eval.mock.calls.some((call) => call[0] === QUEUE_SCRIPT)).toBe(false);
+  });
+
+  it('a waiter counted without fairQueue renews its place while it waits, and leaves after', async () => {
+    const { redis, line } = fullAfter(5);
+    const limiter = redisRateLimit(redis, {
+      fairQueue: false,
+      requestsPerMinute: 1,
+      maxQueueSize: 2,
+      maxQueueMs: 1000,
+    });
+
+    const controller = new AbortController();
+    const waiter = limiter.acquire(1, controller.signal).catch((e: unknown) => e);
+    await waitFor(() => expect(queueOps(redis, 'check').length).toBeGreaterThan(0), 2000);
+    controller.abort();
+    await waiter;
+
+    expect(queueOps(redis, 'leave')).toHaveLength(1);
+    expect(line.size).toBe(0);
   });
 
   it('an uncontended call never counts against the queue', async () => {
@@ -113,11 +188,52 @@ describe('redisRateLimit failure handling', () => {
       requestsPerMinute: 5,
     });
 
-    await expect(limiter.acquire(1)).rejects.toThrow('blip');
+    await expect(limiter.acquire(1)).rejects.toMatchObject({
+      name: 'LLMError',
+      type: 'network',
+      code: 'connection_failed',
+      message: 'Redis acquire failed: blip',
+      cause: expect.objectContaining({ message: 'blip' }),
+    });
     const rollback = redis.eval.mock.calls[2]!;
     expect(rollback[2]).toBe('vernllm:rl:concurrency');
     expect(rollback[3]).toEqual(expect.any(String)); // the lease id it took
     errors.mockRestore();
+  });
+
+  it('passes its own rate limit errors through unwrapped', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValue(ok());
+    const limiter = redisRateLimit(redis, { fairQueue: false, tokensPerMinute: 10 });
+
+    await expect(limiter.acquire(50)).rejects.toMatchObject({
+      type: 'rate_limited',
+      code: 'rate_limit_capacity_exceeded',
+    });
+  });
+
+  it('wraps a Redis failure in readState the same way', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockRejectedValue(new Error('down'));
+    const limiter = redisRateLimit(redis, { requestsPerMinute: 5 });
+
+    await expect(limiter.readState()).rejects.toMatchObject({
+      type: 'network',
+      code: 'connection_failed',
+      message: 'Redis readState failed: down',
+    });
+  });
+
+  it('wraps a non Error rejection too', async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockRejectedValue('socket gone');
+    const limiter = redisRateLimit(redis, { fairQueue: false, requestsPerMinute: 5 });
+
+    await expect(limiter.acquire(1)).rejects.toMatchObject({
+      code: 'connection_failed',
+      message: 'Redis acquire failed: socket gone',
+      cause: 'socket gone',
+    });
   });
 
   it('a failed rollback is reported but never masks the original error', async () => {
@@ -134,7 +250,10 @@ describe('redisRateLimit failure handling', () => {
       requestsPerMinute: 5,
     });
 
-    await expect(limiter.acquire(1)).rejects.toThrow('original');
+    await expect(limiter.acquire(1)).rejects.toMatchObject({
+      code: 'connection_failed',
+      cause: expect.objectContaining({ message: 'original' }),
+    });
     expect(errors).toHaveBeenCalled();
     errors.mockRestore();
   });
@@ -344,5 +463,59 @@ describe('redisRateLimit fair queue waiting', () => {
       expect.objectContaining({ message: 'leave failed' }),
     );
     limiter.dispose();
+  });
+});
+
+describe('redisRateLimit validates limits exactly like core', () => {
+  /** What a constructor threw, as the fields a caller would branch on. */
+  function thrown(build: () => unknown) {
+    try {
+      build();
+    } catch (error) {
+      const { name, type, code, message } = error as Record<string, unknown>;
+      return { name, type, code, message };
+    }
+    return undefined;
+  }
+
+  it.each([
+    { requestsPerMinute: -1 },
+    { requestsPerMinute: 0.5 },
+    { tokensPerMinute: Number.NaN },
+    { tokensPerMinute: Infinity },
+    { maxConcurrent: 1.5 },
+    { maxConcurrent: -1 },
+    { maxQueueSize: 2.5 },
+    { maxQueueMs: -1 },
+    { maxQueueMs: 2_147_483_648 },
+    { aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: 10 } },
+    {
+      requestsPerMinute: 10,
+      aimd: {
+        increaseBy: 1,
+        decreaseFactor: 0.5,
+        minCapacity: 1,
+        maxCapacity: 10,
+        proactiveFloor: -1,
+      },
+    },
+    {
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 0.5, maxCapacity: 10 },
+    },
+    {
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 1, maxCapacity: Number.NaN },
+    },
+    {
+      requestsPerMinute: 10,
+      aimd: { increaseBy: 1, decreaseFactor: 0.5, minCapacity: 20, maxCapacity: 10 },
+    },
+  ])('throws the same error as core for %j', (options) => {
+    const core = thrown(() => new RateLimiter(options));
+    const redis = thrown(() => redisRateLimit(fakeRedisClient(), options));
+
+    expect(core).toMatchObject({ name: 'LLMError', type: 'invalid_params' });
+    expect(redis).toEqual(core);
   });
 });

@@ -80,19 +80,41 @@ describe('resolveRateLimitOptions validation', () => {
   it.each([
     [
       { requestsPerMinute: -1 },
-      'requestsPerMinute must be a finite number that is not negative (got -1).',
+      'requestsPerMinute (-1) must be 0 (unlimited) or a finite number of at least 1.',
+    ],
+    [
+      { requestsPerMinute: 0.5 },
+      'requestsPerMinute (0.5) must be 0 (unlimited) or a finite number of at least 1.',
     ],
     [
       { tokensPerMinute: Infinity },
-      'tokensPerMinute must be a finite number that is not negative (got Infinity).',
+      'tokensPerMinute (Infinity) must be 0 (unlimited) or a finite number of at least 1.',
+    ],
+    [
+      { tokensPerMinute: Number.NaN },
+      'tokensPerMinute (NaN) must be 0 (unlimited) or a finite number of at least 1.',
     ],
     [
       { maxConcurrent: Number.NaN },
-      'maxConcurrent must be a finite number that is not negative (got NaN).',
+      'maxConcurrent (NaN) must be a non-negative integer (0 means unlimited).',
     ],
-    [{ maxQueueMs: -5 }, 'maxQueueMs must be a finite number that is not negative (got -5).'],
-    [{ maxQueueSize: 1.5 }, 'maxQueueSize must be a non-negative integer (got 1.5).'],
-    [{ maxQueueSize: -1 }, 'maxQueueSize must be a non-negative integer (got -1).'],
+    [
+      { maxConcurrent: 1.5 },
+      'maxConcurrent (1.5) must be a non-negative integer (0 means unlimited).',
+    ],
+    [
+      { maxQueueMs: -5 },
+      'maxQueueMs (-5) must be a finite number from 0 to 2147483647. Pass 0 to wait indefinitely.',
+    ],
+    [
+      { maxQueueMs: 2_147_483_648 },
+      'maxQueueMs (2147483648) must be a finite number from 0 to 2147483647. Pass 0 to wait indefinitely.',
+    ],
+    [
+      { maxQueueSize: 1.5 },
+      'maxQueueSize (1.5) must be a non-negative integer (0 means unlimited).',
+    ],
+    [{ maxQueueSize: -1 }, 'maxQueueSize (-1) must be a non-negative integer (0 means unlimited).'],
     [{ queueLeaseMs: 0 }, 'queueLeaseMs must be a finite number greater than 0 (got 0).'],
     [
       { concurrencyLeaseMs: -1 },
@@ -110,5 +132,19 @@ describe('resolveRateLimitOptions validation', () => {
     expect(() => resolveRateLimitOptions({ aimd })).toThrow(
       expect.objectContaining({ type: 'invalid_params' }),
     );
+  });
+});
+
+describe('resolveRateLimitOptions limit edges', () => {
+  it.each([
+    { requestsPerMinute: 0 },
+    { requestsPerMinute: 1 },
+    { tokensPerMinute: 1.5 },
+    { maxConcurrent: 0 },
+    { maxQueueSize: 0 },
+    { maxQueueMs: 0 },
+    { maxQueueMs: 2_147_483_647 },
+  ])('accepts %j', (options) => {
+    expect(() => resolveRateLimitOptions(options)).not.toThrow();
   });
 });

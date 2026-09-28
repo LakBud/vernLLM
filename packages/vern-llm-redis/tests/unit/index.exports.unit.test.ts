@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import * as clientsEntry from '../../src/clients/index.js';
 import * as entry from '../../src/index.js';
 import {
   fromIoredis,
@@ -105,5 +106,47 @@ describe('package entrypoint exports', () => {
     expect(assertRateLimitOptions).toBeDefined();
     expect(assertRateLimiterAdapter).toBeDefined();
     expect(assertTrippingOption).toBeDefined();
+  });
+});
+
+describe('clients subpath exports', () => {
+  it('exports exactly both client adapters', () => {
+    expect(Object.keys(clientsEntry).sort()).toEqual([
+      'fromIoredis',
+      'fromIoredisSubscriber',
+      'fromNodeRedis',
+      'fromNodeRedisSubscriber',
+    ]);
+  });
+
+  it('exports the same functions as the root entry', () => {
+    expect(clientsEntry.fromIoredis).toBe(entry.fromIoredis);
+    expect(clientsEntry.fromNodeRedisSubscriber).toBe(entry.fromNodeRedisSubscriber);
+  });
+
+  it('exports the client types', () => {
+    const client: clientsEntry.RedisClient = {
+      get: async () => null,
+      set: async () => undefined,
+      del: async () => undefined,
+      eval: async () => undefined,
+    };
+    const subscriber: clientsEntry.RedisSubscriber = {
+      subscribe: async () => undefined,
+      on: () => undefined,
+    };
+    const node: clientsEntry.NodeRedisLike = {
+      get: async () => null,
+      set: async () => undefined,
+      del: async () => undefined,
+      eval: async () => undefined,
+    };
+    const nodeSubscriber: clientsEntry.NodeRedisSubscriberLike = {
+      subscribe: async () => undefined,
+    };
+    const io: clientsEntry.IoredisLike = client;
+    const ioSubscriber: clientsEntry.IoredisSubscriberLike = subscriber;
+
+    expect([client, subscriber, node, nodeSubscriber, io, ioSubscriber]).toHaveLength(6);
   });
 });

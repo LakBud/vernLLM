@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
-import { createAdapterLogger } from '../../src/internal/logger.utils.js';
+import { createAdapterLogger } from '../../src/internal/shared/logger.utils.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
 import { waitFor } from '../breakerHelpers.js';
 import { fakeRedisClient } from '../helpers.js';

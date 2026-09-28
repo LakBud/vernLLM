@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
-import { READ_BUCKETS_SCRIPT } from '../../../src/internal/circuit-breaker/snapshotScript.js';
+import { READ_BUCKETS_SCRIPT } from '../../../src/internal/circuit-breaker/scripts/snapshotScript.js';
 import { callContext, waitFor } from '../../breakerHelpers.js';
-import { fakeRedisClient, fakeSubscriber, transitionMessage } from '../../helpers.js';
+import { fakeRedisClient, fakeSubscriber, nextVersion, transitionMessage } from '../../helpers.js';
 
 /**
  * TRANSITION_SCRIPT's reply: [from, to, failures, wonProbe, openedAt,
@@ -33,6 +33,7 @@ function reply(
     String(fields.cooldown ?? 30_000),
     String(fields.grantAt ?? 0),
     String(fields.slots ?? 0),
+    String(nextVersion()),
   ];
 }
 
@@ -282,7 +283,11 @@ describe('redisCircuitBreaker prepare', () => {
       const breaker = redisCircuitBreaker(redis, { pollIntervalMs: 0, logger: 'silent' });
       redis.eval.mockRejectedValueOnce(new Error('redis down'));
 
-      await expect(breaker.prepare?.()).rejects.toThrow('redis down');
+      await expect(breaker.prepare?.()).rejects.toMatchObject({
+        type: 'network',
+        code: 'connection_failed',
+        message: 'Redis prepare failed: redis down',
+      });
 
       redis.eval.mockResolvedValue(reply('closed', 'closed'));
       await expect(breaker.prepare?.()).resolves.toBeUndefined();
@@ -333,7 +338,7 @@ describe('redisCircuitBreaker readState', () => {
     const breaker = redisCircuitBreaker(redis, { keyPrefix: 'cb', pollIntervalMs: 0 });
 
     await expect(breaker.readState?.()).resolves.toBe('open');
-    expect(redis.eval).toHaveBeenCalledWith(READ_BUCKETS_SCRIPT, 1, 'cb');
+    expect(redis.eval).toHaveBeenCalledWith(READ_BUCKETS_SCRIPT, 1, 'cb', '1');
   });
 
   it('also refreshes the local copy, and reports the change', async () => {
@@ -375,16 +380,19 @@ describe('redisCircuitBreaker readState', () => {
 
     await breaker.readState?.('gpt-4o');
 
-    expect(redis.eval).toHaveBeenCalledWith(READ_BUCKETS_SCRIPT, 1, 'cb:gpt-4o');
+    expect(redis.eval).toHaveBeenCalledWith(READ_BUCKETS_SCRIPT, 1, 'cb:gpt-4o', '1');
   });
 
   it('rejects when Redis does, since a live answer was asked for', async () => {
     const redis = fakeRedisClient();
     redis.eval.mockRejectedValue(new Error('redis down'));
 
-    await expect(redisCircuitBreaker(redis, { pollIntervalMs: 0 }).readState?.()).rejects.toThrow(
-      'redis down',
-    );
+    await expect(
+      redisCircuitBreaker(redis, { pollIntervalMs: 0 }).readState?.(),
+    ).rejects.toMatchObject({
+      code: 'connection_failed',
+      message: 'Redis readState failed: redis down',
+    });
   });
 
   it('keeps the clock and cooldown it already knew, so a later prepare can still judge locally', async () => {

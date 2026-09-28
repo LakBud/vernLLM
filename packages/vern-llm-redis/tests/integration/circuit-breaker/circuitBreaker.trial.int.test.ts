@@ -12,9 +12,71 @@ import {
   trip,
 } from '../../breakerHelpers.js';
 import { it } from '../../fixtures.js';
-import { connect, uniquePrefix, waitUntil } from '../../helpers.js';
+import { connect, spyOnScripts, uniquePrefix, waitUntil } from '../../helpers.js';
 
 describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
+  it('a trial call running longer than the lease keeps its trial', async ({ makeBreaker }) => {
+    const options = {
+      keyPrefix: uniquePrefix('cb'),
+      threshold: 1,
+      cooldownMs: 150,
+      probeLeaseMs: 300,
+    };
+    const holder = makeBreaker(options);
+    const other = makeBreaker(options);
+
+    await trip(holder);
+    await learn(other);
+    await sleep(200);
+
+    const slow = await claimTrial(holder);
+    // Three leases long. Without renewal the other process takes the trial over.
+    await expect(claimTrial(other, { timeoutMs: 900 })).rejects.toThrow('admitted 0 of 1');
+
+    holder.recordSuccess('m', slow);
+    await waitUntil(() => holder.getState?.('m') === 'closed');
+  });
+
+  it('a process spending its slot leaves the other slot for another process', async ({
+    redis,
+    newConnection,
+    makeBreaker,
+  }) => {
+    const prefix = uniquePrefix('cb');
+    const options = { keyPrefix: prefix, threshold: 1, cooldownMs: 150, halfOpenProbes: 2 };
+    // Slower than claimTrial's retries, so several rejected attempts are in
+    // flight at once, the way a busy Redis or a burst of calls would have them.
+    const slowConnection = newConnection();
+    const scripts = spyOnScripts(slowConnection);
+    scripts.mockImplementation(async (command, ...args) => {
+      await sleep(30);
+      return scripts.real(command, ...args);
+    });
+    const first = redisCircuitBreaker(fromIoredis(slowConnection), {
+      ...options,
+      pollIntervalMs: 0,
+      logger: 'silent',
+    });
+    const second = makeBreaker(options);
+
+    await trip(first);
+    await learn(second);
+    await sleep(200);
+
+    const held = await claimTrial(first);
+    // Every check behind those attempts has landed.
+    await sleep(150);
+    expect(await redis.hget(prefix, 'slots')).toBe('1');
+
+    const other = await claimTrial(second);
+    expect(await redis.hget(prefix, 'slots')).toBe('0');
+
+    first.recordSuccess('m', held);
+    second.recordSuccess('m', other);
+    await waitUntil(async () => (await redis.hget(prefix, 'state')) === 'closed');
+    first.dispose();
+  });
+
   it('a trial lease held by a process that never reports back is reclaimed, not held forever', async ({
     redis,
     makeBreaker,
@@ -93,14 +155,26 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
 
   it('a late outcome from a holder whose lease was reclaimed cannot settle the new trial', async ({
     redis,
+    newConnection,
     makeBreaker,
   }) => {
     const prefix = uniquePrefix('cb');
-    const slow = makeBreaker({
+    // `slow` is cut off from Redis for its renewals only, like a process
+    // stalled or partitioned mid call, so its lease genuinely lapses.
+    const slowConnection = newConnection();
+    const scripts = spyOnScripts(slowConnection);
+    scripts.mockImplementation((command, ...args) =>
+      args.includes('renew')
+        ? Promise.reject(new Error('partitioned'))
+        : scripts.real(command, ...args),
+    );
+    const slow = redisCircuitBreaker(fromIoredis(slowConnection), {
       keyPrefix: prefix,
       threshold: 1,
       cooldownMs: 150,
       probeLeaseMs: 300,
+      pollIntervalMs: 0,
+      logger: 'silent',
     });
     const fast = makeBreaker({
       keyPrefix: prefix,
@@ -126,6 +200,7 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
     // fast's own success is the one that counts.
     fast.recordSuccess('m', fastCtx);
     await waitUntil(async () => (await redis.hget(prefix, 'state')) === 'closed');
+    slow.dispose();
   });
 
   it('a late success from a call that started before the trip does not close an open circuit', async ({
@@ -320,6 +395,64 @@ describe('redisCircuitBreaker with a faked clock or randomness, real Redis', () 
 
     await waitUntil(async () => (await redis.hget(prefix, 'state')) === 'open');
     expect(await redis.hget(prefix, 'cooldown')).toBe('300');
+    random.mockRestore();
+  });
+
+  it('the lowest jitter still waits the full base cooldown', async ({ redis, makeBreaker }) => {
+    const prefix = uniquePrefix('cb');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const breaker = makeBreaker({
+      keyPrefix: prefix,
+      threshold: 1,
+      cooldownMs: 100,
+      cooldownBackoff: { multiplier: 3, maxMs: 10_000 },
+    });
+
+    await trip(breaker);
+    expect(await redis.hget(prefix, 'cooldown')).toBe('100');
+
+    await sleep(150);
+    const trial = await claimTrial(breaker);
+    breaker.recordFailure('m', trial);
+    await waitUntil(async () => (await redis.hget(prefix, 'state')) === 'open');
+
+    // Grown to 300, jittered only between the base and that.
+    expect(await redis.hget(prefix, 'cooldown')).toBe('100');
+    random.mockRestore();
+  });
+
+  it('jitters across the growth above the base, like core', async ({ redis, makeBreaker }) => {
+    const prefix = uniquePrefix('cb');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const breaker = makeBreaker({
+      keyPrefix: prefix,
+      threshold: 1,
+      cooldownMs: 100,
+      cooldownBackoff: { multiplier: 3 },
+    });
+
+    await trip(breaker);
+    await sleep(150);
+    const trial = await claimTrial(breaker);
+    breaker.recordFailure('m', trial);
+    await waitUntil(async () => (await redis.hget(prefix, 'state')) === 'open');
+
+    expect(await redis.hget(prefix, 'cooldown')).toBe('200');
+    random.mockRestore();
+  });
+
+  it('a maxMs below the base caps the cooldown at maxMs', async ({ redis, makeBreaker }) => {
+    const prefix = uniquePrefix('cb');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const breaker = makeBreaker({
+      keyPrefix: prefix,
+      threshold: 1,
+      cooldownMs: 1000,
+      cooldownBackoff: { multiplier: 2, maxMs: 40 },
+    });
+
+    await trip(breaker);
+    expect(await redis.hget(prefix, 'cooldown')).toBe('40');
     random.mockRestore();
   });
 });

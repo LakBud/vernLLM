@@ -63,6 +63,16 @@
         "default": "./dist/cache.cjs"
       }
     },
+    "./clients": {
+      "import": {
+        "types": "./dist/clients/index.d.mts",
+        "default": "./dist/clients/index.mjs"
+      },
+      "require": {
+        "types": "./dist/clients/index.d.cts",
+        "default": "./dist/clients/index.cjs"
+      }
+    },
     "./clients/ioredis": {
       "import": {
         "types": "./dist/clients/ioredis.d.mts",
@@ -108,10 +118,10 @@
     "size": "size-limit"
   },
   "peerDependencies": {
-    "vern-llm": "workspace:^2.9.1"
+    "vern-llm": "workspace:^"
   },
   "devDependencies": {
-    "vern-llm": "workspace:^2.9.1",
+    "vern-llm": "workspace:^",
     "@types/node": "^26.4.1",
     "ioredis": "^5.4.1",
     "redis": "^4.7.0",
@@ -139,28 +149,28 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "10 KB",
+      "limit": "12 KB",
       "ignore": [
         "vern-llm"
       ]
     },
     {
       "path": "dist/index.cjs",
-      "limit": "11 KB",
+      "limit": "12.5 KB",
       "ignore": [
         "vern-llm"
       ]
     },
     {
       "path": "dist/circuitBreaker.mjs",
-      "limit": "6 KB",
+      "limit": "7 KB",
       "ignore": [
         "vern-llm"
       ]
     },
     {
       "path": "dist/circuitBreaker.cjs",
-      "limit": "6 KB",
+      "limit": "7.25 KB",
       "ignore": [
         "vern-llm"
       ]
@@ -189,6 +199,20 @@
     {
       "path": "dist/cache.cjs",
       "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/clients/index.mjs",
+      "limit": "1 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/clients/index.cjs",
+      "limit": "1 KB",
       "ignore": [
         "vern-llm"
       ]

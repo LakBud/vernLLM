@@ -160,7 +160,17 @@ describe('transitionReply', () => {
       '30000',
       '0',
       '0',
+      expect.stringMatching(/^\d+$/),
+      '',
     ]);
+  });
+
+  it('gives each reply a newer version than the last', () => {
+    const [first, second] = [
+      transitionReply('closed', 'closed'),
+      transitionReply('closed', 'closed'),
+    ];
+    expect(Number(second[11])).toBeGreaterThan(Number(first[11]));
   });
 
   it('a token makes it a reply that won a slot of that epoch', () => {
@@ -179,7 +189,9 @@ describe('transitionReply', () => {
         cooldown: 4,
         grantAt: 5,
         slots: 6,
+        ver: 7,
+        epoch: '8',
       }),
-    ).toEqual(['a', 'b', '1', '0', '2', '', '', '3', '4', '5', '6']);
+    ).toEqual(['a', 'b', '1', '0', '2', '', '', '3', '4', '5', '6', '7', '8']);
   });
 });

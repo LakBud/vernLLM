@@ -1,36 +1,42 @@
 import { LLMError } from 'vern-llm';
 
+/** Minimum gap between AIMD shrinks, core's value, across every process. */
+export const AIMD_SHRINK_WINDOW_MS = 60_000;
+
 export interface AimdOptions {
-  /** Added to the requests-per-minute ceiling on every recorded successful release. */
+  /** Added to the ceiling on each successful release. */
   increaseBy: number;
-  /** Multiplied against the ceiling on a rate-limit signal. Must be greater than 0 and at most 1. */
+  /** Multiplies the ceiling on a rate limit signal, in (0, 1]. */
   decreaseFactor: number;
-  /** Floor the ceiling never shrinks below. */
+  /** Lowest ceiling. */
   minCapacity: number;
-  /** Ceiling the ceiling never grows above. */
+  /** Highest ceiling. */
   maxCapacity: number;
-  /** Shrink proactively once a provider hint reports remainingRequests at or below this. Default 0, meaning off. */
+  /** Shrinks early once a hint's remainingRequests is at or below this. Default 0, off. */
   proactiveFloor?: number;
 }
 
-/** Throws LLMError('invalid_params') describing what's wrong, or returns normally when aimd is a usable config. */
+/** Throws `LLMError('invalid_params')` for an unusable AIMD config. */
 export function assertValidAimd(aimd: AimdOptions, requestsPerMinute: number | undefined): void {
   if (!requestsPerMinute) {
     throw new LLMError('aimd requires requestsPerMinute to be set.', 'invalid_params');
   }
-  if (
-    !Number.isFinite(aimd.minCapacity) ||
-    !Number.isFinite(aimd.maxCapacity) ||
-    aimd.minCapacity < 1 ||
-    aimd.maxCapacity < 1
-  ) {
+  for (const name of ['minCapacity', 'maxCapacity'] as const) {
+    if (!Number.isFinite(aimd[name])) {
+      throw new LLMError(`aimd.${name} (${aimd[name]}) must be a finite number.`, 'invalid_params');
+    }
+  }
+  if (aimd.minCapacity < 1 || aimd.maxCapacity < 1) {
     throw new LLMError(
-      'aimd.minCapacity and aimd.maxCapacity must both be finite and at least 1.',
+      `aimd.minCapacity (${aimd.minCapacity}) and aimd.maxCapacity (${aimd.maxCapacity}) must both be at least 1, since the requests bucket always takes 1 per acquire; a capacity below 1 could never be satisfied.`,
       'invalid_params',
     );
   }
   if (aimd.minCapacity > aimd.maxCapacity) {
-    throw new LLMError('aimd.minCapacity must not exceed aimd.maxCapacity.', 'invalid_params');
+    throw new LLMError(
+      `aimd.minCapacity (${aimd.minCapacity}) must not exceed aimd.maxCapacity (${aimd.maxCapacity}).`,
+      'invalid_params',
+    );
   }
   if (!Number.isFinite(aimd.increaseBy) || aimd.increaseBy <= 0) {
     throw new LLMError('aimd.increaseBy must be a finite number greater than 0.', 'invalid_params');
@@ -50,7 +56,7 @@ export function assertValidAimd(aimd: AimdOptions, requestsPerMinute: number | u
     (!Number.isFinite(aimd.proactiveFloor) || aimd.proactiveFloor < 0)
   ) {
     throw new LLMError(
-      'aimd.proactiveFloor must be a finite number that is not negative.',
+      `aimd.proactiveFloor (${aimd.proactiveFloor}) must be a finite number that is not negative.`,
       'invalid_params',
     );
   }

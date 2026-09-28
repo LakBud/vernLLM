@@ -1,15 +1,11 @@
 import { defaultEstimateTokens, LLMError, type WireRequest } from 'vern-llm';
 
-import {
-  assertNonNegativeFinite,
-  assertNonNegativeInteger,
-  assertPositiveFinite,
-} from '../validate.utils.js';
+import { assertPositiveFinite, invalidParams } from '../shared/errors/validate.utils.js';
 import { assertValidAimd, type AimdOptions } from './aimd.utils.js';
 
 import type { RedisRateLimitOptions } from '../../rateLimit.js';
 
-/** `redisRateLimit`'s options after defaults are applied and every value is checked. */
+/** Options after defaults and validation. */
 export interface ResolvedRateLimitOptions {
   keyPrefix: string;
   wakeChannel: string;
@@ -25,7 +21,7 @@ export interface ResolvedRateLimitOptions {
   aimd: AimdOptions | undefined;
 }
 
-/** Validates `estimateFraction`. Non finite or `<= 0` would zero out or invert the reservation, so it throws; above `1` is only wasteful, so it's clamped. Same rule as core's. */
+/** `estimateFraction` must be finite and above 0. Above 1 is clamped. Same as core. */
 function resolveEstimateFraction(fraction: number | undefined): number {
   if (fraction === undefined) return 1;
 
@@ -39,6 +35,37 @@ function resolveEstimateFraction(fraction: number | undefined): number {
   return Math.min(fraction, 1);
 }
 
+/** Longest delay a timer can hold. Past it, a wait would fire at once. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** Core's limit rules and messages. A ceiling in (0, 1) could never be met. */
+function assertValidLimits(options: RedisRateLimitOptions, maxQueueMs: number): void {
+  for (const name of ['requestsPerMinute', 'tokensPerMinute'] as const) {
+    const value = options[name];
+    if (value === undefined || value === 0) continue;
+
+    if (!Number.isFinite(value) || value < 1) {
+      invalidParams(`${name} (${value}) must be 0 (unlimited) or a finite number of at least 1.`);
+    }
+  }
+
+  // A fractional slot count can't describe calls in flight.
+  for (const name of ['maxConcurrent', 'maxQueueSize'] as const) {
+    const value = options[name];
+    if (value === undefined) continue;
+
+    if (!Number.isInteger(value) || value < 0) {
+      invalidParams(`${name} (${value}) must be a non-negative integer (0 means unlimited).`);
+    }
+  }
+
+  if (!Number.isFinite(maxQueueMs) || maxQueueMs < 0 || maxQueueMs > MAX_TIMER_MS) {
+    invalidParams(
+      `maxQueueMs (${maxQueueMs}) must be a finite number from 0 to ${MAX_TIMER_MS}. Pass 0 to wait indefinitely.`,
+    );
+  }
+}
+
 /** Applies defaults and throws `LLMError('invalid_params')` on the first bad value. */
 export function resolveRateLimitOptions(options: RedisRateLimitOptions): ResolvedRateLimitOptions {
   const keyPrefix = options.keyPrefix ?? 'vernllm:rl';
@@ -49,14 +76,7 @@ export function resolveRateLimitOptions(options: RedisRateLimitOptions): Resolve
   const queueLeaseMs = options.queueLeaseMs ?? 15_000;
   const estimateFraction = resolveEstimateFraction(options.estimateFraction);
 
-  // 0 is meaningful (unlimited capacity for the three bucket options,
-  // "wait forever" for maxQueueMs) and must be preserved, not rejected.
-  // Only negative or non-finite values are actual config mistakes.
-  assertNonNegativeFinite('requestsPerMinute', options.requestsPerMinute);
-  assertNonNegativeFinite('tokensPerMinute', options.tokensPerMinute);
-  assertNonNegativeFinite('maxConcurrent', options.maxConcurrent);
-  assertNonNegativeFinite('maxQueueMs', maxQueueMs);
-  assertNonNegativeInteger('maxQueueSize', maxQueueSize);
+  assertValidLimits(options, maxQueueMs);
   assertPositiveFinite('queueLeaseMs', queueLeaseMs);
   assertPositiveFinite('concurrencyLeaseMs', concurrencyLeaseMs);
   assertPositiveFinite('pollIntervalMs', pollIntervalMs);

@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import { waitUntil } from './helpers.js';
+import { nextVersion, waitUntil } from './helpers.js';
 
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from 'vern-llm';
 
@@ -103,8 +103,9 @@ export async function claimTrial(
 /**
  * TRANSITION_SCRIPT's reply as a fake Redis would return it: [from, to,
  * failures, wonProbe, openedAt, wonToken, breakdown, now, cooldown,
- * grantAt, slots], all strings. Pass `token` to make it a reply that won
- * a half-open slot of that epoch.
+ * grantAt, slots, ver, epoch], all strings. Pass `token` to make it a
+ * reply that won a half-open slot of that epoch. `ver` defaults to a fresh
+ * version. `epoch` defaults to `token`, or none at all.
  */
 export function transitionReply(
   from: string,
@@ -117,6 +118,8 @@ export function transitionReply(
     cooldown?: number;
     grantAt?: number;
     slots?: number;
+    ver?: number;
+    epoch?: string;
   } = {},
 ): string[] {
   return [
@@ -131,5 +134,7 @@ export function transitionReply(
     String(fields.cooldown ?? 30_000),
     String(fields.grantAt ?? 0),
     String(fields.slots ?? 0),
+    String(fields.ver ?? nextVersion()),
+    fields.epoch ?? fields.token ?? '',
   ];
 }

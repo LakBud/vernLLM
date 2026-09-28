@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://vernllm.dev/docs/integrations/otel">Documentation</a> ·
   <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm-otel">Package</a> ·
-  <a href="https://www.npmjs.com/package/vern-llm-redis">npm</a>
+  <a href="https://www.npmjs.com/package/vern-llm-otel">npm</a>
 </p>
 
 <h1 align="center">vern-llm-otel</h1>

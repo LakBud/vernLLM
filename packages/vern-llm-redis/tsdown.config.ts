@@ -6,6 +6,7 @@ export default defineConfig({
     'src/circuitBreaker.ts',
     'src/rateLimit.ts',
     'src/cache.ts',
+    'src/clients/index.ts',
     'src/clients/ioredis.ts',
     'src/clients/nodeRedis.ts',
   ],

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
 import { waitFor } from '../../breakerHelpers.js';
-import { fakeRedisClient, fakeSubscriber, transitionMessage } from '../../helpers.js';
+import { fakeRedisClient, fakeSubscriber, nextVersion, transitionMessage } from '../../helpers.js';
 
 /** Redis clock and slot state a reply carries alongside the transition itself. */
 interface ReplyTiming {
@@ -10,6 +10,7 @@ interface ReplyTiming {
   cooldown?: number;
   grantAt?: number;
   slots?: number;
+  ver?: number;
 }
 
 /** Matches TRANSITION_SCRIPT's return shape: [from, to, failures, wonProbe, openedAt, wonToken, breakdown, now, cooldown, grantAt, slots], all strings. */
@@ -35,6 +36,7 @@ function transitionResult(
     String(timing.cooldown ?? 30_000),
     String(timing.grantAt ?? 0),
     String(timing.slots ?? 0),
+    String(timing.ver ?? nextVersion()),
   ];
 }
 
@@ -96,7 +98,7 @@ describe('redisCircuitBreaker', () => {
       expect.stringContaining('local key = KEYS[1]'),
       1,
       'cb',
-      ...scriptArgs('check', { channel: 'cb:events' }),
+      ...scriptArgs('check', { channel: 'cb:events', grant: '0' }),
     );
   });
 
@@ -470,22 +472,19 @@ describe('redisCircuitBreaker', () => {
     await waitFor(() => expect(redis.eval).toHaveBeenCalled());
   });
 
-  it('isolateByModel falls back to "default" in the bucket key when model is undefined', () => {
+  it('isolateByModel keeps a call with no model on the bare prefix, apart from a model named "default"', () => {
     const redis = fakeRedisClient();
     redis.eval.mockResolvedValue(transitionResult('closed', 'closed', 0));
 
     const breaker = redisCircuitBreaker(redis, { isolateByModel: true, keyPrefix: 'cb' });
     breaker.assertClosed(undefined);
+    breaker.assertClosed('default');
 
-    expect(redis.eval).toHaveBeenCalledWith(
-      expect.any(String),
-      1,
-      'cb:default',
-      ...scriptArgs('check', { channel: 'cb:events' }),
-    );
+    const keys = redis.eval.mock.calls.map((call) => call[2]);
+    expect(keys).toEqual(['cb', 'cb:default']);
   });
 
-  it('a pub/sub message for the "default" bucket key maps back to an undefined model', () => {
+  it('a pub/sub message for the bare prefix maps back to an undefined model', () => {
     const redis = fakeRedisClient();
     const subscriber = fakeSubscriber();
     const onStateChange = vi.fn();
@@ -499,7 +498,7 @@ describe('redisCircuitBreaker', () => {
 
     subscriber.emit(
       'cb:events',
-      transitionMessage({ key: 'cb:default', state: 'open', failures: 3, openedAt: 123456 }),
+      transitionMessage({ key: 'cb', state: 'open', failures: 3, openedAt: 123456 }),
     );
 
     expect(onStateChange).toHaveBeenCalledWith('closed', 'open', 3, undefined, undefined);

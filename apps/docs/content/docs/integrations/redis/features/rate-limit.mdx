@@ -25,11 +25,11 @@ const limiter = redisRateLimit(client, {
 
 | Option               | Default                 | Notes                                                                                                                                                    |
 | -------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `requestsPerMinute`  | unlimited               | Also the AIMD ceiling's starting value when `aimd` is set.                                                                                               |
-| `tokensPerMinute`    | unlimited               | Checked against a pre-flight estimate from `estimateTokens`.                                                                                             |
-| `maxConcurrent`      | unlimited               | Max requests in flight at once, shared across every process using this key.                                                                              |
-| `maxQueueMs`         | `30000`                 | Max time a call may wait for capacity before throwing.                                                                                                   |
-| `maxQueueSize`       | unbounded               | Max calls this process may have waiting at once before new ones throw `rate_limit_queue_full`. Counted per process.                                      |
+| `requestsPerMinute`  | unlimited               | `0` or at least 1. Also the AIMD ceiling's starting value when `aimd` is set, capped at `aimd.maxCapacity`.                                              |
+| `tokensPerMinute`    | unlimited               | `0` or at least 1. Checked against a pre-flight estimate from `estimateTokens`.                                                                          |
+| `maxConcurrent`      | unlimited               | A whole number. Max requests in flight at once, shared across every process using this key.                                                              |
+| `maxQueueMs`         | `30000`                 | Max time a call may wait for capacity before throwing. `0` waits indefinitely, at most `2147483647`.                                                     |
+| `maxQueueSize`       | unbounded               | Max calls waiting at once across every process before new ones throw `rate_limit_queue_full`. See [Fair queue](#fair-queue).                             |
 | `estimateFraction`   | `1`                     | Scales the pre-flight token estimate down. Above 1 is clamped to 1, must be greater than 0.                                                              |
 | `fairQueue`          | `true`                  | Serve waiters first come first served across every process. See [Fair queue](#fair-queue).                                                               |
 | `queueLeaseMs`       | `15000`                 | How long a waiter's place in line survives without renewal, so a crashed waiter stops blocking it.                                                       |
@@ -82,6 +82,9 @@ A waiter renews its place on every check. If its process dies, the place lapses 
 starved by small ones behind it, and also holds everyone behind it while it waits for capacity. Set
 `fairQueue: false` to skip the line and race, which saves a few Redis calls per waiting call.
 
+The line also counts waiters for `maxQueueSize`, across every process. Without `fairQueue`, a waiting
+call joins it only when `maxQueueSize` is set, just to be counted.
+
 ## Reading state and shutting down
 
 `getState()` is synchronous, as the adapter contract requires, so it cannot ask Redis. It reports
@@ -91,7 +94,8 @@ process has made a call it reports every bucket as untouched. Use `await limiter
 live read across every process, which also refreshes what `getState()` reports.
 
 `limiter.dispose()` stops the lease renewals and detaches from the subscriber, call it before closing
-the client.
+the client. Several adapters can share one subscriber: a channel stays subscribed until the last
+adapter using it is disposed.
 
 ## AIMD
 
@@ -113,35 +117,36 @@ against the ceiling on a rate-limit signal; `minCapacity`/`maxCapacity` bound ho
 or grow. Set `proactiveFloor` to shrink ahead of a hard limit once a provider hint reports
 `remainingRequests` at or below that number.
 
-AIMD state lives in Redis alongside the fixed ceiling, so a shrink or growth triggered by one
-process is respected by every other process on their next take, not just the one that saw the
-signal. See [Rate Limiting → AIMD](/docs/core/rate-limiting#aimd) for how the increase or decrease
+The ceiling lives in its own Redis key, `{keyPrefix:rpm}:aimd`, so a shrink or growth triggered by one
+process is respected by every other process on their next take. That key never expires, so an idle
+limiter keeps what it learned. It starts at `requestsPerMinute`, or `maxCapacity` if that is lower,
+and shares the bucket's cluster hash slot. Like core, the ceiling shrinks at most once a minute, and
+that minute is kept in Redis, so a burst of 429s across every process shrinks it once. See [Rate Limiting → AIMD](/docs/core/rate-limiting#aimd) for how the increase or decrease
 curve itself works, that math is identical to the in-process limiter.
 
 ## Errors
 
-`acquire` throws `LLMError` in four cases, none of them tied to Redis connectivity:
+`acquire` throws `LLMError` in these cases:
 
-| type           | code                           | When                                                                                                                                                                                                    |
-| -------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rate_limited` | `rate_limit_capacity_exceeded` | The estimated tokens exceed a fixed `tokensPerMinute`, which AIMD never grows, so the request could never succeed no matter how long it waited. Thrown immediately instead of waiting out `maxQueueMs`. |
-| `rate_limited` | `rate_limit_queue_full`        | `maxQueueSize` calls from this process were already waiting.                                                                                                                                            |
-| `rate_limited` | `rate_limit_queue_timeout`     | The call waited `maxQueueMs` without capacity becoming available.                                                                                                                                       |
-| `aborted`      | none                           | The `AbortSignal` passed to `acquire` fired while it was waiting.                                                                                                                                       |
+| type           | code                           | When                                                                                                              |
+| -------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `rate_limited` | `rate_limit_capacity_exceeded` | The estimated tokens exceed a fixed `tokensPerMinute`, which AIMD never grows. Thrown at once instead of waiting. |
+| `rate_limited` | `rate_limit_queue_full`        | `maxQueueSize` calls, from any process, were already waiting.                                                     |
+| `rate_limited` | `rate_limit_queue_timeout`     | The call waited `maxQueueMs` without capacity becoming available.                                                 |
+| `aborted`      | none                           | The `AbortSignal` passed to `acquire` fired while it was waiting.                                                 |
+| `network`      | `connection_failed`            | Redis failed. The original error is the `cause`. `readState` throws the same.                                     |
 
-Construction time misconfiguration (a negative `requestsPerMinute`, an invalid `aimd` config missing
-`requestsPerMinute`, `minCapacity` above `maxCapacity`, and similar) throws `LLMError('invalid_params')`
-synchronously from `redisRateLimit(...)` itself, before any Redis call is made.
+Construction time mistakes throw `LLMError('invalid_params')` from `redisRateLimit(...)` itself,
+before any Redis call. The limits follow the same rules, with the same messages, as core's
+[Rate Limiting](/docs/core/rate-limiting#options-reference), so a config moves between the two
+unchanged.
 
 ## Redis unavailable
 
-Neither `redisRateLimit` nor `vern-llm` core catches a Redis connection failure here: a rejected
-`eval` call (the primitive every take, give, and resize operation is built on) propagates straight
-out of `acquire()`, and `vern-llm`'s own `acquireRateLimit` dispatch has no try/catch around that
-call either. A Redis outage genuinely fails the LLM call, there is no fail-open path anywhere in the
-stack for rate limiting, unlike caching, where `vern-llm` core catches adapter failures universally.
+A Redis failure inside `acquire` fails that attempt with `network` and `connection_failed`. `vern-llm`
+retries it like any other network error, and never counts it toward the circuit breaker, since no
+provider request was made. There is no fail open path for rate limiting.
 
-Work that happens after a call has already succeeded is different: a failed release, token refund,
-lease renewal or AIMD resize is logged with `console.error` and swallowed, never thrown, so an outage
-cannot crash the process for a call that finished. If Redis fails between two bucket takes inside
-`acquire`, the buckets already taken are given back before the error is thrown.
+Work after a call has succeeded is different: a failed release, token refund, lease renewal or AIMD
+resize is logged and swallowed, so an outage cannot crash the process for a call that finished. If
+Redis fails between two bucket takes, the buckets already taken are given back first.

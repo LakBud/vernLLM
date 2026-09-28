@@ -1,9 +1,11 @@
 import { VernLLM, type Logger } from 'vern-llm';
 import { describe, expect, vi } from 'vitest';
 
+import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
+import { fromIoredis } from '../../../src/clients/ioredis.js';
 import { callContext, sleep, trip } from '../../breakerHelpers.js';
 import { it } from '../../fixtures.js';
-import { uniquePrefix, waitUntil } from '../../helpers.js';
+import { spyOnScripts, uniquePrefix, waitUntil } from '../../helpers.js';
 
 /** Just enough of an LLM client for VernLLM to run one call. */
 const okClient = () =>
@@ -16,6 +18,59 @@ const okClient = () =>
   }) as never;
 
 describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () => {
+  it('a model named "default" and a call with no model are separate circuits', async ({
+    makeBreaker,
+  }) => {
+    const breaker = makeBreaker({
+      keyPrefix: uniquePrefix('cb'),
+      isolateByModel: true,
+      threshold: 1,
+      cooldownMs: 30_000,
+    });
+
+    breaker.recordFailure('default');
+    await waitUntil(() => breaker.getState?.('default') === 'open');
+
+    expect(await breaker.readState?.(undefined)).toBe('closed');
+    expect(() => breaker.assertClosed(undefined)).not.toThrow();
+  });
+
+  it('a new adapter never touches keys under a longer prefix', async ({
+    makeBreaker,
+    newConnection,
+  }) => {
+    const prefix = uniquePrefix('cb');
+    const longer = makeBreaker({ keyPrefix: `${prefix}2`, isolateByModel: true, threshold: 1 });
+    await trip(longer);
+
+    const connection = newConnection();
+    const scripts = spyOnScripts(connection);
+    const fresh = redisCircuitBreaker(fromIoredis(connection), {
+      keyPrefix: prefix,
+      isolateByModel: true,
+      pollIntervalMs: 50,
+      logger: 'silent',
+    });
+    // Long enough for the startup scan and a few polls of whatever it seeded.
+    await sleep(300);
+    fresh.dispose();
+
+    const touched = scripts.mock.calls.map((call) => call[3]);
+    expect(touched).not.toContain(`${prefix}2:m`);
+  });
+
+  it('a new adapter seeds its own open circuits, the no model bucket included', async ({
+    makeBreaker,
+  }) => {
+    const prefix = uniquePrefix('cb');
+    const first = makeBreaker({ keyPrefix: prefix, isolateByModel: true, threshold: 1 });
+    first.recordFailure(undefined);
+    await trip(first);
+
+    const fresh = makeBreaker({ keyPrefix: prefix, isolateByModel: true, threshold: 1 });
+    await waitUntil(() => fresh.getState?.('m') === 'open' && fresh.getState?.() === 'open');
+  });
+
   it('a process that has never touched the key learns it is open on its very first call', async ({
     makeBreaker,
   }) => {
@@ -53,7 +108,7 @@ describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () 
     const prefix = uniquePrefix('cb');
     const breaker = makeBreaker({ keyPrefix: prefix, threshold: 1, cooldownMs: 500 });
     await trip(breaker);
-    const evalSpy = vi.spyOn(redis, 'eval');
+    const evalSpy = spyOnScripts(redis);
 
     // A burst while the cooldown is running costs no Redis round trips at all.
     await Promise.all(Array.from({ length: 50 }, () => breaker.prepare?.('m')));
@@ -143,7 +198,7 @@ describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () 
       const warn = vi.fn();
       const logger: Logger = { debug: vi.fn(), warn, error: vi.fn() };
       const breaker = makeBreaker({ keyPrefix: prefix, prepareTimeoutMs: 100 });
-      vi.spyOn(redis, 'eval').mockImplementation(() => new Promise(() => {}));
+      spyOnScripts(redis).mockImplementation(() => new Promise(() => {}));
       const llm = new VernLLM({ client: okClient(), model: 'm', logger, circuitBreaker: breaker });
 
       const started = Date.now();
@@ -157,7 +212,7 @@ describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () 
       const warn = vi.fn();
       const logger: Logger = { debug: vi.fn(), warn, error: vi.fn() };
       const breaker = makeBreaker({ keyPrefix: uniquePrefix('cb') });
-      vi.spyOn(redis, 'eval').mockRejectedValue(new Error('Redis is down'));
+      spyOnScripts(redis).mockRejectedValue(new Error('Redis is down'));
       const llm = new VernLLM({ client: okClient(), model: 'm', logger, circuitBreaker: breaker });
 
       await expect(llm.call({ userContent: 'hi' })).resolves.toEqual({ ok: true });
@@ -174,7 +229,7 @@ describe('redisCircuitBreaker prepare with a slow Redis', () => {
     makeBreaker,
   }) => {
     const breaker = makeBreaker({ keyPrefix: uniquePrefix('cb'), prepareTimeoutMs: 100 });
-    vi.spyOn(redis, 'eval').mockImplementation(() => new Promise(() => {}));
+    spyOnScripts(redis).mockImplementation(() => new Promise(() => {}));
     const llm = new VernLLM({
       client: okClient(),
       model: 'm',

@@ -67,7 +67,7 @@ against Redis 8.10, the newest release.
 
 Every adapter takes a Redis client as its first argument, wrapped through `fromIoredis` or
 `fromNodeRedis` so both clients present the same shape internally, and an options object as its
-second:
+second. The wrappers are also exported on their own from `vern-llm-redis/clients`:
 
 <Tabs items={['ioredis', 'node-redis']}>
   <Tab value="ioredis">

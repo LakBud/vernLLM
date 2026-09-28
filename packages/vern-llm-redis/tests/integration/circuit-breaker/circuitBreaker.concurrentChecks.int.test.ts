@@ -1,8 +1,8 @@
-import { describe, expect, vi } from 'vitest';
+import { describe, expect } from 'vitest';
 
 import { callContext, claimTrials, isOpen, sleep, trip } from '../../breakerHelpers.js';
 import { it } from '../../fixtures.js';
-import { uniquePrefix, waitUntil } from '../../helpers.js';
+import { spyOnScripts, uniquePrefix, waitUntil } from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
 
@@ -25,18 +25,18 @@ describe.concurrent('half-open trials when checks overlap, real Redis', () => {
    * still in flight, so the test never closes the connection under one.
    */
   function slowDown(redis: Redis, latencyMs: number) {
-    const realEval = redis.eval.bind(redis) as (...args: unknown[]) => Promise<unknown>;
+    const scripts = spyOnScripts(redis);
     let inFlight = 0;
 
-    vi.spyOn(redis, 'eval').mockImplementation((async (...args: unknown[]) => {
+    scripts.mockImplementation(async (command, ...args) => {
       inFlight += 1;
       try {
         await sleep(latencyMs);
-        return await realEval(...args);
+        return await scripts.real(command, ...args);
       } finally {
         inFlight -= 1;
       }
-    }) as never);
+    });
 
     return () => waitUntil(() => inFlight === 0);
   }

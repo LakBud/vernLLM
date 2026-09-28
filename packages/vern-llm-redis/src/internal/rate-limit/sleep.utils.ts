@@ -16,10 +16,7 @@ export function sleepOrAbort(ms: number, signal: AbortSignal | undefined): Promi
     };
 
     const timer = setTimeout(() => {
-      // Normal completion: {once: true} only detaches the listener once
-      // it actually fires, so without this explicit removal a signal
-      // reused across many sleeps (a shared controller) would accumulate
-      // one dead listener per completed sleep.
+      // Removed explicitly, so a shared signal doesn't collect dead listeners.
       signal?.removeEventListener('abort', onAbort);
       resolve();
     }, ms);
@@ -28,11 +25,7 @@ export function sleepOrAbort(ms: number, signal: AbortSignal | undefined): Promi
   });
 }
 
-/**
- * Waits for registry to wake key, or pollIntervalMs, whichever comes
- * first. Used only for the concurrency bucket, which has no
- * deterministic refill time to sleep for instead.
- */
+/** Waits for a wake on `key`, or `pollIntervalMs`, whichever is first. */
 export function waitForWakeOrPoll(
   registry: WaiterRegistry,
   key: string,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { amountFor, buildBuckets } from '../../../../src/internal/rate-limit/buckets.utils.js';
+import {
+  amountFor,
+  buildBuckets,
+  keysFor,
+  sameSlotKey,
+} from '../../../../src/internal/rate-limit/buckets.utils.js';
 
 describe('buildBuckets', () => {
   it('builds no buckets when nothing is configured', () => {
@@ -111,5 +116,62 @@ describe('amountFor', () => {
       rateMode: 'lease' as const,
     };
     expect(amountFor(bucket, 999)).toBe(1);
+  });
+});
+
+describe('the AIMD ceiling key', () => {
+  it('is set only on the requests/min bucket, and only with aimd', () => {
+    const plain = buildBuckets({ keyPrefix: 'p', requestsPerMinute: 10, tokensPerMinute: 100 });
+    const withAimd = buildBuckets({
+      keyPrefix: 'p',
+      requestsPerMinute: 10,
+      tokensPerMinute: 100,
+      aimd: { maxCapacity: 50 },
+    });
+
+    expect(plain.buckets.every((b) => b.capKey === undefined)).toBe(true);
+    expect(withAimd.rpmBucket?.capKey).toBe('{p:rpm}:aimd');
+    expect(withAimd.buckets.find((b) => b.reason === 'tpm')?.capKey).toBeUndefined();
+  });
+
+  it('clamps the starting ceiling to maxCapacity', () => {
+    expect(
+      buildBuckets({ keyPrefix: 'p', requestsPerMinute: 80, aimd: { maxCapacity: 50 } }).rpmBucket
+        ?.initialCapacity,
+    ).toBe(50);
+    expect(
+      buildBuckets({ keyPrefix: 'p', requestsPerMinute: 30, aimd: { maxCapacity: 50 } }).rpmBucket
+        ?.initialCapacity,
+    ).toBe(30);
+  });
+
+  it('keysFor lists the bucket, then its ceiling key when it has one', () => {
+    const { buckets } = buildBuckets({
+      keyPrefix: 'p',
+      maxConcurrent: 1,
+      requestsPerMinute: 10,
+      aimd: { maxCapacity: 50 },
+    });
+
+    expect(buckets.map(keysFor)).toEqual([['p:concurrency'], ['p:rpm', '{p:rpm}:aimd']]);
+  });
+});
+
+describe('sameSlotKey', () => {
+  it('wraps an untagged key so the whole key becomes the hash tag', () => {
+    expect(sameSlotKey('vernllm:rl:rpm', ':aimd')).toBe('{vernllm:rl:rpm}:aimd');
+  });
+
+  it('keeps a key that already has a hash tag as is', () => {
+    expect(sameSlotKey('{app}:rl:rpm', ':aimd')).toBe('{app}:rl:rpm:aimd');
+  });
+
+  it('wraps a key whose braces are not a tag, when that keeps the same text hashed', () => {
+    expect(sameSlotKey('a{b', ':x')).toBe('{a{b}:x');
+  });
+
+  it('falls back to a plain suffix for a stray closing brace', () => {
+    expect(sameSlotKey('a{}b', ':x')).toBe('a{}b:x');
+    expect(sameSlotKey('a}b', ':x')).toBe('a}b:x');
   });
 });

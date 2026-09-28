@@ -1,7 +1,7 @@
 import { describe, expect, vi } from 'vitest';
 
 import { it } from '../../fixtures.js';
-import { uniquePrefix, waitUntil } from '../../helpers.js';
+import { spyOnScripts, uniquePrefix, waitUntil } from '../../helpers.js';
 
 describe.concurrent('redisRateLimit leases, real Redis', () => {
   it('a slot whose holder never releases (a crash) frees itself after the lease', async ({
@@ -110,7 +110,7 @@ describe('redisRateLimit with a faked clock or failing Redis', () => {
   }) => {
     const prefix = uniquePrefix('rl');
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const evalSpy = vi.spyOn(redis, 'eval');
+    const evalSpy = spyOnScripts(redis);
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
 
@@ -133,6 +133,6 @@ describe('redisRateLimit with a faked clock or failing Redis', () => {
     expect(unhandled).not.toHaveBeenCalled();
     expect(errors).toHaveBeenCalled();
     errors.mockRestore();
-    evalSpy.mockRestore();
+    evalSpy.restore();
   });
 });
