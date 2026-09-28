@@ -227,13 +227,16 @@ describe.concurrent('redis adapters under VernLLM, real Redis', () => {
 
     await llm.call({ userContent: 'hi', jsonMode: false });
 
-    await waitUntil(async () => (await limiter.readState()).tokensRemaining! <= 9000 + 5);
+    // The bucket refills about 167 tokens a second, so a slow run reads well above an exact
+    // 9000. Below the midpoint between the charged 9000 and the 9900 the estimate alone leaves.
+    await waitUntil(async () => (await limiter.readState()).tokensRemaining! < 9450);
     expect((await limiter.readState()).tokensRemaining).toBeGreaterThan(8990);
   });
 
   it('all zero usage refunds nothing, the estimate stays spent', async ({ makeLimiter }) => {
+    // A slow refill (10 tokens a second), so a slow run barely moves the bucket.
     const limiter = makeLimiter({
-      tokensPerMinute: 10_000,
+      tokensPerMinute: 600,
       keyPrefix: uniquePrefix('rl'),
       estimateTokens: () => 100,
     });
@@ -250,10 +253,11 @@ describe.concurrent('redis adapters under VernLLM, real Redis', () => {
     await llm.call({ userContent: 'hi', jsonMode: false });
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Spent 100, refilled about 17 a second since. A refund would read 10000.
+    // Spent 100 of 600. A refund would refill the bucket to its 600 cap, which
+    // plain refill only reaches after ten seconds.
     const remaining = (await limiter.readState()).tokensRemaining!;
-    expect(remaining).toBeLessThan(9950);
-    expect(remaining).toBeGreaterThan(9895);
+    expect(remaining).toBeLessThan(590);
+    expect(remaining).toBeGreaterThan(495);
   });
 
   it("an image's base64 data is not estimated as text tokens", async ({ makeLimiter }) => {
