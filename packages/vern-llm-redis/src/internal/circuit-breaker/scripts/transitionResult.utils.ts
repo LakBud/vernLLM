@@ -41,6 +41,23 @@ function parseBreakdown(raw: unknown): Record<string, number> {
   return out;
 }
 
+/** A TRANSITION_SCRIPT reply. Redis sends every field as a string, and some may be missing. */
+type TransitionReply = [
+  from: string,
+  to: string,
+  failures: string,
+  wonProbe: string,
+  openedAt: string,
+  probeToken: string | undefined,
+  breakdown: string | undefined,
+  serverNow: string,
+  cooldownMs: string,
+  grantAt: string,
+  slots: string,
+  version: string | undefined,
+  epoch: string | undefined,
+];
+
 /** Parses a TRANSITION_SCRIPT reply. */
 export function parseTransitionResult(raw: unknown): TransitionResult {
   const [
@@ -57,21 +74,7 @@ export function parseTransitionResult(raw: unknown): TransitionResult {
     slots,
     version,
     epoch,
-  ] = raw as [
-    string,
-    string,
-    string,
-    string,
-    string,
-    string | undefined,
-    string | undefined,
-    string,
-    string,
-    string,
-    string,
-    string | undefined,
-    string | undefined,
-  ];
+  ] = raw as TransitionReply;
 
   return {
     from: from as CircuitState,
