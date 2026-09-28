@@ -31,8 +31,8 @@ const llm = new VernLLM({
 ```
 
 Pass `ai`, not `ai.models`. Only the top level client says whether it talks to Vertex AI or the
-Gemini API, which `fromGemini` reports as the provider. `fromGemini(ai.models)` throws at
-construction.
+Gemini API, which `fromGemini` reports as the provider. `fromGemini(ai.models)` throws an
+`LLMError` at construction.
 
 <Callout>
   `jsonSchema` uses Gemini's native `responseSchema` + `responseMimeType: 'application/json'`.

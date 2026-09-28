@@ -143,6 +143,58 @@ describe('fromBedrock', () => {
     ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
   });
 
+  it('throws an invalid_params LLMError for image data that is not base64', async () => {
+    const { client, converse } = makeFakeBedrockClient('unused');
+
+    await expect(
+      fromBedrock(client).chat.completions.create(
+        {
+          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+          max_tokens: 100,
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'image', data: 'not base64 !!', mimeType: 'image/png' }],
+            },
+          ],
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'LLMError', type: 'invalid_params' });
+
+    expect(converse).not.toHaveBeenCalled();
+  });
+
+  it('decodes an image larger than one base64 chunk byte for byte', async () => {
+    const { client, converse } = makeFakeBedrockClient('described');
+    const original = Uint8Array.from({ length: 100_000 }, (_, i) => i % 256);
+
+    await fromBedrock(client).chat.completions.create(
+      {
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                data: Buffer.from(original).toString('base64'),
+                mimeType: 'image/png',
+              },
+            ],
+          },
+        ],
+      },
+      { signal: new AbortController().signal },
+    );
+
+    const content = at(converse.mock.calls, 0)[0].messages![0]!.content!;
+    const sent = (content[0] as { image: { source: { bytes: Uint8Array } } }).image.source.bytes;
+
+    expect(Buffer.compare(Buffer.from(sent), Buffer.from(original))).toBe(0);
+  });
+
   it('maps output.message.content back into choices[0].message.content', async () => {
     const { client } = makeFakeBedrockClient('bedrock response');
     const adapted = fromBedrock(client);

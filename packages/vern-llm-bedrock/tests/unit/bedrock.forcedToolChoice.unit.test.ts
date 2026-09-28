@@ -47,6 +47,47 @@ describe('fromBedrock, models that reject forced tool_choice', () => {
     );
   });
 
+  it('names the tool in the error when a specific tool is forced', async () => {
+    const { client: bedrock, converse } = client();
+
+    const error = await fromBedrock(bedrock)
+      .chat.completions.create(
+        request('anthropic.claude-opus-5-5-v1:0', {
+          tools,
+          tool_choice: { type: 'function', function: { name: 'lookup' } },
+        }),
+        { signal },
+      )
+      .catch((e: unknown) => e);
+
+    expect(converse).not.toHaveBeenCalled();
+    expect((error as LLMError).message).toContain("toolChoice: { name: 'lookup' }");
+  });
+
+  it('rejects a forced choice on every Claude major 6 and later, whatever the family', async () => {
+    const { client: bedrock, converse } = client();
+
+    await expect(
+      fromBedrock(bedrock).chat.completions.create(
+        request('anthropic.claude-sonnet-6-v1:0', { tools, tool_choice: 'required' }),
+        { signal },
+      ),
+    ).rejects.toMatchObject({ code: 'unsupported_capability' });
+
+    expect(converse).not.toHaveBeenCalled();
+  });
+
+  it('allows a forced choice on an older Claude family such as Sonnet 5', async () => {
+    const { client: bedrock, converse } = client();
+
+    await fromBedrock(bedrock).chat.completions.create(
+      request('anthropic.claude-sonnet-5-v1:0', { tools, tool_choice: 'required' }),
+      { signal },
+    );
+
+    expect(converse).toHaveBeenCalledOnce();
+  });
+
   it('uses outputConfig for jsonSchema without nativeStructuredOutputModels', async () => {
     const { client: bedrock, converse } = client();
 

@@ -61,20 +61,20 @@
     "vern-llm": "workspace:^"
   },
   "devDependencies": {
-    "vern-llm": "workspace:^",
     "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
+    "@size-limit/file": "13.1.1",
     "@smithy/eventstream-serde-node": "^4.5.2",
+    "@smithy/node-http-handler": "^4.12.1",
     "@smithy/util-utf8": "^4.5.2",
     "@types/node": "^26.4.1",
-    "typescript": "^5.9.3",
-    "tsdown": "^0.23.0",
-    "publint": "^0.3.24",
-    "unplugin-unused": "^0.6.0",
-    "@size-limit/file": "13.1.1",
-    "size-limit": "13.1.1",
-    "vitest": "^4.1.11",
     "@vitest/coverage-v8": "^4.1.11",
-    "@smithy/node-http-handler": "^4.12.1"
+    "publint": "^0.3.24",
+    "size-limit": "13.1.1",
+    "tsdown": "^0.23.0",
+    "typescript": "^5.9.3",
+    "unplugin-unused": "^0.6.0",
+    "vern-llm": "workspace:^",
+    "vitest": "^4.1.11"
   },
   "license": "MIT",
   "packageManager": "pnpm@11.27.0",
@@ -90,11 +90,11 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "4 KB"
+      "limit": "5 KB"
     },
     {
       "path": "dist/index.cjs",
-      "limit": "4 KB"
+      "limit": "5 KB"
     }
   ]
 }

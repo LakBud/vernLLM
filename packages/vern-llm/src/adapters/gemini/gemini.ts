@@ -42,8 +42,9 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
   // since plain JS callers get no type error for it.
   const models: GeminiModels | undefined = client.models;
   if (!models && typeof (client as Partial<GeminiModels>).generateContent === 'function') {
-    throw new Error(
+    throw unsupportedCapability(
       'fromGemini takes the top level client: pass ai (new GoogleGenAI(...)), not ai.models.',
+      'top_level_client',
     );
   }
 

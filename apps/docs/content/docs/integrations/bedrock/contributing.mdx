@@ -25,8 +25,10 @@ Follow the same reliability and typing standard as `vern-llm`: handle unusual in
 explain non obvious decisions with a short comment, and keep `any` as a last resort. Bedrock quirks
 stay inside `packages/vern-llm-bedrock`. Type requests and responses against the AWS SDK's own
 types, and narrow stream events one member at a time, since the SDK's union has a generated
-`$unknown` member. Rules shared with other Claude adapters, such as the forced `tool_choice` model
-check or the reasoning budget, come from `vern-llm/adapters` rather than being copied.
+`$unknown` member. The Claude rules, such as the forced `tool_choice` model check and the reasoning
+budget, live in this package next to the adapter. `vern-llm/adapters` exports only the `from*`
+factories, so a change to one of these rules here is not mirrored in `fromAnthropic`, and the other
+way round. Check both when a Claude release changes what a model accepts.
 
 ## Scripts
 

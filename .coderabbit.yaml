@@ -127,7 +127,7 @@ reviews:
 
         Review TypeScript changes with focus on:
         - Requests and responses use the SDK's own types, never structural copies. Stream events are narrowed one member at a time, so the generated $unknown member and event kinds added later are skipped, not misrouted.
-        - Claude rules come from vern-llm/adapters (planClaudeStructuredOutput, resolveClaudeThinking, the forced tool_choice check), never copied, so fromAnthropic and fromBedrock can't drift apart.
+        - Claude rules (structured output planning, thinking, the forced tool_choice check) live in this package, since vern-llm/adapters exports only the from* factories. When one changes, check whether fromAnthropic in vern-llm needs the same change, so the two don't drift apart.
         - Every call path failure is an LLMError with the right type and code, including in-band stream exceptions, and local capability errors throw before dispatch so they are never retried or counted toward the breaker.
         - Converse quirks stay here: strict role alternation, tool results as user turns, the JSON string schema under outputConfig.textFormat, and no toolChoice equivalent to 'none'.
         - vern-llm and @aws-sdk/client-bedrock-runtime stay unbundled peer dependencies, ConverseCommand and ConverseStreamCommand are imported statically, and the adapter keeps naming itself aws.bedrock.

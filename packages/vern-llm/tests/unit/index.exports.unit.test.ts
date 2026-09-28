@@ -8,6 +8,7 @@ import {
   type AnthropicClient,
   type GeminiClient,
 } from '../../src/adapters/index.js';
+import * as adapters from '../../src/adapters/index.js';
 import {
   NormalizedCacheAdapter,
   TieredCacheAdapter,
@@ -41,6 +42,13 @@ describe('package entrypoint exports', () => {
       (name) => /^from[A-Z0-9]/.test(name) || name === 'parseSseStream' || name === 'SSE_PING',
     );
     expect(adapterNames).toEqual([]);
+  });
+
+  it('keeps the adapters entry to the factories and the SSE helpers', () => {
+    const names = Object.keys(adapters).filter(
+      (name) => !/^from[A-Z0-9]/.test(name) && name !== 'parseSseStream' && name !== 'SSE_PING',
+    );
+    expect(names).toEqual([]);
   });
 
   it('exports adapters from the adapters entry at runtime', () => {

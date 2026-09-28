@@ -6,8 +6,9 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
       reportsDirectory: './coverage',
-      // The entrypoint is pure re-exports with nothing to execute.
-      include: ['src/**/*.ts'],
+      // The source and the shared test helpers. The entrypoint is pure re-exports with nothing
+      // to execute.
+      include: ['src/**/*.ts', 'tests/helpers.ts'],
       exclude: ['src/index.ts'],
     },
     projects: [

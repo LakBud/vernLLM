@@ -13,41 +13,6 @@ export {
 } from './fetch/index.js';
 export { parseSseStream, SSE_PING } from './internal/sse.js';
 
-// Shared building blocks for adapters that ship as their own package, so
-// each provider keeps one implementation of these rules.
-export {
-  planClaudeStructuredOutput,
-  resolveClaudeThinking,
-  type ClaudeStructuredOutputPlan,
-  type ClaudeThinking,
-} from './internal/claudeRequest.js';
-export {
-  supportsNativeStructuredOutput,
-  type ModelCapabilityOverride,
-} from './internal/nativeStructuredOutput.js';
-export {
-  assertForcedJsonSchemaToolInputIsObject,
-  throwMissingForcedJsonSchemaTool,
-} from './internal/forcedJsonSchemaTool.js';
-export {
-  assertForcedToolChoiceSupported,
-  rejectsForcedToolChoice,
-} from './internal/forcedToolChoice.js';
-export {
-  assertSupportedImageMimeType,
-  type SupportedImageMimeType,
-} from './internal/imageFormat.js';
-export {
-  assertNoForcedToolChoiceWithThinking,
-  assertValidClaudeBudgetTokens,
-  budgetTokensToEffort,
-  effortToBudgetTokens,
-  resolveEffortTokenTable,
-  supportsManualThinkingBudget,
-  toClaudeAdaptiveEffort,
-  type ClaudeAdaptiveEffort,
-  type EffortTokenTable,
-} from './internal/reasoningBudget.utils.js';
 export {
   type OpenAICompatibleAdapterOptions,
   fromOpenAICompatible,

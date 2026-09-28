@@ -3,6 +3,8 @@ title: AWS Bedrock Overview
 description: The fromBedrock adapter for the AWS Bedrock Converse API, built on the AWS SDK client
 ---
 
+![VernLLM + AWS Bedrock banner](/integrations/bedrock.png)
+
 `vern-llm-bedrock` adapts the AWS SDK's `BedrockRuntimeClient` to VernLLM. It uses Bedrock's
 Converse API, one request and response shape across the model families Converse supports
 (Anthropic, Titan, Llama, Mistral, and others).
@@ -88,6 +90,7 @@ A `ConverseStreamCommand` response missing `stream`, which the SDK types as opti
 | `forcedToolChoiceUnsupportedModels` | Fable 5.1+, Opus 5.5+, Claude 6+                         | Models that reject a forced `tool_choice`, see [below](#models-that-reject-a-forced-tool_choice)                                    |
 | `adaptiveOnlyModels`                | Opus 4.7+, every Claude 5 tier                           | Adds models that only accept adaptive thinking, see [Reasoning](#reasoning)                                                         |
 | `reasoningEffortTokens`             | `minimal` 1024, `low` 4096, `medium` 16000, `high` 32000 | Token count each `reasoningEffort` tier maps onto                                                                                   |
+| `claudeModels`                      | ids containing `claude`                                  | Adds Claude models whose id doesn't say so, see [Reasoning](#reasoning)                                                             |
 
 Each model option takes a list of model ids or a `(model) => boolean` predicate.
 
@@ -235,6 +238,16 @@ as Claude's own `thinking` inside `additionalModelRequestFields`. Other models g
 to the adaptive-only rule with `adaptiveOnlyModels`, and change the token count each tier maps onto
 with `reasoningEffortTokens`. See the
 [Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the conversion table.
+
+A model counts as Claude when its id contains `claude`. An application inference profile ARN has no
+model name, so list it in `claudeModels`, and in `adaptiveOnlyModels` or
+`forcedToolChoiceUnsupportedModels` when those rules apply, since they read the id too:
+
+```ts
+const arn = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123';
+
+fromBedrock(client, { claudeModels: [arn] });
+```
 
 While a reasoning block streams, `fromBedrock` yields a keep-alive ping per delta, so a long
 thinking phase doesn't trip `chunkIdleTimeoutMs`. With thinking on, a tool call result carries

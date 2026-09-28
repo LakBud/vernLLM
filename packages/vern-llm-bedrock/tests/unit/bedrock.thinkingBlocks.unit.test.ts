@@ -97,6 +97,26 @@ describe('fromBedrock, thinking blocks', () => {
     });
   });
 
+  it('reports redacted reasoning larger than one base64 chunk byte for byte', async () => {
+    const redacted = Uint8Array.from({ length: 100_000 }, (_, i) => (i * 7) % 256);
+    const converse = vi.fn(async () => ({
+      output: { message: { content: [{ reasoningContent: { redactedContent: redacted } }] } },
+    }));
+
+    const response = await fromBedrock(stubbedClient({ converse })).chat.completions.create(
+      {
+        model: 'anthropic.claude-test',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      { signal },
+    );
+
+    expect(response.choices?.[0]?.message?.thinking).toEqual([
+      { type: 'redacted_thinking', data: Buffer.from(redacted).toString('base64') },
+    ]);
+  });
+
   it('reports reasoning blocks from a Converse response, redacted bytes as base64', async () => {
     const converse = vi.fn(async () => ({
       output: {

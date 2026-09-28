@@ -4,11 +4,11 @@ import {
   type BedrockRuntimeClient,
 } from '@aws-sdk/client-bedrock-runtime';
 import { LLMError, type LLMClient } from 'vern-llm';
-import { resolveEffortTokenTable } from 'vern-llm/adapters';
 
 import { buildBedrockRequest } from './request.js';
 import { toWireResponse } from './response.js';
 import { toWireStreamChunks } from './stream.js';
+import { resolveEffortTokenTable } from './thinking.js';
 
 import type { BedrockAdapterOptions, ResolvedOptions } from './types.js';
 
@@ -33,6 +33,7 @@ export function fromBedrock(
     effortTokenTable: resolveEffortTokenTable(options?.reasoningEffortTokens),
     adaptiveOnlyModels: options?.adaptiveOnlyModels,
     forcedToolChoiceUnsupportedModels: options?.forcedToolChoiceUnsupportedModels,
+    claudeModels: options?.claudeModels,
   };
 
   return {

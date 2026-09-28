@@ -1,10 +1,10 @@
 import { LLMError, type ThinkingBlock, type WireToolCall } from 'vern-llm';
+
+import { bytesToBase64 } from './bytes.js';
 import {
   assertForcedJsonSchemaToolInputIsObject,
   throwMissingForcedJsonSchemaTool,
-} from 'vern-llm/adapters';
-
-import { bytesToBase64 } from './bytes.js';
+} from './structuredOutput.js';
 
 import type {
   ContentBlock as BedrockContentBlock,
@@ -42,10 +42,10 @@ export function toWireResponse(response: ConverseResponse, toolName: string | un
     // back to text so it follows every other adapter's string contract.
     const toolUse = blocks.find((block) => block.toolUse?.name === toolName)?.toolUse;
 
-    if (!toolUse) throwMissingForcedJsonSchemaTool('Bedrock', toolName);
+    if (!toolUse) throwMissingForcedJsonSchemaTool(toolName);
 
     const { input } = toolUse;
-    assertForcedJsonSchemaToolInputIsObject('Bedrock', toolName, input);
+    assertForcedJsonSchemaToolInputIsObject(toolName, input);
     text = JSON.stringify(input);
   } else {
     text = blocks.map((c) => c.text ?? '').join('');

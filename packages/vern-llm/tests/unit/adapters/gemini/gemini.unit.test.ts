@@ -278,17 +278,13 @@ describe('fromGemini, taking the top level client only', () => {
     expect(generateContent).toHaveBeenCalledTimes(1);
   });
 
-  it('throws a plain Error at construction when given ai.models, pointing to ai', () => {
+  it('throws LLMError(invalid_params) at construction when given ai.models, pointing to ai', () => {
     const { client } = makeFakeGeminiClient('hi');
     const passModels = () => fromGemini(client.models as unknown as GeminiClient);
 
+    expect(passModels).toThrow(LLMError);
     expect(passModels).toThrow('fromGemini takes the top level client: pass ai');
-    try {
-      passModels();
-      expect.unreachable();
-    } catch (error) {
-      expect(error).not.toBeInstanceOf(LLMError);
-    }
+    expect(passModels).toThrow(expect.objectContaining({ type: 'invalid_params' }));
   });
 
   it('throws LLMError(invalid_params) up front when models has no generateContent', () => {

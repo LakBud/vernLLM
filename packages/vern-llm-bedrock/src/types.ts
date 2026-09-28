@@ -1,6 +1,7 @@
+import type { ModelCapabilityOverride } from './capabilities.js';
+import type { EffortTokenTable } from './thinking.js';
 import type { ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
 import type { WireCallRequest } from 'vern-llm';
-import type { EffortTokenTable, ModelCapabilityOverride } from 'vern-llm/adapters';
 
 /** The SDK's JSON document type, used for tool schemas, tool input and model fields. */
 export type DocumentType = NonNullable<ConverseRequest['additionalModelRequestFields']>;
@@ -40,6 +41,14 @@ export interface BedrockAdapterOptions {
    * native structured output.
    */
   forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride;
+  /**
+   * Adds models that are Claude but whose id doesn't say so, such as an
+   * application inference profile ARN. Ids containing `claude` are always
+   * treated as Claude. The version based rules can't read a nameless id, so
+   * list these in `adaptiveOnlyModels` and `forcedToolChoiceUnsupportedModels`
+   * too when they apply.
+   */
+  claudeModels?: ModelCapabilityOverride;
 }
 
 export interface ResolvedOptions {
@@ -48,4 +57,5 @@ export interface ResolvedOptions {
   effortTokenTable: EffortTokenTable;
   adaptiveOnlyModels: ModelCapabilityOverride | undefined;
   forcedToolChoiceUnsupportedModels: ModelCapabilityOverride | undefined;
+  claudeModels: ModelCapabilityOverride | undefined;
 }

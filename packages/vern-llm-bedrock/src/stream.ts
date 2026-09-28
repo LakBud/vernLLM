@@ -1,7 +1,7 @@
 import { LLMError, type WireStreamChunk } from 'vern-llm';
-import { throwMissingForcedJsonSchemaTool } from 'vern-llm/adapters';
 
 import { bytesToBase64 } from './bytes.js';
+import { throwMissingForcedJsonSchemaTool } from './structuredOutput.js';
 
 import type { ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime';
 
@@ -167,5 +167,5 @@ export async function* toWireStreamChunks(
     else if (event.metadata?.usage) yield usageChunk(event.metadata.usage);
   }
 
-  if (toolName && !state.sawJsonTool) throwMissingForcedJsonSchemaTool('Bedrock', toolName);
+  if (toolName && !state.sawJsonTool) throwMissingForcedJsonSchemaTool(toolName);
 }

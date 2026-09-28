@@ -28,7 +28,7 @@ already rejects. Skip to what applies to you:
 ### 3.0.0: Adapters import from `vern-llm/adapters`
 
 Every adapter moved off the root entry. Import the `from*` factories, their option types,
-`ModelCapabilityOverride`, `parseSseStream` and `SSE_PING` from `vern-llm/adapters`:
+`parseSseStream` and `SSE_PING` from `vern-llm/adapters`:
 
 ```ts
 // Before
@@ -43,8 +43,8 @@ import { fromOpenAI } from 'vern-llm/adapters';
 
 ### 3.0.0: `fromGemini` takes `ai`
 
-`fromGemini` takes the top level `GoogleGenAI` client only. Passing `ai.models` now throws a plain
-`Error` at construction, and no longer type-checks:
+`fromGemini` takes the top level `GoogleGenAI` client only. Passing `ai.models` now throws
+`LLMError('invalid_params')` at construction, and no longer type-checks:
 
 ```ts
 // Before

@@ -1,11 +1,9 @@
 import { LLMError, type ContentBlock, type WireCallRequest } from 'vern-llm';
-import {
-  assertSupportedImageMimeType,
-  planClaudeStructuredOutput,
-  resolveClaudeThinking,
-} from 'vern-llm/adapters';
 
 import { decodeBase64 } from './bytes.js';
+import { matchesCapability, type ModelCapabilityOverride } from './capabilities.js';
+import { planStructuredOutput } from './structuredOutput.js';
+import { resolveClaudeThinking } from './thinking.js';
 
 import type { DocumentType, ResolvedOptions, WireMessage } from './types.js';
 import type {
@@ -19,16 +17,20 @@ import type {
 
 /**
  * Only decides whether a reasoning budget is worth forwarding through
- * `additionalModelRequestFields`. A false positive sends an inert field, so a
- * substring match on AWS's `anthropic.claude-*` naming is enough.
+ * `additionalModelRequestFields`. A substring match on AWS's
+ * `anthropic.claude-*` naming covers model ids and most inference profiles.
+ * An application inference profile ARN carries no model name, so `claudeModels`
+ * names those.
  */
-function isClaudeModel(model: string): boolean {
-  return model.includes('claude');
+function isClaudeModel(model: string, claudeModels: ModelCapabilityOverride | undefined): boolean {
+  return (
+    model.includes('claude') || (claudeModels ? matchesCapability(model, claudeModels) : false)
+  );
 }
 
-/** Maps an already validated `ContentBlock` image MIME type to Converse's `format`. */
+/** Maps a `ContentBlock` image MIME type to Converse's `format`. */
 function toBedrockImageFormat(mimeType: string): ImageFormat {
-  switch (assertSupportedImageMimeType(mimeType)) {
+  switch (mimeType) {
     case 'image/png':
       return 'png';
     case 'image/jpeg':
@@ -37,6 +39,11 @@ function toBedrockImageFormat(mimeType: string): ImageFormat {
       return 'gif';
     case 'image/webp':
       return 'webp';
+    default:
+      throw new LLMError(
+        `Unsupported image mimeType "${mimeType}": expected one of image/png, image/jpeg, image/gif, image/webp`,
+        'invalid_params',
+      );
   }
 }
 
@@ -236,8 +243,7 @@ export function buildBedrockRequest(
       m.role === 'user' || m.role === 'assistant' || m.role === 'tool',
   );
 
-  const plan = planClaudeStructuredOutput(
-    'Bedrock',
+  const plan = planStructuredOutput(
     params,
     {
       nativeStructuredOutputModels: options.nativeStructuredOutputModels,
@@ -293,7 +299,7 @@ export function buildBedrockRequest(
 
   // Converse has no reasoning field, so Claude's own `thinking` travels in
   // additionalModelRequestFields, and adaptive effort in outputConfig.
-  const resolved = isClaudeModel(params.model)
+  const resolved = isClaudeModel(params.model, options.claudeModels)
     ? resolveClaudeThinking(params, describeForcedChoice(toolConfig?.toolChoice), options)
     : undefined;
   const effort = resolved?.effort;

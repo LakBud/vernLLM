@@ -1,7 +1,7 @@
+import type { NextConfig } from 'next';
+
 import { createMDX } from 'fumadocs-mdx/next';
 import path from 'node:path';
-
-/** @type {import('next').NextConfig} */
 
 const root = path.resolve(process.cwd(), '../..');
 
@@ -31,7 +31,7 @@ const securityHeaders = [
   { key: 'X-DNS-Prefetch-Control', value: 'off' },
 ];
 
-const config = {
+const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
 
@@ -40,6 +40,24 @@ const config = {
   },
 
   outputFileTracingRoot: root,
+
+  // The Bedrock adapter moved into its own package, so its old page moved
+  // with it. Permanent, since 2.x READMEs and changelog entries still link here.
+  async redirects() {
+    return [
+      {
+        source: '/docs/adapters/bedrock',
+        destination: '/docs/integrations/bedrock',
+        permanent: true,
+      },
+      // middleware.ts serves each page as Markdown at a .md suffix.
+      {
+        source: '/docs/adapters/bedrock.md',
+        destination: '/docs/integrations/bedrock.md',
+        permanent: true,
+      },
+    ];
+  },
 
   async headers() {
     // Skip CSP in development: React's dev-mode debugging tools rely on eval(),

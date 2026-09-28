@@ -106,11 +106,11 @@
     },
     {
       "path": "dist/adapters/index.mjs",
-      "limit": "50 KB"
+      "limit": "12 KB"
     },
     {
       "path": "dist/adapters/index.cjs",
-      "limit": "50 KB"
+      "limit": "12 KB"
     }
   ]
 }
