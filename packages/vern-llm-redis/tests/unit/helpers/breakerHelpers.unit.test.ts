@@ -90,6 +90,16 @@ describe('trip and learn', () => {
     expect(assertClosed).toHaveBeenCalledWith('m');
     expect(state).toBe('half-open');
   });
+
+  it('learn treats a call already rejected as open as learned, not as a failure', async () => {
+    const assertClosed = vi.fn(() => {
+      throw new Error('Circuit open for m');
+    });
+
+    await learn(fakeBreaker({ assertClosed, getState: () => 'open' }));
+
+    expect(assertClosed).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('claimTrials', () => {

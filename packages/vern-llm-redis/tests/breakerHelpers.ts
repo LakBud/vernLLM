@@ -45,9 +45,15 @@ export async function trip(breaker: CircuitBreakerAdapter, model = 'm'): Promise
  * A process that has never touched a key treats it as closed (documented:
  * assertClosed is synchronous, Redis isn't). One call, whose background
  * check pulls Redis's real state into the local cache, teaches it.
+ * The startup scan can win that race, so a call already rejected as open
+ * means the breaker has learned, which is all this waits for.
  */
 export async function learn(breaker: CircuitBreakerAdapter, model = 'm'): Promise<void> {
-  breaker.assertClosed(model);
+  try {
+    breaker.assertClosed(model);
+  } catch {
+    // Already learned, from the startup scan.
+  }
   await waitUntil(() => breaker.getState?.(model) !== 'closed');
 }
 

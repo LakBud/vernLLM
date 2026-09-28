@@ -161,7 +161,14 @@ describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () 
       makeBreaker,
     }) => {
       const prefix = uniquePrefix('cb');
-      const breaker = makeBreaker({ keyPrefix: prefix, threshold: 1, cooldownMs: 250 });
+      // A generous prepare timeout: under load the refresh can outlast the default,
+      // and VernLLM would then decide on the still open local state and reject.
+      const breaker = makeBreaker({
+        keyPrefix: prefix,
+        threshold: 1,
+        cooldownMs: 250,
+        prepareTimeoutMs: 5000,
+      });
       await trip(breaker);
       await sleep(350);
 
