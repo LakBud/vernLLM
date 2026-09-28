@@ -15,6 +15,59 @@ each pairs a client library with a gateway. So each one is compared here as a pa
   issue](https://github.com/LakBud/vernLLM/issues).
 </Callout>
 
+## Failures it's built for
+
+VernLLM decides inside your process, where it knows what the call was for and what counts as a good
+result. A gateway decides from the request and response it sees. These are the cases where that
+difference shows.
+
+### A response that looks fine but isn't
+
+A provider returns a 200 with an empty body, a JSON answer cut off at `max_tokens`, or a placeholder
+like `N/A`. An empty body counts as a failure, and truncated JSON becomes a retryable
+`response_truncated`. For anything else, [`detectSoftFailure`](/docs/core/error-handling#soft-failure-detection)
+turns the result into a failure that retries, falls back, and counts against that target's breaker.
+
+### Your fault, not the provider's
+
+A usage reservation is rejected, the model breaks a tool contract, or the output fails your schema.
+None of these say the provider is unhealthy, so none of them trip the [circuit
+breaker](/docs/core/circuit-breaker#what-counts-as-a-failure). One bad caller can't open the
+circuit for everyone.
+
+### An outage that turns into a retry storm
+
+You send 500 requests a second with 2 retries each, and a provider starts failing half of them.
+Without a limit, retries push traffic toward three times normal at the worst moment. A [retry
+budget](/docs/core/retry-budget) caps retries at a share of traffic, and the breaker stops sending
+to the failing provider altogether.
+
+### Your provider's rate limit
+
+With your own keys, the limit that matters is your account's requests and tokens per minute.
+[Rate limiting](/docs/core/rate-limiting) estimates tokens before each call, queues within the
+limit, reconciles with real usage, and shrinks the limit after a 429, or ahead of one when the
+provider reports few requests left. [`vern-llm-redis`](/docs/integrations/redis) shares it across
+processes.
+
+### One more thing that can fail
+
+A gateway adds a network hop and a service every call depends on. VernLLM adds neither: fallback
+goes straight to another provider, and prompts never pass through a third party.
+
+```ts title="failure-handling.ts"
+const llm = new VernLLM({
+  client: anthropic,
+  model: 'claude-opus-5-5',
+  fallback: { client: openai, model: 'gpt-6-sol', circuitBreaker: true },
+  circuitBreaker: true,
+  retryBudget: { windowMs: 60_000, minCalls: 20, retryRatio: 0.2 },
+  rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000 },
+  detectSoftFailure: (result) =>
+    typeof result === 'string' && result.trim() === 'N/A' ? 'soft_failure_detected' : undefined,
+});
+```
+
 ## What each one is
 
 | Tool                    | Shape                                                                                          | Where the reliability logic runs                |
@@ -50,19 +103,16 @@ features from the optional `vern-llm-redis` package instead of a server.
 
 ## What VernLLM does differently
 
-1. **Failure accounting.** Retries and the breaker only count provider health signals. Quota errors,
-   local rate limit rejections, tool contract violations, and parse or validation failures never
-   trip a breaker.
-2. **Soft failures.** `detectSoftFailure` turns a response that parsed fine but came back empty or
-   truncated into a failure that feeds retries and the breaker.
-3. **Per target isolation.** Every fallback target gets its own breaker, limiter, and retry budget.
+Beyond the [failures above](#failures-its-built-for):
+
+1. **Per target isolation.** Every fallback target gets its own breaker, limiter, and retry budget.
    None are inherited from the primary.
-4. **Errors carry history.** An `LLMError` keeps every attempt with a request snapshot, and auth
+2. **Errors carry history.** An `LLMError` keeps every attempt with a request snapshot, and auth
    headers are stripped from those snapshots.
-5. **Live introspection.** `getCircuitStates()`, `getRetryBudgetState()`, and `readRateLimitState()`
+3. **Live introspection.** `getCircuitStates()`, `getRetryBudgetState()`, and `readRateLimitState()`
    read state, and `openCircuit()` and `closeCircuit()` control it by hand.
-6. **Small footprint.** No runtime dependencies, and CI caps each published bundle at 120 KB.
-7. **Opt in sharing.** Cross process state comes from a package you add, not a server you run.
+4. **Small footprint.** No runtime dependencies, and CI caps each published bundle at 120 KB.
+5. **Opt in sharing.** Cross process state comes from a package you add, not a server you run.
 
 ## Retries and timeouts
 
