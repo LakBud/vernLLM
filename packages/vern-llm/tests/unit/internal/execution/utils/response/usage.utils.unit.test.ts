@@ -36,6 +36,52 @@ describe('toTokenUsage', () => {
     expect('reasoningTokens' in usage).toBe(false);
   });
 
+  it('carries the cache counts and the TTL split through when present', () => {
+    const usage = toTokenUsage(
+      {
+        prompt_tokens: 100,
+        prompt_tokens_details: {
+          cached_tokens: 60,
+          cache_write_tokens: 30,
+          cache_write_tokens_by_ttl: { '5m': 20, '1h': 10 },
+        },
+      },
+      meta,
+    );
+
+    expect(usage).toMatchObject({
+      cacheReadTokens: 60,
+      cacheWriteTokens: 30,
+      cacheWriteTokensByTtl: { '5m': 20, '1h': 10 },
+    });
+  });
+
+  it('copies the TTL split, so a later change to the wire object does not reach the usage', () => {
+    const byTtl = { '5m': 20 };
+    const usage = toTokenUsage(
+      { prompt_tokens_details: { cache_write_tokens_by_ttl: byTtl } },
+      meta,
+    );
+
+    byTtl['5m'] = 999;
+
+    expect(usage.cacheWriteTokensByTtl).toEqual({ '5m': 20 });
+  });
+
+  it('omits each cache field entirely when not reported, rather than setting it undefined', () => {
+    const usage = toTokenUsage({ prompt_tokens_details: {} }, meta);
+
+    expect('cacheReadTokens' in usage).toBe(false);
+    expect('cacheWriteTokens' in usage).toBe(false);
+    expect('cacheWriteTokensByTtl' in usage).toBe(false);
+  });
+
+  it('keeps a cache count of 0, since 0 is a reported value', () => {
+    const usage = toTokenUsage({ prompt_tokens_details: { cached_tokens: 0 } }, meta);
+
+    expect(usage.cacheReadTokens).toBe(0);
+  });
+
   it('stamps requestId, model, provider, and usedFallback from meta', () => {
     const usage = toTokenUsage(
       {},

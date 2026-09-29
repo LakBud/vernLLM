@@ -5,6 +5,7 @@ import {
   assertForcedJsonSchemaToolInputIsObject,
   throwMissingForcedJsonSchemaTool,
 } from './structuredOutput.js';
+import { toWireUsage } from './usage.js';
 
 import type {
   ContentBlock as BedrockContentBlock,
@@ -81,10 +82,6 @@ export function toWireResponse(response: ConverseResponse, toolName: string | un
         ...(response.stopReason === 'max_tokens' ? { finish_reason: 'length' as const } : {}),
       },
     ],
-    usage: {
-      prompt_tokens: response.usage?.inputTokens,
-      completion_tokens: response.usage?.outputTokens,
-      total_tokens: response.usage?.totalTokens,
-    },
+    usage: toWireUsage(response.usage),
   };
 }

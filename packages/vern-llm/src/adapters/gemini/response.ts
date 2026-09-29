@@ -17,6 +17,7 @@ export function toWireUsage(usage: GeminiUsage | undefined) {
     prompt_tokens: usage?.promptTokenCount,
     completion_tokens: usage?.candidatesTokenCount,
     total_tokens: usage?.totalTokenCount,
+    prompt_tokens_details: { cached_tokens: usage?.cachedContentTokenCount },
     ...(usage?.thoughtsTokenCount !== undefined
       ? { completion_tokens_details: { reasoning_tokens: usage.thoughtsTokenCount } }
       : {}),

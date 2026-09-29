@@ -1,3 +1,5 @@
+import { normalizeUsage } from './usage.js';
+
 import type { WireStreamChunk } from '../../types/index.js';
 import type { OpenAIStreamChunk } from './types.js';
 
@@ -25,6 +27,6 @@ export function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStr
   }
 
   if (chunk.usage) {
-    yield { type: 'usage', usage: chunk.usage };
+    yield { type: 'usage', usage: normalizeUsage(chunk.usage) };
   }
 }

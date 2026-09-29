@@ -1,8 +1,8 @@
 import { throwMissingForcedJsonSchemaTool } from '../internal/forcedJsonSchemaTool.js';
-import { promptTokens } from './response.js';
+import { promptTokens, promptTokensDetails } from './response.js';
 
 import type { ThinkingBlock, WireStreamChunk } from '../../types/index.js';
-import type { AnthropicStreamEvent } from './types.js';
+import type { AnthropicStreamEvent, AnthropicUsage } from './types.js';
 
 type StreamEvent<T extends AnthropicStreamEvent['type']> = Extract<
   AnthropicStreamEvent,
@@ -21,7 +21,8 @@ interface StreamState {
   blockKinds: Map<number, 'text' | 'tool_use' | 'json-tool'>;
   /** Reasoning is only usable once whole, so it is gathered per block until its stop event. */
   thinkingBlocks: Map<number, ThinkingBlock>;
-  inputTokens: number;
+  /** `message_start`'s usage, completed by `message_delta`'s cumulative input counts. */
+  startUsage: AnthropicUsage | undefined;
   sawJsonTool: boolean;
 }
 
@@ -107,16 +108,44 @@ function* onBlockStop(
   }
 }
 
+const CUMULATIVE_INPUT_KEYS = [
+  'input_tokens',
+  'cache_creation_input_tokens',
+  'cache_read_input_tokens',
+] as const;
+
+/**
+ * `message_start`'s usage with `message_delta`'s input counts laid over it. Those are cumulative
+ * whole message totals, omitted when they don't apply, so, as in Anthropic's own stream
+ * accumulator, a present value overwrites and is never added.
+ */
+function withCumulativeInput(
+  start: AnthropicUsage | undefined,
+  delta: StreamEvent<'message_delta'>['usage'],
+): AnthropicUsage {
+  const merged: AnthropicUsage = { ...start };
+
+  for (const key of CUMULATIVE_INPUT_KEYS) {
+    const value = delta?.[key];
+    if (value !== undefined && value !== null) merged[key] = value;
+  }
+
+  return merged;
+}
+
 function usageChunk(state: StreamState, event: StreamEvent<'message_delta'>): WireStreamChunk {
+  const usage = withCumulativeInput(state.startUsage, event.usage);
+  const inputTokens = promptTokens(usage) ?? 0;
   const outputTokens = event.usage?.output_tokens ?? 0;
   const thinkingTokens = event.usage?.output_tokens_details?.thinking_tokens;
 
   return {
     type: 'usage',
     usage: {
-      prompt_tokens: state.inputTokens,
+      prompt_tokens: inputTokens,
       completion_tokens: outputTokens,
-      total_tokens: state.inputTokens + outputTokens,
+      total_tokens: inputTokens + outputTokens,
+      prompt_tokens_details: promptTokensDetails(usage),
       ...(thinkingTokens !== undefined
         ? { completion_tokens_details: { reasoning_tokens: thinkingTokens } }
         : {}),
@@ -136,14 +165,14 @@ export async function* toWireStreamChunks(
     toolName,
     blockKinds: new Map(),
     thinkingBlocks: new Map(),
-    inputTokens: 0,
+    startUsage: undefined,
     sawJsonTool: false,
   };
 
   for await (const event of stream) {
     switch (event.type) {
       case 'message_start':
-        state.inputTokens = promptTokens(event.message.usage) ?? 0;
+        state.startUsage = event.message.usage;
         break;
       case 'content_block_start':
         yield* onBlockStart(state, event);

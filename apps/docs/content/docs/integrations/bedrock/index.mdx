@@ -101,6 +101,17 @@ middleware such as [OpenTelemetry](/docs/integrations/otel) reports `gen_ai.prov
 even for an inference profile ARN. Bedrock sends no remaining-capacity headers, so an AIMD rate
 limiter only reacts to throttling, see [Rate Limiting](/docs/core/rate-limiting).
 
+## Prompt caching and usage
+
+Converse reports `inputTokens` without the cache counts, and `totalTokens` with them. `promptTokens`
+is `inputTokens` plus `cacheReadInputTokens` plus `cacheWriteInputTokens`, so `promptTokens` plus
+`completionTokens` now agrees with Bedrock's `totalTokens`, which is kept as reported. The split is
+on `TokenUsage` as `cacheReadTokens`, `cacheWriteTokens`, and `cacheWriteTokensByTtl`, read from
+`cacheDetails`. See [Cache tokens](/docs/core/usage-tracking#cache-tokens).
+
+The token rate limiter sees the same total as before, since Bedrock's total already included cache
+tokens.
+
 ## JSON handling
 
 - `json_object` is **not supported** as a real constraint. Converse has no field that mechanically guarantees valid JSON output for this mode. A plain call (`llm.call({ userContent })`, no `schema`, no explicit `jsonMode`) is silently treated as plain text. An explicit `jsonMode: true`, or `schema` without `jsonSchema`, throws `LLMError('invalid_params')`. Use `jsonSchema` instead.

@@ -57,6 +57,8 @@ If you already have an SDK instance shaped close to OpenAI's, or you want full c
 interface LLMClient {
   /** Defaults to true; set false if this provider can't guarantee JSON output mode. */
   supportsJsonObjectMode?: boolean;
+  /** Defaults to true; set false if this provider's token rate limit skips cache reads. */
+  cacheReadsCountTowardRateLimit?: boolean;
   chat: {
     completions: {
       create(params: {
@@ -85,7 +87,16 @@ interface LLMClient {
       }): Promise<{
         content?: string;
         toolCalls?: Array<{ id: string; name: string; arguments: string }>;
-        usage?: { promptTokens?: number; completionTokens?: number };
+        usage?: {
+          prompt_tokens?: number;
+          completion_tokens?: number;
+          total_tokens?: number;
+          prompt_tokens_details?: {
+            cached_tokens?: number;
+            cache_write_tokens?: number;
+            cache_write_tokens_by_ttl?: Record<string, number>;
+          };
+        };
       }>;
     };
   };
@@ -105,3 +116,19 @@ internally. Implementing it directly is more work than `fromFetch`, but avoids t
   translation. See the [Adapters Overview](/docs/adapters) for how the built-in adapters approach
   this translation for their respective providers.
 </Callout>
+
+## Reporting usage
+
+`prompt_tokens` is every input token the provider processed: uncached input plus cache reads plus
+cache writes. If the provider reports its cache counts separately from its input count, add them
+together first, so `prompt_tokens` and `completion_tokens` agree with `total_tokens`.
+
+`prompt_tokens_details` splits `prompt_tokens`, and its counts surface on
+[`TokenUsage`](/docs/core/usage-tracking#cache-tokens) as `cacheReadTokens`, `cacheWriteTokens` and
+`cacheWriteTokensByTtl`. It follows OpenAI's `cached_tokens` and `cache_write_tokens`, which OpenRouter also sends,
+and only `cache_write_tokens_by_ttl`, keyed by the provider's TTL label, is new. Leave out anything
+the provider doesn't report.
+
+Set `cacheReadsCountTowardRateLimit: false` when the provider's token rate limit doesn't count cache
+reads, so [the rate limiter](/docs/core/rate-limiting#cache-reads) reconciles without them. It
+defaults to `true`.

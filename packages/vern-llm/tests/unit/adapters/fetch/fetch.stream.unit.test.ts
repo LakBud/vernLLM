@@ -77,6 +77,43 @@ describe('fromFetch().chat.completions.createStream', () => {
     );
   });
 
+  it('passes cache counts from a mapStreamEvent usage chunk through', async () => {
+    const requestStream = vi.fn(async (_url: string, _init: unknown) =>
+      fakeReadableStream(['data: {"delta":"hi"}\n\n']),
+    );
+
+    const client = fromFetch({
+      url: 'https://api.example.com/stream',
+      requestStream,
+      mapRequest: (params) => ({ model: params.model }),
+      mapResponse: (json: unknown) => ({ content: String(json) }),
+      mapStreamEvent: () => ({
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          prompt_tokens_details: { cached_tokens: 60, cache_write_tokens_by_ttl: { '1h': 5 } },
+        },
+      }),
+    });
+
+    const chunks = await collect(
+      client.chat.completions.createStream!(
+        { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          prompt_tokens_details: { cached_tokens: 60, cache_write_tokens_by_ttl: { '1h': 5 } },
+        },
+      },
+    ]);
+  });
+
   it('translates an SSE comment-line keep-alive ping into a WireStreamChunk ping, bypassing mapStreamEvent', async () => {
     const mapStreamEvent = vi.fn((event: unknown) => {
       if (!isDeltaEvent(event) || !event.delta) return undefined;

@@ -610,6 +610,110 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
     });
   });
 
+  it.each([
+    [
+      'OpenAI cached_tokens',
+      { prompt_tokens_details: { cached_tokens: 80 } },
+      { cacheReadTokens: 80 },
+    ],
+    [
+      "OpenRouter's cache_write_tokens",
+      { prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 30 } },
+      { cacheReadTokens: 60, cacheWriteTokens: 30 },
+    ],
+    [
+      "DeepSeek's prompt_cache_hit_tokens",
+      { prompt_cache_hit_tokens: 70 },
+      { cacheReadTokens: 70 },
+    ],
+  ])(
+    'reports %s on TokenUsage through a real OpenAI SDK client',
+    async (_label, extra, expected) => {
+      server = await startRealSdkServer([
+        {
+          body: {
+            id: 'chatcmpl-c',
+            object: 'chat.completion',
+            created: 1234567890,
+            model: 'gpt-test',
+            choices: [
+              { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+            ],
+            usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, ...extra },
+          },
+        },
+      ]);
+      const onUsage = vi.fn();
+      const llm = new VernLLM({
+        client: fromOpenAICompatible(
+          new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` }),
+        ),
+        model: 'gpt-test',
+        onUsage,
+      });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      expect(onUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          promptTokens: 100,
+          completionTokens: 5,
+          totalTokens: 105,
+          ...expected,
+        }),
+      );
+    },
+  );
+
+  it('reports streamed cache counts on TokenUsage, filling cached_tokens from DeepSeek', async () => {
+    server = await startRealSdkServer([
+      {
+        raw: sseRaw([
+          {
+            data: {
+              id: '1',
+              object: 'chat.completion.chunk',
+              choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' } }],
+            },
+          },
+          {
+            data: {
+              id: '1',
+              object: 'chat.completion.chunk',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 5,
+                total_tokens: 105,
+                prompt_cache_hit_tokens: 70,
+                prompt_tokens_details: { cache_write_tokens: 10 },
+              },
+            },
+          },
+          { data: '[DONE]' },
+        ]),
+      },
+    ]);
+    const onUsage = vi.fn();
+    const llm = new VernLLM({
+      client: fromOpenAICompatible(new OpenAI({ apiKey: 'test-key', baseURL: `${server.url}/v1` })),
+      model: 'gpt-test',
+      onUsage,
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+    await drain(chunks);
+    await finalResult;
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ promptTokens: 100, cacheReadTokens: 70, cacheWriteTokens: 10 }),
+    );
+  });
+
   it('honors an aborted signal against a real OpenAI SDK client mid-request', async () => {
     server = await startRealSdkServer([{ hang: true }]);
 

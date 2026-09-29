@@ -29,6 +29,15 @@ describe('adapter identity', () => {
     });
   });
 
+  it('flags Anthropic as leaving cache reads out of its rate limit, and no other adapter', () => {
+    expect(
+      fromAnthropic({ messages: { create: async () => ({}) } } as unknown as AnthropicClient)
+        .cacheReadsCountTowardRateLimit,
+    ).toBe(false);
+    expect(fromGemini({ models }).cacheReadsCountTowardRateLimit).toBeUndefined();
+    expect(fromOpenAICompatible(openAIClient()).cacheReadsCountTowardRateLimit).toBeUndefined();
+  });
+
   it('reads Vertex AI or the Gemini API off the client, and claims nothing when vertexai is unset', () => {
     expect(fromGemini({ models, vertexai: true }).adapter).toEqual({
       name: 'gemini',

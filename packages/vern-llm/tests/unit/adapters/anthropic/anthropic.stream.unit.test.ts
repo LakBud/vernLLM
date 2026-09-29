@@ -67,7 +67,12 @@ describe('fromAnthropic().chat.completions.createStream', () => {
       { type: 'text-delta', delta: 'world!' },
       {
         type: 'usage',
-        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 3,
+          total_tokens: 8,
+          prompt_tokens_details: {},
+        },
       },
     ]);
   });
@@ -92,11 +97,11 @@ describe('fromAnthropic().chat.completions.createStream', () => {
 
     expect(chunks).toContainEqual({
       type: 'usage',
-      usage: { prompt_tokens: 0, completion_tokens: 1, total_tokens: 1 },
+      usage: { prompt_tokens: 0, completion_tokens: 1, total_tokens: 1, prompt_tokens_details: {} },
     });
   });
 
-  it('counts cache writes from message_start as prompt tokens, leaving cache reads out', async () => {
+  it('counts cache reads and writes from message_start as prompt tokens, with the split', async () => {
     const { client } = makeFakeStreamingAnthropicClient([
       {
         type: 'message_start',
@@ -105,6 +110,7 @@ describe('fromAnthropic().chat.completions.createStream', () => {
             input_tokens: 5,
             cache_creation_input_tokens: 900,
             cache_read_input_tokens: 4000,
+            cache_creation: { ephemeral_5m_input_tokens: 600, ephemeral_1h_input_tokens: 300 },
           },
         },
       },
@@ -121,7 +127,120 @@ describe('fromAnthropic().chat.completions.createStream', () => {
 
     expect(chunks).toContainEqual({
       type: 'usage',
-      usage: { prompt_tokens: 905, completion_tokens: 2, total_tokens: 907 },
+      usage: {
+        prompt_tokens: 4905,
+        completion_tokens: 2,
+        total_tokens: 4907,
+        prompt_tokens_details: {
+          cached_tokens: 4000,
+          cache_write_tokens: 900,
+          cache_write_tokens_by_ttl: { '5m': 600, '1h': 300 },
+        },
+      },
+    });
+  });
+
+  describe('cumulative input counts on message_delta', () => {
+    const run = async (start: unknown, delta: unknown) => {
+      const events = [
+        ...(start === undefined ? [] : [{ type: 'message_start', message: { usage: start } }]),
+        ...(delta === undefined ? [] : [{ type: 'message_delta', usage: delta }]),
+        { type: 'message_stop' },
+      ];
+      const { client } = makeFakeStreamingAnthropicClient(events as never);
+
+      const chunks = await collect(
+        fromAnthropic(client).chat.completions.createStream!(
+          { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+          { signal: new AbortController().signal },
+        ),
+      );
+
+      return chunks.find((chunk) => chunk.type === 'usage');
+    };
+
+    const start = {
+      input_tokens: 5,
+      cache_creation_input_tokens: 900,
+      cache_read_input_tokens: 4000,
+    };
+
+    it('overwrites the start counts with the delta totals, never adding them', async () => {
+      const usage = await run(start, {
+        output_tokens: 2,
+        input_tokens: 8,
+        cache_creation_input_tokens: 950,
+        cache_read_input_tokens: 4100,
+      });
+
+      expect(usage).toEqual({
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5058,
+          completion_tokens: 2,
+          total_tokens: 5060,
+          prompt_tokens_details: { cached_tokens: 4100, cache_write_tokens: 950 },
+        },
+      });
+    });
+
+    it('keeps the start counts for a delta count that is null', async () => {
+      const usage = await run(start, {
+        output_tokens: 2,
+        input_tokens: null,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+      });
+
+      expect(usage).toMatchObject({ usage: { prompt_tokens: 4905 } });
+    });
+
+    it('overwrites one count and keeps the rest', async () => {
+      const usage = await run(start, { output_tokens: 2, cache_read_input_tokens: 5000 });
+
+      expect(usage).toMatchObject({
+        usage: {
+          prompt_tokens: 5905,
+          prompt_tokens_details: { cached_tokens: 5000, cache_write_tokens: 900 },
+        },
+      });
+    });
+
+    it('overwrites with a delta total of 0, since 0 is a reported value', async () => {
+      const usage = await run(start, { output_tokens: 2, cache_read_input_tokens: 0 });
+
+      expect(usage).toMatchObject({ usage: { prompt_tokens: 905 } });
+    });
+
+    it('takes the counts from the delta when message_start carried no usage', async () => {
+      const usage = await run(undefined, {
+        output_tokens: 2,
+        input_tokens: 7,
+        cache_read_input_tokens: 300,
+      });
+
+      expect(usage).toMatchObject({
+        usage: { prompt_tokens: 307, prompt_tokens_details: { cached_tokens: 300 } },
+      });
+    });
+
+    it('keeps the start counts when message_delta has no usage key at all', async () => {
+      const { client } = makeFakeStreamingAnthropicClient([
+        { type: 'message_start', message: { usage: start } },
+        { type: 'message_delta' },
+        { type: 'message_stop' },
+      ] as never);
+
+      const chunks = await collect(
+        fromAnthropic(client).chat.completions.createStream!(
+          { model: 'claude-x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+          { signal: new AbortController().signal },
+        ),
+      );
+
+      expect(chunks.find((chunk) => chunk.type === 'usage')).toMatchObject({
+        usage: { prompt_tokens: 4905, completion_tokens: 0 },
+      });
     });
   });
 
@@ -145,7 +264,7 @@ describe('fromAnthropic().chat.completions.createStream', () => {
 
     expect(chunks).toContainEqual({
       type: 'usage',
-      usage: { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5 },
+      usage: { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5, prompt_tokens_details: {} },
     });
   });
 
@@ -238,7 +357,12 @@ describe('fromAnthropic().chat.completions.createStream', () => {
       { type: 'text-delta', delta: ', world!' },
       {
         type: 'usage',
-        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 3,
+          total_tokens: 8,
+          prompt_tokens_details: {},
+        },
       },
     ]);
   });
@@ -291,7 +415,15 @@ describe('fromAnthropic().chat.completions.createStream', () => {
       { type: 'tool_call_delta', index: 0, id: 'toolu_1', name: 'get_weather' },
       { type: 'tool_call_delta', index: 0, argumentsDelta: '{"ci' },
       { type: 'tool_call_delta', index: 0, argumentsDelta: 'ty":"NYC"}' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 4,
+          total_tokens: 9,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
   });
 
@@ -335,7 +467,15 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     expect(chunks).toEqual([
       { type: 'text-delta', delta: '{"answer":' },
       { type: 'text-delta', delta: '"42"}' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 2,
+          total_tokens: 7,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
 
     // The forced-tool request shape (name, input_schema, forced tool_choice)
@@ -394,7 +534,15 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     // "Sure, I'll extract that.{"answer":"42"}", which isn't valid JSON.
     expect(chunks).toEqual([
       { type: 'text-delta', delta: '{"answer":"42"}' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 2,
+          total_tokens: 7,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
   });
 

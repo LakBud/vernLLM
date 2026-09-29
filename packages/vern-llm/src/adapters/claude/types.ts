@@ -12,6 +12,17 @@ export type AnthropicContentBlock =
   | { type: 'thinking'; thinking: string; signature: string }
   | { type: 'redacted_thinking'; data: string };
 
+/** The input side of Anthropic's `usage`, which carries the cache counts. */
+export interface AnthropicUsage {
+  input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number;
+    ephemeral_1h_input_tokens?: number;
+  } | null;
+}
+
 /** Minimal structural type for the Anthropic SDK's `messages.create` */
 export interface AnthropicClient {
   messages: {
@@ -62,9 +73,7 @@ export interface AnthropicClient {
         data?: string;
       }>;
       stop_reason?: string | null;
-      usage?: {
-        input_tokens?: number;
-        cache_creation_input_tokens?: number | null;
+      usage?: AnthropicUsage & {
         output_tokens?: number;
         output_tokens_details?: { thinking_tokens?: number } | null;
       };
@@ -77,7 +86,7 @@ export type AnthropicStreamEvent =
   | {
       type: 'message_start';
       message: {
-        usage?: { input_tokens?: number; cache_creation_input_tokens?: number | null };
+        usage?: AnthropicUsage;
       };
     }
   | {
@@ -104,7 +113,11 @@ export type AnthropicStreamEvent =
   | { type: 'content_block_stop'; index: number }
   | {
       type: 'message_delta';
-      usage?: {
+      // Input counts here are cumulative whole message totals, sent only when they apply.
+      usage?: Pick<
+        AnthropicUsage,
+        'input_tokens' | 'cache_creation_input_tokens' | 'cache_read_input_tokens'
+      > & {
         output_tokens?: number;
         output_tokens_details?: { thinking_tokens?: number } | null;
       };

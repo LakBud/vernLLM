@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fromGemini } from '../../../../src/adapters/gemini/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
@@ -56,6 +56,39 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
       contents: [{ role: 'user', parts: [{ text: "What's the capital of France?" }] }],
       systemInstruction: { parts: [{ text: 'You are a helpful geography assistant.' }] },
     });
+  });
+
+  it('reports cachedContentTokenCount as cacheReadTokens, inside promptTokens', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          candidates: [
+            { content: { role: 'model', parts: [{ text: 'cached' }] }, finishReason: 'STOP' },
+          ],
+          usageMetadata: {
+            promptTokenCount: 100,
+            cachedContentTokenCount: 80,
+            candidatesTokenCount: 6,
+            totalTokenCount: 106,
+          },
+        },
+      },
+    ]);
+    const onUsage = vi.fn();
+    const ai = new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } });
+    const llm = new VernLLM({ client: fromGemini(ai), model: 'gemini-test', onUsage });
+
+    await llm.call({ userContent: 'hi', jsonMode: false });
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptTokens: 100,
+        completionTokens: 6,
+        totalTokens: 106,
+        cacheReadTokens: 80,
+      }),
+    );
+    expect(onUsage.mock.calls[0]?.[0]).not.toHaveProperty('cacheWriteTokens');
   });
 
   it('sends real functionCall/tool round-trip through the real SDK client', async () => {

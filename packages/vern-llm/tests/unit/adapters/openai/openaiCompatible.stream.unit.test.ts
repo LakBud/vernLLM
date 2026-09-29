@@ -139,6 +139,41 @@ describe('fromOpenAICompatible().chat.completions.createStream', () => {
     expect(receivedParams).toMatchObject({ stream: true, stream_options: { include_usage: true } });
   });
 
+  it('reports cache counts in the usage chunk, filling cached_tokens from DeepSeek when missing', async () => {
+    const create = vi.fn(async () =>
+      fakeOpenAIStream([
+        { choices: [{ delta: { content: 'hi' } }] },
+        {
+          choices: [{ delta: {} }],
+          usage: {
+            prompt_tokens: 100,
+            completion_tokens: 1,
+            total_tokens: 101,
+            prompt_cache_hit_tokens: 70,
+            prompt_tokens_details: { cache_write_tokens: 10 },
+          },
+        },
+      ]),
+    );
+    const adapted = fromOpenAICompatible({ chat: { completions: { create } } });
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'test-model', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'usage',
+        usage: expect.objectContaining({
+          prompt_tokens_details: { cached_tokens: 70, cache_write_tokens: 10 },
+        }),
+      }),
+    );
+  });
+
   it('omits stream_options for providers configured without stream-usage support', async () => {
     let receivedParams: Record<string, unknown> | undefined;
     const create = vi.fn(async (params: Record<string, unknown>) => {

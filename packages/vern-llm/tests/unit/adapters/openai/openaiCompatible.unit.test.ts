@@ -41,6 +41,7 @@ import {
   fromAtlasCloud,
   from01AI,
 } from '../../../../src/adapters/index.js';
+import { readRateLimitHint } from '../../../../src/internal/utils/rate-limit/rateLimitHint.utils.js';
 
 describe('fromOpenAICompatible and its aliases', () => {
   it('delegates create() to the underlying client, forwarding params/options untouched for string content', async () => {
@@ -524,5 +525,105 @@ describe('fromOpenAICompatible, supportsWithResponse', () => {
     }
 
     expect(chunks[0]).toMatchObject({ type: 'rate_limit_hint', hint: { limitRequests: 100 } });
+  });
+});
+
+describe('fromOpenAICompatible, cache usage', () => {
+  const request = {
+    model: 'm',
+    max_tokens: 10,
+    messages: [{ role: 'user' as const, content: 'hi' }],
+  };
+
+  async function createWith(usage: unknown) {
+    const create = vi.fn(async () => ({ choices: [{ message: { content: 'ok' } }], usage }));
+
+    return fromOpenAICompatible({ chat: { completions: { create } } }).chat.completions.create(
+      request,
+      { signal: new AbortController().signal },
+    );
+  }
+
+  it('passes OpenAI cached_tokens through untouched', async () => {
+    const usage = {
+      prompt_tokens: 100,
+      completion_tokens: 5,
+      total_tokens: 105,
+      prompt_tokens_details: { cached_tokens: 80 },
+    };
+
+    expect((await createWith(usage)).usage).toEqual(usage);
+  });
+
+  it("passes OpenRouter's cache_write_tokens through", async () => {
+    const result = await createWith({
+      prompt_tokens: 100,
+      prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 30 },
+    });
+
+    expect(result.usage?.prompt_tokens_details).toEqual({
+      cached_tokens: 60,
+      cache_write_tokens: 30,
+    });
+  });
+
+  it("fills cached_tokens from DeepSeek's prompt_cache_hit_tokens when missing", async () => {
+    const result = await createWith({ prompt_tokens: 100, prompt_cache_hit_tokens: 70 });
+
+    expect(result.usage?.prompt_tokens_details).toEqual({ cached_tokens: 70 });
+  });
+
+  it('keeps other prompt_tokens_details fields when filling cached_tokens', async () => {
+    const result = await createWith({
+      prompt_tokens: 100,
+      prompt_cache_hit_tokens: 70,
+      prompt_tokens_details: { cache_write_tokens: 10 },
+    });
+
+    expect(result.usage?.prompt_tokens_details).toEqual({
+      cached_tokens: 70,
+      cache_write_tokens: 10,
+    });
+  });
+
+  it('prefers cached_tokens over prompt_cache_hit_tokens when both are sent', async () => {
+    const result = await createWith({
+      prompt_tokens: 100,
+      prompt_cache_hit_tokens: 70,
+      prompt_tokens_details: { cached_tokens: 80 },
+    });
+
+    expect(result.usage?.prompt_tokens_details?.cached_tokens).toBe(80);
+  });
+
+  it('returns usage without cache fields as it came', async () => {
+    const usage = { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 };
+
+    expect((await createWith(usage)).usage).toEqual(usage);
+  });
+
+  it('returns a response without usage as it came', async () => {
+    expect((await createWith(undefined)).usage).toBeUndefined();
+  });
+
+  it('keeps the rate limit hint on the response when usage is normalized', async () => {
+    const create = vi.fn().mockReturnValue({
+      withResponse: async () => ({
+        data: { choices: [], usage: { prompt_tokens: 100, prompt_cache_hit_tokens: 70 } },
+        response: {
+          headers: {
+            get: (name: string) => (name === 'x-ratelimit-limit-requests' ? '100' : null),
+          },
+        },
+      }),
+    });
+
+    const result = await fromOpenAICompatible(
+      { chat: { completions: { create } } },
+      { supportsWithResponse: true },
+    ).chat.completions.create(request, { signal: new AbortController().signal });
+
+    expect(result.usage?.prompt_tokens_details?.cached_tokens).toBe(70);
+    expect(readRateLimitHint(result)).toMatchObject({ limitRequests: 100 });
   });
 });

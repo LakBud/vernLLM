@@ -5,26 +5,44 @@ import {
 } from '../internal/forcedJsonSchemaTool.js';
 
 import type { ThinkingBlock, WireToolCall } from '../../types/index.js';
-import type { AnthropicResponse } from './types.js';
+import type { AnthropicResponse, AnthropicUsage } from './types.js';
+
+const finite = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : 0;
 
 /**
- * Input tokens that count toward Anthropic's input rate limit: cache writes
- * are added back, cache reads stay out. `undefined` when neither is
- * reported, so a missing count isn't passed off as 0; a non finite value
- * counts as 0 rather than poisoning the sum.
+ * Every input token: uncached, cache writes and cache reads. `undefined` when none is reported,
+ * so a missing count isn't passed off as 0; a non finite value counts as 0 rather than poisoning
+ * the sum.
  */
-export function promptTokens(
-  usage: { input_tokens?: number; cache_creation_input_tokens?: number | null } | undefined,
-): number | undefined {
-  const input = usage?.input_tokens;
-  const cacheWrites = usage?.cache_creation_input_tokens;
+export function promptTokens(usage: AnthropicUsage | undefined): number | undefined {
+  const parts = [
+    usage?.input_tokens,
+    usage?.cache_creation_input_tokens,
+    usage?.cache_read_input_tokens,
+  ];
 
-  if (input === undefined && (cacheWrites === undefined || cacheWrites === null)) return undefined;
+  if (parts.every((part) => part === undefined || part === null)) return undefined;
 
-  const finite = (value: number | null | undefined) =>
-    typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return parts.reduce<number>((sum, part) => sum + finite(part), 0);
+}
 
-  return finite(input) + finite(cacheWrites);
+/** The cache split, in the wire shape. `undefined` when there is no usage. */
+export function promptTokensDetails(usage: AnthropicUsage | undefined) {
+  if (!usage) return undefined;
+
+  const byTtl = usage.cache_creation
+    ? {
+        '5m': finite(usage.cache_creation.ephemeral_5m_input_tokens),
+        '1h': finite(usage.cache_creation.ephemeral_1h_input_tokens),
+      }
+    : undefined;
+
+  return {
+    cached_tokens: usage.cache_read_input_tokens ?? undefined,
+    cache_write_tokens: usage.cache_creation_input_tokens ?? undefined,
+    ...(byTtl ? { cache_write_tokens_by_ttl: byTtl } : {}),
+  };
 }
 
 /** The reasoning blocks of a response, in order, in VernLLM's shape. */
@@ -95,6 +113,7 @@ export function toWireResponse(response: AnthropicResponse, toolName: string | u
       prompt_tokens: promptTokens(response.usage),
       completion_tokens: response.usage?.output_tokens,
       total_tokens: (promptTokens(response.usage) ?? 0) + (response.usage?.output_tokens ?? 0),
+      prompt_tokens_details: promptTokensDetails(response.usage),
       ...(response.usage?.output_tokens_details?.thinking_tokens !== undefined
         ? {
             completion_tokens_details: {

@@ -260,6 +260,47 @@ describe('fromFetch', () => {
     });
   });
 
+  it.each([
+    ['cache reads', { cacheReadTokens: 60 }, { cached_tokens: 60 }],
+    ['cache writes', { cacheWriteTokens: 30 }, { cache_write_tokens: 30 }],
+    [
+      'a cache write TTL split',
+      { cacheWriteTokensByTtl: { '5m': 20, '1h': 10 } },
+      { cache_write_tokens_by_ttl: { '5m': 20, '1h': 10 } },
+    ],
+    [
+      'all three',
+      { cacheReadTokens: 60, cacheWriteTokens: 30, cacheWriteTokensByTtl: { '5m': 30 } },
+      { cached_tokens: 60, cache_write_tokens: 30, cache_write_tokens_by_ttl: { '5m': 30 } },
+    ],
+  ])('maps %s from mapResponse onto prompt_tokens_details', async (_label, mapped, details) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })),
+    );
+
+    const client = fromFetch({
+      url: 'https://api.example.com',
+      mapRequest: () => ({}),
+      mapResponse: () => ({
+        content: 'x',
+        usage: { promptTokens: 100, completionTokens: 4, totalTokens: 104, ...mapped },
+      }),
+    });
+
+    const result = await client.chat.completions.create(
+      { model: 'm', temperature: 0.2, max_tokens: 10, messages: [] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage).toEqual({
+      prompt_tokens: 100,
+      completion_tokens: 4,
+      total_tokens: 104,
+      prompt_tokens_details: details,
+    });
+  });
+
   it('throws an error with .status and .headers set on a non-2xx response', async () => {
     const headers = { get: vi.fn((name: string) => (name === 'Retry-After' ? '30' : null)) };
     const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({

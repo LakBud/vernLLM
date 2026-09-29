@@ -134,6 +134,7 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
       prompt_tokens: 30,
       completion_tokens: 12,
       total_tokens: 42,
+      prompt_tokens_details: {},
     });
 
     const sent = at(server.requests, 0);
@@ -438,6 +439,110 @@ describe('Bedrock adapter integration (real @aws-sdk/client-bedrock-runtime clie
     ]);
 
     await expect(finalResult).resolves.toBe('Hello, world!');
+  });
+
+  it('folds real cache counts into promptTokens so prompt plus completion matches the reported total', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          output: { message: { role: 'assistant', content: [{ text: 'cached' }] } },
+          stopReason: 'end_turn',
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            totalTokens: 10015,
+            cacheReadInputTokens: 8000,
+            cacheWriteInputTokens: 2000,
+            cacheDetails: [
+              { ttl: '5m', inputTokens: 1500 },
+              { ttl: '1h', inputTokens: 500 },
+            ],
+          },
+        },
+      },
+    ]);
+    const onUsage = vi.fn();
+    const release = vi.fn();
+    const llm = new VernLLM({
+      client: fromBedrock(makeClient()),
+      model: 'anthropic.claude-test',
+      onUsage,
+      rateLimit: {
+        estimate: () => 50,
+        acquire: async () => ({ release, waitedMs: 0 }),
+        signalRateLimit: () => {},
+        reactToRateLimitHint: () => {},
+      },
+    });
+
+    await llm.call({ userContent: 'hi', jsonMode: false });
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptTokens: 10010,
+        completionTokens: 5,
+        totalTokens: 10015,
+        cacheReadTokens: 8000,
+        cacheWriteTokens: 2000,
+        cacheWriteTokensByTtl: { '5m': 1500, '1h': 500 },
+      }),
+    );
+    // Bedrock's total always included cache tokens, and its limiter counts them, so nothing is left out.
+    expect(release).toHaveBeenCalledWith(10015, true);
+  });
+
+  it('folds streamed cache counts from a real Bedrock event stream into promptTokens', async () => {
+    server = await startRealSdkServer([
+      {
+        raw: await bedrockEventStreamRaw([
+          { eventType: 'messageStart', payload: { role: 'assistant' } },
+          {
+            eventType: 'contentBlockDelta',
+            payload: { contentBlockIndex: 0, delta: { text: 'cached' } },
+          },
+          { eventType: 'contentBlockStop', payload: { contentBlockIndex: 0 } },
+          { eventType: 'messageStop', payload: { stopReason: 'end_turn' } },
+          {
+            eventType: 'metadata',
+            payload: {
+              usage: {
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 10015,
+                cacheReadInputTokens: 8000,
+                cacheWriteInputTokens: 2000,
+                cacheDetails: [{ ttl: '1h', inputTokens: 2000 }],
+              },
+            },
+          },
+        ]),
+      },
+    ]);
+    const onUsage = vi.fn();
+    const llm = new VernLLM({
+      client: fromBedrock(makeClient()),
+      model: 'anthropic.claude-test',
+      onUsage,
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+    await collect(chunks);
+    await finalResult;
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptTokens: 10010,
+        completionTokens: 5,
+        totalTokens: 10015,
+        cacheReadTokens: 8000,
+        cacheWriteTokens: 2000,
+        cacheWriteTokensByTtl: { '1h': 2000 },
+      }),
+    );
   });
 
   it('honors an aborted signal against a real Bedrock SDK client mid-request', async () => {

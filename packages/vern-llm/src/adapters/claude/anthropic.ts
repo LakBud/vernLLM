@@ -85,6 +85,8 @@ export function fromAnthropic(
     // Lets core downgrade a default jsonMode to plain text instead of
     // requesting json_object, which this adapter throws on.
     supportsJsonObjectMode: false,
+    // Anthropic's input rate limit skips cache reads, so the limiter must too.
+    cacheReadsCountTowardRateLimit: false,
     adapter: { name: 'anthropic', provider: 'anthropic' },
     chat: {
       completions: {

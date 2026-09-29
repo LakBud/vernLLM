@@ -100,6 +100,28 @@ const llm = new VernLLM({
 For `stream: true`, tool-call deltas go through the existing `mapStreamEvent` seam, see [Streaming](#streaming) below, there's no separate config for streaming vs non-streaming
 tool calls.
 
+## Usage
+
+`mapResponse` may return `usage` with `promptTokens`, `completionTokens` and `totalTokens`.
+`promptTokens` is every input token the provider processed, cache reads and writes included. If the
+provider reports its cache counts separately from its input count, add them in.
+
+To report the cache split, also return any of these. Each is a subset of `promptTokens`, and they
+surface on [`TokenUsage`](/docs/core/usage-tracking#cache-tokens):
+
+```ts title="fromfetch-cache-usage.ts"
+usage: {
+  promptTokens: body.usage.input + body.usage.cache_read + body.usage.cache_write,
+  completionTokens: body.usage.output,
+  cacheReadTokens: body.usage.cache_read,
+  cacheWriteTokens: body.usage.cache_write,
+  cacheWriteTokensByTtl: { '5m': body.usage.cache_write },
+},
+```
+
+For streams, `mapStreamEvent` returns the same split on a `usage` chunk, in the wire naming
+`prompt_tokens_details.cached_tokens`, `cache_write_tokens` and `cache_write_tokens_by_ttl`.
+
 ## Streaming
 
 `stream: true` requires two additional config fields: `mapStreamEvent`, which turns one parsed

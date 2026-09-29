@@ -136,7 +136,7 @@ describe('fromGemini().chat.completions.createStream', () => {
 
     expect(chunks.at(-1)).toEqual({
       type: 'usage',
-      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, prompt_tokens_details: {} },
     });
     // Only one usage chunk, even though two chunks carried usageMetadata.
     expect(chunks.filter((c) => c.type === 'usage')).toHaveLength(1);

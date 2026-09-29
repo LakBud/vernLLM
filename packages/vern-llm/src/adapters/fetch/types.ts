@@ -69,7 +69,18 @@ export interface FetchAdapterConfig {
    */
   mapResponse: (json: unknown) => {
     content?: string;
-    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+    usage?: {
+      /** Every input token, cache reads and writes included. */
+      promptTokens?: number;
+      completionTokens?: number;
+      totalTokens?: number;
+      /** Cache reads, a subset of `promptTokens`. */
+      cacheReadTokens?: number;
+      /** Cache writes, a subset of `promptTokens`. */
+      cacheWriteTokens?: number;
+      /** `cacheWriteTokens` by TTL label, e.g. `{ '5m': 1200 }`. */
+      cacheWriteTokensByTtl?: Record<string, number>;
+    };
     toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   };
   /**

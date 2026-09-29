@@ -124,9 +124,15 @@ assistant history turn, see [Claude thinking in a tool loop](/docs/core/tool-cal
 
 ## Prompt caching and usage
 
-`promptTokens` is `input_tokens` plus `cache_creation_input_tokens`, since Anthropic counts cache
-writes toward its input rate limit. Cache reads are left out, since it doesn't count those. The
-rate limiter reconciles against the same total.
+`promptTokens` is `input_tokens` plus `cache_creation_input_tokens` plus `cache_read_input_tokens`,
+every input token, so it agrees with the other adapters. The split is on `TokenUsage` as
+`cacheReadTokens`, `cacheWriteTokens`, and `cacheWriteTokensByTtl`, keyed `'5m'` and `'1h'` from
+`cache_creation`. See [Cache tokens](/docs/core/usage-tracking#cache-tokens). When streaming, the
+input counts on the final `message_delta` are cumulative totals and replace those from
+`message_start` when present, as in Anthropic's own SDK.
+
+Anthropic's input rate limit doesn't count cache reads, so the token rate limiter reconciles against
+the total less `cacheReadTokens`. See [Rate Limiting](/docs/core/rate-limiting#cache-reads).
 
 ## Models that reject a forced tool_choice
 

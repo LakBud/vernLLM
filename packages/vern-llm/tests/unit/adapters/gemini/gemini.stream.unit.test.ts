@@ -237,10 +237,45 @@ describe('fromGemini().chat.completions.createStream', () => {
 
     expect(chunks.at(-1)).toEqual({
       type: 'usage',
-      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, prompt_tokens_details: {} },
     });
     // Only one usage chunk, even though two chunks carried usageMetadata.
     expect(chunks.filter((c) => c.type === 'usage')).toHaveLength(1);
+  });
+
+  it('reports cachedContentTokenCount from the last usage chunk as cached tokens', async () => {
+    const { client } = makeFakeStreamingGeminiClient([
+      {
+        candidates: [{ content: { parts: [{ text: 'hi' }] } }],
+        usageMetadata: {
+          promptTokenCount: 100,
+          cachedContentTokenCount: 80,
+          candidatesTokenCount: 2,
+          totalTokenCount: 102,
+        },
+      },
+    ]);
+
+    const chunks = await collect(
+      fromGemini(client).chat.completions.createStream!(
+        {
+          model: 'gemini-3.1-flash-lite',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks.at(-1)).toEqual({
+      type: 'usage',
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 2,
+        total_tokens: 102,
+        prompt_tokens_details: { cached_tokens: 80 },
+      },
+    });
   });
 
   it('throws LLMError(validation) when the client has no generateContentStream', async () => {

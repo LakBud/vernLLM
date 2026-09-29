@@ -3,14 +3,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { fromGemini, type GeminiClient } from '../../../../src/adapters/index.js';
 import { LLMError } from '../../../../src/types/index.js';
 
-function makeFakeGeminiClient(text: string) {
+function makeFakeGeminiClient(
+  text: string,
+  usageMetadata: Record<string, number> = {
+    promptTokenCount: 4,
+    candidatesTokenCount: 6,
+    totalTokenCount: 10,
+  },
+) {
   const generateContent = vi.fn<GeminiClient['models']['generateContent']>(async (_params) => ({
     candidates: [{ content: { parts: [{ text }] } }],
-    usageMetadata: {
-      promptTokenCount: 4,
-      candidatesTokenCount: 6,
-      totalTokenCount: 10,
-    },
+    usageMetadata,
   }));
 
   return { client: { models: { generateContent } }, generateContent };
@@ -90,6 +93,28 @@ describe('fromGemini', () => {
       prompt_tokens: 4,
       completion_tokens: 6,
       total_tokens: 10,
+      prompt_tokens_details: {},
+    });
+  });
+
+  it('reports cachedContentTokenCount as cached tokens, inside the prompt count', async () => {
+    const { client } = makeFakeGeminiClient('x', {
+      promptTokenCount: 100,
+      cachedContentTokenCount: 80,
+      candidatesTokenCount: 6,
+      totalTokenCount: 106,
+    });
+
+    const result = await fromGemini(client).chat.completions.create(
+      { model: 'm', temperature: 0.2, max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage).toEqual({
+      prompt_tokens: 100,
+      completion_tokens: 6,
+      total_tokens: 106,
+      prompt_tokens_details: { cached_tokens: 80 },
     });
   });
 

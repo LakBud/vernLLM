@@ -120,7 +120,12 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
       headline: 'Real SDK works',
       score: 9,
     });
-    expect(result.usage).toEqual({ prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 });
+    expect(result.usage).toEqual({
+      prompt_tokens: 30,
+      completion_tokens: 12,
+      total_tokens: 42,
+      prompt_tokens_details: {},
+    });
 
     const sent = at(server.requests, 0);
     expect(sent.body).toMatchObject({
@@ -557,7 +562,7 @@ describe('Anthropic adapter integration, thinking, caching and forced tool_choic
     });
   });
 
-  it('counts real cache writes toward usage and the rate limiter, and leaves cache reads out', async () => {
+  it('counts real cache reads and writes in usage, but leaves reads out of the rate limiter', async () => {
     server = await startRealSdkServer([
       {
         body: {
@@ -571,6 +576,7 @@ describe('Anthropic adapter integration, thinking, caching and forced tool_choic
             input_tokens: 10,
             cache_creation_input_tokens: 2000,
             cache_read_input_tokens: 8000,
+            cache_creation: { ephemeral_5m_input_tokens: 1500, ephemeral_1h_input_tokens: 500 },
             output_tokens: 5,
           },
         },
@@ -593,7 +599,176 @@ describe('Anthropic adapter integration, thinking, caching and forced tool_choic
     await llm.call({ userContent: 'hi', jsonMode: false });
 
     expect(onUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ promptTokens: 2010, completionTokens: 5, totalTokens: 2015 }),
+      expect.objectContaining({
+        promptTokens: 10010,
+        completionTokens: 5,
+        totalTokens: 10015,
+        cacheReadTokens: 8000,
+        cacheWriteTokens: 2000,
+        cacheWriteTokensByTtl: { '5m': 1500, '1h': 500 },
+      }),
+    );
+    // Anthropic's input rate limit skips cache reads, so 8000 of the 10015 are not released.
+    expect(release).toHaveBeenCalledWith(2015, true);
+  });
+
+  it('counts streamed cache reads and writes in usage, but leaves reads out of the rate limiter', async () => {
+    server = await startRealSdkServer([
+      {
+        raw: sseRaw([
+          {
+            event: 'message_start',
+            data: {
+              type: 'message_start',
+              message: {
+                usage: {
+                  input_tokens: 10,
+                  cache_creation_input_tokens: 2000,
+                  cache_read_input_tokens: 8000,
+                  cache_creation: {
+                    ephemeral_5m_input_tokens: 1500,
+                    ephemeral_1h_input_tokens: 500,
+                  },
+                },
+              },
+            },
+          },
+          {
+            event: 'content_block_start',
+            data: {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '' },
+            },
+          },
+          {
+            event: 'content_block_delta',
+            data: {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'cached' },
+            },
+          },
+          { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+          { event: 'message_delta', data: { type: 'message_delta', usage: { output_tokens: 5 } } },
+          { event: 'message_stop', data: { type: 'message_stop' } },
+        ]),
+      },
+    ]);
+    const onUsage = vi.fn();
+    const release = vi.fn();
+    const llm = new VernLLM({
+      client: fromAnthropic(new Anthropic({ apiKey: 'test-key', baseURL: server.url })),
+      model: 'claude-test',
+      onUsage,
+      rateLimit: {
+        estimate: () => 50,
+        acquire: async () => ({ release, waitedMs: 0 }),
+        signalRateLimit: () => {},
+        reactToRateLimitHint: () => {},
+      },
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+    await drain(chunks);
+    await finalResult;
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptTokens: 10010,
+        completionTokens: 5,
+        totalTokens: 10015,
+        cacheReadTokens: 8000,
+        cacheWriteTokens: 2000,
+        cacheWriteTokensByTtl: { '5m': 1500, '1h': 500 },
+      }),
+    );
+    expect(release).toHaveBeenCalledWith(2015, true);
+  });
+
+  it('takes the cumulative input totals from a real message_delta over message_start', async () => {
+    server = await startRealSdkServer([
+      {
+        raw: sseRaw([
+          {
+            event: 'message_start',
+            data: {
+              type: 'message_start',
+              message: {
+                usage: {
+                  input_tokens: 10,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 0,
+                },
+              },
+            },
+          },
+          {
+            event: 'content_block_start',
+            data: {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '' },
+            },
+          },
+          {
+            event: 'content_block_delta',
+            data: {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'cached' },
+            },
+          },
+          { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+          {
+            event: 'message_delta',
+            data: {
+              type: 'message_delta',
+              usage: {
+                output_tokens: 5,
+                input_tokens: 10,
+                cache_creation_input_tokens: 2000,
+                cache_read_input_tokens: 8000,
+              },
+            },
+          },
+          { event: 'message_stop', data: { type: 'message_stop' } },
+        ]),
+      },
+    ]);
+    const onUsage = vi.fn();
+    const release = vi.fn();
+    const llm = new VernLLM({
+      client: fromAnthropic(new Anthropic({ apiKey: 'test-key', baseURL: server.url })),
+      model: 'claude-test',
+      onUsage,
+      rateLimit: {
+        estimate: () => 50,
+        acquire: async () => ({ release, waitedMs: 0 }),
+        signalRateLimit: () => {},
+        reactToRateLimitHint: () => {},
+      },
+    });
+
+    const { chunks, finalResult } = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+    });
+    await drain(chunks);
+    await finalResult;
+
+    expect(onUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptTokens: 10010,
+        totalTokens: 10015,
+        cacheReadTokens: 8000,
+        cacheWriteTokens: 2000,
+      }),
     );
     expect(release).toHaveBeenCalledWith(2015, true);
   });

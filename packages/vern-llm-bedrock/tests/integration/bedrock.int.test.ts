@@ -34,6 +34,7 @@ describe('Bedrock adapter integration', () => {
       prompt_tokens: 12,
       completion_tokens: 8,
       total_tokens: 20,
+      prompt_tokens_details: {},
     });
 
     expect(bedrock.converse).toHaveBeenCalledWith(

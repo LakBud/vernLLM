@@ -16,6 +16,50 @@ function makeFakeStreamingBedrockClient(events: unknown[], onReturn?: () => void
 }
 
 describe('fromBedrock().chat.completions.createStream', () => {
+  it('folds cache counts into the streamed usage chunk and reports the split', async () => {
+    const { client } = makeFakeStreamingBedrockClient([
+      { messageStart: { role: 'assistant' } },
+      { messageStop: { stopReason: 'end_turn' } },
+      {
+        metadata: {
+          usage: {
+            inputTokens: 5,
+            outputTokens: 3,
+            totalTokens: 5008,
+            cacheReadInputTokens: 4000,
+            cacheWriteInputTokens: 1000,
+            cacheDetails: [{ ttl: '1h', inputTokens: 1000 }],
+          },
+        },
+      },
+    ]);
+
+    const chunks = await collect(
+      fromBedrock(client).chat.completions.createStream!(
+        {
+          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toContainEqual({
+      type: 'usage',
+      usage: {
+        prompt_tokens: 5005,
+        completion_tokens: 3,
+        total_tokens: 5008,
+        prompt_tokens_details: {
+          cached_tokens: 4000,
+          cache_write_tokens: 1000,
+          cache_write_tokens_by_ttl: { '1h': 1000 },
+        },
+      },
+    });
+  });
+
   it('translates text deltas into text-delta WireStreamChunks', async () => {
     const { client } = makeFakeStreamingBedrockClient([
       { messageStart: { role: 'assistant' } },
@@ -42,7 +86,15 @@ describe('fromBedrock().chat.completions.createStream', () => {
     expect(chunks).toEqual([
       { type: 'text-delta', delta: 'Hello, ' },
       { type: 'text-delta', delta: 'world!' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 3,
+          total_tokens: 8,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
   });
 
@@ -82,7 +134,15 @@ describe('fromBedrock().chat.completions.createStream', () => {
       { type: 'tool_call_delta', index: 0, id: 'tool_1', name: 'get_weather' },
       { type: 'tool_call_delta', index: 0, argumentsDelta: '{"ci' },
       { type: 'tool_call_delta', index: 0, argumentsDelta: 'ty":"NYC"}' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 4,
+          total_tokens: 9,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
   });
 
@@ -118,7 +178,15 @@ describe('fromBedrock().chat.completions.createStream', () => {
     expect(chunks).toEqual([
       { type: 'text-delta', delta: '{"answer":' },
       { type: 'text-delta', delta: '"42"}' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 2,
+          total_tokens: 7,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
 
     const [sentRequest] = converseStream.mock.calls[0] as [Record<string, unknown>, unknown];
@@ -173,7 +241,15 @@ describe('fromBedrock().chat.completions.createStream', () => {
     // "Sure, I'll extract that.{"answer":"42"}", which isn't valid JSON.
     expect(chunks).toEqual([
       { type: 'text-delta', delta: '{"answer":"42"}' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 2,
+          total_tokens: 7,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
   });
 
@@ -222,7 +298,15 @@ describe('fromBedrock().chat.completions.createStream', () => {
 
     expect(chunks).toEqual([
       { type: 'text-delta', delta: '{"answer":"42"}' },
-      { type: 'usage', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 2,
+          total_tokens: 7,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
   });
 

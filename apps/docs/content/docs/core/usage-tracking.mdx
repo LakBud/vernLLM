@@ -21,12 +21,18 @@ interface TokenUsage {
   completionTokens: number;
   totalTokens: number;
   reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  cacheWriteTokensByTtl?: Readonly<Record<string, number>>;
   requestId: string;
   model: string;
   provider?: string;
 }
 ```
 
+- **`promptTokens`** is every input token the provider processed: uncached input plus cache reads
+  plus cache writes. This is the same meaning on every adapter, and matches OpenAI, Gemini and the
+  OpenTelemetry `gen_ai.usage.input_tokens` convention.
 - **`requestId`** is whatever you passed to `call({ requestId: '...' })`, or an auto generated UUID if
   you didn't. It is included in usage callbacks and internal logging, making it useful for correlating
   a usage record back to the originating request, joining usage data with application logs, tracing
@@ -41,6 +47,9 @@ interface TokenUsage {
   the provider reports a separate figure for internal reasoning. See the `budgetTokens` row in the
   [Call Params reference](/docs/API-reference/call-params) for how to set a limit and per provider
   notes on when this field is populated.
+- **`cacheReadTokens`**, **`cacheWriteTokens`** and **`cacheWriteTokensByTtl`** split
+  `promptTokens`, and are subsets of it, never added on top. Each is `undefined` when the provider
+  doesn't report it. See [Cache tokens](#cache-tokens).
 
 <Callout type="info">
   `onUsage`/`onUsageFailure` are sugar over the `'usage'`/`'usage_failure'` events documented in
@@ -79,6 +88,40 @@ const llm = new VernLLM({
   `provider` is the configured instance label, while `model` describes the model that actually
   served the request. Do not assume that the instance's default model or provider label is
   necessarily the one represented by a particular usage record when per call overrides are involved.
+</Callout>
+
+## Cache tokens
+
+Providers price cached input differently from fresh input, so `promptTokens` alone can't give an
+exact cost. The three cache fields say how much of it was read from the cache, written to it, and
+for how long the writes are kept.
+
+| Adapter           | `cacheReadTokens`                                                                | `cacheWriteTokens`              | `cacheWriteTokensByTtl`              |
+| ----------------- | -------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------ |
+| OpenAI compatible | `prompt_tokens_details.cached_tokens`, else `prompt_cache_hit_tokens` (DeepSeek) | `cache_write_tokens` when sent  | When sent                            |
+| Anthropic         | `cache_read_input_tokens`                                                        | `cache_creation_input_tokens`   | `cache_creation`, `5m` and `1h`      |
+| Gemini            | `cachedContentTokenCount`                                                        | Not reported                    | Not reported                         |
+| Bedrock           | `cacheReadInputTokens`                                                           | `cacheWriteInputTokens`         | `cacheDetails`                       |
+| `fromFetch`       | The mapper's `cacheReadTokens`                                                   | The mapper's `cacheWriteTokens` | The mapper's `cacheWriteTokensByTtl` |
+
+A count of `0` means the provider reported none, and `undefined` means it didn't say. The TTL keys
+are the provider's own labels, such as `'5m'` and `'1h'`. Write prices depend on the TTL, for
+example a 5 minute write on Anthropic costs 1.25x base input and a 1 hour write 2x.
+
+To price each part, take the uncached input as what is left after both cache counts:
+
+```ts title="usage-cache-pricing.ts"
+onUsage: ({ promptTokens, cacheReadTokens = 0, cacheWriteTokens = 0, completionTokens }) => {
+  const uncached = promptTokens - cacheReadTokens - cacheWriteTokens;
+
+  billing.record({ uncached, cacheReadTokens, cacheWriteTokens, completionTokens });
+},
+```
+
+<Callout type="info">
+  Anthropic's input rate limit leaves cache reads out, so `fromAnthropic` reconciles the token rate
+  limiter against the total less `cacheReadTokens`. See [Rate
+  Limiting](/docs/core/rate-limiting#cache-reads).
 </Callout>
 
 ## When it does and doesn't fire
@@ -180,3 +223,6 @@ const llm = new VernLLM({
   },
 });
 ```
+
+This prices every prompt token at one rate. With prompt caching on, split out the cache tokens as
+shown in [Cache tokens](#cache-tokens), since they are priced differently.

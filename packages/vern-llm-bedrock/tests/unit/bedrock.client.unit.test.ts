@@ -164,7 +164,15 @@ describe('fromBedrock, driving a BedrockRuntimeClient', () => {
 
     expect(await drain(client)).toEqual([
       { type: 'text-delta', delta: 'hey' },
-      { type: 'usage', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 1,
+          completion_tokens: 1,
+          total_tokens: 2,
+          prompt_tokens_details: {},
+        },
+      },
     ]);
   });
 
