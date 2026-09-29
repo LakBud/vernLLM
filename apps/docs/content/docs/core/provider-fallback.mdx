@@ -73,6 +73,9 @@ interface FallbackTarget {
 }
 ```
 
+Target names must be unique across the primary and every fallback, defaults included. Duplicates
+throw at construction, since usage and events identify a target by its name.
+
 `fallback` accepts either a single `FallbackTarget` or an array. Each target needs its own `client`
 and `model`, everything else is optional. A per call `model` override applies to the primary only,
 since it names a model on the primary's provider. Fallback targets always run their own `model`. Retry and timeout knobs left unset inherit the parent

@@ -5,6 +5,7 @@ import {
   buildExecutors,
   type ExecutorFactoryShared,
 } from '../../../src/internal/executorFactory.js';
+import { LLMError } from '../../../src/types/errors.js';
 import { createMockClient } from '../../helpers.js';
 
 import type { FallbackTarget } from '../../../src/types/index.js';
@@ -71,6 +72,40 @@ describe('buildExecutors, naming', () => {
 
     expect(executors[0]!.providerName).toBe('custom-primary');
     expect(executors[1]!.providerName).toBe('custom-fallback');
+  });
+
+  it('throws when a fallback reuses the primary name', () => {
+    expect(() =>
+      buildExecutors(target({ name: 'claude' }), [target({ name: 'claude' })], shared()),
+    ).toThrow(/target name "claude" is used by more than one target/);
+  });
+
+  it('throws when two fallbacks share a name', () => {
+    expect(() =>
+      buildExecutors(target(), [target({ name: 'x' }), target({ name: 'x' })], shared()),
+    ).toThrow(/target name "x"/);
+  });
+
+  it("throws when a hand set name matches another target's default", () => {
+    // Primary defaults to shared.providerName, so a fallback named after it collides.
+    expect(() =>
+      buildExecutors(target(), [target({ name: 'primary' })], shared({ providerName: 'primary' })),
+    ).toThrow(/target name "primary"/);
+    expect(() =>
+      buildExecutors(target(), [target(), target({ name: 'fallback[0]' })], shared()),
+    ).toThrow(/target name "fallback\[0\]"/);
+  });
+
+  it('throws a plain Error, not an LLMError', () => {
+    let thrown: unknown;
+    try {
+      buildExecutors(target({ name: 'a' }), [target({ name: 'a' })], shared());
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(LLMError);
   });
 });
 
