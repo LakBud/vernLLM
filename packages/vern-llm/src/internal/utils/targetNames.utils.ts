@@ -18,7 +18,7 @@ export function resolveTargetNames(
   const duplicate = names.find((name, i) => names.indexOf(name) !== i);
   if (duplicate !== undefined) {
     throw new Error(
-      `[VernLLM] target name "${duplicate}" is used by more than one target. Names identify targets in usage, events and \`targets\`.`,
+      `target name "${duplicate}" is used by more than one target; names identify targets in usage and events`,
     );
   }
 
