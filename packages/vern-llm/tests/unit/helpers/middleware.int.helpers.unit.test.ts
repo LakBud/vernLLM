@@ -15,7 +15,7 @@ import { baseRequest } from '../internal/execution/utils/middleware/middleware.h
 import type { CallMeta, CallResult, PreDispatchContext } from '../../../src/types/index.js';
 
 /**
- * Exercises `middleware.integration.helpers.ts` itself, the shared building blocks the
+ * Exercises `middleware.int.helpers.ts` itself, the shared building blocks the
  * middleware integration tests stand on. A wrong helper would make those tests pass for the
  * wrong reason, so each one is checked here directly, both on its own and against a real
  * `VernLLM` call where that is the whole point of the helper.
