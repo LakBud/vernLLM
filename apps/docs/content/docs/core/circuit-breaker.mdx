@@ -251,6 +251,18 @@ llm.getCircuitStates();
 Each target's state is independent. Opening the primary breaker does not open the fallback breaker,
 and opening a fallback breaker does not affect the primary.
 
+A fallback target's `circuitBreaker` accepts a `CircuitBreakerAdapter` too, so its health can be
+shared across instances or processes the same way as a primary's.
+
+```ts title="circuit-breaker-fallback-shared.ts"
+const llm = new VernLLM({
+  client: anthropic,
+  model: 'claude-opus-5-5',
+  circuitBreaker: redisBreaker,
+  fallback: [{ client: bedrock, model: bedrockOpusId, circuitBreaker: redisBedrockBreaker }],
+});
+```
+
 Within a single instance, the default is one shared circuit for every call regardless of which
 model was used. This includes calls that provide a per call `model` override. See [Per Call Overrides](/docs/guides/per-call-overrides).
 

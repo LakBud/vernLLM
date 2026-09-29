@@ -68,7 +68,7 @@ interface FallbackTarget {
   defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   defaultBudgetTokens?: number;
   nonRetryableStatus?: number[];
-  circuitBreaker?: boolean | CircuitBreakerOptions;
+  circuitBreaker?: boolean | CircuitBreakerOptions | CircuitBreakerAdapter;
   rateLimit?: RateLimitOptions;
 }
 ```
@@ -103,6 +103,10 @@ const llm = new VernLLM({
 instance. Each target's breaker and limiter, if any, are entirely its own. See
 [Circuit Breaker](/docs/core/circuit-breaker#scope) and
 [Rate Limiting](/docs/core/rate-limiting) for their individual behavior.
+
+A target's `circuitBreaker` also accepts a `CircuitBreakerAdapter`. Instances that pass the same
+adapter to the same fallback target share that target's health, for example across processes with
+a Redis backed adapter. See [Circuit Breaker](/docs/customization/circuit-breaker).
 
 ## Every target is independent
 
