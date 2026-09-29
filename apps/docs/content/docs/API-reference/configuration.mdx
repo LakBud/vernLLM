@@ -198,7 +198,10 @@ count as a circuit-breaker failure. Like `circuitBreaker` and `rateLimit`, a tar
 | `fallback`   | none                | A `FallbackTarget` or `FallbackTarget[]`, tried in declaration order after the primary and after each earlier target's retries are exhausted or abandoned. See [Provider Fallback](/docs/core/provider-fallback). |
 | `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget }) => 'next' \| 'stop'`. Decides whether a failed target is followed by the next one.                                                                                                     |
 
-Each `FallbackTarget` needs its own `client` and `model`. `name`, `maxRetries`, `timeoutMs`,
+Each `FallbackTarget` needs its own `client` and `model`. Target names, defaults included, must be
+unique across the primary and every fallback, or the constructor throws.
+
+`name`, `maxRetries`, `timeoutMs`,
 `chunkIdleTimeoutMs`, `readerStallTimeoutMs`, `baseDelayMs`, `maxRetryAfterMs`, `defaultMaxTokens`, `defaultTemperature`,
 `nonRetryableStatus`, and `detectSoftFailure` inherit the parent instance's resolved value when
 omitted.

@@ -9,10 +9,10 @@ page only covers the ones that aren't.
 
 ## 3.0.0: Adapters, streaming, tools, rate limits, usage, and provider request changes
 
-Six changes affect code that works today: adapters import from `vern-llm/adapters`, `fromGemini`
+Seven changes affect code that works today: adapters import from `vern-llm/adapters`, `fromGemini`
 takes the top level client only, `fromBedrock` moved to `vern-llm-bedrock`, a `break` out of
-`chunks` cancels the stream, tool arguments come back as the `argumentsSchema` output, and invalid
-rate limits throw. The rest is type level, one usage count, and requests the provider
+`chunks` cancels the stream, tool arguments come back as the `argumentsSchema` output, invalid
+rate limits throw, and target names must be unique. The rest is type level, one usage count, and requests the provider
 already rejects. Skip to what applies to you:
 [adapters import from `vern-llm/adapters`](#300-adapters-import-from-vern-llmadapters),
 [`fromGemini` takes `ai`](#300-fromgemini-takes-ai),
@@ -20,6 +20,7 @@ already rejects. Skip to what applies to you:
 [stopping a stream early cancels it](#300-stopping-a-stream-early-cancels-it),
 [tool arguments are the `argumentsSchema` output](#300-tool-arguments-are-the-argumentsschema-output),
 [invalid rate limits throw](#300-invalid-rate-limits-throw),
+[target names must be unique](#300-target-names-must-be-unique),
 [new union members](#300-new-union-members),
 [Anthropic prompt tokens include cache writes](#300-anthropic-prompt-tokens-include-cache-writes),
 [Claude forced `tool_choice`](#300-claude-models-that-reject-a-forced-tool_choice), and
@@ -115,6 +116,32 @@ negative, `NaN` or `Infinity` limit, a `requestsPerMinute` or `tokensPerMinute` 
 fractional `maxConcurrent` or `maxQueueSize`, a `maxQueueMs` past `2147483647`, and `aimd` without
 `requestsPerMinute`. `0` still means unlimited, or no queue timeout. See
 [Rate Limiting](/docs/core/rate-limiting#options-reference) for the accepted ranges.
+
+### 3.0.0: Target names must be unique
+
+`VernLLM` now throws a plain `Error` at construction when two targets share a name. The primary
+and every fallback are checked, defaults included, so a fallback named `primary` collides with an
+unnamed primary, and one named `fallback[0]` collides with the first unnamed fallback:
+
+```ts
+// Before: accepted, usage and events for both targets reported as `claude`
+new VernLLM({
+  client,
+  model,
+  name: 'claude',
+  fallback: { client: bedrock, model, name: 'claude' },
+});
+
+// After: give each target its own name
+new VernLLM({
+  client,
+  model,
+  name: 'claude',
+  fallback: { client: bedrock, model, name: 'bedrock' },
+});
+```
+
+Names identify targets in usage, events and observability, so a shared name merged their data.
 
 ### 3.0.0: New union members
 

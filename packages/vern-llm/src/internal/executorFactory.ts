@@ -4,6 +4,7 @@ import { RetryBudget } from './retryBudget.js';
 import { resolveAdapterInfo } from './utils/adapterInfo.utils.js';
 import { buildCircuitBreaker } from './utils/circuit-breaker/circuitBreakerAdapter.utils.js';
 import { buildRateLimit } from './utils/rate-limit/rateLimitAdapter.utils.js';
+import { resolveTargetNames } from './utils/targetNames.utils.js';
 
 import type { Logger } from '../logger.js';
 import type { DetectSoftFailure } from '../types/call.js';
@@ -53,11 +54,11 @@ export function buildExecutors(
   shared: ExecutorFactoryShared,
 ): CallExecutor[] {
   const targets = [primaryTarget, ...declaredFallbacks];
+  const names = resolveTargetNames(targets, shared.providerName);
 
   return targets.map((target, i) => {
     const isFallback = i > 0;
-    // `-1` for the primary, matching `FallbackAttempt.index`.
-    const name = target.name ?? (isFallback ? `fallback[${i - 1}]` : shared.providerName);
+    const name = names[i]!;
 
     // Built before the executor: onStateChange fires from inside the
     // breaker itself, which the executor is merely handed a reference to.
