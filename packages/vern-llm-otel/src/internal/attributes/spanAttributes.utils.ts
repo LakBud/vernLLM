@@ -1,3 +1,5 @@
+import { stringify } from '../content/json.utils.js';
+import { truncate } from '../content/truncate.utils.js';
 import {
   ATTR,
   NO_ATTEMPT_REASON,
@@ -9,7 +11,7 @@ import {
 import { isCount, isNonEmptyString, put } from './values.utils.js';
 
 import type { Attributes } from '@opentelemetry/api';
-import type { CallMeta, WireCallRequest } from 'vern-llm';
+import type { CallMeta, JsonValue, WireCallRequest } from 'vern-llm';
 
 // Everything here is a pure function over plain values, so it is testable without an
 // OpenTelemetry SDK.
@@ -94,6 +96,10 @@ export interface UsageInput {
   promptTokens?: number;
   completionTokens?: number;
   reasoningTokens?: number;
+  /** A subset of `promptTokens`. */
+  cacheReadTokens?: number;
+  /** A subset of `promptTokens`. */
+  cacheWriteTokens?: number;
 }
 
 /** Token attributes for the attempt that spent them. Skips anything not a finite, non negative number. */
@@ -105,6 +111,10 @@ export function usageAttributes(usage: UsageInput, genAiConventions: boolean): A
   if (isCount(usage.completionTokens)) attrs[ATTR.usageOutputTokens] = usage.completionTokens;
   if (isCount(usage.reasoningTokens))
     attrs[ATTR.usageReasoningOutputTokens] = usage.reasoningTokens;
+  if (isCount(usage.cacheReadTokens)) attrs[ATTR.usageCacheReadInputTokens] = usage.cacheReadTokens;
+  if (isCount(usage.cacheWriteTokens)) {
+    attrs[ATTR.usageCacheWriteInputTokens] = usage.cacheWriteTokens;
+  }
 
   return attrs;
 }
@@ -177,6 +187,30 @@ export function callEndAttributes(input: CallEndInput): Attributes {
   put(attrs, VERNLLM_ATTR.noAttemptReason, input.noAttemptReason);
   if (isNonEmptyString(input.shortCircuitedBy)) {
     attrs[VERNLLM_ATTR.shortCircuitBy] = input.shortCircuitedBy;
+  }
+
+  return attrs;
+}
+
+export interface CustomEventInput {
+  source: string;
+  data?: JsonValue;
+}
+
+/**
+ * Attributes for a `custom` span event. `data` is arbitrary middleware output, so it is left out
+ * unless `options.data` is set, and is cut to `maxLength` when it is.
+ */
+export function customEventAttributes(
+  event: CustomEventInput,
+  options: { data: boolean; maxLength: number },
+): Attributes {
+  const attrs: Attributes = {};
+  if (isNonEmptyString(event.source)) attrs[VERNLLM_ATTR.eventSource] = event.source;
+
+  if (options.data && event.data !== undefined) {
+    const json = stringify(event.data);
+    if (json !== undefined) put(attrs, VERNLLM_ATTR.eventData, truncate(json, options.maxLength));
   }
 
   return attrs;

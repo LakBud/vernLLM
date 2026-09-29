@@ -51,6 +51,22 @@ describe('names', () => {
   });
 });
 
+describe('cache and custom event names', () => {
+  it('names the cache attributes as the GenAI conventions define them', () => {
+    expect(ATTR.usageCacheReadInputTokens).toBe('gen_ai.usage.cache_read.input_tokens');
+    expect(ATTR.usageCacheWriteInputTokens).toBe('gen_ai.usage.cache_write.input_tokens');
+  });
+
+  it('keeps the older cache_creation name out, which the conventions renamed', () => {
+    expect(values(ATTR).some((name) => name.includes('cache_creation'))).toBe(false);
+  });
+
+  it('names the custom event attributes under vernllm', () => {
+    expect(VERNLLM_ATTR.eventSource).toBe('vernllm.event.source');
+    expect(VERNLLM_ATTR.eventData).toBe('vernllm.event.data');
+  });
+});
+
 describe('buckets', () => {
   it.each([
     ['token usage', TOKEN_USAGE_BUCKETS],

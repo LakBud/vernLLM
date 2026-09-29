@@ -1,3 +1,4 @@
+import { callScopeFor, noopEmit } from '../utils/callScope.utils.js';
 import { reportRejection } from '../utils/circuit-breaker/circuitBreaker.utils.js';
 
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
@@ -86,6 +87,8 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
       signal,
       state,
       own: {},
+      emit: noopEmit,
+      context: callScopeFor(state)?.context,
       ...middlewareNames,
     };
   }

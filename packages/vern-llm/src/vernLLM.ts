@@ -6,10 +6,15 @@ import { runReservedLogicalCall } from './internal/execution/reservedLogicalCall
 import { runOperation, type RunOperationDependencies } from './internal/execution/runOperation.js';
 import { combineSignals, setupCallSignal } from './internal/execution/utils/callSignal.utils.js';
 import { setupDeadline, stampDeadlineCode } from './internal/execution/utils/deadline.utils.js';
+import {
+  createCallScope,
+  type CallScopeDependencies,
+} from './internal/execution/utils/middleware/customEvent.utils.js';
 import { DEFAULT_MIDDLEWARE_TIMEOUT_MS } from './internal/execution/utils/middleware/middleware.utils.js';
 import { buildExecutors } from './internal/executorFactory.js';
 import { buildMiddlewarePipeline } from './internal/resolveMiddlewareOrder.js';
 import { buildCache } from './internal/utils/cache/cacheAdapter.utils.js';
+import { prepareCallContext, registerCallScope } from './internal/utils/callScope.utils.js';
 import {
   makeEventReporter,
   resolveExecutor,
@@ -75,6 +80,9 @@ export class VernLLM {
 
   private readonly logicalCallDependencies: LogicalCallDependencies;
   private readonly runOperationDependencies: RunOperationDependencies;
+
+  /** What each call's scope needs to deliver a `ctx.emit` event. */
+  private readonly callScopeDependencies: CallScopeDependencies;
 
   /**
    * Marks `cachedCall()`'s inner call params with its state bag, so the inner
@@ -173,6 +181,12 @@ export class VernLLM {
       middlewareTimeoutMs,
       logger: this.logger,
     };
+    this.callScopeDependencies = {
+      reportEvent,
+      middleware: pipeline.transformOrder,
+      middlewareTimeoutMs,
+      logger: this.logger,
+    };
     this.runOperationDependencies = {
       pipeline,
       primaryExecutor: this.executors[0]!,
@@ -247,6 +261,10 @@ export class VernLLM {
     const cachedCallState = this.cachedCallInnerParams.get(params);
     const isCachedCallInner = cachedCallState !== undefined;
 
+    // Validated before any timer or hook exists. The inner call of `cachedCall` skips it, since
+    // `cachedCall` already validated the same `context` and registered the scope.
+    const callContext = isCachedCallInner ? undefined : prepareCallContext(params.context);
+
     const {
       params: effectiveParams,
       signal: effectiveSignal,
@@ -256,6 +274,7 @@ export class VernLLM {
 
     // One bag per logical call, shared by `wrap` and `transform` on every target.
     const middlewareState = cachedCallState ?? createMiddlewareStateBag();
+    registerCallScope(middlewareState, createCallScope(this.callScopeDependencies, callContext));
 
     try {
       // `wrap` also spans the sole target breaker check, so a circuit open
@@ -377,6 +396,10 @@ export class VernLLM {
 
     const requestId = restCallParams.requestId ?? globalThis.crypto.randomUUID();
     const middlewareState = createMiddlewareStateBag();
+    registerCallScope(
+      middlewareState,
+      createCallScope(this.callScopeDependencies, prepareCallContext(restCallParams.context)),
+    );
 
     const resolvedCacheKey = await this.cacheOrchestrator.resolveCacheKey(cacheParams.cacheKey);
     const { holder: metaHolder, release: releaseMetaHolder } = claimMetaHolder(

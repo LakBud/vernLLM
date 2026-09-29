@@ -22,6 +22,8 @@ export function baseCtx(overrides: Partial<AttemptContext> = {}): AttemptContext
     capabilities: { supportsJsonObjectMode: true },
     state: { get: () => undefined, set: () => {} },
     own: {},
+    emit: vi.fn(),
+    context: undefined,
     registeredMiddlewareNames: [],
     transformMiddlewareNames: [],
     ...overrides,

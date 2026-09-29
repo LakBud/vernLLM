@@ -23,6 +23,8 @@ const fakeAttemptContext: AttemptContext = {
   capabilities: { supportsJsonObjectMode: true },
   state: createMiddlewareStateBag(),
   own: {},
+  emit: () => {},
+  context: undefined,
   registeredMiddlewareNames: [],
   transformMiddlewareNames: [],
 };

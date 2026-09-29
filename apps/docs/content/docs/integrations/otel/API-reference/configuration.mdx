@@ -20,6 +20,7 @@ plain `Error` at construction, never during a call.
 | `attributes`       | none              | Extra attributes for the call span, see [below](#attributes).                                                                                           |
 | `recordExceptions` | `false`           | Adds `exception` events, see [below](#recordexceptions).                                                                                                |
 | `middlewareEvents` | `false`           | Emits VernLLM `middleware` events as `vernllm.middleware` span events on the call span.                                                                 |
+| `customEvents`     | `true`            | Emits each event a middleware reports through `ctx.emit` as a span event, see [below](#customevents).                                                   |
 | `logger`           | A `ConsoleLogger` | A `Logger`, or `'silent'`, the same shape as `VernLLMOptions.logger`.                                                                                   |
 | `name`             | `'otel'`          | The middleware entry's name, shown in VernLLM `middleware` events.                                                                                      |
 | `priority`         | `-1000`           | See [Ordering and event delivery](#ordering-and-event-delivery).                                                                                        |
@@ -60,6 +61,17 @@ otelMiddleware({
 });
 ```
 
+The hook receives the call's `ctx`, so it can read [`ctx.context`](/docs/core/middleware#ctxcontext).
+Nothing from `context` is recorded unless you pick it here, since it often holds identity:
+
+```ts title="otel-attributes-context.ts"
+otelMiddleware({
+  attributes: (ctx) => ({
+    'app.tenant': typeof ctx.context?.tenantId === 'string' ? ctx.context.tenantId : undefined,
+  }),
+});
+```
+
 VernLLM has no conversation concept, and the conventions say not to invent an id, so
 `gen_ai.conversation.id` only exists when you provide it. The hook is sync and guarded: a throw is
 logged and adds nothing. Only strings, finite numbers, booleans, and arrays of one of those are
@@ -74,6 +86,21 @@ prompt text. A stack trace is a separate opt in, because a stack's first line ca
 ```ts title="otel-record-exceptions.ts"
 otelMiddleware({ recordExceptions: { stack: true } });
 ```
+
+## `customEvents`
+
+On by default. Each event a middleware reports through
+[`ctx.emit`](/docs/core/middleware#ctxemit) becomes a span event on the call span, named after the
+event, with `vernllm.event.source` set to the middleware that emitted it. The event's `data` is
+whatever the middleware passed, so it is left out unless you opt in:
+
+```ts title="otel-custom-events.ts"
+otelMiddleware({ customEvents: { data: true, maxLength: 2048 } });
+```
+
+`data` is recorded as JSON in `vernllm.event.data`, cut to `maxLength` characters (default 8192)
+with a truncation marker. `customEvents: false` records none. No metric is recorded for custom
+events, since their names are free form.
 
 ## Ordering and event delivery
 

@@ -5,6 +5,7 @@ import {
   otelMiddleware,
   otelMiddlewareRef,
   type CaptureContentOptions,
+  type CustomEventsOptions,
   type GenAiProviderName,
   type OtelMiddlewareOptions,
   type RecordExceptionsOptions,
@@ -33,6 +34,7 @@ describe('package entrypoint exports', () => {
       when: () => true,
     };
     const exceptions: RecordExceptionsOptions = { stack: false };
+    const customEvents: CustomEventsOptions = { data: false, maxLength: 4096 };
     const provider: GenAiProviderName = 'my.gateway';
     const known: GenAiProviderName = 'openai';
 
@@ -43,6 +45,7 @@ describe('package entrypoint exports', () => {
       captureContent: capture,
       middlewareEvents: false,
       recordExceptions: exceptions,
+      customEvents,
       logger: 'silent',
       name: 'otel',
       priority: -1000,

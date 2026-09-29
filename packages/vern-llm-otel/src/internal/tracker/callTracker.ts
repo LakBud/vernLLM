@@ -22,6 +22,7 @@ import {
   attemptStartAttributes,
   callEndAttributes,
   callStartAttributes,
+  customEventAttributes,
   noAttemptReasonOf,
   usageAttributes,
   usageFailureAttributes,
@@ -355,6 +356,11 @@ export class CallTracker {
           });
         }
         return;
+      case 'custom': {
+        const { customEvents } = this.deps.config;
+        if (customEvents) this.addEvent(event.name, customEventAttributes(event, customEvents));
+        return;
+      }
     }
   }
 
@@ -463,6 +469,8 @@ export class CallTracker {
       promptTokens: event.usage.promptTokens,
       completionTokens: event.usage.completionTokens,
       reasoningTokens: event.usage.reasoningTokens,
+      cacheReadTokens: event.usage.cacheReadTokens,
+      cacheWriteTokens: event.usage.cacheWriteTokens,
     };
 
     this.safely('markUsage', () =>

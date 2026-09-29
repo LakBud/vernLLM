@@ -49,6 +49,8 @@ function baseRecoverDelayParams(overrides: Partial<RecoverDelayParams> = {}): Re
       signal,
       state,
       own: {},
+      emit: () => {},
+      context: undefined,
       registeredMiddlewareNames: [],
       transformMiddlewareNames: [],
     }),

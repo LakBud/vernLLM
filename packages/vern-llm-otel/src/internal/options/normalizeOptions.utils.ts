@@ -1,4 +1,5 @@
 import { normalizeCapture } from './captureOptions.utils.js';
+import { normalizeCustomEvents } from './customEventsOptions.utils.js';
 import { normalizeExceptions } from './exceptionOptions.utils.js';
 import { normalizeProviderNames, resolveProviderName } from './providerNames.utils.js';
 import { optionalBoolean, optionalFunction } from './validate.utils.js';
@@ -27,6 +28,7 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
   const validatedCapture = normalizeCapture(opts.captureContent);
   const capture = opts.genAiConventions === false ? undefined : validatedCapture;
   const exceptions = normalizeExceptions(opts.recordExceptions);
+  const customEvents = normalizeCustomEvents(opts.customEvents);
   const providerNames = normalizeProviderNames(opts.providerNames);
 
   if (opts.name !== undefined && (typeof opts.name !== 'string' || opts.name.trim() === '')) {
@@ -57,6 +59,7 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
     normalizeModel: opts.normalizeModel,
     attributes: opts.attributes,
     middlewareEvents: opts.middlewareEvents ?? false,
+    customEvents,
     exceptions,
     logger: opts.logger,
     name: opts.name ?? DEFAULT_NAME,

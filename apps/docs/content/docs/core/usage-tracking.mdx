@@ -27,6 +27,7 @@ interface TokenUsage {
   requestId: string;
   model: string;
   provider?: string;
+  context?: CallContext;
 }
 ```
 
@@ -43,6 +44,8 @@ interface TokenUsage {
 - **`provider`** is the configured `VernLLMOptions.name` instance label, default `'primary'`,
   assigned by VernLLM to usage records. It is a label for the instance that produced the usage
   data, not a signal of request routing or provider selection.
+- **`context`** is the call's [`context`](/docs/core/middleware#ctxcontext), when it gave one. It
+  lets `onUsage` attribute spend to a tenant without looking the `requestId` up.
 - **`reasoningTokens`** is a subset of `completionTokens`, never added on top of it. Present when
   the provider reports a separate figure for internal reasoning. See the `budgetTokens` row in the
   [Call Params reference](/docs/API-reference/call-params) for how to set a limit and per provider

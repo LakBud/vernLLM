@@ -1,3 +1,4 @@
+import type { CallContext } from './call.js';
 import type { LLMError } from './errors.js';
 
 export interface UsageInfo {
@@ -56,6 +57,8 @@ export interface TokenUsage {
    * values.
    */
   usedFallback?: boolean;
+  /** The call's `context`. */
+  context?: CallContext;
 }
 
 export type OnUsage = (usage: TokenUsage) => void;

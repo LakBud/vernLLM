@@ -151,7 +151,12 @@ describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () 
         client: okClient(),
         model: 'm',
         maxRetries: 0,
-        circuitBreaker: makeBreaker({ keyPrefix: prefix, threshold: 1, cooldownMs: 30_000 }),
+        circuitBreaker: makeBreaker({
+          keyPrefix: prefix,
+          threshold: 1,
+          cooldownMs: 30_000,
+          prepareTimeoutMs: 5000,
+        }),
       });
 
       await expect(llm.call({ userContent: 'hi' })).rejects.toMatchObject({ type: 'circuit_open' });

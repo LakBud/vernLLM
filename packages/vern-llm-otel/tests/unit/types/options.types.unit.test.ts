@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from 'vitest';
 
 import type { CaptureContentOptions } from '../../../src/types/capture.js';
+import type { CustomEventsOptions } from '../../../src/types/customEvents.js';
 import type { RecordExceptionsOptions } from '../../../src/types/exceptions.js';
 import type { OtelMiddlewareOptions } from '../../../src/types/options.js';
 import type { GenAiProviderName } from '../../../src/types/provider.js';
@@ -19,6 +20,12 @@ describe('OtelMiddlewareOptions', () => {
     >();
     expectTypeOf<OtelMiddlewareOptions['recordExceptions']>().toEqualTypeOf<
       boolean | RecordExceptionsOptions | undefined
+    >();
+  });
+
+  it('lets custom span events be a flag or a config object', () => {
+    expectTypeOf<OtelMiddlewareOptions['customEvents']>().toEqualTypeOf<
+      boolean | CustomEventsOptions | undefined
     >();
   });
 

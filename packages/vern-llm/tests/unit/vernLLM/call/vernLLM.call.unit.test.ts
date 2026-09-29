@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { LLMError } from '../../../../src/types/index.js';
+import { LLMError, type VernLLMMiddleware } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, createMockClient, jsonResponse, textResponse } from '../../../helpers.js';
 
@@ -315,5 +315,156 @@ describe('VernLLM.call, timeout handling', () => {
     });
 
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('VernLLM.call, context', () => {
+  const call = { userContent: 'hi', jsonMode: false as const };
+
+  function spied() {
+    const hook = vi.fn();
+    const middleware: VernLLMMiddleware = {
+      name: 'spy',
+      enabled: () => {
+        hook('enabled');
+        return true;
+      },
+      wrap: async (_request, next) => {
+        hook('wrap');
+        return next();
+      },
+      transform: () => {
+        hook('transform');
+        return {};
+      },
+      dispatch: async (_request, next) => {
+        hook('dispatch');
+        await next();
+      },
+      onEvent: () => hook('onEvent'),
+    };
+
+    return { hook, middleware };
+  }
+
+  it.each([
+    ['null', null],
+    ['an array', [1]],
+    ['a string', 'tenant'],
+    ['a class instance', new (class Tenant {})()],
+    ['a function value', { a: () => 1 }],
+    ['an undefined value', { a: undefined }],
+    ['NaN', { a: Number.NaN }],
+  ])('rejects %s before any hook runs or any request is sent', async (_label, context) => {
+    const { client, create } = createMockClient([textResponse('ok')]);
+    const { hook, middleware } = spied();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+
+    const rejection = llm.call({ ...call, context: context as never });
+
+    await expect(rejection).rejects.toBeInstanceOf(LLMError);
+    await expect(rejection).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'invalid_context',
+      retryable: false,
+    });
+    expect(hook).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a cyclic context before any hook runs', async () => {
+    const { client, create } = createMockClient([textResponse('ok')]);
+    const { hook, middleware } = spied();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    await expect(llm.call({ ...call, context: cyclic as never })).rejects.toMatchObject({
+      code: 'invalid_context',
+    });
+    expect(hook).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('gives a stream call the same rejection, before it opens anything', async () => {
+    const { client, create } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await expect(llm.call({ ...call, stream: true, context: 5 as never })).rejects.toMatchObject({
+      code: 'invalid_context',
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an empty context and none at all', async () => {
+    const { client } = createMockClient([textResponse('a'), textResponse('b')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await expect(llm.call({ ...call, context: {} })).resolves.toBe('a');
+    await expect(llm.call(call)).resolves.toBe('b');
+  });
+
+  it('shows middleware a frozen copy, so mutating either side cannot change the other', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    const seen: unknown[] = [];
+    const original = { tenantId: 't1', nested: { n: 1 } };
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => {
+            original.tenantId = 'changed mid call';
+            seen.push(
+              ctx.context,
+              Object.isFrozen(ctx.context),
+              Object.isFrozen(ctx.context?.nested),
+            );
+            expect(() => {
+              (ctx.context as { tenantId: string }).tenantId = 'x';
+            }).toThrow(TypeError);
+            return next();
+          },
+        },
+      ],
+    });
+
+    await llm.call({ ...call, context: original });
+
+    expect(seen).toEqual([{ tenantId: 't1', nested: { n: 1 } }, true, true]);
+    expect(original.tenantId).toBe('changed mid call');
+  });
+
+  it('never sends context to the provider', async () => {
+    const { client, calls } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await llm.call({ ...call, context: { tenantId: 'secret-tenant', routing: { only: ['x'] } } });
+
+    expect(JSON.stringify(calls[0])).not.toContain('secret-tenant');
+    expect(calls[0]).not.toHaveProperty('context');
+  });
+
+  it('leaves ctx.context undefined when the call gave none', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    const seen: unknown[] = [];
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => {
+            seen.push(ctx.context);
+            return next();
+          },
+        },
+      ],
+    });
+
+    await llm.call(call);
+
+    expect(seen).toEqual([undefined]);
   });
 });

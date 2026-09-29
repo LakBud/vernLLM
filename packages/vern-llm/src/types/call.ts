@@ -23,6 +23,12 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 /**
+ * Plain JSON describing the request, e.g. tenant or routing constraints. Never sent to the
+ * provider.
+ */
+export type CallContext = { readonly [key: string]: JsonValue };
+
+/**
  * Content for an `assistant` turn in `history`. A parsed `JsonValue` from a `jsonMode` response can
  * go straight back in; it is stringified before sending.
  */
@@ -178,6 +184,9 @@ export interface LLMRequestShape<
    * may keep an older value.
    */
   meta?: { current?: CallMeta };
+
+  /** See `CallContext`. Read by middleware, events and usage. */
+  context?: CallContext;
 }
 
 export interface CallParams<T = unknown, Tools extends readonly ToolDefinition[] = ToolDefinition[]>

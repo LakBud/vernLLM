@@ -1,4 +1,4 @@
-import { optionalBoolean, optionalFunction } from './validate.utils.js';
+import { optionalBoolean, optionalFunction, resolveMaxLength } from './validate.utils.js';
 
 import type { CaptureContentOptions, ResolvedCapture } from '../../types/index.js';
 
@@ -22,16 +22,7 @@ export function normalizeCapture(
   optionalFunction(c.redact, 'captureContent.redact');
   optionalFunction(c.when, 'captureContent.when');
 
-  // Not `??`: an explicit null is a mistake to report, not a request for the default.
-  const maxLength = c.maxLength === undefined ? DEFAULT_MAX_LENGTH : c.maxLength;
-  const validLength =
-    typeof maxLength === 'number' &&
-    (maxLength === Number.POSITIVE_INFINITY || (Number.isInteger(maxLength) && maxLength > 0));
-  if (!validLength) {
-    throw new Error(
-      'otelMiddleware: captureContent.maxLength must be a positive integer or Infinity',
-    );
-  }
+  const maxLength = resolveMaxLength(c.maxLength, 'captureContent.maxLength', DEFAULT_MAX_LENGTH);
 
   const resolved = {
     input: c.input ?? true,
