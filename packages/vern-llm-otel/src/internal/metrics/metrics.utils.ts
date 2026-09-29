@@ -236,6 +236,8 @@ export function createMetrics(config: ConfigSlice, guard: Guard): Metrics {
         );
         return;
       case 'middleware':
+      // `name` is free form, so a metric keyed by it would have unbounded cardinality.
+      case 'custom':
         return;
     }
   };

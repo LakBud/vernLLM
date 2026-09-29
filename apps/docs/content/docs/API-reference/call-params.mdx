@@ -242,6 +242,12 @@ Provider-specific `jsonSchema` and `tools` compatibility is documented in [Combi
     `AbortSignal`, optional. Cancels the current call, including an in-flight attempt or pending
     retry delay. See [Cancellation](/docs/core/cancellation).
   </Card>
+  <Card title="context">
+    `{ [key: string]: JsonValue }`, optional. Plain JSON describing the request, such as a tenant or
+    routing constraints. Never sent to the provider. Read by middleware as `ctx.context` and carried
+    on events and usage. Anything else throws `invalid_params` with code `invalid_context`. See
+    [`ctx.context`](/docs/core/middleware#ctxcontext).
+  </Card>
   <Card title="meta">
     `{ current?: CallMeta }`, optional. With `fallback`, reports which target answered after
     `call()` resolves, for `stream: true` that's once `call()` returns `{ chunks, finalResult }`,

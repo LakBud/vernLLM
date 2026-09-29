@@ -67,6 +67,7 @@ export {
   type JsonModeDisabledCallParams,
   type JsonModeEnabledCallParams,
   type JsonValue,
+  type CallContext,
   type AssistantContent,
   type StreamEnabledCallParams,
   type StreamJsonModeDisabledCallParams,

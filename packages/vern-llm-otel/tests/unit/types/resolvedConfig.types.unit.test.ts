@@ -17,6 +17,9 @@ describe('ResolvedConfig', () => {
   it('uses undefined, not false, for a feature that is off', () => {
     expectTypeOf<ResolvedConfig['capture']>().toEqualTypeOf<ResolvedCapture | undefined>();
     expectTypeOf<ResolvedConfig['exceptions']>().toEqualTypeOf<{ stack: boolean } | undefined>();
+    expectTypeOf<ResolvedConfig['customEvents']>().toEqualTypeOf<
+      { data: boolean; maxLength: number } | undefined
+    >();
   });
 
   it('maps a target label, model, and adapter provider to a name that is always a string', () => {

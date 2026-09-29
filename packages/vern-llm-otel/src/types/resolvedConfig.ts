@@ -28,6 +28,8 @@ export interface ResolvedConfig {
   normalizeModel: ((model: string) => string) | undefined;
   attributes: ((ctx: PreDispatchContext) => Attributes | undefined) | undefined;
   middlewareEvents: boolean;
+  /** `undefined` when custom span events are off. */
+  customEvents: { data: boolean; maxLength: number } | undefined;
   /** `undefined` when exception recording is off. */
   exceptions: { stack: boolean } | undefined;
   logger: LoggerOption | undefined;

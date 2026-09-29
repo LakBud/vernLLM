@@ -1,3 +1,4 @@
+import { callScopeFor, noopEmit } from '../utils/callScope.utils.js';
 import { logError } from '../utils/logger.utils.js';
 import {
   emitEvent,
@@ -87,6 +88,8 @@ export async function runOperation(
         signal: params.signal,
         state,
         own: {},
+        emit: noopEmit,
+        context: callScopeFor(state)?.context,
         registeredMiddlewareNames: names,
         transformMiddlewareNames: transformNames,
       };
@@ -118,7 +121,11 @@ export async function runOperation(
       const onceNext = createOnceAsync(inner);
 
       try {
-        const result = await middleware.wrap(request, onceNext.call, withOwn(ctx, middleware));
+        const result = await middleware.wrap(
+          request,
+          onceNext.call,
+          withOwn(ctx, middleware, label),
+        );
 
         if (!onceNext.wasCalled()) {
           emitEvent(

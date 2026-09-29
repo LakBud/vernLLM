@@ -33,6 +33,8 @@ function fakeCtx(overrides: Partial<AttemptContext> = {}): AttemptContext {
     capabilities: { supportsJsonObjectMode: true },
     state: fakeState(),
     own: {},
+    emit: () => {},
+    context: undefined,
     registeredMiddlewareNames: [],
     transformMiddlewareNames: [],
     ...overrides,

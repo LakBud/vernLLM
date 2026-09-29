@@ -126,13 +126,16 @@ The currently defined caller input codes are:
 | `duplicate_tool_result_ids` | `invalid_params` | A `history` "tool" turn's `toolResults` had more than one entry for the same `toolCallId`.                                                                                                                                                                                                                                              |
 | `unknown_tool_result_ids`   | `invalid_params` | A `history` "tool" turn's `toolResults` referenced a `toolCallId` the preceding assistant turn never requested.                                                                                                                                                                                                                         |
 | `missing_tool_results`      | `invalid_params` | A `history` "tool" turn was missing a result for a `toolCallId` the preceding assistant turn did request.                                                                                                                                                                                                                               |
+| `invalid_context`           | `invalid_params` | The call's `context` isn't a plain JSON object. Thrown before any hook runs or request is sent. See [`ctx.context`](/docs/core/middleware#ctxcontext).                                                                                                                                                                                  |
 
 Everything else under `invalid_params` stays uncoded: the thrown `message` already names the exact
 problem, and a code only earns its place when a caller would realistically branch on it. These six
 are exactly the ones whose `message` already embeds structured data a caller might want directly
 instead of re-parsing it out of prose: a joined list of names/ids for the five history- and
 tools-shape checks, or the specific missing capability for `unsupported_capability`; see
-[`issues`](#issues) below for the typed payload each one carries.
+[`issues`](#issues) below for the typed payload each one carries. `invalid_context` is the one
+exception: it carries no `issues`, but a wrapper that forwards context from elsewhere may want to
+tell that fault apart from a bad request.
 
 The currently defined rate-limiting codes are:
 

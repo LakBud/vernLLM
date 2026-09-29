@@ -4,6 +4,7 @@ import {
   attemptStartAttributes,
   callEndAttributes,
   callStartAttributes,
+  customEventAttributes,
   noAttemptReasonOf,
   outputTypeOf,
   usageAttributes,
@@ -237,6 +238,42 @@ describe('usageAttributes', () => {
     ).toEqual({});
   });
 
+  it('maps cache reads and writes to the cache attributes', () => {
+    expect(
+      usageAttributes(
+        { promptTokens: 100, completionTokens: 5, cacheReadTokens: 60, cacheWriteTokens: 30 },
+        true,
+      ),
+    ).toEqual({
+      'gen_ai.usage.input_tokens': 100,
+      'gen_ai.usage.output_tokens': 5,
+      'gen_ai.usage.cache_read.input_tokens': 60,
+      'gen_ai.usage.cache_write.input_tokens': 30,
+    });
+  });
+
+  it('keeps a zero cache count, and sets each cache attribute on its own', () => {
+    expect(usageAttributes({ cacheReadTokens: 0 }, true)).toEqual({
+      'gen_ai.usage.cache_read.input_tokens': 0,
+    });
+    expect(usageAttributes({ cacheWriteTokens: 7 }, true)).toEqual({
+      'gen_ai.usage.cache_write.input_tokens': 7,
+    });
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, bad('5'), bad(null)])(
+    'skips a cache count that is not a finite non negative number (%s)',
+    (value) => {
+      expect(usageAttributes({ cacheReadTokens: value, cacheWriteTokens: value }, true)).toEqual(
+        {},
+      );
+    },
+  );
+
+  it('emits no cache attributes without GenAI conventions, which promise no gen_ai ones', () => {
+    expect(usageAttributes({ cacheReadTokens: 60, cacheWriteTokens: 30 }, false)).toEqual({});
+  });
+
   it('sets reasoning tokens only when defined', () => {
     const attrs = usageAttributes({ promptTokens: 1, completionTokens: 2 }, true);
     expect(attrs).not.toHaveProperty('gen_ai.usage.reasoning.output_tokens');
@@ -429,5 +466,81 @@ describe('callEndAttributes', () => {
     });
 
     expect(attrs).not.toHaveProperty('vernllm.fallback_index');
+  });
+});
+
+describe('usageFailureAttributes with cache tokens', () => {
+  it('records the cache split of tokens spent on a failed attempt, and marks the failure', () => {
+    expect(usageFailureAttributes({ promptTokens: 9, cacheReadTokens: 4 }, true)).toEqual({
+      'gen_ai.usage.input_tokens': 9,
+      'gen_ai.usage.cache_read.input_tokens': 4,
+      'vernllm.usage.failed': true,
+    });
+  });
+});
+
+describe('customEventAttributes', () => {
+  const on = { data: true, maxLength: 8192 };
+  const off = { data: false, maxLength: 8192 };
+
+  it('records the source and leaves data out unless asked', () => {
+    expect(customEventAttributes({ source: 'router', data: { a: 1 } }, off)).toEqual({
+      'vernllm.event.source': 'router',
+    });
+  });
+
+  it('records data as JSON when asked', () => {
+    expect(
+      customEventAttributes({ source: 'router', data: { a: 1, b: [true, null] } }, on),
+    ).toEqual({
+      'vernllm.event.source': 'router',
+      'vernllm.event.data': '{"a":1,"b":[true,null]}',
+    });
+  });
+
+  it.each([
+    ['a string', 'text', '"text"'],
+    ['zero', 0, '0'],
+    ['false', false, 'false'],
+    ['null', null, 'null'],
+  ])('records %s as data, since a falsy value is still a value', (_label, data, json) => {
+    expect(customEventAttributes({ source: 's', data }, on)['vernllm.event.data']).toBe(json);
+  });
+
+  it('leaves data off when the event carries none', () => {
+    expect(customEventAttributes({ source: 'router' }, on)).toEqual({
+      'vernllm.event.source': 'router',
+    });
+  });
+
+  it('cuts data to maxLength with the truncation marker', () => {
+    const attrs = customEventAttributes(
+      { source: 's', data: { text: 'x'.repeat(200) } },
+      { data: true, maxLength: 50 },
+    );
+
+    const data = attrs['vernllm.event.data'] as string;
+    expect(data.length).toBeLessThanOrEqual(50);
+    expect(data.endsWith('…[truncated]')).toBe(true);
+  });
+
+  it('leaves data out when not even one character fits next to the marker', () => {
+    expect(
+      customEventAttributes({ source: 's', data: { a: 1 } }, { data: true, maxLength: 3 }),
+    ).toEqual({ 'vernllm.event.source': 's' });
+  });
+
+  it('leaves data out instead of throwing when it cannot be serialized', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    expect(customEventAttributes({ source: 's', data: bad(cyclic) }, on)).toEqual({
+      'vernllm.event.source': 's',
+    });
+  });
+
+  it('skips a source that is not a non empty string', () => {
+    expect(customEventAttributes({ source: bad('') }, on)).toEqual({});
+    expect(customEventAttributes({ source: bad(undefined) }, on)).toEqual({});
   });
 });

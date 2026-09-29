@@ -1,4 +1,5 @@
 import type { CircuitState } from '../circuitBreaker.js';
+import type { CallContext, JsonValue } from './call.js';
 import type { LLMError } from './errors.js';
 import type { TokenUsage } from './usage.js';
 
@@ -20,6 +21,7 @@ export type VernLLMEvent =
       delayMs: number;
       retryAfterHonored: boolean;
       error: LLMError;
+      context?: CallContext;
     }
   | {
       kind: 'circuit_state';
@@ -32,6 +34,7 @@ export type VernLLMEvent =
       from: CircuitState;
       to: CircuitState;
       consecutiveFailures: number;
+      context?: CallContext;
     }
   | {
       kind: 'fallback';
@@ -47,6 +50,7 @@ export type VernLLMEvent =
       error: LLMError;
       /** Time spent on `from`, including its own retries, before giving up. */
       elapsedMs: number;
+      context?: CallContext;
     }
   | {
       kind: 'rate_limited';
@@ -58,6 +62,7 @@ export type VernLLMEvent =
       waitedMs: number;
       /** Which configured bucket was blocking this attempt just before it cleared. */
       reason: 'concurrency' | 'rpm' | 'tpm';
+      context?: CallContext;
     }
   | {
       kind: 'middleware';
@@ -67,6 +72,7 @@ export type VernLLMEvent =
       hook: 'transform' | 'wrap_short_circuit' | 'enabled_skip';
       /** For `hook: 'transform'` only: which top-level fields the merged patch touched. */
       patchedFields?: string[];
+      context?: CallContext;
     }
   | {
       /**
@@ -77,6 +83,7 @@ export type VernLLMEvent =
       kind: 'usage';
       requestId: string;
       usage: TokenUsage;
+      context?: CallContext;
     }
   | {
       /**
@@ -87,6 +94,18 @@ export type VernLLMEvent =
       requestId: string;
       usage: TokenUsage;
       error: LLMError;
+      context?: CallContext;
+    }
+  | {
+      /** Reported by a middleware through `ctx.emit`. */
+      kind: 'custom';
+      requestId: string;
+      /** Namespaced by convention, e.g. `router.decision`. */
+      name: string;
+      /** Label of the emitting middleware. */
+      source: string;
+      data?: JsonValue;
+      context?: CallContext;
     };
 
 export type OnEvent = (event: VernLLMEvent) => void;

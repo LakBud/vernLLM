@@ -546,6 +546,20 @@ describe('recordEvent', () => {
     expect((await harness.collect()).size).toBe(0);
   });
 
+  it('records nothing for a custom event, whose free form name would be unbounded cardinality', async () => {
+    const { harness, metrics } = setup();
+
+    metrics.recordEvent({
+      kind: 'custom',
+      requestId: 'r',
+      name: 'router.decision',
+      source: 'router',
+      data: { deployment: 'claude' },
+    });
+
+    expect((await harness.collect()).size).toBe(0);
+  });
+
   it('never puts a request id or an error message on any metric attribute', async () => {
     const { harness, metrics } = setup({ providerNames });
     const requestId = 'req-secret-123';

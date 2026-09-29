@@ -26,7 +26,7 @@ under `gen_ai.*`, which the spec owns.
 | `top_p`, `top_k`, stop sequences, seed, penalties, choice count       | Not emitted | Not on the wire request.                                                                        |
 | `response.model`, `response.id`, `finish_reasons`                     | Not emitted | VernLLM does not surface them, and reporting the requested model there would be wrong.          |
 | Input, output, and reasoning token usage                              | Emitted     | Reasoning tokens only when the provider reports them.                                           |
-| Cache read and cache creation tokens                                  | Not emitted | No data source in `TokenUsage`.                                                                 |
+| Cache read and cache write tokens                                     | Emitted     | Subsets of input tokens, only when the provider reports them. Not on the token usage metric.    |
 | `error.type` and span status                                          | Emitted     | Low cardinality, never the provider's message.                                                  |
 | `gen_ai.conversation.id`                                              | On request  | Set through the `attributes` hook, since VernLLM has no conversation concept.                   |
 | Content on span attributes                                            | Opt in      | See [Content Capture](/docs/integrations/otel/features/content-capture).                        |

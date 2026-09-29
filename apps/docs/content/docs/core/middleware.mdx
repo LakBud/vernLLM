@@ -200,7 +200,8 @@ A throwing, rejecting, or timed out `enabled` is logged and treated as `false`.
 
 Routed off the same event stream as the top-level `onEvent` option, filtered by that middleware's
 own `enabled`. Covers `'retry'`, `'rate_limited'`, `'fallback'`, `'circuit_state'`, `'usage'`,
-`'usage_failure'`, and the `'middleware'` event described below:
+`'usage_failure'`, `'custom'` (see [`ctx.emit`](#ctxemit)), and the `'middleware'` event described
+below:
 
 ```ts title="middleware-onevent.ts"
 {
@@ -250,6 +251,51 @@ always fire.
   integration](/docs/integrations/otel) relies on this to put token counts on its spans.
 </Callout>
 
+## `ctx.emit`
+
+A middleware reports something it decided, such as the target a router picked, with
+`ctx.emit(name, data?)`. It becomes a `'custom'` event, delivered like every other event:
+
+```ts title="middleware-emit.ts"
+{
+  name: 'router',
+  wrap: async (request, next, ctx) => {
+    ctx.emit('router.decision', { deployment: choose(ctx), strategy: 'weighted' });
+    return next();
+  },
+}
+```
+
+```ts title="custom-event-shape.ts"
+{
+  kind: 'custom',
+  requestId: string,
+  name: string, // namespaced by convention, e.g. 'router.decision'
+  source: string, // the emitting middleware's `name`, or `[i]` if unnamed
+  data?: JsonValue,
+}
+```
+
+The event reaches the top level `onEvent` and every enabled middleware's `onEvent`, the emitter
+included. VernLLM defines no names of its own: whoever emits owns the meaning of `name` and `data`.
+`ctx.emit` is on every `ctx`, in every hook, and never throws.
+
+- `name` must be a non empty string and `data` plain JSON: plain objects, arrays, strings, finite
+  numbers, booleans, and `null`. Anything else drops the event and logs one warning per call.
+- An `emit` made synchronously from inside a `'custom'` handler is dropped, so a handler can't loop
+  on itself.
+- A call delivers at most 100 custom events. The rest are dropped with one warning, which also stops
+  a loop through an async `enabled`.
+- A `ctx` with no logical call behind it, like a `'circuit_state'` event from a manual
+  `openCircuit()`, has an `emit` that does nothing.
+
+<Callout type="warn">
+  `data` reaches every `onEvent` and any integration that records events, so keep secrets and prompt
+  content out of it.
+  [`vern-llm-otel`](/docs/integrations/otel/API-reference/configuration#customevents) leaves it off
+  spans unless you opt in.
+</Callout>
+
 ## `ctx.state` and `ctx.own`
 
 Two middleware sharing a value, a span ID one sets and another reads, use `ctx.state`, keyed by a
@@ -286,6 +332,44 @@ starts empty.
 <Callout type="info">
   See [Middleware](/docs/customization/middleware) for `createStateKey`, `createMiddleware`, and
   writing your own middleware.
+</Callout>
+
+## `ctx.context`
+
+`context` is plain JSON the caller attaches to one call, such as a tenant or routing constraints.
+Middleware reads it as `ctx.context` in every hook and stage, fallback attempts included:
+
+```ts title="call-context.ts"
+await llm.call({
+  userContent,
+  context: { tenantId: 't1', routing: { only: ['bedrock'] } },
+});
+
+// in any middleware
+wrap: async (request, next, ctx) => {
+  if (ctx.context?.tenantId === 't1') audit(ctx.requestId);
+  return next();
+};
+```
+
+VernLLM defines no keys. A layer built on it owns and documents its own. The value is a frozen copy,
+made when the call starts, so neither side can change what the other sees. It is never sent to the
+provider and is not part of the `cachedCall` cache key. Anything that isn't a plain JSON object
+throws `invalid_params` with code `invalid_context` before any hook runs.
+
+Every event the call reports carries the same `context`, and so does the `TokenUsage` in a `usage`
+event and in `onUsage`. That is what lets a cost middleware attribute spend to a tenant.
+
+|                          | `ctx.state`       | `ctx.context`                                 |
+| ------------------------ | ----------------- | --------------------------------------------- |
+| Values                   | Any, typed by key | JSON only                                     |
+| Leaves the process       | Never             | Whatever you send events and usage to         |
+| Reported                 | Never             | Events, `TokenUsage`, OTel through attributes |
+| Writable during the call | Yes               | No, frozen                                    |
+
+<Callout type="info">
+  With `cachedCall`, each caller's own middleware sees that caller's `context`. A caller that joins
+  an in flight request shares its events, which carry the context of the caller that started it.
 </Callout>
 
 ## Composition order
@@ -513,7 +597,8 @@ branches.
   one `wrap` invocation, resolving once the shared in-flight call settles, `meta` included.
 
 `ctx.state` is shared between a cache miss's `wrap` and the `transform` it triggers, so a value set
-during `wrap`'s pre phase is visible to that same middleware's `transform`.
+during `wrap`'s pre phase is visible to that same middleware's `transform`. `ctx.emit` works in
+`wrap` on every branch, and in `transform` and `dispatch` on a miss.
 
 See [Caching](/docs/core/caching) for `cachedCall()` itself.
 

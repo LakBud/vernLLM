@@ -1,5 +1,6 @@
 import type { LoggerOption } from '../internal/guard.utils.js';
 import type { CaptureContentOptions } from './capture.js';
+import type { CustomEventsOptions } from './customEvents.js';
 import type { RecordExceptionsOptions } from './exceptions.js';
 import type { GenAiProviderName } from './provider.js';
 import type { Attributes, Meter, Tracer } from '@opentelemetry/api';
@@ -40,6 +41,12 @@ export interface OtelMiddlewareOptions {
   recordExceptions?: boolean | RecordExceptionsOptions;
   /** Default false. Emits VernLLM `middleware` events as span events on the call span. */
   middlewareEvents?: boolean;
+  /**
+   * Default true. Emits each custom event a middleware reports through `ctx.emit` as a span
+   * event on the call span, named after the event, with its `vernllm.event.source`. `false`
+   * turns it off. The event's `data` is left out unless `{ data: true }` is given.
+   */
+  customEvents?: boolean | CustomEventsOptions;
   /** Same shape as `VernLLMOptions.logger`. Default: a `ConsoleLogger`. */
   logger?: LoggerOption;
   /** Entry name. Default `'otel'`. */

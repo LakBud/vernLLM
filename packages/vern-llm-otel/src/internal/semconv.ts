@@ -24,6 +24,10 @@ export const ATTR = {
   usageInputTokens: 'gen_ai.usage.input_tokens',
   usageOutputTokens: 'gen_ai.usage.output_tokens',
   usageReasoningOutputTokens: 'gen_ai.usage.reasoning.output_tokens',
+  // Defined in open-telemetry/semantic-conventions-genai, where the GenAI attributes now live.
+  // Both are subsets of `usageInputTokens`, which `promptTokens` already satisfies.
+  usageCacheReadInputTokens: 'gen_ai.usage.cache_read.input_tokens',
+  usageCacheWriteInputTokens: 'gen_ai.usage.cache_write.input_tokens',
   tokenType: 'gen_ai.token.type',
   inputMessages: 'gen_ai.input.messages',
   outputMessages: 'gen_ai.output.messages',
@@ -57,6 +61,8 @@ export const VERNLLM_ATTR = {
   usageFailed: 'vernllm.usage.failed',
   attemptOutcome: 'vernllm.attempt.outcome',
   contentSkippedReason: 'vernllm.content.skipped_reason',
+  eventSource: 'vernllm.event.source',
+  eventData: 'vernllm.event.data',
   // Metric only attributes.
   provider: 'vernllm.provider',
   model: 'vernllm.model',

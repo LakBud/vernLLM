@@ -323,4 +323,60 @@ describe('options that change what is emitted', () => {
       expect(spans()[1]!.attributes['vernllm.target']).toBe('primary');
     });
   });
+
+  describe('attributes reading the call context', () => {
+    async function callSpanAttributes(
+      attributes: OtelMiddlewareOptions['attributes'],
+      context: Record<string, unknown> | undefined,
+    ) {
+      const client = createMockClient([textResponse('ok', USAGE)]).client;
+      const llm = new VernLLM({ ...BASE, client, middleware: [otel({ attributes })] });
+
+      await llm.call({ ...call, context: context as never });
+
+      return spans().find((span) => span.name === 'vernllm.call')!.attributes;
+    }
+
+    it('lets the existing attributes option read ctx.context, with no option of its own', async () => {
+      const attrs = await callSpanAttributes(
+        (ctx) => ({
+          'tenant.id': typeof ctx.context?.tenantId === 'string' ? ctx.context.tenantId : undefined,
+        }),
+        { tenantId: 't1', routing: { only: ['bedrock'] } },
+      );
+
+      expect(attrs['tenant.id']).toBe('t1');
+    });
+
+    it('sees no context, and adds nothing, when the call gave none', async () => {
+      const attrs = await callSpanAttributes(
+        (ctx) => ({ 'has.context': ctx.context !== undefined }),
+        undefined,
+      );
+
+      expect(attrs['has.context']).toBe(false);
+    });
+
+    it('emits nothing from context by default, since identity is often PII', async () => {
+      const attrs = await callSpanAttributes(undefined, {
+        tenantId: 'secret-tenant',
+        userId: 'u9',
+      });
+
+      expect(JSON.stringify(attrs)).not.toContain('secret-tenant');
+      expect(JSON.stringify(attrs)).not.toContain('u9');
+      expect(Object.keys(attrs).filter((key) => key.includes('context'))).toEqual([]);
+    });
+
+    it('never records the context on span events or metric attributes either', async () => {
+      await callSpanAttributes(undefined, { tenantId: 'secret-tenant' });
+
+      const everything = JSON.stringify([
+        trace.spans().map((span) => [span.attributes, span.events]),
+        [...(await meter.collect()).values()].map((metric) => pointsOf(metric)),
+      ]);
+
+      expect(everything).not.toContain('secret-tenant');
+    });
+  });
 });

@@ -2,6 +2,7 @@ import { SpanStatusCode, trace as otelTrace, type Tracer } from '@opentelemetry/
 import {
   LLMError,
   type AttemptContext,
+  type JsonValue,
   type PreDispatchContext,
   type VernLLMEvent,
   type WireCallRequest,
@@ -160,6 +161,173 @@ describe('CallTracker driven directly', () => {
       const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
       expect(attempt.attributes).not.toHaveProperty('gen_ai.usage.input_tokens');
       expect(errors).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('custom events', () => {
+    const custom = (data?: JsonValue): VernLLMEvent => ({
+      kind: 'custom',
+      requestId: 'r1',
+      name: 'router.decision',
+      source: 'router',
+      ...(data === undefined ? {} : { data }),
+    });
+
+    const callSpanEvents = () => spans().find((span) => span.name === 'vernllm.call')!.events;
+
+    it('adds a span event to the call span, named after the event, with its source only by default', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.applyEvent(custom({ deployment: 'claude' }));
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const events = callSpanEvents();
+      expect(events.map((event) => event.name)).toEqual(['router.decision']);
+      expect(events[0]!.attributes).toEqual({ 'vernllm.event.source': 'router' });
+    });
+
+    it('adds the data as JSON when customEvents.data is on', () => {
+      const { start } = setup({ customEvents: { data: true } });
+      const tracker = start();
+
+      tracker.applyEvent(custom({ deployment: 'claude' }));
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      expect(callSpanEvents()[0]!.attributes).toEqual({
+        'vernllm.event.source': 'router',
+        'vernllm.event.data': '{"deployment":"claude"}',
+      });
+    });
+
+    it('cuts data to customEvents.maxLength', () => {
+      const { start } = setup({ customEvents: { data: true, maxLength: 40 } });
+      const tracker = start();
+
+      tracker.applyEvent(custom({ text: 'x'.repeat(200) }));
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const data = callSpanEvents()[0]!.attributes?.['vernllm.event.data'] as string;
+      expect(data.length).toBeLessThanOrEqual(40);
+      expect(data.endsWith('…[truncated]')).toBe(true);
+    });
+
+    it('adds nothing when customEvents is false', () => {
+      const { start } = setup({ customEvents: false });
+      const tracker = start();
+
+      tracker.applyEvent(custom({ deployment: 'claude' }));
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      expect(callSpanEvents()).toEqual([]);
+    });
+
+    it('does not depend on middlewareEvents, which only covers the core middleware event', () => {
+      const { start } = setup({ middlewareEvents: false });
+      const tracker = start();
+
+      tracker.applyEvent(custom());
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      expect(callSpanEvents().map((event) => event.name)).toEqual(['router.decision']);
+    });
+
+    it('leaves the ended span alone when a late custom event arrives', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.finish({ kind: 'error', error: new Error('x') });
+      tracker.applyEvent(custom());
+
+      expect(callSpanEvents()).toEqual([]);
+    });
+
+    it('leaves the attempt untouched, since a custom event is not an attempt signal', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.startAttempt(attemptCtx(), request);
+      tracker.applyEvent(custom());
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
+      expect(attempt.events).toEqual([]);
+    });
+  });
+
+  describe('cache token attributes', () => {
+    const cachedUsage = (): VernLLMEvent => ({
+      kind: 'usage',
+      requestId: 'r1',
+      usage: {
+        promptTokens: 100,
+        completionTokens: 4,
+        totalTokens: 104,
+        cacheReadTokens: 60,
+        cacheWriteTokens: 30,
+        requestId: 'r1',
+        model: 'gpt-4o',
+      },
+    });
+
+    it('sets both cache attributes on the attempt that spent the tokens', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.startAttempt(attemptCtx(), request);
+      tracker.applyEvent(cachedUsage());
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
+      expect(attempt.attributes).toMatchObject({
+        'gen_ai.usage.input_tokens': 100,
+        'gen_ai.usage.cache_read.input_tokens': 60,
+        'gen_ai.usage.cache_write.input_tokens': 30,
+      });
+    });
+
+    it('sets them on a failed usage too, with the failure marked', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.startAttempt(attemptCtx(), request);
+      tracker.applyEvent({
+        ...(cachedUsage() as Extract<VernLLMEvent, { kind: 'usage' }>),
+        kind: 'usage_failure',
+        error: new LLMError('bad', 'api', { code: 'server_error' }),
+      });
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
+      expect(attempt.attributes).toMatchObject({
+        'gen_ai.usage.cache_read.input_tokens': 60,
+        'vernllm.usage.failed': true,
+      });
+    });
+
+    it('sets none of them without cache counts, so a provider that reports none stays clean', () => {
+      const { start } = setup();
+      const tracker = start();
+
+      tracker.startAttempt(attemptCtx(), request);
+      tracker.applyEvent(usage());
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const attempt = spans().find((span) => span.name === 'chat gpt-4o')!;
+      expect(attempt.attributes).not.toHaveProperty('gen_ai.usage.cache_read.input_tokens');
+      expect(attempt.attributes).not.toHaveProperty('gen_ai.usage.cache_write.input_tokens');
+    });
+
+    it('sets none of them with GenAI conventions off', () => {
+      const { start } = setup({ genAiConventions: false });
+      const tracker = start();
+
+      tracker.startAttempt(attemptCtx(), request);
+      tracker.applyEvent(cachedUsage());
+      tracker.finish({ kind: 'error', error: new Error('x') });
+
+      const attempt = spans().find((span) => span.name === 'vernllm.attempt')!;
+      expect(attempt.attributes).not.toHaveProperty('gen_ai.usage.cache_read.input_tokens');
     });
   });
 

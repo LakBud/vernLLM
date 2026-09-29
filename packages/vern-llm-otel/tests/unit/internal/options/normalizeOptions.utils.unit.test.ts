@@ -21,6 +21,7 @@ describe('normalizeOptions defaults', () => {
       attributes: undefined,
       middlewareEvents: false,
       exceptions: undefined,
+      customEvents: { data: false, maxLength: 8192 },
       logger: undefined,
       name: 'otel',
       priority: -1000,
@@ -87,6 +88,16 @@ describe('normalizeOptions rejections', () => {
     ['null recordExceptions', { recordExceptions: bad(null) }, /recordExceptions must be/],
     ['array recordExceptions', { recordExceptions: bad([]) }, /recordExceptions must be/],
     ['non boolean stack', { recordExceptions: { stack: bad('y') } }, /recordExceptions\.stack/],
+    ['string customEvents', { customEvents: bad('yes') }, /customEvents must be/],
+    ['null customEvents', { customEvents: bad(null) }, /customEvents must be/],
+    ['array customEvents', { customEvents: bad([]) }, /customEvents must be/],
+    ['non boolean customEvents data', { customEvents: { data: bad('y') } }, /customEvents\.data/],
+    ['zero customEvents maxLength', { customEvents: { maxLength: 0 } }, /customEvents\.maxLength/],
+    [
+      'null customEvents maxLength',
+      { customEvents: { maxLength: bad(null) } },
+      /customEvents\.maxLength/,
+    ],
   ];
 
   it.each(cases)('throws a plain Error for %s', (_label, options, message) => {
@@ -191,5 +202,24 @@ describe('passthrough options', () => {
 
   it("accepts 'silent' as a logger", () => {
     expect(normalizeOptions({ logger: 'silent' }).logger).toBe('silent');
+  });
+});
+
+describe('customEvents', () => {
+  it.each<[string, OtelMiddlewareOptions['customEvents'], unknown]>([
+    ['omitted', undefined, { data: false, maxLength: 8192 }],
+    ['true', true, { data: false, maxLength: 8192 }],
+    ['an empty object', {}, { data: false, maxLength: 8192 }],
+    ['false', false, undefined],
+    ['data on', { data: true }, { data: true, maxLength: 8192 }],
+    ['data off explicitly', { data: false }, { data: false, maxLength: 8192 }],
+    ['a length', { maxLength: 100 }, { data: false, maxLength: 100 }],
+    ['an infinite length', { maxLength: Infinity }, { data: false, maxLength: Infinity }],
+  ])('resolves %s', (_label, option, expected) => {
+    expect(normalizeOptions({ customEvents: option }).customEvents).toEqual(expected);
+  });
+
+  it('keeps data out by default, since it is whatever a middleware chose to emit', () => {
+    expect(normalizeOptions({}).customEvents?.data).toBe(false);
   });
 });

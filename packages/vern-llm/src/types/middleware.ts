@@ -1,3 +1,4 @@
+import type { CallContext, JsonValue } from './call.js';
 import type { AdapterInfo, WireMessage, WireToolChoice } from './client.js';
 import type { VernLLMEvent } from './events.js';
 import type { CallMeta } from './fallback.js';
@@ -124,6 +125,12 @@ export interface MiddlewareContextBase {
    * whether any entry after it can still change the request.
    */
   transformMiddlewareNames: readonly string[];
+
+  /** Reports a `custom` event to `onEvent` and every middleware. Never throws. */
+  emit(name: string, data?: JsonValue): void;
+
+  /** The call's `context`, frozen. `undefined` when none was given. */
+  context: CallContext | undefined;
 }
 
 /**

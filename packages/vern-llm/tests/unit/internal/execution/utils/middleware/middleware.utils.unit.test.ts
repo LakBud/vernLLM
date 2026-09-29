@@ -6,7 +6,9 @@ import {
   reclassifyMiddlewareThrow,
   resolveEnabled,
   runTransform,
+  withOwn,
 } from '../../../../../../src/internal/execution/utils/middleware/middleware.utils.js';
+import { registerCallScope } from '../../../../../../src/internal/utils/callScope.utils.js';
 import { LLMError } from '../../../../../../src/types/errors.js';
 import { baseCtx, baseRequest, logger } from './middleware.helpers.js';
 
@@ -24,6 +26,64 @@ describe('middlewareLabel', () => {
 
   it('falls back to the array index when unnamed', () => {
     expect(middlewareLabel({}, 2)).toBe('[2]');
+  });
+});
+
+describe('withOwn', () => {
+  it('gives one entry the same scratch object for every hook of a call, and another entry its own', () => {
+    const ctx = baseCtx();
+    const first: VernLLMMiddleware = { name: 'first' };
+    const second: VernLLMMiddleware = { name: 'second' };
+
+    withOwn(ctx, first, 'first').own.seen = true;
+
+    expect(withOwn(ctx, first, 'first').own).toEqual({ seen: true });
+    expect(withOwn(ctx, second, 'second').own).toEqual({});
+  });
+
+  it('does not share scratch objects between calls, which have their own state bags', () => {
+    const entry: VernLLMMiddleware = { name: 'entry' };
+
+    withOwn(baseCtx(), entry, 'entry').own.seen = true;
+
+    expect(withOwn(baseCtx(), entry, 'entry').own).toEqual({});
+  });
+
+  it("binds emit to the middleware's label and hands the call's scope the context it was built from", () => {
+    const ctx = baseCtx();
+    const emitCustom = vi.fn();
+    registerCallScope(ctx.state, { context: undefined, emitCustom });
+
+    withOwn(ctx, { name: 'router' }, 'router').emit('router.decision', { deployment: 'claude' });
+
+    expect(emitCustom).toHaveBeenCalledExactlyOnceWith(
+      'router.decision',
+      { deployment: 'claude' },
+      'router',
+      ctx,
+    );
+  });
+
+  it('binds a different label for each entry, even on the same context', () => {
+    const ctx = baseCtx();
+    const emitCustom = vi.fn();
+    registerCallScope(ctx.state, { context: undefined, emitCustom });
+
+    withOwn(ctx, { name: 'a' }, 'a').emit('one');
+    withOwn(ctx, {}, '[1]').emit('two');
+
+    expect(emitCustom.mock.calls.map((call) => call[2])).toEqual(['a', '[1]']);
+  });
+
+  it('keeps every other context field as it was', () => {
+    const ctx = baseCtx({ requestId: 'req-9', attempt: 3 });
+
+    expect(withOwn(ctx, { name: 'a' }, 'a')).toMatchObject({
+      stage: 'attempt',
+      requestId: 'req-9',
+      attempt: 3,
+      state: ctx.state,
+    });
   });
 });
 

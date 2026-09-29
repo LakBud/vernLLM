@@ -27,6 +27,7 @@ call is a chat style request.
 | `gen_ai.request.stream`                                                                           | `true` when the call turned out to be a stream                         |
 | `gen_ai.response.time_to_first_chunk`                                                             | Seconds to the first content chunk, streams only                       |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.reasoning.output_tokens` | After the attempt, when the provider reported them                     |
+| `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`                   | After the attempt, when the provider reported them                     |
 | `error.type`, `http.response.status_code`                                                         | On failure, the status only when the error has one                     |
 | `vernllm.target`                                                                                  | The raw target label, `primary` or `fallback[0]` or your `name`        |
 | `vernllm.attempt`, `vernllm.is_fallback`                                                          | Attempt number within its target, and whether the target is a fallback |
@@ -74,6 +75,11 @@ Events go on the call span:
 | `vernllm.fallback`      | `from`, `to`, `elapsed_ms`, `error.type`                             |
 | `vernllm.circuit_state` | `provider`, `model`, `from`, `to`, `consecutive_failures`            |
 | `vernllm.middleware`    | `name`, `hook`, `patched_fields`, only with `middlewareEvents: true` |
+| Your event's `name`     | `vernllm.event.source`, `vernllm.event.data` if opted in             |
+
+The two cache attributes are subsets of the input tokens. A middleware's
+`ctx.emit('router.decision', data)` becomes a span event named `router.decision`, and its `data` is
+recorded only with [`customEvents: { data: true }`](/docs/integrations/otel/API-reference/configuration#customevents).
 
 A rate limit wait is not an event. It is the `vernllm.rate_limit.wait_ms` attribute on the
 attempt and the `vernllm.rate_limit.wait` [metric](/docs/integrations/otel/features/metrics). The attempt

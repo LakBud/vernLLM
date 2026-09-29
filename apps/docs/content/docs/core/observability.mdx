@@ -73,7 +73,12 @@ instances, or across the targets in one instance's `fallback` chain, can tell th
 `fallback` carries `from`/`to` instead, since it's reporting a transition between two targets
 rather than something that happened to one. `usage` and `usage_failure` carry `requestId` and a
 full `TokenUsage`/`LLMError` instead of `provider`/`model` directly, since that information is
-already inside `usage` itself. See [Provider identity](/docs/API-reference/configuration#provider-identity).
+already inside `usage` itself. `custom` describes no target at all, so it carries `requestId` and the
+`source` middleware instead. See [Provider identity](/docs/API-reference/configuration#provider-identity).
+
+Every event a call reports carries that call's [`context`](/docs/core/middleware#ctxcontext) when
+it gave one. A `circuit_state` event with no call behind it, from a manual `openCircuit()`, carries
+none.
 
 <Cards>
   <Card title="retry" href="#retry">
@@ -93,6 +98,9 @@ already inside `usage` itself. See [Provider identity](/docs/API-reference/confi
   </Card>
   <Card title="usage_failure" href="#usage-and-usage_failure">
     Fires when a response carried usage but VernLLM's own post-processing then failed.
+  </Card>
+  <Card title="custom" href="#custom">
+    Fires when a middleware reports something through `ctx.emit`.
   </Card>
 </Cards>
 
@@ -253,6 +261,28 @@ requiring the app to wire a separate top-level `onUsage` option:
   fire](/docs/core/usage-tracking#when-it-does-and-doesnt-fire).
 </Callout>
 
+### `custom`
+
+Reported by a middleware through [`ctx.emit`](/docs/core/middleware#ctxemit). VernLLM sets no
+meaning for `name` or `data`, so this is where a router, a policy layer, or a cost tracker publishes
+its own decisions next to the built in events.
+
+```ts title="custom-event.ts"
+{
+  kind: 'custom',
+  requestId: string,
+  name: string, // namespaced by convention, e.g. 'router.decision'
+  source: string, // the emitting middleware
+  data?: JsonValue,
+}
+```
+
+```ts title="custom-event-handler.ts"
+onEvent: (event) => {
+  if (event.kind === 'custom' && event.name === 'router.decision') log(event.source, event.data);
+};
+```
+
 ## Narrowing by kind
 
 `event.kind` discriminates the union, so a handler that only cares about one kind can narrow with a
@@ -294,9 +324,9 @@ longer a separate mechanism scoped to token usage: they're driven from the exact
 
 ## Options reference
 
-| Option    | Default | Notes                                                                                                                                                                            |
-| --------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, `rate_limited`, `fallback`, `usage`, or `usage_failure` occurrence. Fire and forget; cannot change the call's outcome. |
+| Option    | Default | Notes                                                                                                                                                                                      |
+| --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `onEvent` | none    | Receives one `VernLLMEvent` per `retry`, `circuit_state`, `rate_limited`, `fallback`, `usage`, `usage_failure`, or `custom` occurrence. Fire and forget; cannot change the call's outcome. |
 
 See [Configuration](/docs/API-reference/configuration#observability) for how `onEvent`
 sits alongside `onUsage`, `onUsageFailure`, `logger`, and `debug`.

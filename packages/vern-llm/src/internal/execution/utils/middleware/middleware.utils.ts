@@ -8,6 +8,7 @@ import {
   type WireCallRequest,
   type WireCallRequestPatch,
 } from '../../../../types/index.js';
+import { callScopeFor } from '../../../utils/callScope.utils.js';
 import { logError, logHookError } from '../../../utils/logger.utils.js';
 import { middlewareLabel } from '../../../utils/middlewareLabels.utils.js';
 import { normalizeError } from '../errors.utils.js';
@@ -39,11 +40,15 @@ const ownStores = new WeakMap<
 >();
 
 /**
- * `ctx` with `own` set to this middleware's scratch object for the call. The same object is
- * returned for every hook, so a value set in `wrap` is there in `transform`. Collected with the
- * call's state bag.
+ * `ctx` with `own` set to this middleware's scratch object for the call, and `emit` bound to its
+ * `label` so a custom event says who reported it. The same `own` object is returned for every
+ * hook, so a value set in `wrap` is there in `transform`. Collected with the call's state bag.
  */
-export function withOwn<C extends MiddlewareContext>(ctx: C, entry: VernLLMMiddleware): C {
+export function withOwn<C extends MiddlewareContext>(
+  ctx: C,
+  entry: VernLLMMiddleware,
+  label: string,
+): C {
   let store = ownStores.get(ctx.state);
 
   if (!store) {
@@ -58,7 +63,12 @@ export function withOwn<C extends MiddlewareContext>(ctx: C, entry: VernLLMMiddl
     store.set(entry, own);
   }
 
-  return { ...ctx, own };
+  return {
+    ...ctx,
+    own,
+    // A bag made outside a call, like a manual `openCircuit()`'s, has no scope to report to.
+    emit: (name, data) => callScopeFor(ctx.state)?.emitCustom(name, data, label, ctx),
+  };
 }
 
 /**
@@ -110,7 +120,11 @@ export async function resolveEnabled(
   const timeoutMs = middleware.timeoutMs ?? middlewareTimeoutMs;
 
   try {
-    return await raceTimeout(async () => enabled(withOwn(ctx, middleware)), timeoutMs, label);
+    return await raceTimeout(
+      async () => enabled(withOwn(ctx, middleware, label)),
+      timeoutMs,
+      label,
+    );
   } catch (error) {
     logError(
       logger,
@@ -251,7 +265,7 @@ export async function runTransform(
 
   try {
     return await raceTimeout(
-      async () => middleware.transform!(request, withOwn(ctx, middleware)),
+      async () => middleware.transform!(request, withOwn(ctx, middleware, label)),
       timeoutMs,
       label,
     );
@@ -297,7 +311,7 @@ export async function runDispatch(params: RunDispatchParams): Promise<void> {
     let hookFailure: { error: unknown } | undefined;
 
     try {
-      await entry.dispatch(structuredClone(request), inner.call, withOwn(ctx, entry));
+      await entry.dispatch(structuredClone(request), inner.call, withOwn(ctx, entry, label));
     } catch (error) {
       hookFailure = { error };
     }
@@ -365,11 +379,30 @@ export function emitEvent(
   middlewareTimeoutMs: number,
   logger: Logger,
 ): void {
-  reportEventInstance(event);
+  const stamped = withCallContext(event, ctx);
+
+  reportEventInstance(stamped);
 
   if (middleware.length === 0) return;
 
-  dispatchEventToMiddleware(middleware, event, ctx, middlewareTimeoutMs, logger);
+  dispatchEventToMiddleware(middleware, stamped, ctx, middlewareTimeoutMs, logger);
+}
+
+/**
+ * `event` with the call's `context` on it, and on its `usage` too, so `onUsage` and a cost
+ * middleware see which tenant spent the tokens. Stamped here, the one place every event passes
+ * through. An event with no call behind it, like a manual `openCircuit()`'s, carries none.
+ */
+function withCallContext(event: VernLLMEvent, ctx: MiddlewareContext): VernLLMEvent {
+  const { context } = ctx;
+
+  if (context === undefined) return event;
+
+  if (event.kind === 'usage' || event.kind === 'usage_failure') {
+    return { ...event, context, usage: { ...event.usage, context } };
+  }
+
+  return { ...event, context };
 }
 
 /** Calls `onEvent`, logging a sync throw or a rejection instead of propagating either. */
@@ -381,9 +414,11 @@ function invokeOnEvent(
   logger: Logger,
 ): void {
   try {
-    void Promise.resolve(entry.onEvent!(event, withOwn(ctx, entry))).catch((error: unknown) => {
-      logHookError(logger, `middleware "${label}".onEvent`, error);
-    });
+    void Promise.resolve(entry.onEvent!(event, withOwn(ctx, entry, label))).catch(
+      (error: unknown) => {
+        logHookError(logger, `middleware "${label}".onEvent`, error);
+      },
+    );
   } catch (error) {
     logHookError(logger, `middleware "${label}".onEvent`, error);
   }
