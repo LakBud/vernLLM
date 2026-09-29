@@ -1,5 +1,6 @@
 import type { LLMErrorCode } from './errors.js';
 import type { CallMeta } from './fallback.js';
+import type { MiddlewareStateEntry } from './middleware.js';
 import type { JsonSchemaSpec, SchemaLike } from './schema.js';
 import type {
   ToolCall,
@@ -187,6 +188,9 @@ export interface LLMRequestShape<
 
   /** See `CallContext`. Read by middleware, events and usage. */
   context?: CallContext;
+
+  /** Values placed in `ctx.state` before any middleware runs. Build entries with `stateEntry`. */
+  state?: readonly MiddlewareStateEntry[];
 }
 
 export interface CallParams<T = unknown, Tools extends readonly ToolDefinition[] = ToolDefinition[]>

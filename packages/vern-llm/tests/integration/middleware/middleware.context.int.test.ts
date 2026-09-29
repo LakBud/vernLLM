@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { type VernLLMEvent } from '../../../src/types/index.js';
+import { createStateKey, stateEntry, type VernLLMEvent } from '../../../src/types/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import {
   createMockClient,
@@ -250,5 +250,255 @@ describe('middleware call context', () => {
     const usageEvents = events.filter((event) => event.kind === 'usage');
     expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]!.context).toEqual(context);
+  });
+});
+
+describe('middleware seeded state', () => {
+  const tenantKey = createStateKey<string>('test.tenant');
+  const decisionKey = createStateKey<{ deployment: string }>('test.decision');
+  const otherKey = createStateKey<string>('test.other');
+  const seed = [stateEntry(tenantKey, 't1'), stateEntry(decisionKey, { deployment: 'bedrock' })];
+
+  it('is on ctx.state in every hook and both stages, across a real fallback chain', async () => {
+    const chain = fallbackChain([new FakeApiError('down', 500)], [textResponse('from fallback')]);
+    const seen: { where: string; tenant: unknown; decision: unknown }[] = [];
+    const record = (
+      hook: string,
+      ctx: { stage: string; state: { get: (key: never) => unknown } },
+    ) =>
+      seen.push({
+        where: `${hook}:${ctx.stage}`,
+        tenant: ctx.state.get(tenantKey as never),
+        decision: ctx.state.get(decisionKey as never),
+      });
+
+    const llm = new VernLLM({
+      ...chain.options,
+      middleware: [
+        {
+          name: 'reader',
+          enabled: (ctx) => (record('enabled', ctx), true),
+          wrap: async (_request, next, ctx) => (record('wrap', ctx), next()),
+          transform: (_request, ctx) => (record('transform', ctx), {}),
+          dispatch: async (_request, next, ctx) => (record('dispatch', ctx), void (await next())),
+          onEvent: (_event, ctx) => record('onEvent', ctx),
+        },
+      ],
+    });
+
+    await llm.call({ ...CALL, state: seed });
+
+    for (const entry of seen) {
+      expect(entry.tenant).toBe('t1');
+      expect(entry.decision).toEqual({ deployment: 'bedrock' });
+    }
+    expect(new Set(seen.map((entry) => entry.where))).toEqual(
+      new Set([
+        'enabled:pre-dispatch',
+        'wrap:pre-dispatch',
+        'enabled:attempt',
+        'transform:attempt',
+        'dispatch:attempt',
+        'onEvent:attempt',
+      ]),
+    );
+    // One attempt on each target, so the fallback attempt's own hooks saw it too.
+    expect(seen.filter((entry) => entry.where === 'transform:attempt')).toHaveLength(2);
+    expect(seen.filter((entry) => entry.where === 'dispatch:attempt')).toHaveLength(2);
+  });
+
+  it('leaves the bag empty when the call gave no state', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    const seen: unknown[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (seen.push(ctx.state.get(tenantKey)), next()),
+        },
+      ],
+    });
+
+    await llm.call(CALL);
+    await llm.call({ ...CALL, state: [] });
+
+    expect(seen).toEqual([undefined, undefined]);
+  });
+
+  it('lets a later entry win on a duplicate key', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    let seen: unknown;
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => ((seen = ctx.state.get(tenantKey)), next()),
+        },
+      ],
+    });
+
+    await llm.call({
+      ...CALL,
+      state: [stateEntry(tenantKey, 'first'), stateEntry(tenantKey, 'last')],
+    });
+
+    expect(seen).toBe('last');
+  });
+
+  it('accepts raw pairs as well as stateEntry', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    let seen: unknown;
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => ((seen = ctx.state.get(tenantKey)), next()),
+        },
+      ],
+    });
+
+    await llm.call({ ...CALL, state: [[tenantKey, 'raw']] });
+
+    expect(seen).toBe('raw');
+  });
+
+  it('is writable during the call, and each call starts again from its own seed', async () => {
+    const { client } = createMockClient([textResponse('a'), textResponse('b')]);
+    const before: unknown[] = [];
+    const after: unknown[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'writer',
+          priority: 0,
+          wrap: async (_request, next, ctx) => {
+            before.push(ctx.state.get(tenantKey));
+            ctx.state.set(tenantKey, 'changed');
+            ctx.state.set(otherKey, 'added');
+            return next();
+          },
+        },
+        {
+          name: 'later-reader',
+          priority: 1,
+          wrap: async (_request, next, ctx) => {
+            after.push([ctx.state.get(tenantKey), ctx.state.get(otherKey)]);
+            return next();
+          },
+        },
+      ],
+    });
+    const state = [stateEntry(tenantKey, 't1')];
+
+    await llm.call({ ...CALL, state });
+    await llm.call({ ...CALL, state });
+
+    // The second call did not inherit the first call's writes, and the caller's array is untouched.
+    expect(before).toEqual(['t1', 't1']);
+    expect(after).toEqual([
+      ['changed', 'added'],
+      ['changed', 'added'],
+    ]);
+    expect(state).toEqual([[tenantKey, 't1']]);
+  });
+
+  it('keeps two concurrent calls apart, each seeing only its own state', async () => {
+    const { client } = createMockClient([textResponse('a'), textResponse('b')]);
+    const seenByCall = new Map<string, unknown>();
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => {
+            // Yielding lets the two calls interleave, so a shared bag would be overwritten.
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            seenByCall.set(ctx.requestId, ctx.state.get(tenantKey));
+            return next();
+          },
+        },
+      ],
+    });
+
+    await Promise.all([
+      llm.call({ ...CALL, requestId: 'a', state: [stateEntry(tenantKey, 'A')] }),
+      llm.call({ ...CALL, requestId: 'b', state: [stateEntry(tenantKey, 'B')] }),
+    ]);
+
+    expect(Object.fromEntries(seenByCall)).toEqual({ a: 'A', b: 'B' });
+  });
+
+  it('reaches a stream call', async () => {
+    const { client } = createMockStreamingClient([
+      [
+        { type: 'text-delta', delta: 'hello' },
+        { type: 'usage', usage: USAGE },
+      ],
+    ]);
+    const seen: unknown[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (seen.push(ctx.state.get(tenantKey)), next()),
+          transform: (_request, ctx) => (seen.push(ctx.state.get(tenantKey)), {}),
+        },
+      ],
+    });
+
+    const { finalResult } = await llm.call({ ...CALL, stream: true, state: seed });
+    await finalResult;
+
+    expect(seen).toEqual(['t1', 't1']);
+  });
+
+  it('is never sent to the provider and never reported on an event or usage', async () => {
+    const { client, calls } = createMockClient([
+      new FakeApiError('temporary', 500),
+      withUsage('ok'),
+    ]);
+    const events: VernLLMEvent[] = [];
+    const usages: unknown[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 1,
+      baseDelayMs: 1,
+      logger: 'silent',
+      onEvent: (event) => void events.push(event),
+      onUsage: (usage) => void usages.push(usage),
+    });
+
+    await llm.call({ ...CALL, state: [stateEntry(tenantKey, 'secret-tenant')] });
+
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call).not.toHaveProperty('state');
+    expect(events.length).toBeGreaterThan(0);
+    expect(JSON.stringify([calls, events, usages])).not.toContain('secret-tenant');
+    for (const event of events) expect(event).not.toHaveProperty('state');
   });
 });

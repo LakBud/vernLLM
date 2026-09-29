@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   createMiddlewareRef,
+  createMiddlewareStateBag,
   createStateKey,
+  stateEntry,
   type MiddlewareRef,
+  type MiddlewareStateEntry,
   type MiddlewareStateKey,
 } from '../../../src/types/middleware.js';
 
@@ -45,5 +48,43 @@ describe('MiddlewareRef / MiddlewareStateKey nominal typing', () => {
     void asRef;
     void fakeRef;
     void fakeKey;
+  });
+});
+
+describe('stateEntry and a seeded state bag', () => {
+  it('stateEntry ties the value to the key type at compile time', () => {
+    const key = createStateKey<string>('tenant');
+
+    expectTypeOf(stateEntry(key, 't1')).toEqualTypeOf<MiddlewareStateEntry>();
+
+    // @ts-expect-error a number cannot be stored under a MiddlewareStateKey<string>
+    const mismatched = stateEntry(key, 1);
+
+    void mismatched;
+  });
+
+  it('seeds the bag from entries, and later entries win', () => {
+    const tenant = createStateKey<string>('tenant');
+    const count = createStateKey<number>('count');
+    const bag = createMiddlewareStateBag([
+      stateEntry(tenant, 'first'),
+      stateEntry(count, 2),
+      stateEntry(tenant, 'last'),
+    ]);
+
+    expect(bag.get(tenant)).toBe('last');
+    expect(bag.get(count)).toBe(2);
+  });
+
+  it('starts empty without entries, and stays writable when seeded', () => {
+    const key = createStateKey<string>('tenant');
+
+    expect(createMiddlewareStateBag().get(key)).toBeUndefined();
+    expect(createMiddlewareStateBag([]).get(key)).toBeUndefined();
+
+    const seeded = createMiddlewareStateBag([stateEntry(key, 'a')]);
+    seeded.set(key, 'b');
+
+    expect(seeded.get(key)).toBe('b');
   });
 });

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { type VernLLMEvent, type VernLLMMiddleware } from '../../../src/types/index.js';
+import {
+  createStateKey,
+  stateEntry,
+  type VernLLMEvent,
+  type VernLLMMiddleware,
+} from '../../../src/types/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import { createMockClient, createMockStreamingClient, textResponse } from '../../helpers.js';
 import { CALL, wrapCounter } from './middleware.int.helpers.js';
@@ -137,5 +142,87 @@ describe('middleware with cachedCall', () => {
       { hook: 'wrap' },
     ]);
     expect(new Set(custom.map((event) => event.requestId))).toEqual(new Set(['req-cached']));
+  });
+});
+
+describe('cachedCall seeded state', () => {
+  const key = createStateKey<string>('test.caller');
+
+  it("gives each caller's wrap its own state on a miss, a join and a hit; the shared request sees the leader's", async () => {
+    let resolveCall!: (value: unknown) => void;
+    const pendingCall = new Promise((resolve) => {
+      resolveCall = resolve;
+    });
+    const { client, create } = createMockClient([() => pendingCall as Promise<never>]);
+    const wrapSeen: Record<string, unknown> = {};
+    const transformSeen: unknown[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (
+            (wrapSeen[ctx.requestId] = ctx.state.get(key)),
+            next()
+          ),
+          transform: (_request, ctx) => (transformSeen.push(ctx.state.get(key)), {}),
+        },
+      ],
+    });
+    const call = (requestId: string, caller: string) =>
+      llm.cachedCall({
+        cacheKey: 'shared',
+        ttl: 1000,
+        call: { ...CALL, requestId, state: [stateEntry(key, caller)] },
+      });
+
+    // Concurrent: the first is the miss that runs the request, the second joins it.
+    const leader = call('leader', 'A');
+    const follower = call('follower', 'B');
+    resolveCall(textResponse('shared result'));
+    await Promise.all([leader, follower]);
+    // Later: a plain hit.
+    await call('hit', 'C');
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(wrapSeen).toEqual({ leader: 'A', follower: 'B', hit: 'C' });
+    // The shared request ran once, for the leader, and the follower's state was never used for it.
+    expect(transformSeen).toEqual(['A']);
+  });
+
+  it('does not change the cache key, so different state still hits the same entry', async () => {
+    const { client, create } = createMockClient([textResponse('computed')]);
+    const llm = new VernLLM({ client, model: 'test-model', logger: 'silent' });
+    const call = (caller: string) =>
+      llm.cachedCall({
+        cacheKey: 'ck',
+        ttl: 1000,
+        call: { ...CALL, state: [stateEntry(key, caller)] },
+      });
+
+    await expect(call('A')).resolves.toBe('computed');
+    await expect(call('B')).resolves.toBe('computed');
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an invalid state without leaving the cache key claimed, so the next call still runs', async () => {
+    const { client, create } = createMockClient([textResponse('computed')]);
+    const llm = new VernLLM({ client, model: 'test-model', logger: 'silent' });
+    const params = (state: unknown) => ({
+      cacheKey: 'ck',
+      ttl: 1000,
+      call: { ...CALL, state: state as never },
+    });
+
+    await expect(llm.cachedCall(params('nope'))).rejects.toMatchObject({
+      type: 'invalid_params',
+    });
+    await expect(llm.cachedCall(params([stateEntry(key, 'A')]))).resolves.toBe('computed');
+
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });

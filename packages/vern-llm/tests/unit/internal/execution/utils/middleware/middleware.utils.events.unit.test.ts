@@ -15,8 +15,10 @@ import {
   noopEmit,
   prepareCallContext,
   registerCallScope,
+  validateStateEntries,
 } from '../../../../../../src/internal/utils/callScope.utils.js';
 import { LLMError } from '../../../../../../src/types/errors.js';
+import { createStateKey } from '../../../../../../src/types/middleware.js';
 import { baseCtx, logger } from './middleware.helpers.js';
 
 import type { VernLLMEvent, VernLLMMiddleware } from '../../../../../../src/types/index.js';
@@ -844,5 +846,53 @@ describe('call context stamping', () => {
 
     expect(reportEvent.mock.calls[0]![0]).toBe(event);
     expect(reportEvent.mock.calls[0]![0].usage).toBe(usage);
+  });
+});
+
+describe('validateStateEntries', () => {
+  const key = createStateKey<string>('test.key');
+  const rejection = (value: unknown) => {
+    try {
+      validateStateEntries(value);
+    } catch (error) {
+      return error as LLMError;
+    }
+    return undefined;
+  };
+
+  it('leaves an absent state absent', () => {
+    expect(validateStateEntries(undefined)).toBeUndefined();
+  });
+
+  it('returns the same entries when they are valid, an empty array included', () => {
+    const entries = [[key, 'a']] as const;
+
+    expect(validateStateEntries(entries)).toBe(entries);
+    expect(validateStateEntries([])).toEqual([]);
+  });
+
+  it('accepts any value, including undefined, next to a key', () => {
+    expect(validateStateEntries([[key, undefined]])).toEqual([[key, undefined]]);
+  });
+
+  it.each([
+    ['null', null],
+    ['a plain object', {}],
+    ['a string', 'x'],
+    ['an entry that is not an array', [key]],
+    ['a short entry', [[key]]],
+    ['a long entry', [[key, 'a', 'b']]],
+    ['a string key', [['k', 'a']]],
+    ['a null key', [[null, 'a']]],
+    ['a plain object key', [[{}, 'a']]],
+    ['a key with a non string debugName', [[{ debugName: 1 }, 'a']]],
+    ['a class instance key', [[new Date(), 'a']]],
+  ])('rejects %s with a plain invalid_params', (_label, value) => {
+    const error = rejection(value);
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect(error).toMatchObject({ type: 'invalid_params', retryable: false });
+    // Deliberately uncoded: it only happens when a caller bypasses the types.
+    expect(error?.code).toBeUndefined();
   });
 });

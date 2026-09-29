@@ -5,6 +5,7 @@ import type {
   MiddlewareContext,
   MiddlewareContextBase,
   MiddlewareStateBag,
+  MiddlewareStateEntry,
 } from '../../types/middleware.js';
 
 /**
@@ -115,4 +116,38 @@ export function prepareCallContext(value: unknown): CallContext | undefined {
   }
 
   return deepFreeze(structuredClone(value as CallContext));
+}
+
+/**
+ * A `[key, value]` pair whose key looks like one made by `createStateKey`. `MiddlewareStateKey` is
+ * a type level brand, so the only runtime trace of one is its string `debugName`.
+ */
+function isStateEntry(entry: unknown): entry is MiddlewareStateEntry {
+  if (!Array.isArray(entry) || entry.length !== 2) return false;
+
+  const key: unknown = entry[0];
+
+  return (
+    typeof key === 'object' &&
+    key !== null &&
+    typeof (key as { debugName?: unknown }).debugName === 'string'
+  );
+}
+
+/**
+ * Checks that `state` is an array of `[key, value]` pairs, so a malformed entry fails here instead
+ * of seeding a key nothing can read. Throws a plain `invalid_params`, with no `code`, since it
+ * only happens when a caller bypasses the types.
+ */
+export function validateStateEntries(state: unknown): readonly MiddlewareStateEntry[] | undefined {
+  if (state === undefined) return undefined;
+
+  if (!Array.isArray(state) || !state.every(isStateEntry)) {
+    throw new LLMError(
+      '`state` must be an array of [key, value] pairs, with keys made by createStateKey',
+      'invalid_params',
+    );
+  }
+
+  return state;
 }

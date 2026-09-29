@@ -84,9 +84,22 @@ export interface MiddlewareStateBag {
   set<T>(key: MiddlewareStateKey<T>, value: T): void;
 }
 
-/** A plain, `Map`-backed `MiddlewareStateBag`. */
-export function createMiddlewareStateBag(): MiddlewareStateBag {
-  const store = new Map<MiddlewareStateKey<unknown>, unknown>();
+/**
+ * One `[key, value]` pair for a call's `state`. A tuple can't tie each value to its own key's type,
+ * so `stateEntry` carries that check. Raw pairs are not type checked.
+ */
+export type MiddlewareStateEntry = readonly [MiddlewareStateKey<unknown>, unknown];
+
+/** Builds a type checked `state` entry: `value` must match the key's type. */
+export function stateEntry<T>(key: MiddlewareStateKey<T>, value: T): MiddlewareStateEntry {
+  return [key, value];
+}
+
+/** A plain, `Map`-backed `MiddlewareStateBag`, optionally seeded with `entries`. Later entries win. */
+export function createMiddlewareStateBag(
+  entries?: readonly MiddlewareStateEntry[],
+): MiddlewareStateBag {
+  const store = new Map<MiddlewareStateKey<unknown>, unknown>(entries);
 
   return {
     get<T>(key: MiddlewareStateKey<T>): T | undefined {
