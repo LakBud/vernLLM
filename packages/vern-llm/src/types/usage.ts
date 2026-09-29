@@ -27,6 +27,9 @@ export interface UsageHooks {
 }
 
 export interface TokenUsage {
+  /**
+   * Every input token the provider processed: uncached input plus cache reads plus cache writes.
+   */
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -35,6 +38,12 @@ export interface TokenUsage {
    * doesn't report them separately.
    */
   reasoningTokens?: number;
+  /** Cache reads, a subset of `promptTokens`. `undefined` when not reported. */
+  cacheReadTokens?: number;
+  /** Cache writes, a subset of `promptTokens`. `undefined` when not reported. */
+  cacheWriteTokens?: number;
+  /** `cacheWriteTokens` by the provider's TTL label. `undefined` when not split. */
+  cacheWriteTokensByTtl?: Readonly<Record<string, number>>;
   requestId: string;
   model: string;
   /**

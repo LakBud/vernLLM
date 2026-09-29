@@ -11,6 +11,8 @@ export interface UsageReporterOptions {
   /** True for every target after the primary. Stamped onto every reported `TokenUsage`. */
   isFallback: boolean;
   maxRetries: number;
+  /** Whether cache reads count toward the provider's token rate limit. Default `true`. */
+  cacheReadsCountTowardRateLimit?: boolean;
   /**
    * Reports `'usage'` and `'usage_failure'` events through the shared event path. `onUsage` and
    * `onUsageFailure` are driven from those events, so usage has one reporting route.
@@ -30,8 +32,9 @@ export interface UsageReporter {
     model: string,
   ): TokenUsage | undefined;
   /**
-   * The token count to reconcile the limiter with: `totalTokens`, else prompt plus completion.
-   * `undefined` when missing or all zero, so the limiter keeps its estimate.
+   * The token count to reconcile the limiter with: `totalTokens`, else prompt plus completion,
+   * less cache reads when the provider's limit skips them. `undefined` when missing or nothing is
+   * left, so the limiter keeps its estimate.
    */
   actualTokensFor(usage: TokenUsage | undefined): number | undefined;
   /** Reports token usage for a successful call as a `'usage'` event. `ctx` is this attempt's `AttemptContext`, used to fan the event out to middleware and to `onEvent`/`onUsage`. */
@@ -51,6 +54,7 @@ export interface UsageReporter {
 
 export function createUsageReporter(options: UsageReporterOptions): UsageReporter {
   const { providerName, isFallback, maxRetries, emitEvent, logger } = options;
+  const cacheReadsCount = options.cacheReadsCountTowardRateLimit ?? true;
 
   function extract(
     response: Awaited<ReturnType<LLMClient['chat']['completions']['create']>>,
@@ -70,7 +74,13 @@ export function createUsageReporter(options: UsageReporterOptions): UsageReporte
     // A real request always spends prompt tokens, so an all zero report
     // means the provider sent no usage. Reconciling against it would
     // refund the whole estimate for tokens that were actually spent.
-    return total === 0 ? undefined : total;
+    if (cacheReadsCount) return total === 0 ? undefined : total;
+
+    // Anthropic's limit skips cache reads; counting them would throttle cached traffic harder
+    // than the provider does. Nothing left means the report carried no countable usage.
+    const counted = total - (usage.cacheReadTokens ?? 0);
+
+    return counted > 0 ? counted : undefined;
   }
 
   function reportSuccess(usage: TokenUsage | undefined, ctx: AttemptContext): void {

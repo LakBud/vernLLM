@@ -487,7 +487,15 @@ describe('fromBedrock, native structured output', () => {
         { type: 'text-delta', delta: '{"ok":true}' },
         { type: 'tool_call_delta', index: 1, id: 'call_1', name: 'get_weather' },
         { type: 'tool_call_delta', index: 1, argumentsDelta: '{"city":"NYC"}' },
-        { type: 'usage', usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } },
+        {
+          type: 'usage',
+          usage: {
+            prompt_tokens: 12,
+            completion_tokens: 6,
+            total_tokens: 18,
+            prompt_tokens_details: {},
+          },
+        },
       ]);
     },
   );

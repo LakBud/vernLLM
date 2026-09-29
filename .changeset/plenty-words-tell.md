@@ -21,6 +21,4 @@ history: [
 
 Models: on Claude Fable 5.1 and later, Opus 5.5 and later, and every Claude major 6 and later, a forced `toolChoice` throws `unsupported_capability` before dispatch, and `jsonSchema` uses native structured output. GPT-6 and later with tools get `reasoning_effort: "none"` when no reasoning was asked for, and throw `unsupported_capability` when it was. `forcedToolChoiceUnsupportedModels` and `noReasoningToolModels` replace either rule.
 
-Usage: `fromAnthropic` now counts `cache_creation_input_tokens` in `promptTokens` and `totalTokens`, since Anthropic counts cache writes toward its input rate limit. Before, the rate limiter saw more headroom than it had whenever prompt caching wrote to the cache. Cache reads stay out, as Anthropic doesn't count them. Reported usage rises by the cache writes for those calls.
-
 Existing code keeps compiling unless it has an exhaustive `switch` over `LLMErrorCode` or `WireStreamChunk`, which needs a case for `reader_stall_timeout` or `thinking_block`, or builds `AttemptContext`/`PreDispatchContext` objects by hand, which need the new fields. At runtime every request that works today behaves the same. The requests that change already fail at the provider: they now either succeed or fail earlier with a clearer error.

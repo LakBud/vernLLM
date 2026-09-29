@@ -3,10 +3,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { fromBedrock } from '../../src/index.js';
 import { at, stubbedClient, type ConverseHandler } from '../helpers.js';
 
-function makeFakeBedrockClient(text: string) {
+/** `usage: null` builds a response that carries no usage block at all. */
+function makeFakeBedrockClient(
+  text: string,
+  usage: Record<string, unknown> | null = { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+) {
   const converse = vi.fn<ConverseHandler>(async (_params, _options) => ({
     output: { message: { content: [{ text }] } },
-    usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+    ...(usage ? { usage } : {}),
   }));
 
   return { client: stubbedClient({ converse }), converse };
@@ -220,6 +224,123 @@ describe('fromBedrock', () => {
       prompt_tokens: 8,
       completion_tokens: 2,
       total_tokens: 10,
+      prompt_tokens_details: {},
+    });
+  });
+
+  describe('cache usage', () => {
+    const run = async (usage: Record<string, unknown> | null) => {
+      const { client } = makeFakeBedrockClient('x', usage);
+
+      return fromBedrock(client).chat.completions.create(
+        {
+          model: 'm',
+          temperature: 0.2,
+          max_tokens: 10,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      );
+    };
+
+    it('folds cache reads and writes into prompt_tokens and keeps the reported total', async () => {
+      const result = await run({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 6210,
+        cacheReadInputTokens: 5000,
+        cacheWriteInputTokens: 1200,
+      });
+
+      // With caching on, prompt plus completion now agrees with Bedrock's own total.
+      expect(result.usage).toEqual({
+        prompt_tokens: 6208,
+        completion_tokens: 2,
+        total_tokens: 6210,
+        prompt_tokens_details: { cached_tokens: 5000, cache_write_tokens: 1200 },
+      });
+    });
+
+    it('reports cache writes by TTL from cacheDetails', async () => {
+      const result = await run({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 2010,
+        cacheWriteInputTokens: 2000,
+        cacheDetails: [
+          { ttl: '5m', inputTokens: 1200 },
+          { ttl: '1h', inputTokens: 800 },
+        ],
+      });
+
+      expect(result.usage?.prompt_tokens_details).toEqual({
+        cache_write_tokens: 2000,
+        cache_write_tokens_by_ttl: { '5m': 1200, '1h': 800 },
+      });
+    });
+
+    it('counts a TTL entry without inputTokens as 0, and skips one without a TTL', async () => {
+      const result = await run({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10,
+        cacheDetails: [{ ttl: '5m' }, { inputTokens: 40 }],
+      });
+
+      expect(result.usage?.prompt_tokens_details?.cache_write_tokens_by_ttl).toEqual({ '5m': 0 });
+    });
+
+    it('omits the TTL split when cacheDetails is empty or has no usable entry', async () => {
+      const empty = await run({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10,
+        cacheDetails: [],
+      });
+      const unlabeled = await run({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10,
+        cacheDetails: [{ inputTokens: 40 }],
+      });
+
+      expect(empty.usage?.prompt_tokens_details).not.toHaveProperty('cache_write_tokens_by_ttl');
+      expect(unlabeled.usage?.prompt_tokens_details).not.toHaveProperty(
+        'cache_write_tokens_by_ttl',
+      );
+    });
+
+    it('handles reads without writes, and writes without reads', async () => {
+      const reads = await run({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 510,
+        cacheReadInputTokens: 500,
+      });
+      const writes = await run({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 310,
+        cacheWriteInputTokens: 300,
+      });
+
+      expect(reads.usage?.prompt_tokens).toBe(508);
+      expect(writes.usage?.prompt_tokens).toBe(308);
+    });
+
+    it('leaves prompt_tokens undefined when inputTokens is missing, rather than reporting the cache counts alone', async () => {
+      const result = await run({ outputTokens: 2, totalTokens: 502, cacheReadInputTokens: 500 });
+
+      expect(result.usage?.prompt_tokens).toBeUndefined();
+      expect(result.usage?.prompt_tokens_details?.cached_tokens).toBe(500);
+    });
+
+    it('reports nothing for a response without usage', async () => {
+      const result = await run(null);
+
+      expect(result.usage?.prompt_tokens).toBeUndefined();
+      expect(result.usage?.total_tokens).toBeUndefined();
+      expect(result.usage?.prompt_tokens_details?.cached_tokens).toBeUndefined();
     });
   });
 

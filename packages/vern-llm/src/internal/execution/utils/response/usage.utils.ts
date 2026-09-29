@@ -11,6 +11,13 @@ export interface WireUsage {
   completion_tokens?: number;
   total_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
+  /** Cache split of `prompt_tokens`. Follows OpenAI and OpenRouter naming. */
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+    /** Writes by TTL label, e.g. `{ '5m': 1200, '1h': 800 }`. */
+    cache_write_tokens_by_ttl?: Record<string, number>;
+  };
 }
 
 /** Call-level fields stamped onto every `TokenUsage`, not carried by the wire usage itself. */
@@ -28,12 +35,20 @@ export interface TokenUsageMeta {
  */
 export function toTokenUsage(wireUsage: WireUsage, meta: TokenUsageMeta): TokenUsage {
   const reasoningTokens = wireUsage.completion_tokens_details?.reasoning_tokens;
+  const details = wireUsage.prompt_tokens_details;
 
   return {
     promptTokens: wireUsage.prompt_tokens ?? 0,
     completionTokens: wireUsage.completion_tokens ?? 0,
     totalTokens: wireUsage.total_tokens ?? 0,
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    ...(details?.cached_tokens !== undefined ? { cacheReadTokens: details.cached_tokens } : {}),
+    ...(details?.cache_write_tokens !== undefined
+      ? { cacheWriteTokens: details.cache_write_tokens }
+      : {}),
+    ...(details?.cache_write_tokens_by_ttl
+      ? { cacheWriteTokensByTtl: { ...details.cache_write_tokens_by_ttl } }
+      : {}),
     requestId: meta.requestId,
     model: meta.model,
     provider: meta.providerName,

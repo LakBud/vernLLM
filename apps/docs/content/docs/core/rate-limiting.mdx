@@ -111,6 +111,18 @@ Image base64 is never read as text, since providers bill images by pixels. This 
 rough. Once the call completes, the estimate is reconciled against the provider's real reported
 usage. A usage report that is all zero is treated as missing, so the estimate stays.
 
+### Cache reads
+
+`promptTokens` includes cache reads, but Anthropic's input token limit does not count them. So for
+`fromAnthropic`, the limiter reconciles against `totalTokens` less `cacheReadTokens`, and counting
+cached traffic never throttles you harder than Anthropic does. If nothing is left after that, the
+estimate stays, like an all zero report.
+
+Every other adapter reconciles against the full `totalTokens`. OpenAI and Gemini totals already
+include cached input, and Bedrock's reported total has always included cache reads and writes. A
+custom client whose provider skips cache reads sets `cacheReadsCountTowardRateLimit: false`, see
+[Provider](/docs/customization/provider#reporting-usage).
+
 ### estimateFraction
 
 Most calls don't use their whole `max_tokens` budget, so reserving the full estimate under-throttles

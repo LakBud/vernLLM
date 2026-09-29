@@ -16,6 +16,7 @@ import {
 } from './reasoning.js';
 import { ensureJsonKeyword, toOpenAIMessages } from './request.js';
 import { toWireStreamChunks } from './stream.js';
+import { normalizeUsage } from './usage.js';
 
 import type { Logger } from '../../logger.js';
 import type { LLMClient } from '../../types/index.js';
@@ -102,11 +103,15 @@ export function fromOpenAICompatible(
         async create(params, requestOptions) {
           const { data, headers } = await send<WireResponse>(buildRequest(params), requestOptions);
 
-          if (headers && data && typeof data === 'object') {
-            attachRateLimitHint(data, parseOpenAIRateLimitHeaders(headers));
+          // Normalized before the hint is attached: the hint is a non enumerable symbol property,
+          // which the copy would drop.
+          const result = data?.usage ? { ...data, usage: normalizeUsage(data.usage) } : data;
+
+          if (headers && result && typeof result === 'object') {
+            attachRateLimitHint(result, parseOpenAIRateLimitHeaders(headers));
           }
 
-          return data;
+          return result;
         },
 
         async *createStream(params, requestOptions) {

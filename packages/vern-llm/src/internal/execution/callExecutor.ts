@@ -146,6 +146,7 @@ export class CallExecutor {
       providerName,
       isFallback: this.isFallback,
       maxRetries: this.maxRetries,
+      cacheReadsCountTowardRateLimit: client.cacheReadsCountTowardRateLimit,
       emitEvent: (event, ctx) =>
         emitEvent(event, ctx, reportEvent, middleware, middlewareTimeoutMs, this.logger),
       logger: this.logger,

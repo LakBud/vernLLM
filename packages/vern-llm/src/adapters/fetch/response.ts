@@ -1,6 +1,16 @@
 import type { WireToolCall } from '../../types/index.js';
 import type { FetchAdapterConfig } from './types.js';
 
+type MappedUsage = NonNullable<ReturnType<FetchAdapterConfig['mapResponse']>['usage']>;
+
+function hasCacheCounts(usage: MappedUsage): boolean {
+  return (
+    usage.cacheReadTokens !== undefined ||
+    usage.cacheWriteTokens !== undefined ||
+    usage.cacheWriteTokensByTtl !== undefined
+  );
+}
+
 /** Maps what `mapResponse` returned onto the wire response. */
 export function toWireResponse(mapped: ReturnType<FetchAdapterConfig['mapResponse']>) {
   const { content, usage, toolCalls } = mapped;
@@ -28,6 +38,15 @@ export function toWireResponse(mapped: ReturnType<FetchAdapterConfig['mapRespons
           prompt_tokens: usage.promptTokens,
           completion_tokens: usage.completionTokens,
           total_tokens: usage.totalTokens,
+          ...(hasCacheCounts(usage)
+            ? {
+                prompt_tokens_details: {
+                  cached_tokens: usage.cacheReadTokens,
+                  cache_write_tokens: usage.cacheWriteTokens,
+                  cache_write_tokens_by_ttl: usage.cacheWriteTokensByTtl,
+                },
+              }
+            : {}),
         }
       : undefined,
   };

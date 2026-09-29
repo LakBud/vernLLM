@@ -65,6 +65,7 @@ export interface GeminiModels {
       candidatesTokenCount?: number;
       totalTokenCount?: number;
       thoughtsTokenCount?: number;
+      cachedContentTokenCount?: number;
     };
   }>;
 
@@ -84,6 +85,7 @@ export interface GeminiModels {
         candidatesTokenCount?: number;
         totalTokenCount?: number;
         thoughtsTokenCount?: number;
+        cachedContentTokenCount?: number;
       };
     }>
   >;

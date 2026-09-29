@@ -9,10 +9,10 @@ page only covers the ones that aren't.
 
 ## 3.0.0: Adapters, streaming, tools, rate limits, usage, and provider request changes
 
-Seven changes affect code that works today: adapters import from `vern-llm/adapters`, `fromGemini`
+Six changes affect code that works today: adapters import from `vern-llm/adapters`, `fromGemini`
 takes the top level client only, `fromBedrock` moved to `vern-llm-bedrock`, a `break` out of
-`chunks` cancels the stream, tool arguments come back as the `argumentsSchema` output, invalid
-rate limits throw, and target names must be unique. The rest is type level, one usage count, and requests the provider
+`chunks` cancels the stream, tool arguments come back as the `argumentsSchema` output, and invalid
+rate limits throw. The rest is type level, one usage count, and requests the provider
 already rejects. Skip to what applies to you:
 [adapters import from `vern-llm/adapters`](#300-adapters-import-from-vern-llmadapters),
 [`fromGemini` takes `ai`](#300-fromgemini-takes-ai),
@@ -20,9 +20,8 @@ already rejects. Skip to what applies to you:
 [stopping a stream early cancels it](#300-stopping-a-stream-early-cancels-it),
 [tool arguments are the `argumentsSchema` output](#300-tool-arguments-are-the-argumentsschema-output),
 [invalid rate limits throw](#300-invalid-rate-limits-throw),
-[target names must be unique](#300-target-names-must-be-unique),
 [new union members](#300-new-union-members),
-[Anthropic prompt tokens include cache writes](#300-anthropic-prompt-tokens-include-cache-writes),
+[`promptTokens` includes cache reads and writes](#300-prompttokens-includes-cache-reads-and-writes),
 [Claude forced `tool_choice`](#300-claude-models-that-reject-a-forced-tool_choice), and
 [GPT-6 tools on Chat Completions](#300-gpt-6-tools-on-chat-completions).
 
@@ -117,32 +116,6 @@ fractional `maxConcurrent` or `maxQueueSize`, a `maxQueueMs` past `2147483647`, 
 `requestsPerMinute`. `0` still means unlimited, or no queue timeout. See
 [Rate Limiting](/docs/core/rate-limiting#options-reference) for the accepted ranges.
 
-### 3.0.0: Target names must be unique
-
-`VernLLM` now throws a plain `Error` at construction when two targets share a name. The primary
-and every fallback are checked, defaults included, so a fallback named `primary` collides with an
-unnamed primary, and one named `fallback[0]` collides with the first unnamed fallback:
-
-```ts
-// Before: accepted, usage and events for both targets reported as `claude`
-new VernLLM({
-  client,
-  model,
-  name: 'claude',
-  fallback: { client: bedrock, model, name: 'claude' },
-});
-
-// After: give each target its own name
-new VernLLM({
-  client,
-  model,
-  name: 'claude',
-  fallback: { client: bedrock, model, name: 'bedrock' },
-});
-```
-
-Names identify targets in usage, events and observability, so a shared name merged their data.
-
 ### 3.0.0: New union members
 
 `LLMErrorCode` gains `'reader_stall_timeout'`, and `WireStreamChunk` gains
@@ -160,13 +133,36 @@ switch (error.code) {
 A custom adapter that only yields chunks is unaffected. `reader_stall_timeout` only appears when you
 opt into [`readerStallTimeoutMs`](/docs/core/streaming#reader-stall-timeout).
 
-### 3.0.0: Anthropic prompt tokens include cache writes
+### 3.0.0: `promptTokens` includes cache reads and writes
 
-`fromAnthropic` now adds `cache_creation_input_tokens` to `promptTokens` and `totalTokens`, since
-Anthropic counts cache writes toward its input rate limit. On calls that write to the prompt cache,
-`onUsage`, the `'usage'` event, and the rate limiter all see the higher number. Cache reads are
-still left out. If you compute cost from `promptTokens`, price cache writes from the provider's own
-usage fields rather than subtracting them back out.
+`promptTokens` is now every input token the provider processed: uncached input plus cache reads plus
+cache writes. OpenAI compatible adapters and `fromGemini` already worked this way. Two adapters
+change:
+
+- `fromAnthropic` adds `cache_read_input_tokens` and `cache_creation_input_tokens` to
+  `input_tokens`. Before, only cache writes were added.
+- `fromBedrock` adds `cacheReadInputTokens` and `cacheWriteInputTokens` to `inputTokens`. Before, it
+  reported `inputTokens` alone. `totalTokens` is still what Bedrock reports.
+
+On calls that use the prompt cache, `onUsage`, the `'usage'` event, and OpenTelemetry's
+`gen_ai.usage.input_tokens` now show the higher number. `fromFetch` reports whatever `mapResponse`
+returns, so add cache tokens to `promptTokens` there if your mapper leaves them out.
+
+If you added cache reads to `promptTokens` yourself, remove that, or they count twice. The split is
+on `TokenUsage` as `cacheReadTokens`, `cacheWriteTokens`, and `cacheWriteTokensByTtl`:
+
+```ts
+// Before: promptTokens left cache reads out on Anthropic and Bedrock
+const total = usage.promptTokens + (usage.cacheReadTokens ?? 0);
+
+// After: promptTokens already includes them
+const total = usage.promptTokens;
+const uncached = usage.promptTokens - (usage.cacheReadTokens ?? 0) - (usage.cacheWriteTokens ?? 0);
+```
+
+The token rate limiter is unaffected. Anthropic's limit skips cache reads, so `fromAnthropic`
+reconciles against the total less `cacheReadTokens`, and no other adapter's number changes. See
+[Cache tokens](/docs/core/usage-tracking#cache-tokens).
 
 ### 3.0.0: Claude models that reject a forced `tool_choice`
 

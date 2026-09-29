@@ -173,6 +173,70 @@ describe('createUsageReporter, actualTokensFor', () => {
     const usage = baseUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
     expect(reporter.actualTokensFor(usage)).toBeUndefined();
   });
+
+  describe('cache reads', () => {
+    const cached = () =>
+      baseUsage({
+        promptTokens: 1000,
+        completionTokens: 50,
+        totalTokens: 1050,
+        cacheReadTokens: 800,
+      });
+
+    it('counts them by default', () => {
+      expect(createUsageReporter(baseOptions()).actualTokensFor(cached())).toBe(1050);
+    });
+
+    it('counts them when the flag is true', () => {
+      const reporter = createUsageReporter(baseOptions({ cacheReadsCountTowardRateLimit: true }));
+
+      expect(reporter.actualTokensFor(cached())).toBe(1050);
+    });
+
+    it('leaves them out when the flag is false', () => {
+      const reporter = createUsageReporter(baseOptions({ cacheReadsCountTowardRateLimit: false }));
+
+      expect(reporter.actualTokensFor(cached())).toBe(250);
+    });
+
+    it('leaves them out of the prompt plus completion fallback too', () => {
+      const reporter = createUsageReporter(baseOptions({ cacheReadsCountTowardRateLimit: false }));
+      const usage = baseUsage({
+        promptTokens: 1000,
+        completionTokens: 50,
+        totalTokens: 0,
+        cacheReadTokens: 800,
+      });
+
+      expect(reporter.actualTokensFor(usage)).toBe(250);
+    });
+
+    it('changes nothing when the flag is false and no cache reads were reported', () => {
+      const reporter = createUsageReporter(baseOptions({ cacheReadsCountTowardRateLimit: false }));
+      const usage = baseUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
+
+      expect(reporter.actualTokensFor(usage)).toBe(15);
+    });
+
+    it('returns undefined when nothing is left after leaving cache reads out', () => {
+      const reporter = createUsageReporter(baseOptions({ cacheReadsCountTowardRateLimit: false }));
+      const usage = baseUsage({
+        promptTokens: 800,
+        completionTokens: 0,
+        totalTokens: 800,
+        cacheReadTokens: 800,
+      });
+
+      expect(reporter.actualTokensFor(usage)).toBeUndefined();
+    });
+
+    it('returns undefined for all zero usage when the flag is false', () => {
+      const reporter = createUsageReporter(baseOptions({ cacheReadsCountTowardRateLimit: false }));
+      const usage = baseUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+
+      expect(reporter.actualTokensFor(usage)).toBeUndefined();
+    });
+  });
 });
 
 // `reportSuccess`/`reportFailure` only build the `'usage'`/`'usage_failure'`

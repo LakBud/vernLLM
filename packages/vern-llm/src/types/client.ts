@@ -68,6 +68,9 @@ export interface LLMClient {
    */
   supportsJsonObjectMode?: boolean;
 
+  /** Whether cache reads count toward this provider's token rate limit. Default `true`. */
+  cacheReadsCountTowardRateLimit?: boolean;
+
   /** Which adapter built this client. Every built in adapter sets it; a hand written client may leave it out. */
   adapter?: AdapterInfo;
 
@@ -140,6 +143,13 @@ export interface LLMClient {
           completion_tokens?: number;
           total_tokens?: number;
           completion_tokens_details?: { reasoning_tokens?: number };
+          /** Cache split of `prompt_tokens`. Follows OpenAI and OpenRouter naming. */
+          prompt_tokens_details?: {
+            cached_tokens?: number;
+            cache_write_tokens?: number;
+            /** Writes by TTL label, e.g. `{ '5m': 1200, '1h': 800 }`. */
+            cache_write_tokens_by_ttl?: Record<string, number>;
+          };
         };
       }>;
 

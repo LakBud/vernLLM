@@ -2,6 +2,7 @@ import { LLMError, type WireStreamChunk } from 'vern-llm';
 
 import { bytesToBase64 } from './bytes.js';
 import { throwMissingForcedJsonSchemaTool } from './structuredOutput.js';
+import { toWireUsage } from './usage.js';
 
 import type { ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime';
 
@@ -131,11 +132,7 @@ function* onBlockStop(state: StreamState, event: BlockStop): Generator<WireStrea
 function usageChunk(usage: Usage): WireStreamChunk {
   return {
     type: 'usage',
-    usage: {
-      prompt_tokens: usage.inputTokens,
-      completion_tokens: usage.outputTokens,
-      total_tokens: usage.totalTokens,
-    },
+    usage: toWireUsage(usage),
   };
 }
 

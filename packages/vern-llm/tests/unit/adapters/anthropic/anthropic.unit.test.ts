@@ -81,10 +81,11 @@ describe('fromAnthropic', () => {
       prompt_tokens: 7,
       completion_tokens: 3,
       total_tokens: 10,
+      prompt_tokens_details: {},
     });
   });
 
-  it('counts cache writes as prompt tokens and leaves cache reads out', async () => {
+  it('counts cache reads and writes as prompt tokens, and reports the split', async () => {
     const { client } = makeFakeAnthropicClient('x', {
       input_tokens: 7,
       cache_creation_input_tokens: 1200,
@@ -97,13 +98,85 @@ describe('fromAnthropic', () => {
       { signal: new AbortController().signal },
     );
 
-    expect(result.usage).toEqual({ prompt_tokens: 1207, completion_tokens: 3, total_tokens: 1210 });
+    expect(result.usage).toEqual({
+      prompt_tokens: 6207,
+      completion_tokens: 3,
+      total_tokens: 6210,
+      prompt_tokens_details: { cached_tokens: 5000, cache_write_tokens: 1200 },
+    });
+  });
+
+  it('splits cache writes by TTL', async () => {
+    const { client } = makeFakeAnthropicClient('x', {
+      input_tokens: 7,
+      cache_creation_input_tokens: 2000,
+      cache_creation: { ephemeral_5m_input_tokens: 1200, ephemeral_1h_input_tokens: 800 },
+      output_tokens: 3,
+    } as never);
+
+    const result = await fromAnthropic(client).chat.completions.create(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage?.prompt_tokens_details).toEqual({
+      cache_write_tokens: 2000,
+      cache_write_tokens_by_ttl: { '5m': 1200, '1h': 800 },
+    });
+  });
+
+  it('counts a missing or non finite TTL bucket as 0', async () => {
+    const { client } = makeFakeAnthropicClient('x', {
+      input_tokens: 7,
+      cache_creation: { ephemeral_5m_input_tokens: NaN },
+      output_tokens: 3,
+    } as never);
+
+    const result = await fromAnthropic(client).chat.completions.create(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage?.prompt_tokens_details?.cache_write_tokens_by_ttl).toEqual({
+      '5m': 0,
+      '1h': 0,
+    });
+  });
+
+  it('omits the TTL split when cache_creation is null', async () => {
+    const { client } = makeFakeAnthropicClient('x', {
+      input_tokens: 7,
+      cache_creation: null,
+      output_tokens: 3,
+    } as never);
+
+    const result = await fromAnthropic(client).chat.completions.create(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage?.prompt_tokens_details).not.toHaveProperty('cache_write_tokens_by_ttl');
+  });
+
+  it('reports no cache split when the response carries no usage', async () => {
+    const create = vi.fn(async () => ({ content: [{ type: 'text', text: 'x' }] }));
+
+    const result = await fromAnthropic({ messages: { create } } as never).chat.completions.create(
+      { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result.usage?.prompt_tokens).toBeUndefined();
+    expect(result.usage?.prompt_tokens_details).toBeUndefined();
   });
 
   it.each([
     ['a null cache write count', { input_tokens: 7, cache_creation_input_tokens: null }, 7],
     ['a non finite cache write count', { input_tokens: 7, cache_creation_input_tokens: NaN }, 7],
+    ['a null cache read count', { input_tokens: 7, cache_read_input_tokens: null }, 7],
+    ['a non finite cache read count', { input_tokens: 7, cache_read_input_tokens: NaN }, 7],
     ['cache writes without input_tokens', { cache_creation_input_tokens: 40 }, 40],
+    ['cache reads without input_tokens', { cache_read_input_tokens: 500 }, 500],
     ['no input counts at all', {}, undefined],
   ])('handles %s', async (_label, usage, expected) => {
     const { client } = makeFakeAnthropicClient('x', { ...usage, output_tokens: 3 } as never);
