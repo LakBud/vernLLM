@@ -324,6 +324,35 @@ Sharing requires both middleware to import the same key, so two middleware can o
 purpose. `ctx.state` is created once per logical call and threaded into every `transform`/`wrap`
 that call triggers.
 
+A caller can seed `ctx.state` before any middleware runs, with `state` on the call. Build each entry
+with `stateEntry`, which checks the value against the key's type:
+
+```ts title="ctx-state-seeding.ts"
+import { createStateKey, stateEntry } from 'vern-llm';
+
+const routeDecisionKey = createStateKey<RouteDecision>('router.decision');
+
+await llm.call({ userContent, state: [stateEntry(routeDecisionKey, decision)] });
+
+// in any middleware
+wrap: async (request, next, ctx) => {
+  const decision = ctx.state.get(routeDecisionKey);
+  return next();
+};
+```
+
+Raw `[key, value]` pairs also work, without the type check. A later entry wins over an earlier one
+with the same key. Each call starts from its own seed, and middleware writes never reach the
+caller's array or the next call. `state` is never sent to the provider and never reported on events
+or usage. Anything that isn't an array of `[key, value]` pairs, with keys made by `createStateKey`,
+throws `invalid_params` before any hook runs. It is not part of the `cachedCall` cache key.
+
+<Callout type="info">
+  With `cachedCall`, each caller's own `wrap` sees that caller's `state`. A caller that joins an in
+  flight request shares it, so the shared request's `transform` and `dispatch` see the state of the
+  caller that started it.
+</Callout>
+
 `ctx.own` is a plain `Record<string, unknown>`, pre-namespaced to that one middleware, for scratch
 state it doesn't share with anyone else. It is the same object for every hook of one logical call,
 retries included, so a value set in `wrap` is there in `transform` and `onEvent`. The next call

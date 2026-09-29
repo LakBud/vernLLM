@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { LLMError, type VernLLMMiddleware } from '../../../../src/types/index.js';
+import {
+  createStateKey,
+  LLMError,
+  stateEntry,
+  type VernLLMMiddleware,
+} from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, createMockClient, jsonResponse, textResponse } from '../../../helpers.js';
 
@@ -466,5 +471,94 @@ describe('VernLLM.call, context', () => {
     await llm.call(call);
 
     expect(seen).toEqual([undefined]);
+  });
+});
+
+describe('VernLLM.call, state', () => {
+  const call = { userContent: 'hi', jsonMode: false as const };
+  const key = createStateKey<string>('test.key');
+
+  function spied() {
+    const hook = vi.fn();
+    const middleware: VernLLMMiddleware = {
+      name: 'spy',
+      enabled: () => {
+        hook('enabled');
+        return true;
+      },
+      wrap: async (_request, next) => {
+        hook('wrap');
+        return next();
+      },
+      transform: () => {
+        hook('transform');
+        return {};
+      },
+      dispatch: async (_request, next) => {
+        hook('dispatch');
+        await next();
+      },
+      onEvent: () => hook('onEvent'),
+    };
+
+    return { hook, middleware };
+  }
+
+  it.each([
+    ['null', null],
+    ['an object', {}],
+    ['a string', 'state'],
+    ['an entry that is not an array', [key]],
+    ['an entry with one item', [[key]]],
+    ['an entry with three items', [[key, 'a', 'b']]],
+    ['a string key', [['tenant', 'a']]],
+    ['a null key', [[null, 'a']]],
+    ['a plain object key', [[{}, 'a']]],
+    ['a key with a non string debugName', [[{ debugName: 1 }, 'a']]],
+    ['a class instance key', [[new Date(), 'a']]],
+  ])('rejects %s before any hook runs or any request is sent', async (_label, state) => {
+    const { client, create } = createMockClient([textResponse('ok')]);
+    const { hook, middleware } = spied();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+
+    const rejection = llm.call({ ...call, state: state as never });
+
+    await expect(rejection).rejects.toBeInstanceOf(LLMError);
+    await expect(rejection).rejects.toMatchObject({
+      type: 'invalid_params',
+      message: expect.stringContaining('`state`'),
+      retryable: false,
+    });
+    expect(hook).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('gives a stream call the same rejection, before it opens anything', async () => {
+    const { client, create } = createMockClient([textResponse('ok')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await expect(llm.call({ ...call, stream: true, state: 5 as never })).rejects.toMatchObject({
+      type: 'invalid_params',
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an empty state and none at all', async () => {
+    const { client } = createMockClient([textResponse('a'), textResponse('b')]);
+    const llm = new VernLLM({ client, model: 'test-model' });
+
+    await expect(llm.call({ ...call, state: [] })).resolves.toBe('a');
+    await expect(llm.call(call)).resolves.toBe('b');
+  });
+
+  it('runs every hook once the state is valid', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    const { hook, middleware } = spied();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+
+    await llm.call({ ...call, state: [stateEntry(key, 'v')] });
+
+    expect(hook).toHaveBeenCalledWith('wrap');
+    expect(hook).toHaveBeenCalledWith('transform');
   });
 });

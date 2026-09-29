@@ -20,6 +20,8 @@ import {
   createMiddleware,
   createStateKey,
   createMiddlewareStateBag,
+  stateEntry,
+  type MiddlewareStateEntry,
   type LLMClient,
   type JsonSchemaSpec,
   type RetryAttempt,
@@ -125,6 +127,11 @@ describe('package entrypoint exports', () => {
     const bag = createMiddlewareStateBag();
     bag.set(key, 'value');
     expect(bag.get(key)).toBe('value');
+
+    expect(typeof stateEntry).toBe('function');
+
+    const entry: MiddlewareStateEntry = stateEntry(key, 'seeded');
+    expect(createMiddlewareStateBag([entry]).get(key)).toBe('seeded');
 
     const middleware = createMiddleware({ name: 'test', onError: () => {} });
     expect(middleware.name).toBe('test');

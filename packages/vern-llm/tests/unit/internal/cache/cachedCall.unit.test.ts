@@ -17,6 +17,7 @@ import type {
   CachedToolCallParams,
   CallMeta,
   LLMRequestShape,
+  MiddlewareStateEntry,
 } from '../../../../src/types/index.js';
 import type { ToolDefinition } from '../../../../src/types/tools.js';
 
@@ -242,6 +243,33 @@ describe('VernLLM.cachedCall, context', () => {
         call: { userContent: 'hi', context: 'nope' as never },
       }),
     ).rejects.toMatchObject({ type: 'invalid_params', code: 'invalid_context' });
+
+    expect(cache.get).not.toHaveBeenCalled();
+    expect(cache.resolveKey).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('VernLLM.cachedCall, state', () => {
+  it('accepts a state inside `call`', () => {
+    expectTypeOf<CachedJsonModeDisabledCallParams['call']>().toHaveProperty('state');
+    expectTypeOf<LLMRequestShape['state']>().toEqualTypeOf<
+      readonly MiddlewareStateEntry[] | undefined
+    >();
+  });
+
+  it('rejects an invalid state with invalid_params before touching the cache or the provider', async () => {
+    const { client, create } = createMockClient([jsonResponse({ ok: true })]);
+    const cache = { get: vi.fn(), set: vi.fn(), resolveKey: vi.fn() };
+    const llm = new VernLLM({ client, model: 'test-model', cache: cache as never });
+
+    await expect(
+      llm.cachedCall({
+        cacheKey: 'k',
+        ttl: 100,
+        call: { userContent: 'hi', state: 'nope' as never },
+      }),
+    ).rejects.toMatchObject({ type: 'invalid_params' });
 
     expect(cache.get).not.toHaveBeenCalled();
     expect(cache.resolveKey).not.toHaveBeenCalled();
