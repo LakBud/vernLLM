@@ -1,7 +1,8 @@
 import { LLMError, type RetryAttempt } from './errors.js';
 
-import type { CircuitBreakerOptions, CircuitState } from '../circuitBreaker.js';
+import type { CircuitState } from '../circuitBreaker.js';
 import type { RetryBudgetOptions } from '../internal/retryBudget.js';
+import type { CircuitBreakerOption } from '../internal/utils/circuit-breaker/circuitBreakerAdapter.utils.js';
 import type { RateLimitOption } from '../internal/utils/rate-limit/rateLimitAdapter.utils.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
@@ -28,8 +29,8 @@ export interface FallbackTarget {
   defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   defaultBudgetTokens?: number;
   nonRetryableStatus?: number[];
-  /** This target's own circuit breaker, independent of every other target's. Not inherited from the parent's `circuitBreaker`. */
-  circuitBreaker?: boolean | CircuitBreakerOptions;
+  /** This target's own breaker, or a shared `CircuitBreakerAdapter`. Not inherited from the parent's `circuitBreaker`. */
+  circuitBreaker?: CircuitBreakerOption;
   /** This target's own rate limiter, independent of every other target's. Not inherited from the parent's `rateLimit`. */
   rateLimit?: RateLimitOption;
   /** This target's own retry budget, independent of every other target's. Not inherited from the parent's `retryBudget`. */

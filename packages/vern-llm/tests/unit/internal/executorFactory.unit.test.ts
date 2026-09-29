@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { CircuitBreaker } from '../../../src/circuitBreaker.js';
 import {
   buildExecutors,
   type ExecutorFactoryShared,
@@ -149,6 +150,24 @@ describe('buildExecutors, breaker only built when configured', () => {
 
     expect(executors[0]!.getCircuitState()).toBeDefined();
     expect(executors[1]!.getCircuitState()).toBeUndefined();
+  });
+
+  it('a fallback target uses a CircuitBreakerAdapter as its own breaker', () => {
+    const adapter = new CircuitBreaker({ threshold: 1 });
+    const executors = buildExecutors(target(), [target({ circuitBreaker: adapter })], shared());
+
+    adapter.open();
+
+    expect(executors[0]!.getCircuitState()).toBeUndefined();
+    expect(executors[1]!.getCircuitState()).toBe('open');
+  });
+
+  it('an incomplete adapter on a fallback target throws invalid_params', () => {
+    const incomplete = { assertClosed: vi.fn() } as never;
+
+    expect(() =>
+      buildExecutors(target(), [target({ circuitBreaker: incomplete })], shared()),
+    ).toThrow(expect.objectContaining({ type: 'invalid_params' }));
   });
 });
 

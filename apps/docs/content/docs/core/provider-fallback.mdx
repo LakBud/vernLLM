@@ -68,7 +68,7 @@ interface FallbackTarget {
   defaultReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   defaultBudgetTokens?: number;
   nonRetryableStatus?: number[];
-  circuitBreaker?: boolean | CircuitBreakerOptions;
+  circuitBreaker?: boolean | CircuitBreakerOptions | CircuitBreakerAdapter;
   rateLimit?: RateLimitOptions;
 }
 ```
@@ -104,11 +104,16 @@ instance. Each target's breaker and limiter, if any, are entirely its own. See
 [Circuit Breaker](/docs/core/circuit-breaker#scope) and
 [Rate Limiting](/docs/core/rate-limiting) for their individual behavior.
 
+A target's `circuitBreaker` also accepts a `CircuitBreakerAdapter`. Instances that pass the same
+adapter to the same fallback target share that target's health, for example across processes with
+a Redis backed adapter. See [Circuit Breaker](/docs/customization/circuit-breaker).
+
 ## Every target is independent
 
 Each target, primary and every fallback, gets its own `CallExecutor` under the hood: its own retry
 loop, its own per-attempt timeout, its own circuit breaker if configured, and its own rate limiter
-if configured. Tripping one target's breaker has no effect on any other target's.
+if configured. Tripping one target's breaker has no effect on any other target's, unless they were
+given the same `CircuitBreakerAdapter`.
 
 ```ts title="provider-fallback-independent-breakers.ts"
 const llm = new VernLLM({
