@@ -112,7 +112,8 @@ a Redis backed adapter. See [Circuit Breaker](/docs/customization/circuit-breake
 
 Each target, primary and every fallback, gets its own `CallExecutor` under the hood: its own retry
 loop, its own per-attempt timeout, its own circuit breaker if configured, and its own rate limiter
-if configured. Tripping one target's breaker has no effect on any other target's.
+if configured. Tripping one target's breaker has no effect on any other target's, unless they were
+given the same `CircuitBreakerAdapter`.
 
 ```ts title="provider-fallback-independent-breakers.ts"
 const llm = new VernLLM({
