@@ -72,12 +72,25 @@ const llm = new VernLLM({
   AWS SDK v3's standard retry mode retries transient failures, including `ThrottlingException`,
   internally by default (`maxAttempts: 3`), before VernLLM's own retry loop ever sees them. Pass
   `maxAttempts: 1` to `BedrockRuntimeClient` if you want VernLLM to be the sole retry authority. See
-  [SDK-internal retries](/docs/core/retries#sdk-internal-retries).
+  [SDK retries](#sdk-retries).
 </Callout>
 
 A `ConverseStreamCommand` response missing `stream`, which the SDK types as optional, throws
 `LLMError('api')`. Stream events the adapter doesn't model, including the SDK's generated
 `$unknown` member, are skipped.
+
+## SDK retries
+
+`fromBedrock` reads the client's retry setting when a `VernLLM` is constructed and logs a `warn`,
+once per process, if the SDK would retry on its own. The client is never modified. Those retries
+are hidden from VernLLM's retries, circuit breaker, rate limiter, and events, see
+[SDK-internal retries](/docs/core/retries#sdk-internal-retries) for why that matters.
+
+To make VernLLM the only retry owner, pass `maxAttempts: 1` and don't set a custom `retryStrategy`.
+An explicit `retryStrategy` overrides `maxAttempts`, so remove it or configure it for one attempt.
+The warning reads the attempt count of the SDK's own `StandardRetryStrategy` and
+`AdaptiveRetryStrategy`, including one you pass in. A fully custom strategy exposes no count, so it
+can't be checked and gets no warning, even if it still retries.
 
 ## Options
 

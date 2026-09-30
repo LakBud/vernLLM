@@ -3,6 +3,9 @@ import {
   type BedrockRuntimeClientConfig,
 } from '@aws-sdk/client-bedrock-runtime';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { VernLLM } from 'vern-llm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -807,20 +810,43 @@ describe('Bedrock adapter, SDK retry warning (real BedrockRuntimeClient)', () =>
     return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
   }
 
-  function client(maxAttempts?: BedrockRuntimeClientConfig['maxAttempts']) {
+  function client(
+    maxAttempts?: BedrockRuntimeClientConfig['maxAttempts'],
+    retryStrategy?: BedrockRuntimeClientConfig['retryStrategy'],
+  ) {
     return new BedrockRuntimeClient({
       region: 'us-east-1',
       credentials: { accessKeyId: 'a', secretAccessKey: 'b' },
       ...(maxAttempts === undefined ? {} : { maxAttempts }),
+      ...(retryStrategy === undefined ? {} : { retryStrategy }),
     });
   }
 
-  // `AWS_MAX_ATTEMPTS` would change the SDK default under test.
+  /** A real SDK strategy built from the class the client itself uses by default. */
+  async function sdkStrategy(attempts: number) {
+    const fallback = await client().config.retryStrategy();
+    const Strategy = fallback.constructor as new (attempts: number) => typeof fallback;
+    return new Strategy(attempts);
+  }
+
+  let awsDir: string;
+
+  // `AWS_MAX_ATTEMPTS` and a profile level `max_attempts` would change the SDK default under test,
+  // so point the SDK at empty config and credentials files.
   beforeEach(() => {
+    awsDir = mkdtempSync(join(tmpdir(), 'vern-aws-'));
+    writeFileSync(join(awsDir, 'config'), '');
+    writeFileSync(join(awsDir, 'credentials'), '');
     vi.stubEnv('AWS_MAX_ATTEMPTS', undefined);
+    vi.stubEnv('AWS_CONFIG_FILE', join(awsDir, 'config'));
+    vi.stubEnv('AWS_SHARED_CREDENTIALS_FILE', join(awsDir, 'credentials'));
+    vi.stubEnv('AWS_PROFILE', undefined);
     resetBedrockRetryWarning();
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(awsDir, { recursive: true, force: true });
+  });
 
   it("warns once the real client's default maxAttempts resolves", async () => {
     const logger = spyLogger();
@@ -864,11 +890,40 @@ describe('Bedrock adapter, SDK retry warning (real BedrockRuntimeClient)', () =>
     expect(later.warn).not.toHaveBeenCalled();
   });
 
-  it('stays silent for a hand written client with no AWS config', async () => {
+  it("warns from an SDK strategy's own attempts, not maxAttempts: 1", async () => {
     const logger = spyLogger();
-    const wrapper = { send: vi.fn() } as unknown as BedrockRuntimeClient;
 
-    new VernLLM({ client: fromBedrock(wrapper), model: 'm', logger });
+    new VernLLM({
+      client: fromBedrock(client(1, await sdkStrategy(5))),
+      model: 'm',
+      logger,
+    });
+
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledTimes(1));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('retries up to 4 times'));
+  });
+
+  it('stays silent for a one attempt SDK strategy, whatever maxAttempts says', async () => {
+    const logger = spyLogger();
+    const real = client(5, await sdkStrategy(1));
+    const resolved = vi.spyOn(real.config, 'retryStrategy');
+
+    new VernLLM({ client: fromBedrock(real), model: 'm', logger });
+
+    await vi.waitFor(() => expect(resolved).toHaveBeenCalled());
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent for a client whose config has no maxAttempts', async () => {
+    const logger = spyLogger();
+    const real = client();
+    vi.spyOn(real, 'send').mockImplementation(async () => ({}) as never);
+    // Simulate the missing configuration on the real client.
+    Object.defineProperty(real, 'config', { value: {}, configurable: true });
+
+    new VernLLM({ client: fromBedrock(real), model: 'm', logger });
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(logger.warn).not.toHaveBeenCalled();

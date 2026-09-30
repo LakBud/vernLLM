@@ -19,19 +19,29 @@ export function resetBedrockRetryWarning(): void {
  * and the once per process rule in step with it.
  *
  * `config.maxAttempts` is an async provider that counts the first call and also reads
- * `AWS_MAX_ATTEMPTS`, so the warning lands once it resolves. A provider that rejects, or a stubbed
- * client without one, stays silent: the warning is advice and must never fail construction.
+ * `AWS_MAX_ATTEMPTS`, so the warning lands once it resolves. An SDK strategy, default or passed as
+ * `retryStrategy`, keeps its own count on `maxAttemptsProvider`, which wins because the strategy
+ * is what actually retries. A fully custom strategy exposes no count, so it falls back to
+ * `config.maxAttempts` and can't be checked. A provider that rejects, or a stubbed client without
+ * one, stays silent: the warning is advice and must never fail construction.
  */
 export function bedrockRetryWarning(client: BedrockRuntimeClient): (logger: Logger) => void {
   return (logger) => {
     if (warned) return;
 
     Promise.resolve()
-      .then(() => {
+      .then(async () => {
         // A hand written client without `config.maxAttempts` throws here and lands in the `catch`,
         // the same as a provider that rejects.
-        const { maxAttempts } = (client as { config: { maxAttempts: () => unknown } }).config;
-        return maxAttempts();
+        const { maxAttempts, retryStrategy } = (
+          client as {
+            config: { maxAttempts: () => unknown; retryStrategy?: () => unknown };
+          }
+        ).config;
+        const strategy = await Promise.resolve(retryStrategy?.()).catch(() => undefined);
+        const own = (strategy as { maxAttemptsProvider?: unknown } | undefined)
+          ?.maxAttemptsProvider;
+        return typeof own === 'function' ? own() : maxAttempts();
       })
       .then((attempts) => {
         // Checked again here: several clients can resolve at once, and only the first may warn.
@@ -42,7 +52,9 @@ export function bedrockRetryWarning(client: BedrockRuntimeClient): (logger: Logg
         logger.warn(
           `[VernLLM] bedrock: the SDK client retries up to ${attempts - 1} times on its own, ` +
             "hidden from VernLLM's retries, circuit breaker, rate limiter, and events. Pass " +
-            'maxAttempts: 1 to the BedrockRuntimeClient so VernLLM is the only retry owner.',
+            'maxAttempts: 1 to the BedrockRuntimeClient so VernLLM is the only retry owner. With an ' +
+            'explicit retryStrategy, maxAttempts is ignored: remove that strategy or configure it ' +
+            'for one attempt.',
         );
       })
       .catch(() => {});

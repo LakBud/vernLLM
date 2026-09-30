@@ -117,9 +117,11 @@ If you want VernLLM to be the sole retry authority, disable the SDK's own retrie
 ```ts title="disable-sdk-retries.ts"
 const openai = new OpenAI({ apiKey, maxRetries: 0 });
 const anthropic = new Anthropic({ apiKey, maxRetries: 0 });
-// AWS SDK v3: new BedrockRuntimeClient({ maxAttempts: 1, ... })
+// AWS SDK v3: new BedrockRuntimeClient({ maxAttempts: 1, ... }), see the Bedrock page below
 // @google/genai: leave out httpOptions.retryOptions, or set its attempts to 1
 ```
+
+For AWS Bedrock, including how a custom `retryStrategy` interacts with `maxAttempts`, see [AWS Bedrock → SDK retries](/docs/integrations/bedrock#sdk-retries).
 
 ## Cancelling mid retry
 
