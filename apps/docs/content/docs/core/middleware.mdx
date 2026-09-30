@@ -96,7 +96,7 @@ fallback chain:
 ```ts title="wrap-signature.ts"
 wrap?: (
   request: Readonly<WireCallRequest>,
-  next: () => Promise<CallResult>,
+  next: (options?: { targets?: readonly string[] }) => Promise<CallResult>,
   ctx: PreDispatchContext,
 ) => Promise<CallResult>;
 ```
@@ -114,9 +114,14 @@ wrap: async (request, next, ctx) => {
 ```
 
 `wrap` runs before any fallback target is chosen, so its own `ctx` is a `PreDispatchContext`, not
-the `AttemptContext` `transform` gets: it only carries `primaryProvider`/`primaryModel`. There's no
+the `AttemptContext` `transform` gets: it carries `primaryProvider`/`primaryModel` and
+`targets`. There's no
 `requestedProvider`, `isFallbackAttempt`, or `attempt` to read here at all, since none of those have
 a real answer yet. Read `result.meta` after `next()` resolves for what actually happened.
+
+`next({ targets })` reorders or drops the targets the call may try, by name, and never adds one.
+`ctx.targets` lists what this `wrap` may choose from. See
+[Choosing the order per call](/docs/core/provider-fallback#choosing-the-order-per-call).
 
 A `wrap` that never calls `next()` short-circuits the real call, and every middleware nested inside
 it never runs either:

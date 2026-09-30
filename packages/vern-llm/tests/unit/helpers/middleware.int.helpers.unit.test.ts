@@ -6,6 +6,7 @@ import {
   CALL,
   fallbackChain,
   metaRecorder,
+  targetChain,
   USAGE,
   withUsage,
   wrapCounter,
@@ -30,6 +31,7 @@ const meta: CallMeta = {
   fallbackIndex: -1,
   usedFallback: false,
   attempts: 1,
+  position: 0,
 };
 
 describe('CALL', () => {
@@ -228,6 +230,7 @@ describe('metaRecorder', () => {
       fallbackIndex: -1,
       usedFallback: false,
       attempts: 1,
+      position: 0,
     });
   });
 });
@@ -285,5 +288,65 @@ describe('fallbackChain', () => {
     await expect(llm.call(CALL)).resolves.toBe('rescued');
 
     expect(counter.count()).toBe(1);
+  });
+});
+
+describe('targetChain', () => {
+  it('wires three named targets into options a test can spread into new VernLLM', () => {
+    const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+
+    expect(chain.options.client).toBe(chain.primary.client);
+    expect(chain.options).toMatchObject({
+      model: 'primary-model',
+      name: 'primary',
+      maxRetries: 0,
+      logger: 'silent',
+    });
+    expect(chain.options.fallback).toEqual([
+      { client: chain.b.client, model: 'b-model', name: 'b' },
+      { client: chain.c.client, model: 'c-model', name: 'c' },
+    ]);
+  });
+
+  it('gives each target its own script and its own call log', async () => {
+    const chain = targetChain(
+      [textResponse('from p')],
+      [textResponse('from b')],
+      [textResponse('from c')],
+    );
+    const params = { model: 'm', max_tokens: 10, messages: [] };
+    const options = { signal: new AbortController().signal };
+
+    const [p, b, c] = await Promise.all(
+      [chain.primary, chain.b, chain.c].map((target) =>
+        target.client.chat.completions.create(params, options),
+      ),
+    );
+
+    expect([p, b, c].map((response) => response?.choices?.[0]?.message?.content)).toEqual([
+      'from p',
+      'from b',
+      'from c',
+    ]);
+    expect([chain.primary, chain.b, chain.c].map((target) => target.calls.length)).toEqual([
+      1, 1, 1,
+    ]);
+    expect(new Set([chain.primary.client, chain.b.client, chain.c.client]).size).toBe(3);
+  });
+
+  it('runs a real chain with retries off, trying each declared target once in order', async () => {
+    const chain = targetChain(
+      [new FakeApiError('primary down', 500)],
+      [new FakeApiError('b down', 500)],
+      [textResponse('rescued by c')],
+    );
+
+    const llm = new VernLLM(chain.options);
+
+    await expect(llm.call(CALL)).resolves.toBe('rescued by c');
+
+    expect(chain.primary.create).toHaveBeenCalledTimes(1);
+    expect(chain.b.create).toHaveBeenCalledTimes(1);
+    expect(chain.c.create).toHaveBeenCalledTimes(1);
   });
 });

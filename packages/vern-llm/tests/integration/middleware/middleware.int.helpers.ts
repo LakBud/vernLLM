@@ -68,3 +68,31 @@ export function fallbackChain(primaryScript: Script, fallbackScript: Script) {
 
   return { primary, fallback, options };
 }
+
+/**
+ * Three targets named `primary`, `b` and `c`, in that declared order, each playing its own script
+ * with retries off. Spread `options` into `new VernLLM`. `primary`, `b` and `c` expose each mock
+ * client's `calls` and `create`.
+ */
+export function targetChain(primaryScript: Script, bScript: Script, cScript: Script) {
+  const primary = createMockClient(primaryScript);
+  const b = createMockClient(bScript);
+  const c = createMockClient(cScript);
+
+  const options: Pick<
+    VernLLMOptions,
+    'client' | 'model' | 'name' | 'maxRetries' | 'logger' | 'fallback'
+  > = {
+    client: primary.client,
+    model: 'primary-model',
+    name: 'primary',
+    maxRetries: 0,
+    logger: 'silent',
+    fallback: [
+      { client: b.client, model: 'b-model', name: 'b' },
+      { client: c.client, model: 'c-model', name: 'c' },
+    ],
+  };
+
+  return { primary, b, c, options };
+}

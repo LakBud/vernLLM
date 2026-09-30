@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { LLMError, type WireStreamChunk } from '../../../../src/index.js';
+import { LLMError, type CallMeta, type WireStreamChunk } from '../../../../src/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { createMockStreamingClient, drain } from '../../../helpers.js';
 
@@ -298,5 +298,78 @@ describe('VernLLM.call, stream early exit', () => {
     }
 
     expect(rest).toEqual(['b', 'c']);
+  });
+});
+
+describe('VernLLM.call, stream over a reordered chain', () => {
+  function chain(
+    primaryScript: Parameters<typeof createMockStreamingClient>[0],
+    otherScript: Parameters<typeof createMockStreamingClient>[0],
+  ) {
+    const primary = createMockStreamingClient(primaryScript);
+    const other = createMockStreamingClient(otherScript);
+    const llm = new VernLLM({
+      client: primary.client,
+      model: 'primary-model',
+      name: 'primary',
+      maxRetries: 0,
+      logger: 'silent',
+      fallback: { client: other.client, model: 'other-model', name: 'other' },
+    });
+
+    return { llm, primary, other };
+  }
+
+  it('opens the first target in the order, skipping the primary it leaves out', async () => {
+    const { llm, primary, other } = chain(
+      [[{ type: 'text-delta', delta: 'from primary' }]],
+      [[{ type: 'text-delta', delta: 'from other' }]],
+    );
+    const meta: { current?: CallMeta } = {};
+
+    const result = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+      targets: ['other'],
+      meta,
+    });
+    await drain(result.chunks);
+
+    await expect(result.finalResult).resolves.toBe('from other');
+    expect(primary.createStream).not.toHaveBeenCalled();
+    expect(meta.current).toMatchObject({
+      provider: 'other',
+      fallbackIndex: 0,
+      usedFallback: true,
+      position: 0,
+    });
+    expect(other.createStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves the meta to the next target in the order when the first fails before content', async () => {
+    const { llm } = chain(
+      [[{ type: 'text-delta', delta: 'from primary' }]],
+      [new LLMError('other down', 'api', { status: 500 })],
+    );
+    const meta: { current?: CallMeta } = {};
+
+    const result = await llm.call({
+      userContent: 'hi',
+      jsonMode: false,
+      stream: true,
+      targets: ['other', 'primary'],
+      meta,
+    });
+    await drain(result.chunks);
+
+    await expect(result.finalResult).resolves.toBe('from primary');
+    // Declared identity of the primary, second in the order tried.
+    expect(meta.current).toMatchObject({
+      provider: 'primary',
+      fallbackIndex: -1,
+      usedFallback: false,
+      position: 1,
+    });
   });
 });

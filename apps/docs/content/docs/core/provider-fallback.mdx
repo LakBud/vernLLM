@@ -145,8 +145,25 @@ abandoned early, and returns `'next'` or `'stop'`. `'retry'` is never a valid re
 already happened inside the target.
 
 ```ts title="provider-fallback-on-signature.ts"
-type FallbackOn = (error: LLMError, context: { isLastTarget: boolean }) => 'next' | 'stop';
+type FallbackOn = (
+  error: LLMError,
+  context: { isLastTarget: boolean; failed: TargetInfo; next?: TargetInfo },
+) => 'next' | 'stop';
 ```
+
+`failed` is the target that just failed and `next` the one that would be tried after it, both as
+`TargetInfo` (`name`, declared `index`, `model`, `adapter`) and in the order tried. `next` is left
+out on the last target. `failed.model` is the model that target ran, so the per call `model` shows
+on the primary only. A policy can use them to stop before a hop it knows can't help:
+
+```ts title="provider-fallback-on-details.ts"
+const fallbackOn: FallbackOn = (error, { failed, next }) =>
+  next && next.model !== failed.model && error.type === 'validation'
+    ? 'stop'
+    : defaultFallbackOn(error, { isLastTarget: !next });
+```
+
+Policies written before these fields existed keep working, since they ignore them.
 
 The default, `defaultFallbackOn`, is exported so a custom policy can wrap rather than replace it:
 
@@ -232,6 +249,7 @@ meta.current;
 //   fallbackIndex: 0,      // -1 if the primary answered
 //   usedFallback: true,
 //   attempts: 1,           // attempts against the target that answered, including the successful one
+//   position: 1,           // where it sat in the order tried, 0 based
 // }
 ```
 
@@ -242,6 +260,56 @@ point `call()` returns `{ chunks, finalResult }`, so `meta.current` is already p
 `metaRef()` is just a small helper that returns `{}`, typed as `{ current?: CallMeta }`, so you
 don't need to write that type out by hand. A plain `const meta: { current?: CallMeta } = {}`
 literal still works exactly the same, since `meta` on `CallParams` hasn't changed shape.
+
+## Choosing the order per call
+
+By default every call tries every target as declared. `targets` names which ones to try, and in what
+order, for one call:
+
+```ts title="provider-fallback-targets.ts"
+await llm.call({ userContent: '...', targets: ['bedrock', 'primary'] });
+```
+
+Names are the ones in `name` (see [Declaring targets](#declaring-targets)), and a target left out
+is never tried. Core runs the list it is given and never chooses it: picking the order is the
+caller's or a middleware's job.
+
+A `wrap` sees the order it can use as `ctx.targets`, and reorders or drops targets through
+`next({ targets })`:
+
+```ts title="provider-fallback-wrap-targets.ts"
+wrap: (request, next, ctx) => {
+  const allowed = ctx.targets.filter((t) => t.adapter.provider === 'anthropic');
+  return next({ targets: allowed.map((t) => t.name) });
+};
+```
+
+Each entry of `ctx.targets` is a `TargetInfo`: `name`, the declared `index` (0 is the primary),
+`model` and `adapter`. Filtering by provider goes through `adapter.provider`.
+
+Layers compose from the outside in. The call's `targets` sets the starting order, and each `wrap`,
+outermost first, may reorder or drop what it was shown. A target an outer `wrap` removed can't be
+added back by an inner one: the name is ignored and logged. Only the first `next()` call's
+`targets` counts.
+
+Invalid orders throw an `LLMError` with type `invalid_params` before any provider is contacted:
+
+| Code                  | When                                                                          |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `unknown_target`      | A name matches no target. The message lists the valid names.                  |
+| `no_eligible_targets` | The order is empty, repeats a name, or leaves nothing an outer layer allowed. |
+
+What stays the same whatever the order:
+
+- Events, `FallbackAttempt.index`, `fallbackIndex` and `usedFallback` keep the declared indices, so
+  `usedFallback` still means a declared fallback answered. `CallMeta.position` says where in the
+  order the answering target sat.
+- `fallbackOn` gets `isLastTarget` for the last target in the order, not the last declared one.
+- The per call `model` override still applies to the primary only, and goes unused when the order
+  leaves the primary out.
+- A call narrowed to one target keeps the early breaker check, before usage is reserved.
+- `targets` is not part of the `cachedCall` cache key, and a coalesced follower's `targets` are
+  ignored.
 
 ## Observing the chain
 
@@ -318,7 +386,7 @@ coalescing for concurrent misses on the same `cacheKey` covers the full chain to
 | Option       | Default             | Notes                                                                                                                                                                                                                 |
 | ------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fallback`   | none                | A `FallbackTarget` or `FallbackTarget[]`, tried in order after the primary. Each target's `circuitBreaker`/`rateLimit` are independent; every other field inherits the parent instance's resolved value when omitted. |
-| `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget }) => 'next' \| 'stop'`, called once per failed target. See the decision table above.                                                                                                         |
+| `fallbackOn` | `defaultFallbackOn` | `(error, { isLastTarget, failed, next }) => 'next' \| 'stop'`, called once per failed target. See the decision table above.                                                                                           |
 
 See [Configuration](/docs/API-reference/configuration#fallback) for how `fallback` sits
 alongside every other constructor option, and

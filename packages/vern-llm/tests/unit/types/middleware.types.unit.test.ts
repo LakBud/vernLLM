@@ -8,7 +8,12 @@ import {
   type MiddlewareRef,
   type MiddlewareStateEntry,
   type MiddlewareStateKey,
+  type PreDispatchContext,
+  type VernLLMMiddleware,
 } from '../../../src/types/middleware.js';
+
+import type { AdapterInfo } from '../../../src/types/client.js';
+import type { CallMeta, TargetInfo } from '../../../src/types/fallback.js';
 
 // `MiddlewareRef` and `MiddlewareStateKey<T>` are structurally identical
 // at runtime (both are just `{ debugName: string }`), but must stay
@@ -86,5 +91,37 @@ describe('stateEntry and a seeded state bag', () => {
     seeded.set(key, 'b');
 
     expect(seeded.get(key)).toBe('b');
+  });
+});
+
+describe('target order types', () => {
+  it('next() takes optional target names and resolves to a CallResult', () => {
+    type Next = Parameters<NonNullable<VernLLMMiddleware['wrap']>>[1];
+
+    expectTypeOf<Next>().parameter(0).toEqualTypeOf<{ targets?: readonly string[] } | undefined>();
+    expectTypeOf<Next>().returns.resolves.toHaveProperty('value');
+  });
+
+  it('a wrap can call next() with no arguments, and a middleware written before targets still compiles', () => {
+    const legacy: VernLLMMiddleware = { name: 'legacy', wrap: (_request, next) => next() };
+
+    expect(legacy.name).toBe('legacy');
+  });
+
+  it('TargetInfo describes a target by name, declared index, model and adapter', () => {
+    expectTypeOf<TargetInfo>().toEqualTypeOf<{
+      name: string;
+      index: number;
+      model: string;
+      adapter: AdapterInfo;
+    }>();
+  });
+
+  it('ctx.targets is read only, so a wrap cannot reorder the order it was shown in place', () => {
+    expectTypeOf<PreDispatchContext['targets']>().toEqualTypeOf<readonly TargetInfo[]>();
+  });
+
+  it('CallMeta carries the position in the order tried', () => {
+    expectTypeOf<CallMeta['position']>().toEqualTypeOf<number>();
   });
 });

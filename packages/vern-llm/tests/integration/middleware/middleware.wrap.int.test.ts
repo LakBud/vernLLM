@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { FallbackExhaustedError } from '../../../src/types/fallback.js';
-import { createStateKey, type VernLLMMiddleware } from '../../../src/types/index.js';
+import {
+  createStateKey,
+  type CallMeta,
+  type VernLLMEvent,
+  type VernLLMMiddleware,
+} from '../../../src/types/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import {
   createMockClient,
@@ -9,7 +14,13 @@ import {
   FakeApiError,
   textResponse,
 } from '../../helpers.js';
-import { CALL, fallbackChain, metaRecorder, wrapCounter } from './middleware.int.helpers.js';
+import {
+  CALL,
+  fallbackChain,
+  metaRecorder,
+  targetChain,
+  wrapCounter,
+} from './middleware.int.helpers.js';
 
 describe('middleware wrap', () => {
   it('transform reaches the real streaming adapter path and wrap observes the streamed result', async () => {
@@ -296,7 +307,292 @@ describe('middleware wrap', () => {
       fallbackIndex: -1,
       usedFallback: false,
       attempts: 1,
+      position: 0,
     });
     expect(streamed.meta()).toEqual(plain.meta());
+  });
+});
+
+describe('middleware wrap, target order', () => {
+  /** A script entry that records that its target was tried, then answers. */
+  const answers = (order: string[], name: string) => () => {
+    order.push(name);
+    return textResponse(`from ${name}`);
+  };
+
+  /** A script entry that records that its target was tried, then fails. */
+  const fails = (order: string[], name: string) => () => {
+    order.push(name);
+    throw new FakeApiError(`${name} down`, 500);
+  };
+
+  it('shows a wrap every target in declared order, with the per call model on the primary only', async () => {
+    const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+    let seen: unknown;
+
+    const observer: VernLLMMiddleware = {
+      name: 'observer',
+      wrap: async (_request, next, ctx) => {
+        seen = ctx.targets;
+        return next();
+      },
+    };
+
+    const llm = new VernLLM({ ...chain.options, middleware: [observer] });
+    await llm.call({ ...CALL, model: 'override-model' });
+
+    expect(seen).toEqual([
+      { name: 'primary', index: 0, model: 'override-model', adapter: { name: 'custom' } },
+      { name: 'b', index: 1, model: 'b-model', adapter: { name: 'custom' } },
+      { name: 'c', index: 2, model: 'c-model', adapter: { name: 'custom' } },
+    ]);
+  });
+
+  it('runs the order the call asks for, leaving out the targets it does not name', async () => {
+    const order: string[] = [];
+    const chain = targetChain(
+      [answers(order, 'primary')],
+      [answers(order, 'b')],
+      [answers(order, 'c')],
+    );
+    const meta: { current?: CallMeta } = {};
+
+    const llm = new VernLLM(chain.options);
+
+    await expect(llm.call({ ...CALL, targets: ['c', 'primary'], meta })).resolves.toBe('from c');
+
+    expect(order).toEqual(['c']);
+    expect(chain.primary.create).not.toHaveBeenCalled();
+    expect(chain.b.create).not.toHaveBeenCalled();
+    expect(meta.current).toMatchObject({ provider: 'c', model: 'c-model', position: 0 });
+  });
+
+  it('falls over along the requested order, keeping declared indices in the meta, events and attempts', async () => {
+    const order: string[] = [];
+    const events: VernLLMEvent[] = [];
+    const chain = targetChain(
+      [answers(order, 'primary')],
+      [answers(order, 'b')],
+      [fails(order, 'c')],
+    );
+    const meta: { current?: CallMeta } = {};
+
+    const llm = new VernLLM({ ...chain.options, onEvent: (event) => events.push(event) });
+
+    await expect(llm.call({ ...CALL, targets: ['c', 'b'], meta })).resolves.toBe('from b');
+
+    expect(order).toEqual(['c', 'b']);
+    // Declared: b is the first fallback, but the second target tried.
+    expect(meta.current).toMatchObject({
+      provider: 'b',
+      fallbackIndex: 0,
+      usedFallback: true,
+      position: 1,
+    });
+    expect(events.filter((event) => event.kind === 'fallback')).toEqual([
+      expect.objectContaining({ from: 'c', to: 'b', fromIndex: 1, toIndex: 0 }),
+    ]);
+  });
+
+  it('reports every failed target of a requested order in FallbackExhaustedError, by declared index', async () => {
+    const order: string[] = [];
+    const chain = targetChain(
+      [fails(order, 'primary')],
+      [answers(order, 'b')],
+      [fails(order, 'c')],
+    );
+
+    const llm = new VernLLM(chain.options);
+    const error = await llm.call({ ...CALL, targets: ['c', 'primary'] }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(FallbackExhaustedError);
+    expect((error as FallbackExhaustedError).attempts).toMatchObject([
+      { provider: 'c', index: 1 },
+      { provider: 'primary', index: -1 },
+    ]);
+    expect(order).toEqual(['c', 'primary']);
+  });
+
+  it('lets an outer wrap narrow the order and an inner one reorder what is left', async () => {
+    const order: string[] = [];
+    const chain = targetChain(
+      [answers(order, 'primary')],
+      [answers(order, 'b')],
+      [answers(order, 'c')],
+    );
+    let innerSaw: string[] = [];
+    const meta: { current?: CallMeta } = {};
+
+    const policy: VernLLMMiddleware = {
+      name: 'policy',
+      position: 'outermost',
+      wrap: (_request, next, ctx) =>
+        next({ targets: ctx.targets.filter((target) => target.name !== 'c').map((t) => t.name) }),
+    };
+    const router: VernLLMMiddleware = {
+      name: 'router',
+      position: 'innermost',
+      wrap: (_request, next, ctx) => {
+        innerSaw = ctx.targets.map((target) => target.name);
+        return next({ targets: [...innerSaw].reverse() });
+      },
+    };
+
+    const llm = new VernLLM({ ...chain.options, middleware: [router, policy] });
+
+    await expect(llm.call({ ...CALL, meta })).resolves.toBe('from b');
+
+    expect(innerSaw).toEqual(['primary', 'b']);
+    expect(order).toEqual(['b']);
+    expect(meta.current).toMatchObject({ provider: 'b', fallbackIndex: 0, position: 0 });
+  });
+
+  it('shows an inner wrap the order an outer one left, with declared indices', async () => {
+    const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+    let innerSaw: Array<{ name: string; index: number }> = [];
+
+    const policy: VernLLMMiddleware = {
+      name: 'policy',
+      position: 'outermost',
+      wrap: (_request, next) => next({ targets: ['c', 'primary'] }),
+    };
+    const observer: VernLLMMiddleware = {
+      name: 'observer',
+      position: 'innermost',
+      wrap: async (_request, next, ctx) => {
+        innerSaw = ctx.targets.map(({ name, index }) => ({ name, index }));
+        return next();
+      },
+    };
+
+    const llm = new VernLLM({ ...chain.options, middleware: [observer, policy] });
+    await llm.call(CALL);
+
+    expect(innerSaw).toEqual([
+      { name: 'c', index: 2 },
+      { name: 'primary', index: 0 },
+    ]);
+  });
+
+  it('never lets an inner wrap widen the order: a target an outer one removed is dropped and logged', async () => {
+    const order: string[] = [];
+    const warn = vi.fn();
+    const chain = targetChain(
+      [answers(order, 'primary')],
+      [answers(order, 'b')],
+      [answers(order, 'c')],
+    );
+
+    const policy: VernLLMMiddleware = {
+      name: 'policy',
+      position: 'outermost',
+      wrap: (_request, next) => next({ targets: ['primary', 'b'] }),
+    };
+    const router: VernLLMMiddleware = {
+      name: 'router',
+      position: 'innermost',
+      wrap: (_request, next) => next({ targets: ['c', 'b'] }),
+    };
+
+    const llm = new VernLLM({
+      ...chain.options,
+      logger: { debug: vi.fn(), warn, error: vi.fn() },
+      middleware: [router, policy],
+    });
+
+    await expect(llm.call({ ...CALL, requestId: 'req-1' })).resolves.toBe('from b');
+
+    expect(order).toEqual(['b']);
+    expect(chain.c.create).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      '[VernLLM:req-1] middleware "router" asked for target "c", which an outer layer removed; ignoring it',
+    );
+  });
+
+  it('rejects with no_eligible_targets when an inner wrap asks only for targets an outer one removed', async () => {
+    const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+
+    const policy: VernLLMMiddleware = {
+      name: 'policy',
+      position: 'outermost',
+      wrap: (_request, next) => next({ targets: ['primary'] }),
+    };
+    const router: VernLLMMiddleware = {
+      name: 'router',
+      position: 'innermost',
+      wrap: (_request, next) => next({ targets: ['c'] }),
+    };
+
+    const llm = new VernLLM({ ...chain.options, middleware: [router, policy] });
+
+    await expect(llm.call(CALL)).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'no_eligible_targets',
+      retryable: false,
+    });
+    expect(chain.primary.create).not.toHaveBeenCalled();
+    expect(chain.c.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an unknown name', ['nope'], 'unknown_target'],
+    ['an empty order', [], 'no_eligible_targets'],
+    ['a repeated name', ['b', 'b'], 'no_eligible_targets'],
+  ])(
+    'rejects %s from next() with its own code, before any provider is contacted',
+    async (_label, targets, code) => {
+      const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+
+      const router: VernLLMMiddleware = {
+        name: 'router',
+        wrap: (_request, next) => next({ targets }),
+      };
+
+      const llm = new VernLLM({ ...chain.options, middleware: [router] });
+
+      // Not `middleware_threw`: the wrap threw an LLMError, which keeps its own classification.
+      await expect(llm.call(CALL)).rejects.toMatchObject({ type: 'invalid_params', code });
+      expect(chain.primary.create).not.toHaveBeenCalled();
+      expect(chain.b.create).not.toHaveBeenCalled();
+      expect(chain.c.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses the options of the first next() call only, like its result', async () => {
+    const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+
+    const twice: VernLLMMiddleware = {
+      name: 'twice',
+      wrap: async (_request, next) => {
+        const first = await next({ targets: ['b'] });
+        await next({ targets: ['c'] });
+        return first;
+      },
+    };
+
+    const llm = new VernLLM({ ...chain.options, middleware: [twice] });
+
+    await expect(llm.call(CALL)).resolves.toBe('b');
+    expect(chain.b.create).toHaveBeenCalledTimes(1);
+    expect(chain.c.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the order it received when next() is called with no targets', async () => {
+    const order: string[] = [];
+    const chain = targetChain(
+      [answers(order, 'primary')],
+      [answers(order, 'b')],
+      [answers(order, 'c')],
+    );
+
+    const passthrough: VernLLMMiddleware = {
+      name: 'passthrough',
+      wrap: (_request, next) => next({}),
+    };
+
+    const llm = new VernLLM({ ...chain.options, middleware: [passthrough] });
+
+    await expect(llm.call({ ...CALL, targets: ['c', 'b'] })).resolves.toBe('from c');
+    expect(order).toEqual(['c']);
   });
 });

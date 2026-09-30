@@ -254,6 +254,12 @@ Provider-specific `jsonSchema` and `tools` compatibility is documented in [Combi
     reported on events. Anything else throws `invalid_params`. See
     [`ctx.state`](/docs/core/middleware#ctxstate-and-ctxown).
   </Card>
+  <Card title="targets">
+    `readonly string[]`, optional. Target names to try, in order. Defaults to every target as
+    declared. An unknown name throws `invalid_params` with code `unknown_target`, and an empty or
+    repeating list throws `no_eligible_targets`. See
+    [Choosing the order per call](/docs/core/provider-fallback#choosing-the-order-per-call).
+  </Card>
   <Card title="meta">
     `{ current?: CallMeta }`, optional. With `fallback`, reports which target answered after
     `call()` resolves, for `stream: true` that's once `call()` returns `{ chunks, finalResult }`,

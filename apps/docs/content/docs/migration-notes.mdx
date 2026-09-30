@@ -164,6 +164,14 @@ The token rate limiter is unaffected. Anthropic's limit skips cache reads, so `f
 reconciles against the total less `cacheReadTokens`, and no other adapter's number changes. See
 [Cache tokens](/docs/core/usage-tracking#cache-tokens).
 
+### 3.0.0: Target order fields
+
+`LLMErrorCode` also gains `'unknown_target'` and `'no_eligible_targets'`, raised only when a call
+passes an invalid [`targets`](/docs/core/provider-fallback#choosing-the-order-per-call). `CallMeta`
+gains a required `position`, and `PreDispatchContext` a required `targets`. Hand built values need
+both fields, and an exhaustive `switch` over `LLMErrorCode` needs the two new cases. Nothing else
+changes until a call passes `targets`.
+
 ### 3.0.0: Claude models that reject a forced `tool_choice`
 
 On Claude Fable 5.1 and later, Opus 5.5 and later, and every Claude major 6 and later,
