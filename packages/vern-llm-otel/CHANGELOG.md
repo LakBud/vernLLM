@@ -1,5 +1,47 @@
 # vern-llm-otel
 
+## 0.2.0
+
+### Minor Changes
+
+- f3ab557: Cache token attributes and custom span events. Needs `vern-llm` 3.0.0.
+
+  Attempt spans set `gen_ai.usage.cache_read.input_tokens` and `gen_ai.usage.cache_write.input_tokens` when the provider reports them. Both are subsets of `gen_ai.usage.input_tokens`, as the GenAI conventions define. The token usage metric still records input and output only.
+
+  Each event a middleware reports through `ctx.emit` becomes a span event on the call span, named after the event, with `vernllm.event.source`. The event's `data` is whatever the middleware passed, so it is left out unless you opt in, and no metric is recorded for custom events.
+
+  ```ts
+  otelMiddleware({ customEvents: { data: true, maxLength: 2048 } }); // default: on, no data
+  otelMiddleware({ customEvents: false }); // record none
+  ```
+
+  Existing code keeps compiling. At runtime, spans gain the two cache attributes on calls that use the prompt cache, and a call whose middleware emits events gains span events. Set `customEvents: false` to keep spans as they were.
+
+- 82ffcb4: Attempt spans now follow the provider request, and time to first chunk skips keep-alive pings. Needs `vern-llm` 3.0.0.
+
+  An attempt span starts when the request is sent, after the rate limiter and every `transform`, and is the active span while it runs, so an HTTP client span nests under it. Its duration no longer includes rate limit waiting or later transforms. A call rejected before sending, by an open circuit, a full rate limit queue, a throwing `transform`, or a capability the model lacks, gets no attempt span, no duration point, and no count in `vernllm.total_attempts`.
+
+  Time to first chunk runs from sending the request to the first content chunk. Pings, including those Claude sends while reasoning, no longer count, so reasoning models report a later, accurate value.
+
+  `gen_ai.provider.name` uses the provider the adapter names before guessing from the model id. `providerNames` still wins.
+
+  Input capture reads the request as sent, after every `transform`, so it is never skipped for ordering and `vernllm.content.skipped_reason` is gone. The default `priority` is `-1000` whether or not capture is on.
+
+  Existing code keeps compiling. At runtime, dashboards see shorter attempt spans, fewer attempt spans, and later time to first chunk values for streams that ping first.
+
+### Patch Changes
+
+- 8846fbb: Telemetry fixes.
+
+  `gen_ai.provider.name` no longer uses the target label. Unmapped targets are inferred from the model id (Claude with an `@version` suffix is `gcp.vertex_ai`), and `_OTHER` is used when that fails. Dashboards filtering on `primary` or `fallback[0]` need updating, or set `providerNames`.
+  Input capture is skipped when any middleware sorts after it, so a later redactor can never be bypassed. The span gets `vernllm.content.skipped_reason` and a warning is logged once. Middleware without a `transform` counts too, so give `otelMiddleware` the highest priority when capturing.
+  `maxLength` now caps the whole attribute, JSON and marker included. Older messages that don't fit are dropped whole, not left as marker only parts. An attribute whose structure alone doesn't fit is left out instead of exceeding the limit.
+  The `normalizeModel` cache is bounded.
+  `gen_ai.request.temperature` is omitted for Anthropic, and for Claude on Bedrock, when thinking is on, since it is never sent.
+  An attempt whose closing signal was missed ends with `vernllm.attempt.outcome` set to `unknown` instead of an error, and records no duration.
+
+- Updated dependencies: vern-llm@3.0.0
+
 ## 0.1.0
 
 ### Minor Changes
