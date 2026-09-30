@@ -135,7 +135,7 @@ export function VerdictTable({ tools, rows, rowHeader = 'Area', className }: Ver
         className,
       )}
     >
-      <table className="w-full min-w-[42rem] border-collapse text-sm">
+      <table className="w-full min-w-2xl border-collapse text-sm">
         <thead>
           <tr className="border-b border-fd-border text-left">
             <th scope="col" className="p-3 font-medium text-fd-muted-foreground">

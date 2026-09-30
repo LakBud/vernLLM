@@ -56,7 +56,7 @@ export function PillarVerdict({ tools, rows }: PillarVerdictProps) {
 
   return (
     <div className="not-prose my-6 overflow-x-auto rounded-xl border border-fd-border bg-fd-card">
-      <table className="w-full min-w-[40rem] border-collapse text-sm">
+      <table className="w-full min-w-160 border-collapse text-sm">
         <thead>
           <tr className="border-b border-fd-border text-left">
             <th scope="col" className="p-3 font-medium">
