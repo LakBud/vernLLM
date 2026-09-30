@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-bedrock",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "AWS Bedrock Converse adapter for vern-llm, built on the AWS SDK's BedrockRuntimeClient",
   "keywords": [
     "vern-llm",
