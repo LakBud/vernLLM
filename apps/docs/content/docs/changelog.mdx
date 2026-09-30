@@ -8,6 +8,200 @@ vern-llm uses Changesets for versioning. The release history below is generated 
 
 # vern-llm
 
+## 3.0.0
+
+### Major Changes
+
+- 9121676: Stopping a stream early cancels it, tool arguments come back as the `argumentsSchema` output, and invalid rate limits throw.
+
+  Streaming: leaving a `for await` over `chunks` before the end, by `break`, `return`, a throw in the loop body, or `return()`, cancels the provider stream. `finalResult` rejects with `LLMError('aborted')` and the rate limiter slot is freed. A stream that already finished is left alone. On a `cachedCall()` miss, only that caller leaves: the shared stream keeps running, and is cached, while another caller waits on it.
+
+  Tools: `ToolCall.arguments` is now the `argumentsSchema` output, so defaults, coercion and transforms apply. Tools without a schema are unchanged.
+
+  Rate limiting: `RateLimiter` throws `LLMError('invalid_params')` at construction for a negative, `NaN` or `Infinity` limit, a `requestsPerMinute` or `tokensPerMinute` between 0 and 1, a fractional `maxConcurrent` or `maxQueueSize`, a `maxQueueMs` past `2147483647`, a bad `aimd.proactiveFloor`, and `aimd` without `requestsPerMinute`. `0` still means unlimited.
+
+- df1d501: Adapters import from `vern-llm/adapters`, `fromGemini` takes the top level client, and `fromBedrock` moves to its own package, `vern-llm-bedrock`.
+
+  Adapters: every `from*` factory, their option types, `ModelCapabilityOverride`, `parseSseStream` and `SSE_PING` moved off the root entry to the new `vern-llm/adapters` subpath. `LLMClient`, the wire types and everything else stay on `vern-llm`. Both entries share one `LLMError` class, so `instanceof` checks keep working. The rules adapter packages share with the built-in adapters are exported there too: `supportsNativeStructuredOutput`, `rejectsForcedToolChoice`, `assertForcedToolChoiceSupported`, `throwMissingForcedJsonSchemaTool`, `assertForcedJsonSchemaToolInputIsObject`, `assertSupportedImageMimeType`, the Claude reasoning budget helpers, and `planClaudeStructuredOutput` and `resolveClaudeThinking`, which apply Claude's structured output and thinking rules to a request.
+
+  Gemini: pass `ai`, the `GoogleGenAI` instance. `fromGemini(ai.models)` throws a plain `Error` at construction that says to pass `ai`, and `GeminiClient` now describes the top level client, with the model methods under `models`.
+
+  Bedrock: `fromBedrock` now ships in `vern-llm-bedrock`. Install it with `@aws-sdk/client-bedrock-runtime`, import `fromBedrock` from it, and pass a `BedrockRuntimeClient`. The hand-written `{ converse, converseStream }` client form and `BedrockConverseClient` are gone. `vern-llm` no longer loads the AWS SDK at all.
+
+- 5ec7a11: `promptTokens` is now every input token the provider processed, cache reads and writes included, and `TokenUsage` reports the cache split.
+
+  Usage: `fromAnthropic` adds `cache_read_input_tokens` to `promptTokens` and `totalTokens`, on top of the cache writes it already counted. Streams take the input counts from the final `message_delta` when it sends them, since they are cumulative totals, as Anthropic's own SDK does. OpenAI compatible adapters and `fromGemini` already worked this way, and `fromFetch` reports what `mapResponse` returns. `TokenUsage` gains `cacheReadTokens`, `cacheWriteTokens` and `cacheWriteTokensByTtl`, each a subset of `promptTokens` and `undefined` when the provider doesn't report it. The wire usage gains `prompt_tokens_details` with `cached_tokens`, `cache_write_tokens` and `cache_write_tokens_by_ttl`. `fromOpenAICompatible` fills `cached_tokens` from DeepSeek's `prompt_cache_hit_tokens`, and `fromFetch`'s `mapResponse` can return the three cache counts.
+
+  Rate limiting: `LLMClient` gains `cacheReadsCountTowardRateLimit`, default `true`. `fromAnthropic` sets it to `false`, since Anthropic's input limit skips cache reads, so the token rate limiter reconciles against the total less `cacheReadTokens` and its numbers don't change.
+
+  ```ts
+  // Before: cache reads were left out of promptTokens on Anthropic
+  const total = usage.promptTokens + (usage.cacheReadTokens ?? 0);
+
+  // After: promptTokens already includes them
+  const total = usage.promptTokens;
+  ```
+
+  Existing code keeps compiling. At runtime, `promptTokens` and `totalTokens` are higher on Anthropic calls that read the prompt cache, in `onUsage`, the `'usage'` event and OpenTelemetry's `gen_ai.usage.input_tokens`. Code that added cache reads to `promptTokens` by hand now counts them twice. See [Migration Notes](/docs/migration-notes#300-prompttokens-includes-cache-reads-and-writes).
+
+### Minor Changes
+
+- d02c2a7: Caching, rate limiting, retry, fallback, middleware, and streaming fixes, plus a new `response_truncated` error code.
+
+  Caching: `NormalizedCacheAdapter` no longer strips punctuation or case, so `"2+2"` and `"2-2"` no longer share an answer. It only normalizes Unicode composition, line endings, and outer whitespace. `InMemoryCacheAdapter` copies values on write and read, and doesn't cache a value it can't copy faithfully (a class instance or function anywhere inside it). A missing, NaN, zero, or negative `ttl` stores nothing instead of an entry that never expires. `cachedCall` warns when `ttl` is missing or NaN and skips the write. `TieredCacheAdapter` no longer serves a value after L2 has expired it.
+
+  Rate limiting: the default token estimate counts each image as 1,600 tokens instead of reading its base64 as text. AIMD shrinks at most once per 60 seconds. A blank rate limit header is treated as missing, and all zero usage keeps the estimate. An error thrown by a limiter's `estimate` or `acquire` never counts toward the circuit breaker.
+
+  Retries: a negative or NaN `maxRetries` means one attempt instead of none, with a warning. Output cut off at `max_tokens` that fails to parse throws `LLMError('parse')` with the new code `response_truncated`, which is retried and never counts toward the breaker. `fromAnthropic`, `fromGemini`, and `fromBedrock` report when they stopped at `max_tokens`. Custom clients can set `finish_reason: 'length'` on a choice.
+
+  Fallback: a per call `model` override applies to the primary target only. Fallback targets run their own `model`, and every report of the model names the one each target ran.
+
+  Middleware: `ctx.own` persists for one middleware across all its hooks within a logical call. An unnamed middleware is labeled `[i]` everywhere, including `ctx.registeredMiddlewareNames`, and a `name` that matches another entry's `[i]` label throws at construction. The response body in a `fromFetch` error passes through `redact`. A circuit transition with no call behind it reaches middleware `onEvent`.
+
+  Streaming: a stream that fails before its first content chunk is retried and falls back, even after a keep-alive ping opened it. `call()` still resolves on the first ping, so a long thinking phase stays outside `timeoutMs`. `chunks` and `finalResult` follow whichever attempt produces content, and `meta.current` is updated in place if a different target answers.
+
+  Existing code keeps compiling unless it has an exhaustive `switch` over `LLMErrorCode`, which needs a case for `response_truncated`. At runtime: prompts that only matched through case or punctuation stop sharing a cache entry, code that matched an unnamed middleware in `registeredMiddlewareNames` by its bare index must use `[i]`, and a failure between a ping and the first content chunk now retries instead of rejecting `finalResult`.
+
+- 63c976f: A call can seed `ctx.state` before any middleware runs, with the new `state` param and `stateEntry` helper.
+
+  ```ts
+  const routeDecisionKey = createStateKey<RouteDecision>('router.decision');
+
+  await llm.call({ userContent, state: [stateEntry(routeDecisionKey, decision)] });
+  ```
+
+  `stateEntry` checks the value against the key's type. Raw `[key, value]` pairs also work, and a later entry wins over an earlier one with the same key. `createMiddlewareStateBag` accepts the same entries. The seed is never sent to the provider, never reported on events or usage, and not part of the `cachedCall` cache key. With `cachedCall`, each caller's `wrap` sees that caller's `state`, while the shared request sees the state of the caller that started it. Anything that isn't an array of `[key, value]` pairs throws `invalid_params` with the new code `invalid_state`, before any hook runs.
+
+  Existing code keeps compiling, and nothing changes at runtime until a call passes `state`.
+
+- f3ab557: A call takes a `context`, plain JSON that middleware, events and usage carry.
+
+  ```ts
+  await llm.call({
+    userContent,
+    context: { tenantId: 't1', routing: { only: ['bedrock'] } },
+  });
+  ```
+
+  Middleware reads it as `ctx.context` in every hook and stage, fallback attempts included. Every event the call reports has it as `event.context`, and so does the `TokenUsage` in `onUsage` and the `'usage'` event, so a cost middleware can attribute spend to a tenant. It is a frozen copy made when the call starts, is never sent to the provider, and is not part of the `cachedCall` cache key. VernLLM defines no keys: whatever is built on it owns its own.
+
+  Anything that isn't a plain JSON object throws `LLMError` of type `invalid_params` with the new code `invalid_context`, before any hook runs or request is sent.
+
+  Existing code keeps compiling unless it has an exhaustive `switch` over `LLMErrorCode`, which needs a case for `invalid_context`, or builds `AttemptContext`/`PreDispatchContext` objects by hand, which need `context`. At runtime nothing changes until a call passes `context`.
+
+- f1ce144: Target names must be unique.
+
+  `VernLLM` now throws at construction when two targets, the primary or a fallback, share a name. Defaults count, so a fallback named `primary` collides with an unnamed primary. Usage and events identify a target by name, so a shared name merged their data.
+
+- 987189c: Middleware dispatch hook, adapter context, a configurable Retry-After cap, an opt-in reader stall timeout, Claude thinking blocks in tool loops, and request fixes for newer Claude and GPT models.
+
+  Middleware: a new `dispatch` hook wraps each attempt's provider request, after the rate limiter and every `transform`, and sees exactly what is sent. It observes the request, it can't change the outcome. `AttemptContext.adapter` and `PreDispatchContext.primaryAdapter` name the adapter and, when certain, the provider. Every context gains `transformMiddlewareNames`. `LLMClient` gains optional `adapter` and `setLogger`. `fromOpenAICompatible` takes a `provider` option and `fromFetch` a `provider` field.
+
+  Retries: `maxRetryAfterMs` caps the honored Retry-After wait and `LLMError.retryAfterMs`. The default stays 10 seconds.
+
+  Streaming: `readerStallTimeoutMs`, off by default, detaches a `chunks` reader that holds a full buffer that long. Its next pull rejects with the new code `reader_stall_timeout`, and `finalResult` still settles.
+
+  Tools: with thinking on, `fromAnthropic` and `fromBedrock` return Claude's reasoning on `ToolCallResult.thinking`, and an assistant history turn takes it back, so a tool loop can continue.
+
+  ```ts
+  history: [
+    { role: 'assistant', toolCalls: first.toolCalls, thinking: first.thinking },
+    { role: 'tool', toolResults },
+  ];
+  ```
+
+  Models: on Claude Fable 5.1 and later, Opus 5.5 and later, and every Claude major 6 and later, a forced `toolChoice` throws `unsupported_capability` before dispatch, and `jsonSchema` uses native structured output. GPT-6 and later with tools get `reasoning_effort: "none"` when no reasoning was asked for, and throw `unsupported_capability` when it was. `forcedToolChoiceUnsupportedModels` and `noReasoningToolModels` replace either rule.
+
+  Existing code keeps compiling unless it has an exhaustive `switch` over `LLMErrorCode` or `WireStreamChunk`, which needs a case for `reader_stall_timeout` or `thinking_block`, or builds `AttemptContext`/`PreDispatchContext` objects by hand, which need the new fields. At runtime every request that works today behaves the same. The requests that change already fail at the provider: they now either succeed or fail earlier with a clearer error.
+
+- f3ab557: Middleware can report its own events with `ctx.emit`, delivered as a new `'custom'` event.
+
+  ```ts
+  wrap: async (request, next, ctx) => {
+    ctx.emit('router.decision', { deployment: 'claude', strategy: 'weighted' });
+    return next();
+  };
+  ```
+
+  The event carries `requestId`, `name`, the emitting middleware's label as `source`, and optional JSON `data`. It reaches `onEvent` and every enabled middleware's `onEvent`, the emitter included. VernLLM sets no meaning for `name` or `data`, so a router, policy layer, or cost tracker owns its own. `ctx.emit` never throws: an empty name or data that isn't plain JSON is dropped with one warning per call, an emit made from inside a `'custom'` handler is dropped, and a call delivers at most 100 custom events.
+
+  Existing code keeps compiling unless it has an exhaustive `switch` over `VernLLMEvent['kind']`, which needs a case for `custom`, or builds `AttemptContext`/`PreDispatchContext` objects by hand, which need `emit`. At runtime nothing changes until a middleware calls `ctx.emit`.
+
+- d7681f0: A call, or a `wrap`, can choose which configured targets to try and in what order. Nothing is created per call, and core runs the list it is given without choosing it.
+
+  ```ts
+  await llm.call({ userContent, targets: ['bedrock', 'primary'] });
+
+  const policy: VernLLMMiddleware = {
+    name: 'policy',
+    wrap: (request, next, ctx) =>
+      next({
+        targets: ctx.targets.filter((t) => t.adapter.provider === 'anthropic').map((t) => t.name),
+      }),
+  };
+  ```
+
+  `targets` selects by name. Each `wrap` sees the order it can use as `ctx.targets` (`TargetInfo`: `name`, declared `index`, `model`, `adapter`) and may reorder or drop through `next({ targets })`, outermost first. An inner `wrap` can never widen the order: a name an outer one removed is ignored and logged. An unknown name throws `invalid_params` with the new code `unknown_target`, and an empty or repeating order, or one with nothing left, throws `no_eligible_targets`, both before any provider is contacted.
+
+  Events, `FallbackAttempt.index`, `fallbackIndex` and `usedFallback` keep the declared indices. The new `CallMeta.position` is where the answering target sat in the order tried, and `fallbackOn`'s `isLastTarget` follows the order tried. The per call `model` still applies to the primary only. `targets` is not part of the `cachedCall` cache key, and a coalesced follower's `targets` are ignored.
+
+  Existing code keeps compiling unless it has an exhaustive `switch` over `LLMErrorCode`, which needs a case for `unknown_target` and `no_eligible_targets`, or builds `PreDispatchContext` or `CallMeta` objects by hand, which need `targets` and `position`. At runtime nothing changes until a call passes `targets` or a `wrap` passes it to `next`.
+
+- bc4ccf3: `FallbackTarget.circuitBreaker` now accepts a `CircuitBreakerAdapter`, so a fallback target's health can be shared across instances or processes. Options and `true` behave as before, and the breaker is still never inherited from the parent instance.
+- d7681f0: `fallbackOn` is told which target failed and which one would come next.
+
+  ```ts
+  fallbackOn: (error, { failed, next }) =>
+    next && next.model !== failed.model && error.type === 'validation'
+      ? 'stop'
+      : defaultFallbackOn(error, { isLastTarget: !next }),
+  ```
+
+  The context gains `failed` and `next`, both `TargetInfo` (`name`, declared `index`, `model`, `adapter`) and in the order tried, so a per call `targets` order shows up as given. `next` is left out on the last target. `failed.model` is the model that target ran, so the per call `model` shows on the primary only. The new `FallbackOnContext` type names the context.
+
+  `defaultFallbackOn` is unchanged, and its context parameter still only needs `isLastTarget`. Existing policies keep compiling and behaving the same, since they ignore the new fields. Only code that calls a `FallbackOn` by hand needs to pass `failed`.
+
+### Patch Changes
+
+- 8ae597d: Streaming fixes.
+
+  A rate-limit hint that arrives before the first real chunk no longer counts as the stream having opened, so a failure on that first chunk is retried and can fall back.
+  A slow reader of `chunks` pauses the stream instead of silently losing chunks. Eviction now only applies while nobody is reading, such as before the first read or after a `break`.
+  SSE parsing runs in linear time on large frames split across many chunks.
+
+- 5b4858c: Adapter payload fixes.
+
+  `fromBedrock` merges consecutive same-role turns, so a tool result followed by a user message no longer breaks Converse role alternation.
+  `fromOpenAICompatible` adds a JSON instruction when `json_object` is set and no message mentions "json", so a default `call()` no longer gets a 400 from OpenAI.
+  OpenAI reasoning models (the o-series and GPT 5 onward, such as `gpt-6-sol`) get `max_completion_tokens` instead of `max_tokens`, and no `temperature`.
+  A failed tool result on OpenAI-compatible adapters keeps its failure, sent as content prefixed with `Error: ` instead of being dropped.
+
+- c45a708: Coalescing, abort, and deadline fixes.
+
+  One caller's abort or deadline no longer fails every coalesced `cachedCall`. The shared request is aborted only once every caller has left.
+  A joiner's own abort rejects it right away, instead of waiting for the trigger to settle.
+  `deadlineMs: Infinity` means no deadline, instead of aborting after about 1ms. NaN and values past the timer range are treated the same way.
+
+- c417a00: Circuit breaker fixes.
+
+  Caller side 4xx statuses no longer count toward the breaker. 408, 425, and 429 still do.
+  413 is no longer retried, and the default `nonRetryableStatus` now includes 402 and 413.
+  `defaultFallbackOn` stops on `invalid_params`, except `unsupported_capability`.
+  Outcomes from calls admitted before the latest open are ignored, so they can't close the circuit, extend its cooldown, or count against a recovered generation.
+  `cooldownBackoff` never drops a cooldown below `cooldownMs`, even with a multiplier below 1, unless `maxMs` is lower.
+  `getState` reports `half-open` once the cooldown has elapsed.
+  Rolling tripping now trips under `isolateByModel`. A success no longer wipes that model's rolling window.
+
+- 82ffcb4: A `dispatch` hook's `next()` settles at a stream's first content chunk instead of its first keep-alive ping.
+
+  A stream that fails after a ping but before content now rejects `next()` with that attempt's error, so a hook timing or tracing the provider request sees the same outcome the retry loop does. `call()` still resolves on the first ping.
+
+  Existing code keeps compiling. At runtime only `dispatch` hooks on streams see a change: `next()` settles later when the provider sends pings first.
+
+- 5a5ff4b: Warn when a provider SDK retries on its own.
+
+  `fromOpenAICompatible` (and every alias such as `fromOpenAI`), `fromAnthropic`, and `fromGemini` log a `warn` at `VernLLM` construction, once per process for each SDK, when the wrapped SDK client would retry failed requests itself, since those retries are hidden from VernLLM's retries, circuit breaker, rate limiter, and events. Nothing else changes at runtime: the client is never modified. Pass `maxRetries: 0` to OpenAI and Anthropic clients, and leave out `httpOptions.retryOptions` on Gemini, to silence it.
+
 ## 2.9.1
 
 ### Patch Changes
