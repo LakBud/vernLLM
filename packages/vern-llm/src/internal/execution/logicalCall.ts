@@ -3,6 +3,7 @@ import { FallbackExhaustedError } from '../../types/fallback.js';
 import { callScopeFor, noopEmit } from '../utils/callScope.utils.js';
 import { createDeferred } from '../utils/deferred.utils.js';
 import { middlewareContextNames } from '../utils/middlewareLabels.utils.js';
+import { describeTargets, type ResolvedTarget } from './targetOrder.js';
 import { normalizeError } from './utils/errors.utils.js';
 import { emitEvent } from './utils/middleware/middleware.utils.js';
 
@@ -17,6 +18,7 @@ import type {
   FallbackOn,
   MiddlewareStateBag,
   StreamChunk,
+  TargetInfo,
   VernLLMEvent,
   VernLLMMiddleware,
 } from '../../types/index.js';
@@ -24,8 +26,11 @@ import type { CallExecutor } from './callExecutor.js';
 
 /** What the logical call functions need from `VernLLM`, so they can live outside the class. */
 export interface LogicalCallDependencies {
-  /** One `CallExecutor` per provider target: index 0 is the primary, everything after it is a `fallback` target, in the order declared. */
-  executors: CallExecutor[];
+  /**
+   * The targets this call may try, in the order to try them. Every target as declared, unless the
+   * call's `targets` or a `wrap` narrowed or reordered it. Set per call.
+   */
+  targets: readonly ResolvedTarget[];
   /** Decides whether a failed target is followed by the next one or the chain stops. See `VernLLMOptions['fallbackOn']`. */
   fallbackOn: FallbackOn;
   /** Reports a `'fallback'` event when the chain moves to the next target. */
@@ -38,13 +43,16 @@ export interface LogicalCallDependencies {
 }
 
 /**
- * The chain's outcome: the winning result, which target answered and its index, and how many
- * attempts that target made.
+ * The chain's outcome: the winning result, which target answered, its declared index and its
+ * position in the order tried, and how many attempts that target made.
  */
 export interface FallbackChainOutcome<TResult> {
   result: TResult;
   executor: CallExecutor;
+  /** Declared index, see `ResolvedTarget`. */
   index: number;
+  /** Position in the order tried, 0 based. */
+  position: number;
   attemptCount: number;
   /** The model the winning target actually ran, see `modelForTarget`. */
   model: string;
@@ -71,22 +79,30 @@ export function paramsForTarget<P extends Pick<CallParams<unknown>, 'model'>>(
 }
 
 /**
- * Tries each target in order until one succeeds. `skipBreakerCheckForFirst` is set when `call()`
- * already checked the sole target, since checking again would see its own claimed trial. Throws the
- * lone failure when one target was tried, else `FallbackExhaustedError` with every attempt.
+ * Tries each of `dependencies.targets` in order until one succeeds. `skipBreakerCheckForFirst` is
+ * set when `call()` already checked the sole target, since checking again would see its own
+ * claimed trial. Throws the lone failure when one target was tried, else `FallbackExhaustedError`
+ * with every attempt. Events and attempts keep declared indices, whatever the order.
  */
 export async function runFallbackChain<R>(
   dependencies: LogicalCallDependencies,
   params: Pick<CallParams<unknown>, 'model' | 'signal'>,
   requestId: string,
   middlewareState: MiddlewareStateBag,
-  attempt: (executor: CallExecutor, onAttempt: () => void, targetIndex: number) => Promise<R>,
+  attempt: (
+    executor: CallExecutor,
+    onAttempt: () => void,
+    targetIndex: number,
+    position: number,
+  ) => Promise<R>,
   skipBreakerCheckForFirst = false,
 ): Promise<FallbackChainOutcome<R>> {
   const fallbackAttempts: FallbackAttempt[] = [];
 
-  for (let targetIndex = 0; targetIndex < dependencies.executors.length; targetIndex++) {
-    const executor = dependencies.executors[targetIndex]!;
+  const { targets } = dependencies;
+
+  for (let position = 0; position < targets.length; position++) {
+    const { executor, index: targetIndex } = targets[position]!;
     const targetModel = modelForTarget(params, targetIndex);
     const startedAt = Date.now();
     let attemptCount = 0;
@@ -94,7 +110,7 @@ export async function runFallbackChain<R>(
     try {
       // Claiming a half-open trial is a side effect, so a target already checked by `call()` isn't
       // checked twice.
-      if (!(targetIndex === 0 && skipBreakerCheckForFirst)) {
+      if (!(position === 0 && skipBreakerCheckForFirst)) {
         const checking = executor.assertBreakerClosed(targetModel, {
           requestId,
           state: middlewareState,
@@ -110,11 +126,13 @@ export async function runFallbackChain<R>(
           attemptCount += 1;
         },
         targetIndex,
+        position,
       );
       return {
         result,
         executor,
         index: targetIndex,
+        position,
         attemptCount,
         model: targetModel ?? executor.model,
       };
@@ -140,13 +158,20 @@ export async function runFallbackChain<R>(
         error: normalizedError.toSnapshot(),
       });
 
-      const isLastTarget = targetIndex === dependencies.executors.length - 1;
+      const isLastTarget = position === targets.length - 1;
       // Always consult fallbackOn, including on the last target, so it
       // sees every failure and callers who log or count from inside it
       // get a complete picture. The chain still stops once the last
       // target fails regardless of what fallbackOn returns: there is
       // no next executor to fall over to.
-      const policyDecision = dependencies.fallbackOn(normalizedError, { isLastTarget });
+      const [failed, next] = describeTargets(targets.slice(position, position + 2), (index) =>
+        modelForTarget(params, index),
+      ) as [TargetInfo, TargetInfo | undefined];
+      const policyDecision = dependencies.fallbackOn(normalizedError, {
+        isLastTarget,
+        failed,
+        ...(next ? { next } : {}),
+      });
       const decision = isLastTarget ? 'stop' : policyDecision;
 
       if (decision === 'stop') {
@@ -159,7 +184,8 @@ export async function runFallbackChain<R>(
 
       reportFallback(dependencies, {
         requestId,
-        targetIndex,
+        failed: targets[position]!,
+        next: targets[position + 1]!,
         failedModel: targetModel ?? executor.model,
         attempt: attemptCount,
         error: normalizedError,
@@ -177,14 +203,15 @@ export async function runFallbackChain<R>(
 }
 
 /**
- * Emits the `'fallback'` event for the target at `targetIndex` that just failed.
- * The context describes that failed target, not the next one.
+ * Emits the `'fallback'` event for the `failed` target, moving on to `next`. The context describes
+ * the failed target, not the next one. Indices are the declared ones.
  */
 function reportFallback(
   dependencies: LogicalCallDependencies,
   failure: {
     requestId: string;
-    targetIndex: number;
+    failed: ResolvedTarget;
+    next: ResolvedTarget;
     failedModel: string;
     attempt: number;
     error: LLMError;
@@ -193,9 +220,9 @@ function reportFallback(
     middlewareState: MiddlewareStateBag;
   },
 ): void {
-  const { requestId, targetIndex, signal } = failure;
-  const executor = dependencies.executors[targetIndex]!;
-  const nextExecutor = dependencies.executors[targetIndex + 1]!;
+  const { requestId, signal } = failure;
+  const { executor, index: targetIndex } = failure.failed;
+  const nextExecutor = failure.next.executor;
 
   const ctx: AttemptContext = {
     stage: 'attempt',
@@ -222,7 +249,7 @@ function reportFallback(
       from: executor.providerName,
       to: nextExecutor.providerName,
       fromIndex: targetIndex - 1,
-      toIndex: targetIndex,
+      toIndex: failure.next.index - 1,
       error: failure.error,
       elapsedMs: failure.elapsedMs,
     },
@@ -238,15 +265,18 @@ function reportFallback(
 function metaFor(
   executor: CallExecutor,
   index: number,
+  position: number,
   attemptCount: number,
   model: string,
 ): CallMeta {
   return {
     provider: executor.providerName,
     model,
+    // Declared, so they keep meaning "a declared fallback answered" in any order.
     fallbackIndex: index - 1,
     usedFallback: index > 0,
     attempts: attemptCount,
+    position,
   };
 }
 
@@ -258,7 +288,13 @@ function buildCallResult<R>(
   outcome: FallbackChainOutcome<R>,
   params: Pick<CallParams<unknown>, 'meta'>,
 ): CallResult<R> {
-  const meta = metaFor(outcome.executor, outcome.index, outcome.attemptCount, outcome.model);
+  const meta = metaFor(
+    outcome.executor,
+    outcome.index,
+    outcome.position,
+    outcome.attemptCount,
+    outcome.model,
+  );
 
   // `params` here is the same object `VernLLM.call()` received from the
   // caller, not a clone, so this write is visible on the caller's own
@@ -312,7 +348,7 @@ export async function executeLogicalStreamCall<T>(
     finalResult: Promise<T | CallWithToolsResult<T>>;
   }>
 > {
-  type Opened = { executor: CallExecutor; index: number; attempts: number };
+  type Opened = { executor: CallExecutor; index: number; position: number; attempts: number };
 
   const { promise: opened, resolve: resolveOpened } = createDeferred<Opened>();
 
@@ -321,7 +357,7 @@ export async function executeLogicalStreamCall<T>(
     params,
     requestId,
     middlewareState,
-    (executor, onAttempt, targetIndex) => {
+    (executor, onAttempt, targetIndex, position) => {
       let attempts = 0;
       return executor.runStream(
         paramsForTarget(params, targetIndex),
@@ -331,7 +367,7 @@ export async function executeLogicalStreamCall<T>(
           onAttempt();
         },
         middlewareState,
-        () => resolveOpened({ executor, index: targetIndex, attempts }),
+        () => resolveOpened({ executor, index: targetIndex, position, attempts }),
       );
     },
     soleTarget,
@@ -347,15 +383,27 @@ export async function executeLogicalStreamCall<T>(
 
   if (first.kind === 'settled') return buildCallResult(first.value, params);
 
-  const { executor, index, attempts } = first.value;
-  const meta = metaFor(executor, index, attempts, modelForTarget(params, index) ?? executor.model);
+  const { executor, index, position, attempts } = first.value;
+  const meta = metaFor(
+    executor,
+    index,
+    position,
+    attempts,
+    modelForTarget(params, index) ?? executor.model,
+  );
   if (params.meta) params.meta.current = meta;
 
   const finalResult = chain.then((outcome) => {
     // Same object the caller already holds, so a reopened stream shows up in it.
     Object.assign(
       meta,
-      metaFor(outcome.executor, outcome.index, outcome.attemptCount, outcome.model),
+      metaFor(
+        outcome.executor,
+        outcome.index,
+        outcome.position,
+        outcome.attemptCount,
+        outcome.model,
+      ),
     );
     return outcome.result.finalResult;
   });

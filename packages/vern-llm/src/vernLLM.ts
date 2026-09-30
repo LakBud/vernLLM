@@ -4,6 +4,11 @@ import { CallExecutor } from './internal/execution/callExecutor.js';
 import { type LogicalCallDependencies } from './internal/execution/logicalCall.js';
 import { runReservedLogicalCall } from './internal/execution/reservedLogicalCall.js';
 import { runOperation, type RunOperationDependencies } from './internal/execution/runOperation.js';
+import {
+  declaredTargets,
+  narrowTargets,
+  type ResolvedTarget,
+} from './internal/execution/targetOrder.js';
 import { combineSignals, setupCallSignal } from './internal/execution/utils/callSignal.utils.js';
 import { setupDeadline, stampDeadlineCode } from './internal/execution/utils/deadline.utils.js';
 import {
@@ -82,7 +87,11 @@ export class VernLLM {
   /** Owns cache reads, writes and in-flight coalescing for `cachedCall()`. */
   private readonly cacheOrchestrator: CacheOrchestrator;
 
-  private readonly logicalCallDependencies: LogicalCallDependencies;
+  /** Every target in declared order, the pool `targets` selects from. */
+  private readonly declaredTargets: readonly ResolvedTarget[];
+
+  /** Everything but `targets`, which each call sets for its own order. */
+  private readonly logicalCallDependencies: Omit<LogicalCallDependencies, 'targets'>;
   private readonly runOperationDependencies: RunOperationDependencies;
 
   /** What each call's scope needs to deliver a `ctx.emit` event. */
@@ -177,8 +186,9 @@ export class VernLLM {
       detectSoftFailure: options.detectSoftFailure,
     });
 
+    this.declaredTargets = declaredTargets(this.executors);
+
     this.logicalCallDependencies = {
-      executors: this.executors,
       fallbackOn: options.fallbackOn ?? defaultFallbackOn,
       reportEvent,
       middleware: pipeline.transformOrder,
@@ -194,6 +204,7 @@ export class VernLLM {
     this.runOperationDependencies = {
       pipeline,
       primaryExecutor: this.executors[0]!,
+      targets: this.declaredTargets,
       middlewareTimeoutMs,
       logger: this.logger,
       reportEvent,
@@ -269,6 +280,7 @@ export class VernLLM {
     // `cachedCall` already validated the same `context` and registered the scope.
     const callContext = isCachedCallInner ? undefined : prepareCallContext(params.context);
     const stateEntries = isCachedCallInner ? undefined : validateStateEntries(params.state);
+    const targets = this.resolveTargets(params.targets);
 
     const {
       params: effectiveParams,
@@ -289,13 +301,18 @@ export class VernLLM {
         effectiveParams,
         requestId,
         middlewareState,
-        () =>
-          runReservedLogicalCall(this.logicalCallDependencies, effectiveParams, {
-            requestId,
-            middlewareState,
-            breakController,
-            onRefundError: (logMessage, error) => logError(this.logger, logMessage, error),
-          }),
+        targets,
+        (chosen) =>
+          runReservedLogicalCall(
+            { ...this.logicalCallDependencies, targets: chosen },
+            effectiveParams,
+            {
+              requestId,
+              middlewareState,
+              breakController,
+              onRefundError: (logMessage, error) => logError(this.logger, logMessage, error),
+            },
+          ),
         isCachedCallInner,
       );
 
@@ -308,6 +325,15 @@ export class VernLLM {
     } finally {
       dispose();
     }
+  }
+
+  /**
+   * The order a call starts with: `requested` by name, or every target as declared. Throws before
+   * any timer or hook exists, so an invalid order never starts a call.
+   */
+  private resolveTargets(requested: readonly string[] | undefined): ResolvedTarget[] {
+    // Nothing is narrowed yet, so no name can have been dropped.
+    return narrowTargets(this.declaredTargets, this.declaredTargets, requested, () => {});
   }
 
   /** Kept on `VernLLM` since tests drive the caching core directly through it. */
@@ -405,6 +431,8 @@ export class VernLLM {
       middlewareState,
       createCallScope(this.callScopeDependencies, prepareCallContext(restCallParams.context)),
     );
+    // Before the cache is touched or a meta holder claimed, like `context` above.
+    const targets = this.resolveTargets(restCallParams.targets);
 
     const resolvedCacheKey = await this.cacheOrchestrator.resolveCacheKey(cacheParams.cacheKey);
     const { holder: metaHolder, release: releaseMetaHolder } = claimMetaHolder(
@@ -435,9 +463,17 @@ export class VernLLM {
     // The inner call runs once for all participants, so it takes the shared
     // signal and no per caller deadline. Marked so its own `runOperation`
     // skips `wrap` and reuses this state bag.
-    const callShared = (sharedSignal: AbortSignal) => {
+    // Only the caller that runs the call gets to choose its targets: a coalesced follower's are
+    // ignored, and `targets` is not part of the cache key. The inner call gets the order `wrap`
+    // left, by name, so it resolves to the same targets.
+    const callShared = (sharedSignal: AbortSignal, chosen: readonly ResolvedTarget[]) => {
       const { deadlineMs: _deadlineMs, ...sharedParams } = participantParams;
-      const innerParams = { ...sharedParams, signal: sharedSignal, meta: metaHolder };
+      const innerParams = {
+        ...sharedParams,
+        targets: chosen.map((target) => target.executor.providerName),
+        signal: sharedSignal,
+        meta: metaHolder,
+      };
       this.cachedCallInnerParams.set(innerParams, middlewareState);
       return this.call(innerParams).finally(() => {
         syncCallerMeta();
@@ -455,17 +491,21 @@ export class VernLLM {
         participantParams,
         requestId,
         middlewareState,
-        async () => {
+        targets,
+        async (chosen) => {
           const value = restCallParams.stream
             ? await this.cacheOrchestrator.runCachedStream(
                 {
                   ...participantCacheParams,
                   openStream: (sharedSignal) =>
-                    callShared(sharedSignal) as Promise<StreamCallResult<unknown>>,
+                    callShared(sharedSignal, chosen) as Promise<StreamCallResult<unknown>>,
                 },
                 Boolean(restCallParams.tools),
               )
-            : await this.runCached({ ...participantCacheParams, fn: callShared });
+            : await this.runCached({
+                ...participantCacheParams,
+                fn: (sharedSignal) => callShared(sharedSignal, chosen),
+              });
 
           return { value, meta: metaHolder.current };
         },

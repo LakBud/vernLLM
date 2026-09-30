@@ -127,15 +127,18 @@ The currently defined caller input codes are:
 | `unknown_tool_result_ids`   | `invalid_params` | A `history` "tool" turn's `toolResults` referenced a `toolCallId` the preceding assistant turn never requested.                                                                                                                                                                                                                         |
 | `missing_tool_results`      | `invalid_params` | A `history` "tool" turn was missing a result for a `toolCallId` the preceding assistant turn did request.                                                                                                                                                                                                                               |
 | `invalid_context`           | `invalid_params` | The call's `context` isn't a plain JSON object. Thrown before any hook runs or request is sent. See [`ctx.context`](/docs/core/middleware#ctxcontext).                                                                                                                                                                                  |
+| `unknown_target`            | `invalid_params` | A name in `targets` matches no target. The message lists the valid names. See [Choosing the order per call](/docs/core/provider-fallback#choosing-the-order-per-call).                                                                                                                                                                  |
+| `no_eligible_targets`       | `invalid_params` | `targets` is empty, repeats a name, or names only targets an outer `wrap` removed. Thrown before any provider is contacted.                                                                                                                                                                                                             |
 
 Everything else under `invalid_params` stays uncoded: the thrown `message` already names the exact
-problem, and a code only earns its place when a caller would realistically branch on it. These six
-are exactly the ones whose `message` already embeds structured data a caller might want directly
-instead of re-parsing it out of prose: a joined list of names/ids for the five history- and
-tools-shape checks, or the specific missing capability for `unsupported_capability`; see
-[`issues`](#issues) below for the typed payload each one carries. `invalid_context` is the one
-exception: it carries no `issues`, but a wrapper that forwards context from elsewhere may want to
-tell that fault apart from a bad request.
+problem, and a code only earns its place when a caller would realistically branch on it. Six of
+the nine codes above carry `issues`. They are exactly the ones whose `message` already embeds
+structured data a caller might want directly instead of re-parsing it out of prose: a joined list of
+names/ids for the five history- and tools-shape checks, or the specific missing capability for
+`unsupported_capability`; see [`issues`](#issues) below for the typed payload each one carries. The
+other three, `invalid_context`, `unknown_target` and `no_eligible_targets`, carry no `issues`.
+`invalid_context` still earns its code, since a wrapper that forwards context from elsewhere may
+want to tell that fault apart from a bad request.
 
 The currently defined rate-limiting codes are:
 

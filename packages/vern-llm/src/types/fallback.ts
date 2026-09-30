@@ -5,7 +5,7 @@ import type { RetryBudgetOptions } from '../internal/retryBudget.js';
 import type { CircuitBreakerOption } from '../internal/utils/circuit-breaker/circuitBreakerAdapter.utils.js';
 import type { RateLimitOption } from '../internal/utils/rate-limit/rateLimitAdapter.utils.js';
 import type { DetectSoftFailure } from './call.js';
-import type { LLMClient } from './client.js';
+import type { AdapterInfo, LLMClient } from './client.js';
 
 /**
  * A provider tried after the primary fails, in the order given. Omitted overrides fall back to the
@@ -55,6 +55,18 @@ export interface CallMeta {
   usedFallback: boolean;
   /** Attempts made against the target that ultimately answered, including the successful one. */
   attempts: number;
+  /** Position of the answering target in the order tried, 0 based. */
+  position: number;
+}
+
+/** One configured target, as a middleware sees it in `ctx.targets`. */
+export interface TargetInfo {
+  /** The name `targets` selects by. */
+  name: string;
+  /** Declared position: 0 is the primary. */
+  index: number;
+  model: string;
+  adapter: AdapterInfo;
 }
 
 /** One target's circuit state, as returned by `VernLLM.getCircuitStates()`. */
@@ -85,11 +97,21 @@ export interface FallbackAttempt extends RetryAttempt {
   model: string;
 }
 
+/** What `fallbackOn` is told about the failed target and what would come after it. */
+export interface FallbackOnContext {
+  /** Whether no target is left in the order tried. The chain stops after the last one whatever `fallbackOn` returns. */
+  isLastTarget: boolean;
+  /** The target that just failed. `model` is what it ran, so the per call `model` shows on the primary only. */
+  failed: TargetInfo;
+  /** The target that would be tried next. `undefined` on the last target. */
+  next?: TargetInfo;
+}
+
 /**
  * Whether to try the next target (`'next'`) or give up (`'stop'`) after a target's own retries.
  * Called once per failed target.
  */
-export type FallbackOn = (error: LLMError, context: { isLastTarget: boolean }) => 'next' | 'stop';
+export type FallbackOn = (error: LLMError, context: FallbackOnContext) => 'next' | 'stop';
 
 /**
  * Tool contract failures another provider can't fix. Most are the model ignoring the request;
@@ -107,7 +129,10 @@ const TOOL_CONTRACT_CODES = new Set([
  * The default `fallbackOn` policy. Exported so a caller can wrap rather
  * than replace it, e.g. `fallbackOn: (e, ctx) => myCheck(e) ? 'stop' : defaultFallbackOn(e, ctx)`.
  */
-export const defaultFallbackOn: FallbackOn = (error) => {
+export const defaultFallbackOn: (
+  error: LLMError,
+  context: Pick<FallbackOnContext, 'isLastTarget'>,
+) => 'next' | 'stop' = (error) => {
   if (error.type === 'parse' || error.type === 'validation' || error.type === 'aborted') {
     return 'stop';
   }

@@ -2,7 +2,13 @@ import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 
 import { isLLMError, type LLMError } from '../../../../src/types/errors.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
-import { createMockClient, jsonResponse } from '../../../helpers.js';
+import {
+  createMockClient,
+  createMockStreamingClient,
+  jsonResponse,
+  textResponse,
+} from '../../../helpers.js';
+import { targetChain } from '../../../integration/middleware/middleware.int.helpers.js';
 
 import type {
   CachedCallParams,
@@ -18,6 +24,7 @@ import type {
   CallMeta,
   LLMRequestShape,
   MiddlewareStateEntry,
+  VernLLMMiddleware,
 } from '../../../../src/types/index.js';
 import type { ToolDefinition } from '../../../../src/types/tools.js';
 
@@ -274,5 +281,150 @@ describe('VernLLM.cachedCall, state', () => {
     expect(cache.get).not.toHaveBeenCalled();
     expect(cache.resolveKey).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('VernLLM.cachedCall, targets', () => {
+  const call = { userContent: 'hi', jsonMode: false as const };
+
+  it('accepts targets inside `call`', () => {
+    expectTypeOf<CachedJsonModeDisabledCallParams['call']>().toHaveProperty('targets');
+    expectTypeOf<LLMRequestShape['targets']>().toEqualTypeOf<readonly string[] | undefined>();
+  });
+
+  it.each([
+    ['an unknown name', ['nope'], 'unknown_target'],
+    ['an empty order', [], 'no_eligible_targets'],
+    ['a repeated name', ['b', 'b'], 'no_eligible_targets'],
+  ])(
+    'rejects %s with its own code before touching the cache or any provider',
+    async (_label, targets, code) => {
+      const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+      const cache = { get: vi.fn(), set: vi.fn(), resolveKey: vi.fn() };
+      const llm = new VernLLM({ ...chain.options, cache: cache as never });
+
+      await expect(
+        llm.cachedCall({ cacheKey: 'k', ttl: 100, call: { ...call, targets } }),
+      ).rejects.toMatchObject({ type: 'invalid_params', code });
+
+      expect(cache.get).not.toHaveBeenCalled();
+      expect(cache.resolveKey).not.toHaveBeenCalled();
+      expect(chain.primary.create).not.toHaveBeenCalled();
+      expect(chain.b.create).not.toHaveBeenCalled();
+      expect(chain.c.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('runs the requested order on a miss, reporting the position that answered', async () => {
+    const chain = targetChain(
+      [textResponse('from primary')],
+      [textResponse('from b')],
+      [textResponse('from c')],
+    );
+    const llm = new VernLLM(chain.options);
+    const meta: { current?: CallMeta } = {};
+
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, call: { ...call, targets: ['c', 'b'], meta } }),
+    ).resolves.toBe('from c');
+
+    expect(chain.primary.create).not.toHaveBeenCalled();
+    expect(chain.b.create).not.toHaveBeenCalled();
+    expect(meta.current).toMatchObject({ provider: 'c', fallbackIndex: 1, position: 0 });
+  });
+
+  it('runs the order a wrap leaves, once, since cachedCall wraps the whole logical call', async () => {
+    const chain = targetChain(
+      [textResponse('from primary')],
+      [textResponse('from b')],
+      [textResponse('from c')],
+    );
+    let wraps = 0;
+    const narrow: VernLLMMiddleware = {
+      name: 'narrow',
+      wrap: (_request, next) => {
+        wraps++;
+        return next({ targets: ['b'] });
+      },
+    };
+
+    const llm = new VernLLM({ ...chain.options, middleware: [narrow] });
+
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, call: { ...call, targets: ['c', 'b'] } }),
+    ).resolves.toBe('from b');
+
+    expect(wraps).toBe(1);
+    expect(chain.c.create).not.toHaveBeenCalled();
+    expect(chain.b.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a coalesced follower's targets: the shared call runs the one that started it", async () => {
+    let release!: (value: unknown) => void;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const chain = targetChain(
+      [textResponse('from primary')],
+      [() => gate as Promise<ReturnType<typeof textResponse>>],
+      [textResponse('from c')],
+    );
+    const llm = new VernLLM(chain.options);
+    const starterMeta: { current?: CallMeta } = {};
+    const followerMeta: { current?: CallMeta } = {};
+
+    const starter = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { ...call, targets: ['b'], meta: starterMeta },
+    });
+    await Promise.resolve();
+    const follower = llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { ...call, targets: ['c'], meta: followerMeta },
+    });
+
+    release(textResponse('from b'));
+
+    await expect(Promise.all([starter, follower])).resolves.toEqual(['from b', 'from b']);
+    expect(chain.c.create).not.toHaveBeenCalled();
+    expect(followerMeta.current).toEqual(starterMeta.current);
+    expect(starterMeta.current).toMatchObject({ provider: 'b' });
+  });
+
+  it('does not make targets part of the cache key, so a hit is served whatever order asks for it', async () => {
+    const chain = targetChain([textResponse('p')], [textResponse('from b')], [textResponse('c')]);
+    const llm = new VernLLM(chain.options);
+
+    await llm.cachedCall({ cacheKey: 'k', ttl: 60, call: { ...call, targets: ['b'] } });
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 60, call: { ...call, targets: ['c'] } }),
+    ).resolves.toBe('from b');
+
+    expect(chain.c.create).not.toHaveBeenCalled();
+    expect(chain.b.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the requested order for a streamed call too', async () => {
+    const primary = createMockStreamingClient([[{ type: 'text-delta', delta: 'from primary' }]]);
+    const other = createMockStreamingClient([[{ type: 'text-delta', delta: 'from other' }]]);
+    const llm = new VernLLM({
+      client: primary.client,
+      model: 'primary-model',
+      name: 'primary',
+      logger: 'silent',
+      fallback: { client: other.client, model: 'other-model', name: 'other' },
+    });
+
+    const { finalResult } = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 60,
+      call: { ...call, stream: true, targets: ['other'] },
+    });
+
+    await expect(finalResult).resolves.toBe('from other');
+    expect(primary.calls).toHaveLength(0);
+    expect(other.calls).toHaveLength(1);
   });
 });

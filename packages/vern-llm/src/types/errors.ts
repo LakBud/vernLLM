@@ -30,6 +30,8 @@ export type LLMErrorCode =
   | 'unknown_tool_result_ids'
   | 'missing_tool_results'
   | 'invalid_context'
+  | 'unknown_target'
+  | 'no_eligible_targets'
   // Middleware (invalid_params)
   | 'middleware_threw'
   // Rate limiting (rate_limited)

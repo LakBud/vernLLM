@@ -191,6 +191,9 @@ export interface LLMRequestShape<
 
   /** Values placed in `ctx.state` before any middleware runs. Build entries with `stateEntry`. */
   state?: readonly MiddlewareStateEntry[];
+
+  /** Target names to try, in order. Default: every target, as declared. */
+  targets?: readonly string[];
 }
 
 export interface CallParams<T = unknown, Tools extends readonly ToolDefinition[] = ToolDefinition[]>

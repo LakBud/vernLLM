@@ -8,6 +8,7 @@ import {
   LLMError,
   metaRef,
   type CallMeta,
+  type FallbackOn,
   type VernLLMEvent,
 } from '../../src/types/index.js';
 import { VernLLM } from '../../src/vernLLM.js';
@@ -566,6 +567,43 @@ describe('VernLLM, fallback', () => {
         model: 'fallback-model',
       }),
     );
+  });
+
+  describe('fallbackOn target details', () => {
+    it('names the failed and next target by their default names when none are set', async () => {
+      const primary = createMockClient([new FakeApiError('down', 500)]);
+      const fallback = createMockClient([textResponse('ok')]);
+      const fallbackOn = vi.fn(() => 'next' as const);
+
+      const llm = new VernLLM({
+        client: primary.client,
+        model: 'primary-model',
+        maxRetries: 0,
+        fallback: { client: fallback.client, model: 'fallback-model' },
+        fallbackOn,
+      });
+
+      await llm.call({ userContent: 'u', jsonMode: false });
+
+      expect(fallbackOn).toHaveBeenCalledWith(expect.any(LLMError), {
+        isLastTarget: false,
+        failed: expect.objectContaining({ name: 'primary', index: 0, model: 'primary-model' }),
+        next: expect.objectContaining({ name: 'fallback[0]', index: 1, model: 'fallback-model' }),
+      });
+    });
+
+    it('accepts defaultFallbackOn called with just isLastTarget, for policies that wrap it', () => {
+      const wrapping: FallbackOn = (error, { next }) =>
+        defaultFallbackOn(error, { isLastTarget: !next });
+
+      expect(
+        wrapping(new LLMError('m', 'parse'), {
+          isLastTarget: false,
+          failed: { name: 'a', index: 0, model: 'm', adapter: { name: 'x' } },
+          next: { name: 'b', index: 1, model: 'm', adapter: { name: 'x' } },
+        }),
+      ).toBe('stop');
+    });
   });
 
   describe('defaultFallbackOn', () => {

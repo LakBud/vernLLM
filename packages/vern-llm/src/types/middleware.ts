@@ -1,7 +1,7 @@
 import type { CallContext, JsonValue } from './call.js';
 import type { AdapterInfo, WireMessage, WireToolChoice } from './client.js';
 import type { VernLLMEvent } from './events.js';
-import type { CallMeta } from './fallback.js';
+import type { CallMeta, TargetInfo } from './fallback.js';
 
 /** Capabilities of the target a middleware hook is currently looking at. */
 export interface MiddlewareCapabilities {
@@ -179,6 +179,9 @@ export interface PreDispatchContext extends MiddlewareContextBase {
   /** The adapter behind the primary target. `{ name: 'custom' }` when its client doesn't identify one. */
   primaryAdapter: AdapterInfo;
   primaryModel: string;
+
+  /** The order so far: what this `wrap` may try, after every outer `wrap` narrowed it. */
+  targets: readonly TargetInfo[];
 }
 
 /**
@@ -312,12 +315,13 @@ export interface VernLLMMiddleware {
   ) => WireCallRequestPatch | Promise<WireCallRequestPatch>;
 
   /**
-   * Wraps one whole logical call once, however many retries or targets ran. `ctx` only describes
-   * the primary; read `next()`'s `CallResult.meta` for what happened.
+   * Wraps one whole logical call once, however many retries or targets ran. `ctx` describes the
+   * primary and the order so far (`ctx.targets`); read `next()`'s `CallResult.meta` for what
+   * happened. `next({ targets })` reorders or drops targets by name, never adds one.
    */
   wrap?: (
     request: Readonly<WireCallRequest>,
-    next: () => Promise<CallResult>,
+    next: (options?: { targets?: readonly string[] }) => Promise<CallResult>,
     ctx: PreDispatchContext,
   ) => Promise<CallResult>;
 

@@ -385,6 +385,7 @@ describe('callEndAttributes', () => {
     fallbackIndex: 1,
     usedFallback: true,
     attempts: 3,
+    position: 2,
   };
 
   it('describes an answered call', () => {

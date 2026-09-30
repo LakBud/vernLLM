@@ -562,3 +562,136 @@ describe('VernLLM.call, state', () => {
     expect(hook).toHaveBeenCalledWith('transform');
   });
 });
+
+describe('VernLLM.call, targets', () => {
+  const call = { userContent: 'hi', jsonMode: false as const };
+
+  function twoTargets(middleware: VernLLMMiddleware[] = []) {
+    const primary = createMockClient([textResponse('from primary')]);
+    const other = createMockClient([textResponse('from other')]);
+    const llm = new VernLLM({
+      client: primary.client,
+      model: 'primary-model',
+      name: 'primary',
+      logger: 'silent',
+      fallback: { client: other.client, model: 'other-model', name: 'other' },
+      middleware,
+    });
+
+    return { llm, primary, other };
+  }
+
+  function spied() {
+    const hook = vi.fn();
+    const middleware: VernLLMMiddleware = {
+      name: 'spy',
+      enabled: () => {
+        hook('enabled');
+        return true;
+      },
+      wrap: async (_request, next) => {
+        hook('wrap');
+        return next();
+      },
+      transform: () => {
+        hook('transform');
+        return {};
+      },
+      dispatch: async (_request, next) => {
+        hook('dispatch');
+        await next();
+      },
+      onEvent: () => hook('onEvent'),
+    };
+
+    return { hook, middleware };
+  }
+
+  it.each([
+    ['an unknown name', ['nope'], 'unknown_target'],
+    ['a name repeated', ['primary', 'primary'], 'no_eligible_targets'],
+    ['an empty order', [], 'no_eligible_targets'],
+  ])(
+    'rejects %s with its own code before any hook runs or any request is sent',
+    async (_label, targets, code) => {
+      const { hook, middleware } = spied();
+      const { llm, primary, other } = twoTargets([middleware]);
+
+      const rejection = llm.call({ ...call, targets });
+
+      await expect(rejection).rejects.toBeInstanceOf(LLMError);
+      await expect(rejection).rejects.toMatchObject({
+        type: 'invalid_params',
+        code,
+        retryable: false,
+      });
+      expect(hook).not.toHaveBeenCalled();
+      expect(primary.create).not.toHaveBeenCalled();
+      expect(other.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('lists every valid name when a name is unknown, so the mistake is easy to spot', async () => {
+    const { llm } = twoTargets();
+
+    await expect(llm.call({ ...call, targets: ['primry'] })).rejects.toThrow(
+      'Unknown target "primry". Valid targets: "primary", "other"',
+    );
+  });
+
+  it.each([
+    ['a string', 'primary'],
+    ['null', null],
+    ['an object', {}],
+    ['a number in the list', [1]],
+    ['a null in the list', [null]],
+  ])(
+    'rejects %s, which only a caller bypassing the types can pass, without a code',
+    async (_label, targets) => {
+      const { hook, middleware } = spied();
+      const { llm, primary } = twoTargets([middleware]);
+
+      const rejection = llm.call({ ...call, targets: targets as never });
+
+      await expect(rejection).rejects.toBeInstanceOf(LLMError);
+      await expect(rejection).rejects.toMatchObject({
+        type: 'invalid_params',
+        message: expect.stringContaining('`targets`'),
+        code: undefined,
+      });
+      expect(hook).not.toHaveBeenCalled();
+      expect(primary.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('gives a stream call the same rejection, before it opens anything', async () => {
+    const { llm, primary } = twoTargets();
+
+    await expect(llm.call({ ...call, stream: true, targets: ['nope'] })).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'unknown_target',
+    });
+    expect(primary.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts no targets and the full list, both meaning every target as declared', async () => {
+    const { llm, primary } = twoTargets();
+
+    await expect(llm.call(call)).resolves.toBe('from primary');
+    await expect(llm.call({ ...call, targets: ['primary', 'other'] })).resolves.toBe(
+      'from primary',
+    );
+    expect(primary.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs every hook once the targets are valid', async () => {
+    const { hook, middleware } = spied();
+    const { llm, other } = twoTargets([middleware]);
+
+    await expect(llm.call({ ...call, targets: ['other'] })).resolves.toBe('from other');
+
+    expect(hook).toHaveBeenCalledWith('wrap');
+    expect(hook).toHaveBeenCalledWith('transform');
+    expect(other.create).toHaveBeenCalledTimes(1);
+  });
+});
