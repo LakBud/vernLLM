@@ -7,6 +7,7 @@ import {
   resolveEffortTokenTable,
   type EffortTokenTable,
 } from '../internal/reasoningBudget.utils.js';
+import { readMaxRetries, sdkRetryWarning } from '../internal/sdkRetries.js';
 import { buildAnthropicRequestBody } from './request.js';
 import { toWireResponse } from './response.js';
 import { toWireStreamChunks } from './stream.js';
@@ -63,6 +64,11 @@ export function fromAnthropic(
 ): LLMClient {
   const effortTokenTable = resolveEffortTokenTable(options?.reasoningEffortTokens);
   const supportsWithResponse = options?.supportsWithResponse ?? false;
+  const warnOnSdkRetries = sdkRetryWarning(
+    'anthropic',
+    () => readMaxRetries(anthropicClient),
+    'Pass maxRetries: 0 to the client',
+  );
 
   const buildBody = (params: Parameters<LLMClient['chat']['completions']['create']>[0]) =>
     buildAnthropicRequestBody(
@@ -88,6 +94,7 @@ export function fromAnthropic(
     // Anthropic's input rate limit skips cache reads, so the limiter must too.
     cacheReadsCountTowardRateLimit: false,
     adapter: { name: 'anthropic', provider: 'anthropic' },
+    setLogger: warnOnSdkRetries,
     chat: {
       completions: {
         async create(params, requestOptions) {

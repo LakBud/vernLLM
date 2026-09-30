@@ -1,7 +1,8 @@
 import { GoogleGenAI } from '@google/genai';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fromGemini } from '../../../../src/adapters/gemini/index.js';
+import { resetSdkRetryWarnings } from '../../../../src/adapters/internal/sdkRetries.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
@@ -357,5 +358,65 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
       fromGemini(new GoogleGenAI({ vertexai: true, project: 'p', location: 'us-central1' }))
         .adapter,
     ).toEqual({ name: 'gemini', provider: 'gcp.vertex_ai' });
+  });
+});
+
+describe('Gemini adapter, SDK retry warning (real @google/genai client)', () => {
+  beforeEach(() => resetSdkRetryWarnings());
+
+  function spyLogger() {
+    return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  }
+
+  it('stays silent for a default client, which does not retry', () => {
+    const logger = spyLogger();
+
+    new VernLLM({ client: fromGemini(new GoogleGenAI({ apiKey: 'k' })), model: 'm', logger });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns when retryOptions is set, counting the SDK's default of 5 attempts", () => {
+    const logger = spyLogger();
+    const ai = new GoogleGenAI({ apiKey: 'k', httpOptions: { retryOptions: {} } });
+
+    new VernLLM({ client: fromGemini(ai), model: 'm', logger });
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[VernLLM\] gemini: the SDK client retries up to 4 times on its own.*Remove httpOptions\.retryOptions/,
+      ),
+    );
+  });
+
+  it('counts attempts the way the SDK does when untyped config passes a string', () => {
+    const logger = spyLogger();
+    // Plain JS or config read from env can hand the SDK a string, which it coerces.
+    const retryOptions = { attempts: '3' } as unknown as { attempts: number };
+    const ai = new GoogleGenAI({ apiKey: 'k', httpOptions: { retryOptions } });
+
+    new VernLLM({ client: fromGemini(ai), model: 'm', logger });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('retries up to 2 times'));
+  });
+
+  it('stays silent when attempts is not a number the SDK can read', () => {
+    const logger = spyLogger();
+    const retryOptions = { attempts: 'many' } as unknown as { attempts: number };
+    const ai = new GoogleGenAI({ apiKey: 'k', httpOptions: { retryOptions } });
+
+    new VernLLM({ client: fromGemini(ai), model: 'm', logger });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when retryOptions allows a single attempt', () => {
+    const logger = spyLogger();
+    const ai = new GoogleGenAI({ apiKey: 'k', httpOptions: { retryOptions: { attempts: 1 } } });
+
+    new VernLLM({ client: fromGemini(ai), model: 'm', logger });
+
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

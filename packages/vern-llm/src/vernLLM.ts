@@ -332,8 +332,7 @@ export class VernLLM {
    * any timer or hook exists, so an invalid order never starts a call.
    */
   private resolveTargets(requested: readonly string[] | undefined): ResolvedTarget[] {
-    // Nothing is narrowed yet, so no name can have been dropped.
-    return narrowTargets(this.declaredTargets, this.declaredTargets, requested, () => {});
+    return narrowTargets(this.declaredTargets, this.declaredTargets, requested);
   }
 
   /** Kept on `VernLLM` since tests drive the caching core directly through it. */

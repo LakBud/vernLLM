@@ -110,14 +110,18 @@ This is invisible, not incorrect, but it has real consequences worth knowing abo
 - **Blind telemetry.** `onEvent`'s `retry` events, the logger, and budget reservation all see nothing while a retry happens at the SDK layer.
 - **A shared timeout budget.** `timeoutMs` wraps the whole `create()` call, SDK-internal retries included, so they can eat into the budget before VernLLM's own retry loop gets a turn.
 
+`fromOpenAI` (and every OpenAI compatible alias), `fromAnthropic`, `fromGemini`, and `fromBedrock` read the client's retry setting when a `VernLLM` is constructed and log a `warn` if the SDK would retry on its own. It prints once per process for each SDK, so an app that builds a new client or `VernLLM` per request doesn't repeat it. A hand written or fake client without those settings stays silent.
+
 If you want VernLLM to be the sole retry authority, disable the SDK's own retries when constructing the client:
 
 ```ts title="disable-sdk-retries.ts"
 const openai = new OpenAI({ apiKey, maxRetries: 0 });
 const anthropic = new Anthropic({ apiKey, maxRetries: 0 });
-// AWS SDK v3: new BedrockRuntimeClient({ maxAttempts: 1, ... })
-// @google/genai: check the SDK's own retry-options field for the installed version
+// AWS SDK v3: new BedrockRuntimeClient({ maxAttempts: 1, ... }), see the Bedrock page below
+// @google/genai: leave out httpOptions.retryOptions, or set its attempts to 1
 ```
+
+For AWS Bedrock, including how a custom `retryStrategy` interacts with `maxAttempts`, see [AWS Bedrock → SDK retries](/docs/integrations/bedrock#sdk-retries).
 
 ## Cancelling mid retry
 

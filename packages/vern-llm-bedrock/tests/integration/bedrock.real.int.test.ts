@@ -1,9 +1,16 @@
-import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import {
+  BedrockRuntimeClient,
+  type BedrockRuntimeClientConfig,
+} from '@aws-sdk/client-bedrock-runtime';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { VernLLM } from 'vern-llm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fromBedrock } from '../../src/index.js';
+import { resetBedrockRetryWarning } from '../../src/sdkRetries.js';
 import { at, collect } from '../helpers.js';
 import { bedrockEventStreamRaw, startRealSdkServer, type RealSdkServer } from '../realSdkServer.js';
 
@@ -795,5 +802,154 @@ describe('Bedrock adapter integration, thinking and forced tool_choice (real AWS
       llm.call({ userContent: 'hi', tools: [weatherTool], toolChoice: 'required' }),
     ).rejects.toMatchObject({ type: 'invalid_params', code: 'unsupported_capability' });
     expect(server.requests).toHaveLength(0);
+  });
+});
+
+describe('Bedrock adapter, SDK retry warning (real BedrockRuntimeClient)', () => {
+  function spyLogger() {
+    return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  }
+
+  function client(
+    maxAttempts?: BedrockRuntimeClientConfig['maxAttempts'],
+    retryStrategy?: BedrockRuntimeClientConfig['retryStrategy'],
+  ) {
+    return new BedrockRuntimeClient({
+      region: 'us-east-1',
+      credentials: { accessKeyId: 'a', secretAccessKey: 'b' },
+      ...(maxAttempts === undefined ? {} : { maxAttempts }),
+      ...(retryStrategy === undefined ? {} : { retryStrategy }),
+    });
+  }
+
+  /** A real SDK strategy built from the class the client itself uses by default. */
+  async function sdkStrategy(attempts: number) {
+    const fallback = await client().config.retryStrategy();
+    const Strategy = fallback.constructor as new (attempts: number) => typeof fallback;
+    return new Strategy(attempts);
+  }
+
+  let awsDir: string;
+
+  // `AWS_MAX_ATTEMPTS` and a profile level `max_attempts` would change the SDK default under test,
+  // so point the SDK at empty config and credentials files.
+  beforeEach(() => {
+    awsDir = mkdtempSync(join(tmpdir(), 'vern-aws-'));
+    writeFileSync(join(awsDir, 'config'), '');
+    writeFileSync(join(awsDir, 'credentials'), '');
+    vi.stubEnv('AWS_MAX_ATTEMPTS', undefined);
+    vi.stubEnv('AWS_CONFIG_FILE', join(awsDir, 'config'));
+    vi.stubEnv('AWS_SHARED_CREDENTIALS_FILE', join(awsDir, 'credentials'));
+    vi.stubEnv('AWS_PROFILE', undefined);
+    resetBedrockRetryWarning();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(awsDir, { recursive: true, force: true });
+  });
+
+  it("warns once the real client's default maxAttempts resolves", async () => {
+    const logger = spyLogger();
+
+    new VernLLM({ client: fromBedrock(client()), model: 'm', logger });
+
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledTimes(1));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[VernLLM\] bedrock: the SDK client retries up to 2 times on its own.*Pass maxAttempts: 1 to the BedrockRuntimeClient/,
+      ),
+    );
+  });
+
+  it('warns once per process, even for separate clients resolving at the same time', async () => {
+    const first = spyLogger();
+    const later = spyLogger();
+
+    new VernLLM({
+      client: fromBedrock(client()),
+      model: 'a',
+      fallback: { client: fromBedrock(client()), model: 'b' },
+      logger: first,
+    });
+    new VernLLM({ client: fromBedrock(client()), model: 'm', logger: later });
+
+    await vi.waitFor(() => expect(first.warn).toHaveBeenCalled());
+    // Let the other providers settle, so a late second warning would show up here.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(first.warn).toHaveBeenCalledTimes(1);
+    expect(later.warn).not.toHaveBeenCalled();
+
+    // After the warning, a new client's config isn't even resolved again.
+    const afterWarning = vi.fn(async () => 3);
+    new VernLLM({ client: fromBedrock(client(afterWarning)), model: 'm', logger: later });
+    // Resolving would happen in a promise chain, so let it run before asserting it didn't.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(afterWarning).not.toHaveBeenCalled();
+    expect(later.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns from an SDK strategy's own attempts, not maxAttempts: 1", async () => {
+    const logger = spyLogger();
+
+    new VernLLM({
+      client: fromBedrock(client(1, await sdkStrategy(5))),
+      model: 'm',
+      logger,
+    });
+
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledTimes(1));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('retries up to 4 times'));
+  });
+
+  it('stays silent for a one attempt SDK strategy, whatever maxAttempts says', async () => {
+    const logger = spyLogger();
+    const real = client(5, await sdkStrategy(1));
+    const resolved = vi.spyOn(real.config, 'retryStrategy');
+
+    new VernLLM({ client: fromBedrock(real), model: 'm', logger });
+
+    await vi.waitFor(() => expect(resolved).toHaveBeenCalled());
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent for a client whose config has no maxAttempts', async () => {
+    const logger = spyLogger();
+    const real = client();
+    vi.spyOn(real, 'send').mockImplementation(async () => ({}) as never);
+    // Simulate the missing configuration on the real client.
+    Object.defineProperty(real, 'config', { value: {}, configurable: true });
+
+    new VernLLM({ client: fromBedrock(real), model: 'm', logger });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('stays silent with maxAttempts: 1, or a maxAttempts provider that rejects', async () => {
+    const logger = spyLogger();
+    const single = vi.fn(async () => 1);
+    const rejecting = vi.fn(() => Promise.reject(new Error('config file unreadable')));
+
+    new VernLLM({
+      client: fromBedrock(client(single)),
+      model: 'a',
+      fallback: { client: fromBedrock(client(rejecting)), model: 'b' },
+      logger,
+    });
+
+    await vi.waitFor(() => {
+      expect(single).toHaveBeenCalled();
+      expect(rejecting).toHaveBeenCalled();
+    });
+    // Let both provider promises settle before asserting nothing was logged.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

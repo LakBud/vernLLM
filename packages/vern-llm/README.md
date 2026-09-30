@@ -22,7 +22,7 @@
 
 <p align="center">The LLM call framework. Resilience, observability, and control for every call, in your own process.</p>
 
-**Full documentation: [vernllm.dev](https://vernllm.dev)** for installation, structured output, caching, circuit breaker, provider fallback, rate limiting, observability, every adapter, and the complete API reference. This README is a quick reference, not the manual.
+**Full documentation: [vernllm.dev](https://vernllm.dev)** for installation, every adapter, and the complete API reference. This README is a quick reference, not the manual.
 
 ## Install
 
@@ -38,13 +38,15 @@ import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
 import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
 
-const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
-const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }));
+const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 }));
+const anthropic = fromAnthropic(
+  new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 }),
+);
 
 const llm = new VernLLM({
   client: openai,
-  model: 'gpt-4o',
-  fallback: { client: anthropic, model: 'claude-sonnet-5', circuitBreaker: true },
+  model: 'gpt-6-sol',
+  fallback: { client: anthropic, model: 'claude-sonnet-5-5', circuitBreaker: true },
   rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000, maxConcurrent: 20 },
   retryBudget: { windowMs: 60_000, minCalls: 20, retryRatio: 0.2 },
   maxRetries: 3,
@@ -56,28 +58,59 @@ const llm = new VernLLM({
 const result = await llm.call({ userContent: "What's the weather in New York?" });
 ```
 
-## Why vern-llm?
+Pass `maxRetries: 0` to provider SDKs so vern-llm is the only retry authority.
 
-- **Retries with backoff**: transient failures retry automatically; validation errors and non-retryable status codes fail fast instead
-- **Provider fallback**: declare an ordered list of backup targets, tried in order after the primary, with no scoring or health-checking, `fallback` on the same constructor
-- **Client-side rate limiting**: queue locally against requests-per-minute, tokens-per-minute, and concurrency ceilings instead of letting the provider reject the call
-- **Structured output**: pass a Zod schema, get a typed, validated result back
-- **Tool calling**: pass `tools`, vern-llm handles retries and validation around them the same as any other call; you run the tools and continue the conversation
-- **Streaming**: set `stream: true` on any call and get live chunks alongside the same validated result the call would otherwise resolve to
-- **Provider-native JSON Schema mode**: constrain generation itself, not just validate after the fact
-- **Caching**: wrap any LLM call with `cachedCall`, bring your own cache adapter
-- **Middleware pipeline**: `transform` patches the outgoing request per attempt, `wrap` runs once around the whole logical call regardless of retries or fallback, patches from separate middleware merge instead of clobbering each other, order is controlled by `priority`, and each entry can be conditionally `enabled` per call
-- **Circuit breaker**: trips after repeated failures, recovers automatically once the provider's back, independent per fallback target too
-- **Observability**: one `onEvent` stream reports retries, fallovers, circuit transitions, and rate-limit waits
-- **Usage tracking**: `onUsage` and `onUsageFailure` report token spend on success and on failure, so nothing goes unaccounted for when a call fails after the provider already responded
-- **One interface, every provider**: OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together, Fireworks, Ollama, Anthropic, Gemini, Bedrock (via `vern-llm-bedrock`), or raw HTTP via `fromFetch`
-- **Zero runtime dependencies**: `zod` and provider SDKs are not required dependencies; vern-llm relies on compatible interfaces rather than specific implementations.
+## Resilience
 
-### Why not a gateway?
+Calls keep working when providers fail, and a failing provider can't take your app down with it.
 
-The customization is something a gateway can't match. vern-llm runs in your process, so you bring your own rate limiter, cache, and middlewares which transform the call instead of picking from a config panel, and hooks like `reserveUsage`, `onEvent` and even more give you superior control over billing and observability.
+- **Retries**: full jitter backoff that honors `Retry-After` up to your cap. Validation and caller errors fail fast
+- **Retry budget**: caps retries at a share of each target's traffic, so an outage can't turn into a retry storm
+- **Circuit breaker per target**: consecutive, rolling, or custom tripping, with half open trials and a success ratio for recovery. Caller errors never open it
+- **Soft failures**: an empty body, JSON cut off at `max_tokens`, a stream that fails before its first chunk, or anything `detectSoftFailure` flags counts as a failure, even behind a 200
+- **Ordered fallback**: each target gets its own retries, breaker, limiter, and budget. When every target is open, the call fails fast with `FallbackExhaustedError`
+- **Client side rate limiting**: requests, tokens, and concurrency per target, with a wait queue that adapts after or ahead of a 429
+- **Timeouts**: per attempt, whole call via `deadlineMs`, stream idle, and reader stall
+- **Caching**: `cachedCall` shares one provider call across concurrent misses, treats a failing cache as a miss, and never caches a failed call
 
-See the [docs](https://vernllm.dev) for adapter setup, caching, the circuit breaker, provider fallback, rate limiting, and structured output in depth.
+## Observability
+
+Every retry, fallback, wait, and breaker change is reported, tied to the call and the tenant that caused it.
+
+- **One event stream**: `onEvent` reports retries, fallbacks, breaker transitions, rate limit waits, usage, and middleware events from `ctx.emit`
+- **Usage on success and failure**: `onUsage` and `onUsageFailure`, with prompt cache reads and writes split out
+- **Typed errors**: every `LLMError` carries a code and each attempt with its request snapshot, auth headers stripped
+- **Live health state**: `getCircuitStates()`, `getFailureBreakdown()`, `getRetryBudgetState()`, and `readRateLimitState()`
+- **OpenTelemetry**: [`vern-llm-otel`](https://www.npmjs.com/package/vern-llm-otel) turns events into GenAI traces and metrics in your own setup
+
+## Control
+
+Your code decides which providers a call may use, in what order, and when to give up.
+
+- **Per call targets**: `targets: ['bedrock', 'primary']` picks the providers and order for one call
+- **Middleware**: `transform` patches each attempt, `wrap` runs once around the whole call, and `dispatch` sees the final request. Order it with `priority`, `runsAfter`, and `runsBefore`
+- **Policy that only narrows**: a `wrap` can drop or reorder targets through `next({ targets })`, and an inner one can never add back what an outer one removed
+- **Fallback decisions**: `fallbackOn` sees the error, the failed target, and the next one
+- **Call scoped data**: `context` reaches every hook, event, and usage report
+- **Manual breakers**: `openCircuit()` and `closeCircuit()` per target
+- **No surprises**: vern-llm never reorders targets on its own, and bad config throws at construction
+
+## Also included
+
+- **Structured output** with any validator or provider native JSON Schema mode
+- **Tool calling** with typed calls. You run the tools and continue the conversation
+- **Streaming** with `stream: true`, returning live chunks and the same validated result
+- **Adapters** for OpenAI compatible providers, Anthropic, Gemini, Bedrock (via `vern-llm-bedrock`), and raw HTTP via `fromFetch`
+- **Shared state across processes** for the breaker, rate limits, and cache via `vern-llm-redis`
+- **Zero runtime dependencies**. `zod` and provider SDKs are optional
+
+## Why not a gateway?
+
+A gateway sees an HTTP request and response. vern-llm sees the call: the schema the answer must pass, the tenant it belongs to, and which providers it may use. So it judges the answer instead of the status code, tells your fault from the provider's, and adds no network hop, no server, and no third party in the path of your prompts.
+
+It is not a gateway, dashboard, key manager, pricing table, or agent framework, and it never executes tools for you. It works alongside one: point an OpenAI compatible adapter at LiteLLM, Portkey, or `fromVercelAIGateway`, and pick one retry owner.
+
+See [Why VernLLM](https://vernllm.dev/docs/why) for the full comparison with the AI SDK, LiteLLM, and Portkey.
 
 ## License
 
