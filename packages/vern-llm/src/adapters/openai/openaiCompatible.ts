@@ -7,6 +7,7 @@ import {
   resolveEffortTokenTable,
   type EffortTokenTable,
 } from '../internal/reasoningBudget.utils.js';
+import { readMaxRetries, sdkRetryWarning } from '../internal/sdkRetries.js';
 import { openAICompatibleProvider } from './provider.js';
 import {
   applyReasoningBudget,
@@ -74,6 +75,11 @@ export function fromOpenAICompatible(
   const effortTokenTable = resolveEffortTokenTable(options.reasoningEffortTokens);
   const provider = openAICompatibleProvider(client, options.provider);
   let logger: Logger | undefined;
+  const warnOnSdkRetries = sdkRetryWarning(
+    'openai-compatible',
+    () => readMaxRetries(client),
+    'Pass maxRetries: 0 to the client',
+  );
 
   // `extra` carries the stream fields, which VernLLM's own wire type, like
   // `reasoning_effort: 'none'`, doesn't list, hence the cast on the way out.
@@ -97,6 +103,7 @@ export function fromOpenAICompatible(
     adapter: { name: 'openai-compatible', ...(provider ? { provider } : {}) },
     setLogger(next) {
       logger = next;
+      warnOnSdkRetries(next);
     },
     chat: {
       completions: {

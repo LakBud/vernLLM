@@ -3,6 +3,7 @@ import {
   resolveEffortTokenTable,
   type EffortTokenTable,
 } from '../internal/reasoningBudget.utils.js';
+import { sdkRetryWarning } from '../internal/sdkRetries.js';
 import { buildGeminiRequest } from './request.js';
 import { toWireResponse } from './response.js';
 import { toWireStreamChunks } from './stream.js';
@@ -27,6 +28,21 @@ function geminiProvider(client: GeminiClient): { provider?: string } {
   if (client.vertexai === true) return { provider: 'gcp.vertex_ai' };
   if (client.vertexai === false) return { provider: 'gcp.gemini' };
   return {};
+}
+
+/**
+ * Retries the client makes on its own. `@google/genai` only retries when
+ * `httpOptions.retryOptions` is set, and then `attempts`, which counts the
+ * first call, defaults to 5. The SDK types `httpOptions` as private, so it is
+ * read structurally and anything unexpected counts as no retry.
+ */
+function geminiRetries(client: GeminiClient): number | undefined {
+  const retryOptions = (client as { httpOptions?: { retryOptions?: { attempts?: unknown } } })
+    .httpOptions?.retryOptions;
+  if (!retryOptions || typeof retryOptions !== 'object') return undefined;
+
+  const attempts = retryOptions.attempts ?? 5;
+  return typeof attempts === 'number' ? attempts - 1 : undefined;
 }
 
 /**
@@ -55,6 +71,12 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
     );
   }
 
+  const warnOnSdkRetries = sdkRetryWarning(
+    'gemini',
+    () => geminiRetries(client),
+    'Remove httpOptions.retryOptions from the client, or set its attempts to 1,',
+  );
+
   const generateContent = models.generateContent.bind(models);
   const generateContentStream =
     typeof models.generateContentStream === 'function'
@@ -63,6 +85,7 @@ export function fromGemini(client: GeminiClient, options?: GeminiAdapterOptions)
 
   return {
     adapter: { name: 'gemini', ...geminiProvider(client) },
+    setLogger: warnOnSdkRetries,
     chat: {
       completions: {
         async create(params, options) {

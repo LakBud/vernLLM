@@ -7,6 +7,7 @@ import { LLMError, type LLMClient } from 'vern-llm';
 
 import { buildBedrockRequest } from './request.js';
 import { toWireResponse } from './response.js';
+import { bedrockRetryWarning } from './sdkRetries.js';
 import { toWireStreamChunks } from './stream.js';
 import { resolveEffortTokenTable } from './thinking.js';
 
@@ -39,6 +40,7 @@ export function fromBedrock(
   return {
     supportsJsonObjectMode: false,
     adapter: { name: 'bedrock', provider: 'aws.bedrock' },
+    setLogger: bedrockRetryWarning(client),
     chat: {
       completions: {
         async create(params, requestOptions) {
