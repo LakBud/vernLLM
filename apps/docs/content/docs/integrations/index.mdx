@@ -1,47 +1,67 @@
 ---
 title: What are Integrations
-description: Take your LLM calls further with infrastructure
+description: Optional packages that connect VernLLM to the infrastructure around it
 icon: CircleQuestionMark
 ---
 
-Most of what VernLLM tracks, a breaker's trip count, a rate limit's window, a cache entry, starts
-out living in memory, scoped to one process. That's the simplest thing to do, and it's correct
-right up until a second process enters the picture. Once an app runs as more than one process,
-memory stops being a source of truth. Each process only knows its own half of the story.
+Core `vern-llm` runs inside one process with zero runtime dependencies. That covers most of what a
+call needs, but some things live outside the process: state that several processes have to agree
+on, telemetry that belongs in the tools you already run, and providers that come with their own SDK.
+Integrations are the optional packages that connect VernLLM to that infrastructure, so core never
+has to depend on a store, a vendor, or a cloud.
 
 ## What an integration is
 
-An integration is a separate package that plugs a piece of shared infrastructure, a database, a
-store, a message bus, into the same interfaces VernLLM already exposes for customization. Nothing
-about how you use VernLLM has to change, only where its state actually lives: from one process's
-memory to something every process can read and write. Not every integration is about shared state: some
-connect VernLLM to the tooling you already use to observe it.
+An integration is a separate package that implements an extension point core already exposes. Your
+calls don't change, only what backs them:
 
-## Why it helps
+| Extension point                                               | What an integration can back it with         |
+| ------------------------------------------------------------- | -------------------------------------------- |
+| `CircuitBreakerAdapter`, `RateLimiterAdapter`, `CacheAdapter` | A shared store, so every process acts as one |
+| Middleware                                                    | Telemetry, tracing, or policy tooling        |
+| `LLMClient`                                                   | A provider SDK that needs its own adapter    |
+
+Because each one sits behind the same interface as the built in version, the guarantees stay the
+same. A breaker still ignores caller errors, a cache still fails open, and a fallback target still
+never inherits the primary's breaker or limiter.
+
+## When to add one
+
+Start without any. Reach for an integration when one of these becomes true:
+
+- **Your app runs as more than one process.** In memory, each process only knows its own half of the
+  story: rate limits multiply by the number of processes, and a breaker that opened in one keeps
+  sending traffic from the rest.
+- **You want calls in your observability stack.** Events are already reported in process. An
+  integration turns them into the traces and metrics your backend understands.
+- **Your provider needs its own SDK.** OpenAI compatible providers, Anthropic, and Gemini are built
+  in. Others arrive as their own adapter package.
+
+## Why they are separate
 
 <Cards>
-  <Card title="Stay consistent">
-    Whatever VernLLM already protects against inside one process keeps working the same way once
-    that logic spans many.
+  <Card title="Same guarantees">
+    Whatever VernLLM protects against in one process keeps working the same way across many.
   </Card>
-  <Card title="Stay focused">
-    Core `vern-llm` never has to decide which store, protocol, or vendor to depend on just to run.
+  <Card title="Nothing forced">
+    Core never picks a store, protocol, or vendor for you, and stays at zero runtime dependencies.
   </Card>
-  <Card title="Stay optional">
-    Cross process coordination is something you reach for when you need it, not a cost every install
-    pays by default.
+  <Card title="Pay for what you use">
+    Infrastructure is something you add when you need it, not a cost every install pays.
   </Card>
-  <Card title="Stay independent">
-    Each integration versions and releases on its own schedule, adding one never touches
-    `vern-llm`'s.
+  <Card title="Own release schedule">
+    Each integration versions on its own. Adding or upgrading one never touches `vern-llm`.
   </Card>
 </Cards>
+
+Every integration takes `vern-llm` as a peer dependency, so it shares the copy your app already
+uses and an `LLMError` it throws passes your own `instanceof` checks.
 
 ## Available integrations
 
 <Cards>
   <Card title="Redis" href="/docs/integrations/redis">
-    Coordinate state across every process running VernLLM.
+    Share breakers, rate limits, and the cache across every process running VernLLM.
   </Card>
   <Card title="OpenTelemetry" href="/docs/integrations/otel">
     Turn every call into traces and metrics that follow the GenAI semantic conventions.
@@ -51,11 +71,18 @@ connect VernLLM to the tooling you already use to observe it.
   </Card>
 </Cards>
 
+## Building your own
+
+Nothing about the official integrations is special. Any package, or code in your own app, can
+implement the same interfaces: see [Customization](/docs/customization) for the
+[circuit breaker](/docs/customization/circuit-breaker),
+[rate limiter](/docs/customization/rate-limiting), [cache](/docs/customization/caching),
+[middleware](/docs/customization/middleware), and [provider](/docs/customization/provider)
+contracts.
+
 ## Community
 
-Each integration ships as its own package with its own Contributing guide and Changelog, since its
-scripts, test setup, and release schedule are its own, see
-[Redis → Contributing](/docs/integrations/redis/contributing) for an example. Code of
-Conduct and Security are not duplicated per integration: every integration is governed by the same
-project-wide [Code of Conduct](/docs/code-of-conduct) and [Security](/docs/security) policy as
-`vern-llm` itself.
+Each integration has its own Contributing guide and Changelog, since its scripts, test setup, and
+release schedule are its own. See [Redis → Contributing](/docs/integrations/redis/contributing) for
+an example. The project wide [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy cover every integration, the same as `vern-llm` itself.

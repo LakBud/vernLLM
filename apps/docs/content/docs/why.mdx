@@ -1,284 +1,1114 @@
 ---
 title: Why VernLLM
-description: How VernLLM compares with the Vercel AI SDK and AI Gateway, LiteLLM, and Portkey
+description: How VernLLM compares with the Vercel AI SDK and AI Gateway, LiteLLM, and Portkey on resilience, observability, and control
 icon: Scale
 ---
 
-VernLLM makes LLM calls reliable from inside your own process. The tools below overlap with it, but
-each pairs a client library with a gateway. So each one is compared here as a pair.
+VernLLM is the LLM call framework: resilience, observability, and control for every call, running
+inside your own process. Each one means something concrete:
+
+- **Resilience.** Calls keep working when providers fail, and a failing provider can't take your app
+  down with it.
+- **Observability.** Every retry, fallback, wait, and breaker change is reported, tied to the call and
+  the tenant that caused it.
+- **Control.** Your code decides which providers a call may use, in what order, and when to give up.
+
+The tools below overlap with it on retries and fallback, but each is built around a gateway that owns
+keys, a model catalog, and billing. So each one is compared here as a client and gateway pair.
 
 <Callout type="info">
   Based on source and docs from September 2026: `ai` 7.0.107, `@ai-sdk/gateway` 4.0.87, LiteLLM
-  1.103.0, `portkey-ai` 3.1.0, Portkey Gateway 1.15.2 and `vern-llm` 2.9.0. Vercel AI Gateway and
-  hosted Portkey are hosted services, so only what their repos and docs show is compared. "None
-  found" means not in what was read, not proven absent. Something out of date? [Open an
+  1.103.0, `portkey-ai` 3.1.0, Portkey Gateway 1.15.2 and its 2.0 pre-release docs, and `vern-llm`
+  3.0.0 with `vern-llm-otel` 0.2.0 and `vern-llm-redis` 0.3.0. Vercel AI Gateway and hosted Portkey
+  are hosted services, so only what their docs show is compared. "None found" means not in what was
+  read, not proven absent. Something out of date? [Open an
   issue](https://github.com/LakBud/vernLLM/issues).
 </Callout>
 
-## Failures it's built for
+## At a glance
 
-VernLLM decides inside your process, where it knows what the call was for and what counts as a good
-result. A gateway decides from the request and response it sees. These are the cases where that
-difference shows.
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Pillar"
+  rows={[
+    {
+      label: 'Resilience',
+      best: 'VernLLM',
+      why: 'Judges the answer, not the status code, and isolates every target.',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Retry budget, soft failures, half open trials, a cache that fails open',
+        },
+        'AI SDK + AI Gateway': {
+          level: 'good',
+          detail: 'Managed failover across providers, nothing to tune',
+        },
+        LiteLLM: { level: 'partial', detail: 'Cooldowns and health checks, no wait queue' },
+        Portkey: { level: 'good', detail: 'Rate based breaker on status codes, no trial' },
+      },
+    },
+    {
+      label: 'Observability',
+      best: 'VernLLM',
+      why: 'Reports every decision inside the call, including ones a gateway never sees.',
+      note: 'AI Gateway leads if you want a hosted dashboard instead of your own backend.',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Event per decision, OpenTelemetry, typed error codes',
+        },
+        'AI SDK + AI Gateway': {
+          level: 'strong',
+          detail: 'Routing attempt logs, uptime, trace drains',
+        },
+        LiteLLM: { level: 'good', detail: 'Callbacks to many backends, Proxy admin UI' },
+        Portkey: { level: 'partial', detail: 'Gateway logs and traces' },
+      },
+    },
+    {
+      label: 'Control',
+      best: 'VernLLM',
+      why: 'Routing policy is typed code in your repo that composes and only narrows.',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Per call targets, policy middleware, manual breakers',
+        },
+        'AI SDK + AI Gateway': {
+          level: 'partial',
+          detail: 'Request options and team rules, set outside your code',
+        },
+        LiteLLM: { level: 'good', detail: 'Router strategies and per request fallbacks' },
+        Portkey: { level: 'good', detail: 'Config JSON with conditional routing' },
+      },
+    },
+  ]}
+/>
 
-### A response that looks fine but isn't
+Levels reflect what each tool's docs and source show, in five stages from Excellent down to Limited,
+then None found. A Gateway,
+Proxy, or Hosted tag means that server has to run. A Redis tag means the optional `vern-llm-redis`
+package. Keys, budgets, and model catalogs are gateway
+territory, covered under [Beyond reliability](#beyond-reliability).
 
-A provider returns a 200 with an empty body, a JSON answer cut off at `max_tokens`, or a placeholder
-like `N/A`. An empty body counts as a failure, and truncated JSON becomes a retryable
-`response_truncated`. For anything else, [`detectSoftFailure`](/docs/core/error-handling#soft-failure-detection)
-turns the result into a failure that retries, falls back, and counts against that target's breaker.
+## Why in process
+
+A gateway sees an HTTP request and an HTTP response. VernLLM sees the call: the schema the answer has
+to pass, the tenant it belongs to, whether the caller already gave up, and which of your providers it
+may use. That changes three things:
+
+1. **It judges the answer, not the status code.** A 200 with an unusable body is a failure.
+2. **It tells your fault from the provider's.** A bad request never opens the circuit for everyone.
+3. **It adds nothing that can fail.** No extra network hop, no server to run, and prompts never pass
+   through a third party.
+
+## Resilience
+
+### A 200 that isn't a success
+
+Anthropic can send an `overloaded_error` inside a stream that already returned 200. Portkey's docs
+note that by default [its gateway passes this to the client, so retry, fallback, and the circuit
+breaker never run](https://portkey.ai/docs/aigw/integrations/llms/anthropic), since they key on status
+codes. An opt in flag fixes it for Anthropic streams only.
+
+VernLLM retries and falls back on any stream that fails before its first content chunk, even after a
+keep-alive ping opened it. An empty body is a failure, JSON cut off at `max_tokens` becomes a
+retryable `response_truncated`, and [`detectSoftFailure`](/docs/core/error-handling#soft-failure-detection)
+turns anything else you consider broken, like a placeholder `N/A`, into a failure that retries,
+falls back, and counts against that target's breaker.
+
+### A primary that keeps failing
+
+A common LiteLLM setup has one deployment and one fallback. A [LiteLLM
+issue](https://github.com/BerriAI/litellm/issues/40405) shows that with the defaults, the primary is
+never cooled down, so every request during an outage pays three failed attempts, 5 to 6 seconds,
+before the fallback answers.
+
+In VernLLM every target has its own [circuit breaker](/docs/core/circuit-breaker). Once the primary
+opens, calls skip it without a provider attempt and go straight to the fallback. Recovery goes through
+half open trial calls with a success ratio, not a timer, and a cooldown can grow on each repeat
+open. Outcomes from calls admitted before the latest open are ignored, so a slow straggler can't close
+the circuit. With [`vern-llm-redis`](/docs/integrations/redis) the state is shared and one process
+wins each trial.
+
+When every target is open, VernLLM fails fast with a `FallbackExhaustedError`. Portkey's documented
+breaker [sends traffic to every target in that case](https://portkey.ai/docs/product/ai-gateway/circuit-breaker)
+and closes once a fixed cooldown of at least 30 seconds passes, without a trial.
+
+### A request that was never going to work
+
+A client that can't stream, a forced tool choice a newer Claude model rejects, or a tool history with
+a missing result all fail locally with a typed `invalid_params` error before any provider is
+contacted. That saves a round trip, a rate limit slot, and a misleading provider error.
+
+### One target starving another
+
+Every target gets its own limiter, so a burst against a struggling primary can't use up the
+concurrency a healthy fallback needs. With `isolateByModel`, one bad model can't open the circuit for
+the others on the same provider.
 
 ### Your fault, not the provider's
 
-A usage reservation is rejected, the model breaks a tool contract, or the output fails your schema.
-None of these say the provider is unhealthy, so none of them trip the [circuit
-breaker](/docs/core/circuit-breaker#what-counts-as-a-failure). One bad caller can't open the
-circuit for everyone.
+A usage reservation is rejected, a caller sends a 4xx request, the model breaks a tool contract, or
+the output fails your schema. None of these say the provider is unhealthy, so [none trip the
+breaker](/docs/core/circuit-breaker#what-counts-as-a-failure). For parse, validation, quota, and
+invalid input errors, `defaultFallbackOn` also stops instead of burning another provider on the same
+bad input.
 
 ### An outage that turns into a retry storm
 
-You send 500 requests a second with 2 retries each, and a provider starts failing half of them.
-Without a limit, retries push traffic toward three times normal at the worst moment. A [retry
-budget](/docs/core/retry-budget) caps retries at a share of traffic, and the breaker stops sending
-to the failing provider altogether.
+At 500 requests a second with 2 retries each, a provider failing half its calls pushes traffic toward
+three times normal at the worst moment. A [retry budget](/docs/core/retry-budget) caps retries at a
+share of each target's traffic. None of the others have one.
 
 ### Your provider's rate limit
 
 With your own keys, the limit that matters is your account's requests and tokens per minute.
-[Rate limiting](/docs/core/rate-limiting) estimates tokens before each call, queues within the
-limit, reconciles with real usage, and shrinks the limit after a 429, or ahead of one when the
-provider reports few requests left. [`vern-llm-redis`](/docs/integrations/redis) shares it across
-processes.
+[Rate limiting](/docs/core/rate-limiting) estimates tokens before each call, queues within the limit,
+reconciles with real usage, and shrinks the limit after a 429, or ahead of one when the provider
+reports few requests left. `vern-llm-redis` shares the buckets, the queue, and the shrinking across
+processes. LiteLLM's per deployment concurrency limit [has no wait
+queue](https://docs.litellm.ai/docs/routing): a request over it gets a 429 at once.
 
-### One more thing that can fail
+### A cache that can't take you down
 
-A gateway adds a network hop and a service every call depends on. VernLLM adds neither: fallback
-goes straight to another provider, and prompts never pass through a third party.
+[`cachedCall`](/docs/core/caching) is built to stay out of the failure path. When many callers miss
+the same key at once, one provider call serves all of them, streaming and plain calls alike, so a
+cold cache can't stampede a struggling provider. A cache that errors is treated as a miss on read and
+logged on write, so a Redis outage slows calls down instead of failing them. One caller aborting
+never cancels the shared call for the others, and a hit never touches the provider or its breaker.
 
-```ts title="failure-handling.ts"
+The cache also refuses to serve wrong answers: the in memory adapter copies values on write and read, a cached `null`
+is a real hit, failed calls are never cached, and a missing or NaN `ttl` stores nothing instead of
+an entry that never expires.
+
+### A stream that stalls or is abandoned
+
+Leaving a `for await` early cancels the provider stream and frees the rate limit slot. A slow reader
+pauses the stream instead of losing chunks, `readerStallTimeoutMs` detaches one that stops reading,
+and an idle chunk timeout catches a provider that stalls mid stream and counts it against the breaker.
+
+```ts title="resilience.ts"
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
+
 const llm = new VernLLM({
-  client: anthropic,
+  client: fromAnthropic(anthropic),
   model: 'claude-opus-5-5',
-  fallback: { client: openai, model: 'gpt-6-sol', circuitBreaker: true },
-  circuitBreaker: true,
+  circuitBreaker: { threshold: 5, cooldownMs: 30_000, halfOpenProbes: 3 },
   retryBudget: { windowMs: 60_000, minCalls: 20, retryRatio: 0.2 },
   rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000 },
+  fallback: {
+    name: 'openai',
+    client: fromOpenAI(openai),
+    model: 'gpt-6-sol',
+    circuitBreaker: true,
+  },
   detectSoftFailure: (result) =>
     typeof result === 'string' && result.trim() === 'N/A' ? 'soft_failure_detected' : undefined,
 });
 ```
 
-## What each one is
+## Observability
 
-| Tool                    | Shape                                                                                          | Where the reliability logic runs                |
-| ----------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| **VernLLM**             | TypeScript LLM call framework, no runtime dependencies. Optional `vern-llm-redis` shares state | Your process                                    |
-| **AI SDK + AI Gateway** | TypeScript SDK. Plain model ids resolve through the Gateway                                    | Retries in your process, routing in the Gateway |
-| **LiteLLM**             | Python SDK and Router, plus a self hosted Proxy server                                         | Your process, or the Proxy                      |
-| **Portkey**             | Node SDK that is a thin client, plus an open source gateway                                    | The gateway, hosted or self run                 |
+A gateway log shows what the gateway did. VernLLM reports what happened to the call, including the
+parts no gateway can see: a schema that failed, a soft failure, a local rate limit wait, or a
+middleware that rewrote the request.
+
+| Question                                | Where VernLLM answers it                                                                                                                                    |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why did this call take 9 seconds?       | `rate_limited` with the wait, `retry` with the delay and whether `Retry-After` was honored, `fallback` with the time spent on each target                   |
+| Was it us or the provider?              | OpenTelemetry attempt spans start when the request is sent, so queue time and transforms never inflate provider latency. Time to first chunk skips pings    |
+| Which provider answered?                | `meta.current`, with `position` in the order tried, and `vernllm.answered.provider` on the span                                                             |
+| Which tenant spent these tokens?        | The call's `context` rides on every event and every `TokenUsage`                                                                                            |
+| Were we billed for a call that failed?  | A `usage_failure` event, `onUsageFailure`, and the `vernllm.usage_failure.count` metric                                                                     |
+| How much came from the prompt cache?    | `cacheReadTokens` and `cacheWriteTokens` on usage, and the GenAI cache attributes on spans                                                                  |
+| Is a breaker open right now?            | `getCircuitStates()`, `getFailureBreakdown()`, `getRetryBudgetState()`, `readRateLimitState()`, and the `vernllm.circuit.transitions` metric                |
+| What did our routing middleware decide? | Middleware reports its own events with `ctx.emit`, and each becomes a span event                                                                            |
+| Why was this call rejected?             | 12 error types and 38 codes. A breaker rejection says whether it is cooling down or waiting on a trial, and `getFailureBreakdown()` counts failures by code |
+| What exactly was sent?                  | The `dispatch` hook sees each request after every transform. An `LLMError` keeps every attempt with a request snapshot, auth headers stripped               |
+
+All of it flows through one [`onEvent`](/docs/core/observability) stream tagged with a `requestId`, and
+[`vern-llm-otel`](/docs/integrations/otel) turns it into GenAI traces and metrics in your own
+OpenTelemetry setup.
+
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rows={[
+    {
+      label: 'Decision events',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Retry, fallback, breaker, wait, usage, custom' },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'Lifecycle callbacks' },
+        LiteLLM: { level: 'good', detail: 'Success and failure callbacks' },
+        Portkey: { level: 'partial', detail: 'Gateway logs', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Attempt history',
+      best: ['VernLLM', 'AI SDK + AI Gateway'],
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Every attempt on each LLMError, auth stripped' },
+        'AI SDK + AI Gateway': {
+          level: 'strong',
+          detail: 'Every routing attempt, kept 30 days',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'partial', detail: 'Per call callback data' },
+        Portkey: { level: 'good', detail: 'Logs with trace IDs', via: 'gateway' },
+      },
+    },
+    {
+      label: 'OpenTelemetry',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'GenAI spans and metrics, spans start at dispatch' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: '@ai-sdk/otel and trace drains' },
+        LiteLLM: { level: 'good', detail: 'OpenTelemetry callback' },
+        Portkey: { level: 'partial', detail: 'Gateway traces', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Failures decided in your process',
+      best: 'VernLLM',
+      why: 'Schema failures, soft failures, and local rate limit waits never reach a gateway.',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Typed codes on events and spans' },
+        'AI SDK + AI Gateway': { level: 'limited', detail: 'SDK errors only' },
+        LiteLLM: { level: 'limited', detail: 'SDK exceptions' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Live health state',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Breaker, budget, limiter, failure breakdown' },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'Provider uptime windows', via: 'hosted' },
+        LiteLLM: { level: 'partial', detail: 'Health endpoints', via: 'proxy' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Dashboard',
+      best: 'AI SDK + AI Gateway',
+      cells: {
+        VernLLM: { level: 'na', label: 'Bring your own', detail: 'Any OpenTelemetry backend' },
+        'AI SDK + AI Gateway': {
+          level: 'excellent',
+          detail: 'Usage, cost, and routing logs',
+          via: 'hosted',
+        },
+        LiteLLM: { level: 'good', detail: 'Admin UI', via: 'proxy' },
+        Portkey: { level: 'strong', detail: 'Console and hosted analytics', via: 'hosted' },
+      },
+    },
+  ]}
+/>
+
+The gateway views are good at fleet level questions. They can't see anything decided in your process,
+such as a schema failure or a soft failure, and they stop at the gateway boundary.
+
+## Control
+
+In a gateway, routing lives in a config header, a dashboard rule, or YAML on another server. In
+VernLLM it is TypeScript in your repo: typed, reviewed, testable, and able to read anything your app
+knows.
+
+- **Per call target order.** `targets: ['bedrock', 'primary']` picks which providers one call may use
+  and in what order. Nothing is created per call.
+- **Policy that only narrows.** A `wrap` middleware can reorder or drop targets through
+  `next({ targets })`. An inner one can never add back what an outer one removed, so a residency or
+  compliance rule can't be undone further down.
+- **Fallback decisions with context.** `fallbackOn` sees the error, the target that failed, and the
+  one that would come next, and returns `'next'` or `'stop'`.
+- **Call scoped data.** `context` carries a tenant or routing hint to every hook, event, and usage
+  report. `state` seeds typed values for middleware before any hook runs.
+- **Hands on the breaker.** `openCircuit()` drains a provider before maintenance, `closeCircuit()`
+  brings it back, and a fallback target's breaker can be a shared adapter.
+- **One clock.** `deadlineMs` bounds the whole call across retries and fallbacks, and
+  `maxRetryAfterMs` caps how long a provider can make you wait.
+- **No surprises.** VernLLM never reorders targets on its own, and bad config, such as duplicate
+  target names or an invalid rate limit, throws at construction instead of in production.
+
+```ts title="residency-policy.ts"
+const residency: VernLLMMiddleware = {
+  name: 'residency',
+  wrap: (request, next, ctx) =>
+    ctx.context?.region === 'eu'
+      ? next({ targets: ctx.targets.filter((t) => t.name.startsWith('eu-')).map((t) => t.name) })
+      : next(),
+};
+
+await llm.call({ userContent, context: { tenantId: 't1', region: 'eu' } });
+```
+
+### Middleware compared with the AI SDK
+
+<VerdictTable
+  tools={['VernLLM', 'AI SDK']}
+  rows={[
+    {
+      label: 'Hooks',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'transform, wrap, dispatch, enabled, onEvent' },
+        'AI SDK': { level: 'good', detail: 'transformParams, wrapGenerate, wrapStream' },
+      },
+    },
+    {
+      label: 'Scope of wrap',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Whole call: retries, fallback, breaker, budget' },
+        'AI SDK': { level: 'partial', detail: 'One model call, inside the retry loop' },
+      },
+    },
+    {
+      label: 'Routing',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'next({ targets }), can only narrow' },
+        'AI SDK': { level: 'none' },
+      },
+    },
+    {
+      label: 'Ordering',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'priority, runsAfter, runsBefore, position' },
+        'AI SDK': { level: 'limited', detail: 'Array order' },
+      },
+    },
+    {
+      label: 'Shared state',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Typed ctx.state, seeded per call' },
+        'AI SDK': { level: 'none' },
+      },
+    },
+    {
+      label: 'Own events',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'ctx.emit to onEvent and OpenTelemetry' },
+        'AI SDK': { level: 'none' },
+      },
+    },
+    {
+      label: 'Time guard',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'middlewareTimeoutMs, default 5 seconds' },
+        'AI SDK': { level: 'none' },
+      },
+    },
+  ]}
+/>
+
+LiteLLM offers `CustomLogger` hooks that can modify request params, and Portkey runs guardrail hooks
+before and after a request in the gateway.
 
 ## Feature matrix
 
-Cells marked Proxy or Gateway need that server. VernLLM gets the cross process versions of its
-features from the optional `vern-llm-redis` package instead of a server.
+Tags show where a feature runs when it isn't in the client library.
 
-| Feature                 | VernLLM                     | AI SDK + AI Gateway              | LiteLLM SDK + Proxy       | Portkey SDK + Gateway           |
-| ----------------------- | --------------------------- | -------------------------------- | ------------------------- | ------------------------------- |
-| Retries                 | Yes                         | Yes                              | Yes                       | Yes, in the gateway             |
-| Retry budget            | Yes                         | None found                       | None found                | None found                      |
-| Timeouts                | Yes                         | Yes                              | Yes                       | Yes                             |
-| Circuit breaker         | Yes                         | None found                       | Cooldowns                 | Hooks only, handler not in repo |
-| Fallback                | Your ordered list           | Gateway                          | Yes                       | Gateway                         |
-| Load balancing          | No, by design               | Gateway, sort by cost or speed   | Yes, several strategies   | Gateway, weighted               |
-| Outbound rate limits    | Yes                         | None found                       | Partial                   | None found in repo              |
-| Caller limits, budgets  | Hooks you wire up           | Gateway quota                    | Proxy                     | None found in repo              |
-| Response caching        | Yes                         | Recipe, plus gateway option      | Yes                       | Yes, in memory                  |
-| Semantic caching        | Guide only                  | None found                       | Yes                       | Hosted feature                  |
-| Middleware              | Yes                         | Yes                              | Callback hooks            | Gateway hooks                   |
-| Guardrails              | None found                  | None found                       | Proxy                     | Gateway plugins                 |
-| Cost tracking           | Tokens only                 | Gateway                          | Yes                       | Pricing hook only               |
-| Observability           | Event stream, OpenTelemetry | OpenTelemetry, Gateway dashboard | Callbacks, Proxy admin UI | Gateway logs, traces            |
-| Shared across processes | Redis                       | Gateway                          | Redis, Proxy              | Gateway                         |
-| Extra network hop       | None                        | Only through the Gateway         | Only through the Proxy    | Yes                             |
-
-## What VernLLM does differently
-
-Beyond the [failures above](#failures-its-built-for):
-
-1. **Per target isolation.** Every fallback target gets its own breaker, limiter, and retry budget.
-   None are inherited from the primary.
-2. **Errors carry history.** An `LLMError` keeps every attempt with a request snapshot, and auth
-   headers are stripped from those snapshots.
-3. **Live introspection.** `getCircuitStates()`, `getRetryBudgetState()`, and `readRateLimitState()`
-   read state, and `openCircuit()` and `closeCircuit()` control it by hand.
-4. **Small footprint.** No runtime dependencies, and CI caps each published bundle at 120 KB.
-5. **Opt in sharing.** Cross process state comes from a package you add, not a server you run.
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Feature"
+  rows={[
+    {
+      label: 'Retries',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Full jitter, Retry-After aware' },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'SDK and Gateway' },
+        LiteLLM: { level: 'strong', detail: 'Policy per error type' },
+        Portkey: { level: 'good', detail: 'Per target status codes', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Retry budget',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Caps retries as a share of traffic' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Timeouts',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Attempt, whole call, stream idle, reader stall' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: 'Total, step, first chunk, chunk' },
+        LiteLLM: { level: 'partial', detail: 'Per model' },
+        Portkey: { level: 'partial', detail: 'Per request', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Circuit breaker',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Per target, half open trials' },
+        'AI SDK + AI Gateway': {
+          level: 'limited',
+          detail: 'Managed, nothing to tune',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'partial', detail: 'Cooldowns' },
+        Portkey: { level: 'good', detail: 'Count or rate, no trial', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Soft failure detection',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Empty, truncated, or anything you flag' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'limited', detail: 'Anthropic streams, opt in', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Caching',
+      best: ['VernLLM', 'LiteLLM'],
+      note: 'VernLLM leads on resilience of the cache, LiteLLM on backends.',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Stampede safe, fails open, tiered' },
+        'AI SDK + AI Gateway': { level: 'limited', detail: 'Gateway option', via: 'gateway' },
+        LiteLLM: { level: 'excellent', detail: 'Many backends plus semantic' },
+        Portkey: { level: 'good', detail: 'Exact, semantic in 2.0', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Fallback',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Ordered, isolated per target' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: 'Models and providers', via: 'gateway' },
+        LiteLLM: { level: 'strong', detail: 'Plus context window fallbacks' },
+        Portkey: { level: 'good', detail: 'Status code triggers', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Outbound rate limits',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Queue and AIMD' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'partial', detail: 'No wait queue' },
+        Portkey: { level: 'none', label: 'Not wired in' },
+      },
+    },
+    {
+      label: 'Observability',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Events and OpenTelemetry' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: 'Callbacks, OpenTelemetry, logs' },
+        LiteLLM: { level: 'good', detail: 'Callbacks' },
+        Portkey: { level: 'partial', detail: 'Gateway logs', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Dashboard',
+      best: 'AI SDK + AI Gateway',
+      cells: {
+        VernLLM: { level: 'na', label: 'Bring your own' },
+        'AI SDK + AI Gateway': { level: 'excellent', via: 'hosted' },
+        LiteLLM: { level: 'good', detail: 'Admin UI', via: 'proxy' },
+        Portkey: { level: 'strong', detail: 'Console, analytics', via: 'hosted' },
+      },
+    },
+    {
+      label: 'Routing policy',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Your code, never reorders' },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'Request options, team rules' },
+        LiteLLM: { level: 'good', detail: 'Router strategies' },
+        Portkey: { level: 'strong', detail: 'Config JSON, conditional' },
+      },
+    },
+    {
+      label: 'Load balancing',
+      best: 'LiteLLM',
+      cells: {
+        VernLLM: { level: 'na', label: 'By design' },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'By cost or speed', via: 'gateway' },
+        LiteLLM: { level: 'excellent', detail: 'Several strategies' },
+        Portkey: { level: 'strong', detail: 'Weighted', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Caller budgets',
+      best: ['AI SDK + AI Gateway', 'LiteLLM'],
+      cells: {
+        VernLLM: { level: 'limited', detail: 'Hooks you wire up' },
+        'AI SDK + AI Gateway': {
+          level: 'excellent',
+          detail: 'Team, project, key, user',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'excellent', detail: 'Key, user, team, model', via: 'proxy' },
+        Portkey: { level: 'good', detail: 'Budget limits', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Guardrails',
+      best: 'Portkey',
+      cells: {
+        VernLLM: { level: 'limited', detail: 'Through middleware' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'good', via: 'proxy' },
+        Portkey: { level: 'excellent', detail: 'Plugin library', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Shared across processes',
+      best: 'AI SDK + AI Gateway',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Optional package', via: 'redis' },
+        'AI SDK + AI Gateway': { level: 'excellent', detail: 'Nothing to run', via: 'hosted' },
+        LiteLLM: { level: 'good', detail: 'Redis and Proxy' },
+        Portkey: { level: 'strong', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Extra network hop',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', label: 'None' },
+        'AI SDK + AI Gateway': { level: 'good', label: 'Through the Gateway only' },
+        LiteLLM: { level: 'good', label: 'Through the Proxy only' },
+        Portkey: { level: 'limited', label: 'Always' },
+      },
+    },
+  ]}
+/>
 
 ## Retries and timeouts
 
-| Tool                    | Approach                                                                                                                                                                                                                                                                                                    |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | Exponential backoff with full jitter, capped at 10 seconds. Waits longer after a 429 or a server error. Honors `Retry-After` and `Retry-After-Ms`. Default 1 retry. Per attempt timeout of 25 seconds, `deadlineMs` for the whole call across retries and fallbacks, and an idle chunk timeout for streams. |
-| **AI SDK + AI Gateway** | SDK retries with exponential backoff, honors retry headers under 60 seconds, default 2. Timeouts can be total, per step, first chunk, or per chunk. Gateway retry behavior is not in the docs.                                                                                                              |
-| **LiteLLM**             | Router retries, default 2, with a retry policy per error type. Retries instantly if healthy deployments remain. `timeout` and `stream_timeout` per model.                                                                                                                                                   |
-| **Portkey**             | SDK retries once on network errors and some 5xx. Gateway retries per target with attempts and status codes, optional `Retry-After`, skipping waits of 60 seconds or more. `requestTimeout` returns a 408.                                                                                                   |
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Aspect"
+  rows={[
+    {
+      label: 'Backoff',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Full jitter, longer after 429 or 5xx, Retry-After up to your cap',
+        },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'Exponential, retry headers under 60 s' },
+        LiteLLM: {
+          level: 'strong',
+          detail: 'Policy per error type, instant if healthy deployments remain',
+        },
+        Portkey: { level: 'partial', detail: 'SDK once, gateway per target', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Retry cap under load',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Retry budget per target' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Per attempt timeout',
+      cells: {
+        VernLLM: { level: 'strong', detail: '25 s default' },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'Per step' },
+        LiteLLM: { level: 'good', detail: 'timeout per model' },
+        Portkey: { level: 'good', detail: 'requestTimeout returns 408', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Whole call deadline',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'deadlineMs across retries and fallback' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: 'Total timeout' },
+        LiteLLM: { level: 'limited', detail: 'Per model only' },
+        Portkey: { level: 'partial', detail: 'Per request', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Stream timeouts',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Idle chunk and reader stall' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: 'First chunk and per chunk' },
+        LiteLLM: { level: 'partial', detail: 'stream_timeout' },
+        Portkey: { level: 'none' },
+      },
+    },
+  ]}
+/>
 
-Only VernLLM adds a [retry budget](/docs/core/retry-budget): a cap on how much of your traffic may
-be retries, so an outage doesn't turn into a retry storm. One caution: SDKs such as `openai` retry
-on their own too. Pass `maxRetries: 0` to the client so VernLLM is the only retry authority.
+SDKs such as `openai` retry on their own too. Pass `maxRetries: 0` to the client so VernLLM is the
+only retry authority.
 
 ## Circuit breaking
 
-| Tool                    | Approach                                                                                                                                                                                                                                                                                |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | Consecutive or rolling tripping, or your own policy. Half open trial calls with a success ratio, cooldown backoff with jitter, per model isolation, failure counts by error code, and manual open and close. With `vern-llm-redis` the state is shared and one process wins each trial. |
-| **AI SDK + AI Gateway** | None found. The Gateway moves down a provider list when one fails.                                                                                                                                                                                                                      |
-| **LiteLLM**             | A deployment enters a cooldown after `allowed_fails` failures (default 3) for `cooldown_time` (default 5 seconds). Policy per error type. The state can be shared through Redis.                                                                                                        |
-| **Portkey**             | The gateway skips targets flagged open and calls a breaker handler with per target `cbConfig`. The handler itself is not in the open repo.                                                                                                                                              |
+Vercel [says the Gateway runs circuit breakers](https://vercel.com/i/open-source-ai-gateways), but no
+settings are documented. Portkey's breaker is [documented here](https://portkey.ai/docs/product/ai-gateway/circuit-breaker)
+and is moving into the open gateway with 2.0.
+
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Aspect"
+  rows={[
+    {
+      label: 'Tripping',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Consecutive, rolling, or your own policy' },
+        'AI SDK + AI Gateway': {
+          level: 'limited',
+          detail: 'Managed, not configurable',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'partial', detail: 'allowed_fails per error type' },
+        Portkey: { level: 'strong', detail: 'Count or rate, minimum requests', via: 'gateway' },
+      },
+    },
+    {
+      label: 'What counts',
+      best: 'VernLLM',
+      why: 'Caller errors never open the circuit, and a bad 200 can.',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'By error code, soft failures included' },
+        'AI SDK + AI Gateway': { level: 'none', label: 'Not documented' },
+        LiteLLM: { level: 'good', detail: 'Policy per error type' },
+        Portkey: { level: 'partial', detail: 'HTTP status codes only' },
+      },
+    },
+    {
+      label: 'Recovery',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Half open trials, success ratio, backoff' },
+        'AI SDK + AI Gateway': { level: 'none', label: 'Not documented' },
+        LiteLLM: { level: 'partial', detail: 'Fixed cooldown, optional health checks' },
+        Portkey: { level: 'limited', detail: 'Closes after 30 s minimum, no trial' },
+      },
+    },
+    {
+      label: 'When every target is open',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Fails fast, fallbackOn can page you' },
+        'AI SDK + AI Gateway': { level: 'none', label: 'Not documented' },
+        LiteLLM: { level: 'partial', detail: 'Health check routing bypasses cooldown' },
+        Portkey: { level: 'limited', detail: 'Breaker bypassed, all targets get traffic' },
+      },
+    },
+    {
+      label: 'Isolation',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Per target and per model' },
+        'AI SDK + AI Gateway': { level: 'none', label: 'Not documented' },
+        LiteLLM: { level: 'good', detail: 'Per deployment' },
+        Portkey: { level: 'good', detail: 'Per strategy path' },
+      },
+    },
+    {
+      label: 'Shared state',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'One process per trial', via: 'redis' },
+        'AI SDK + AI Gateway': { level: 'excellent', detail: 'Nothing to run', via: 'hosted' },
+        LiteLLM: { level: 'good', detail: 'Through Redis' },
+        Portkey: { level: 'strong', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Manual control',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Open, close, and read by target' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'none' },
+      },
+    },
+  ]}
+/>
 
 ## Fallback and routing
 
-| Tool                    | Approach                                                                                                                                                                                                                                                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | Ordered `fallback` targets you declare. `fallbackOn` decides `'next'` or `'stop'`. By default it stops on parse, validation, abort, quota, and invalid-params errors, and moves on for provider faults. An `unsupported_capability` error also moves on, since another target may support it. Never reorders. |
-| **AI SDK + AI Gateway** | Gateway options: `models` fallback list, provider `order` and `only`, `sort` by cost, first token time, or throughput, and BYOK keys tried in order.                                                                                                                                                          |
-| **LiteLLM**             | Router `fallbacks`, plus context window and content policy fallbacks, up to 5 by default. Routing strategies include shuffle, least busy, latency, and cost.                                                                                                                                                  |
-| **Portkey**             | Gateway config with `fallback`, `loadbalance` (weights), `conditional`, and `single` modes, with status codes that trigger a fallback.                                                                                                                                                                        |
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Aspect"
+  rows={[
+    {
+      label: 'Fallback chain',
+      best: 'LiteLLM',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Ordered targets' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: 'Models and providers', via: 'gateway' },
+        LiteLLM: { level: 'excellent', detail: 'Plus context window and content policy' },
+        Portkey: { level: 'good', detail: 'Status code triggers', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Per target isolation',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Own retries, breaker, limiter, budget' },
+        'AI SDK + AI Gateway': { level: 'none', label: 'Not documented' },
+        LiteLLM: { level: 'good', detail: 'Per deployment cooldowns' },
+        Portkey: { level: 'partial', detail: 'Inherited cb_config' },
+      },
+    },
+    {
+      label: 'Deciding to move on',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'fallbackOn sees failed and next target' },
+        'AI SDK + AI Gateway': { level: 'limited', detail: 'Gateway decides' },
+        LiteLLM: { level: 'strong', detail: 'Policy per error type' },
+        Portkey: { level: 'partial', detail: 'Status codes' },
+      },
+    },
+    {
+      label: 'Per call order',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'targets, policy that only narrows' },
+        'AI SDK + AI Gateway': { level: 'good', detail: 'order and only per request' },
+        LiteLLM: { level: 'good', detail: 'Per request fallbacks' },
+        Portkey: { level: 'good', detail: 'Config per request' },
+      },
+    },
+    {
+      label: 'Automatic selection',
+      best: ['AI SDK + AI Gateway', 'LiteLLM'],
+      note: 'VernLLM leaves this out on purpose: the order is the whole policy.',
+      cells: {
+        VernLLM: { level: 'na', label: 'Never reorders' },
+        'AI SDK + AI Gateway': {
+          level: 'excellent',
+          detail: 'Sort by cost, first token, throughput',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'excellent', detail: 'Shuffle, least busy, latency, cost' },
+        Portkey: { level: 'strong', detail: 'Weighted and conditional', via: 'gateway' },
+      },
+    },
+  ]}
+/>
 
-In VernLLM the order is the whole policy. When every target fails you get a
-`FallbackExhaustedError` with each target's attempts, and `meta` tells you which target answered. The
-gateways can choose for you by cost, latency, or weight. That is a feature if you want it and a
-surprise if you don't.
+When every target fails you get a `FallbackExhaustedError` with each target's attempts. The gateways
+can choose for you by cost, latency, or weight. That is a feature if you want it and a surprise if you
+don't.
 
 ## Rate limiting
 
-| Tool                    | Approach                                                                                                                                                                                                                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **VernLLM**             | Requests, tokens, and concurrency against the provider. Tokens are estimated before the call, then reconciled with real usage. Queue with a max wait and size. AIMD shrinks the limit after a 429, or ahead of one when the provider reports few requests left. With `vern-llm-redis` the buckets, a fair queue, and AIMD are shared across processes. |
-| **AI SDK + AI Gateway** | No provider limiter found. Docs show limiting your own endpoint with Upstash. Gateway tracks quota per `quotaEntityId`.                                                                                                                                                                                                                                |
-| **LiteLLM**             | `rpm` and `tpm` per deployment for routing. Proxy adds `rpm_limit`, `tpm_limit`, and parallel request limits per key, user, team, and model, shared across pods through a coordination Redis.                                                                                                                                                          |
-| **Portkey**             | A Redis token bucket class keyed by virtual key, API key, and workspace exists, but nothing in the open gateway imports it.                                                                                                                                                                                                                            |
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Aspect"
+  rows={[
+    {
+      label: 'Provider limits',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Requests, tokens, and concurrency' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'partial', detail: 'rpm and tpm for routing' },
+        Portkey: { level: 'none', label: 'Not wired in' },
+      },
+    },
+    {
+      label: 'Queueing',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Max wait and size, fair across processes' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none', label: 'Rejects with 429' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Token accounting',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Estimate, reconcile, cache aware' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'partial', detail: 'Usage tracking' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Adapts to 429s',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'AIMD, after or ahead of a 429' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'limited', detail: 'Cooldown on 429' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Limits on your callers',
+      best: 'LiteLLM',
+      cells: {
+        VernLLM: { level: 'limited', detail: 'reserveUsage hooks' },
+        'AI SDK + AI Gateway': {
+          level: 'strong',
+          detail: 'Budgets per team, project, key, user',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'excellent', detail: 'Per key, user, team, model', via: 'proxy' },
+        Portkey: { level: 'partial', detail: 'Budget limits', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Shared across processes',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Buckets, queue, and AIMD', via: 'redis' },
+        'AI SDK + AI Gateway': { level: 'na' },
+        LiteLLM: { level: 'good', detail: 'Across pods', via: 'proxy' },
+        Portkey: { level: 'none' },
+      },
+    },
+  ]}
+/>
 
-These solve different problems. VernLLM protects the provider limit your app shares. The proxies
-protect the gateway from its callers.
+VernLLM protects the provider limit your app shares. The proxies protect the gateway from its callers.
 
 ## Caching
 
-| Tool                    | Approach                                                                                                                                                                                                                                             |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | You choose the `cacheKey` and `ttl`. Exact, normalized, and tiered adapters. Concurrent misses share one call. Cached streams replay. A failing cache counts as a miss. `redisCache` shares it across processes. Semantic caching is a worked guide. |
-| **AI SDK + AI Gateway** | No built in response cache. Docs show a middleware recipe. Gateway has a `caching` option and routing for models with implicit caching.                                                                                                              |
-| **LiteLLM**             | Local, Redis, S3, disk, GCS, and Azure Blob, plus semantic caching on Redis, Valkey, or Qdrant. A dual cache pairs local with Redis.                                                                                                                 |
-| **Portkey**             | Open gateway keeps an in memory exact match cache keyed by a hash of the request, with max age and force refresh. Semantic caching is listed as a hosted feature.                                                                                    |
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Aspect"
+  rows={[
+    {
+      label: 'Stampede protection',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Concurrent misses share one call, streams included',
+        },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Cache outage',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Failed read is a miss, failed write is logged' },
+        'AI SDK + AI Gateway': { level: 'na', label: 'Hosted' },
+        LiteLLM: { level: 'none', label: 'Not documented' },
+        Portkey: { level: 'none', label: 'Not documented' },
+      },
+    },
+    {
+      label: 'One caller leaving',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Shared call aborts only when every caller has left',
+        },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Correctness guards',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Copies values, caches null, bad ttl never stored forever',
+        },
+        'AI SDK + AI Gateway': { level: 'none', label: 'Not documented' },
+        LiteLLM: { level: 'none', label: 'Not documented' },
+        Portkey: { level: 'none', label: 'Not documented' },
+      },
+    },
+    {
+      label: 'Backends',
+      best: 'LiteLLM',
+      cells: {
+        VernLLM: { level: 'good', detail: 'Memory, normalized, tiered, Redis, your own' },
+        'AI SDK + AI Gateway': { level: 'limited', detail: 'Gateway option', via: 'gateway' },
+        LiteLLM: { level: 'excellent', detail: 'Redis, S3, GCS, Azure Blob, disk' },
+        Portkey: { level: 'partial', detail: 'In memory in the open gateway', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Semantic matching',
+      best: 'LiteLLM',
+      cells: {
+        VernLLM: { level: 'partial', detail: 'Worked guide through resolveKey' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'excellent', detail: 'Redis, Valkey, or Qdrant' },
+        Portkey: { level: 'good', detail: 'In 2.0 and hosted', via: 'gateway' },
+      },
+    },
+  ]}
+/>
 
-## Middleware and hooks
-
-VernLLM and the AI SDK let you intercept calls, but at different levels.
-
-|               | VernLLM                                                        | AI SDK                                          |
-| ------------- | -------------------------------------------------------------- | ----------------------------------------------- |
-| Attach        | `middleware: [...]` on the instance                            | `wrapLanguageModel({ model, middleware })`      |
-| Hooks         | `transform`, `wrap`, `enabled`, `onEvent`                      | `transformParams`, `wrapGenerate`, `wrapStream` |
-| When it runs  | `transform` per attempt, `wrap` once per logical call          | Per model call, inside the retry loop           |
-| Sees          | Retries, fallback, breaker, budget reservation, through `wrap` | The single model call                           |
-| Ordering      | `priority`, `runsAfter`, `runsBefore`, `position`              | Array order                                     |
-| Filtering     | `enabled` flag or predicate per call                           | Write the condition inside the middleware       |
-| Short circuit | `wrap` that skips `next()`                                     | `wrapGenerate` that skips `doGenerate()`        |
-| Shared state  | Typed keys through `ctx.state`                                 | None found                                      |
-| Time guard    | `middlewareTimeoutMs`, default 5 seconds                       | None found                                      |
-
-The same idea, redacting messages, looks like this in each:
-
-```ts title="vernllm-middleware.ts"
-const llm = new VernLLM({
-  client,
-  model: 'gpt-4o',
-  middleware: [
-    { name: 'redaction', transform: (request) => ({ messages: redact(request.messages) }) },
-  ],
-});
-```
-
-```ts title="ai-sdk-middleware.ts"
-const model = wrapLanguageModel({
-  model: openai('gpt-4o'),
-  middleware: {
-    transformParams: async ({ params }) => ({ ...params, prompt: redact(params.prompt) }),
-  },
-});
-```
-
-An AI SDK middleware gets no attempt information, only the params for one model call. VernLLM's
-`wrap` sees the whole call, including which provider finally answered.
-
-| Tool        | Approach                                                                                                                                              |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **LiteLLM** | Subclass `CustomLogger`. `async_pre_request_hook` can modify request params, and success and failure hooks run after. The Proxy adds guardrail hooks. |
-| **Portkey** | The gateway runs `beforeRequestHook` and `afterRequestHook` guardrail checks that can deny, run async or in sequence. The SDK has no middleware.      |
-
-## Observability and errors
-
-| Tool                    | Approach                                                                                                                                                                                                                                                                |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | One `onEvent` stream for retries, fallback, circuit state, rate limit waits, middleware, and usage, all tagged with a `requestId`. `redact` scrubs debug logs. Errors carry a type, a code, and attempt history. `vern-llm-otel` adds OpenTelemetry traces and metrics. |
-| **AI SDK + AI Gateway** | OpenTelemetry through `@ai-sdk/otel` and lifecycle callbacks. Gateway adds a dashboard, generation lookup, and `tags` and `user`.                                                                                                                                       |
-| **LiteLLM**             | Callbacks to Langfuse, Datadog, Prometheus, OpenTelemetry, and more. Proxy adds spend logs and an admin UI.                                                                                                                                                             |
-| **Portkey**             | Gateway logs, trace IDs, custom metadata, and a local console. Hosted adds analytics.                                                                                                                                                                                   |
-
-`vern-llm-otel` emits spans and metrics through your own OpenTelemetry setup. VernLLM ships no dashboard, so you bring the backend.
+With `reserveUsage`, every coalesced caller still reserves and refunds its own budget, so sharing a
+call never means sharing a bill. See [Budget Reservation](/docs/core/budget-reservation).
 
 ## Shared state across processes
 
-| Tool                    | Approach                                                                                                                                                                                                                                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | In memory by default. `vern-llm-redis` shares the breaker, limiter, and cache through Redis, with `ioredis` or `node-redis`, and Cluster is tested. It needs Redis 5 or newer with Lua scripting. If Redis is down, the cache is skipped, the breaker uses its local copy, and rate limited calls fail. |
-| **AI SDK + AI Gateway** | Nothing shared in the SDK. Routing and quota state live in the hosted Gateway.                                                                                                                                                                                                                          |
-| **LiteLLM**             | The Router shares cooldowns and usage through a Redis backed dual cache. The Proxy adds Postgres for keys and spend, and a coordination Redis for limits and health checks across pods.                                                                                                                 |
-| **Portkey**             | State lives in the gateway. The open gateway's cache is in memory.                                                                                                                                                                                                                                      |
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Aspect"
+  rows={[
+    {
+      label: 'What has to run',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Nothing, Redis optional' },
+        'AI SDK + AI Gateway': { level: 'strong', detail: 'Nothing, it is hosted' },
+        LiteLLM: { level: 'partial', detail: 'Redis, Proxy adds Postgres' },
+        Portkey: { level: 'partial', detail: 'The gateway' },
+      },
+    },
+    {
+      label: 'Breaker and cooldowns',
+      cells: {
+        VernLLM: { level: 'strong', via: 'redis' },
+        'AI SDK + AI Gateway': { level: 'excellent', via: 'hosted' },
+        LiteLLM: { level: 'good', detail: 'Through Redis' },
+        Portkey: { level: 'strong', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Rate limits',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', via: 'redis' },
+        'AI SDK + AI Gateway': { level: 'na', label: 'No limiter' },
+        LiteLLM: { level: 'good', via: 'proxy' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Cache',
+      best: 'LiteLLM',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Redis adapter, tiered with local' },
+        'AI SDK + AI Gateway': { level: 'partial', detail: 'Caching option', via: 'gateway' },
+        LiteLLM: { level: 'excellent', detail: 'Redis, S3, GCS, Azure Blob, disk' },
+        Portkey: { level: 'partial', detail: 'In memory in the open gateway' },
+      },
+    },
+    {
+      label: 'When the store is down',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Documented per feature' },
+        'AI SDK + AI Gateway': { level: 'na', label: 'Hosted' },
+        LiteLLM: { level: 'none', label: 'Not documented' },
+        Portkey: { level: 'na', label: 'Gateway' },
+      },
+    },
+  ]}
+/>
 
-## Spend and cost
+With `vern-llm-redis` down, the cache is skipped, the breaker decides from its local copy, and rate
+limited calls fail with `connection_failed`.
 
-| Tool                    | Approach                                                                                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **VernLLM**             | `reserveUsage` and `refundUsage` call your own billing before and after a call. `onUsage` reports prompt, completion, and reasoning tokens. There is no pricing table or cost. |
-| **AI SDK + AI Gateway** | Credit balance, `quotaEntityId`, and `user` and `tags` attribution. Generation lookup shows cost.                                                                              |
-| **LiteLLM**             | Proxy adds virtual keys, `max_budget` per key, team, and model. A cost calculator ships with the SDK.                                                                          |
-| **Portkey**             | Virtual keys hold provider keys in a vault. The open repo has a model pricing hook, but no budget controls were found.                                                         |
+## Beyond reliability
 
-## Structured output, tools, and streaming
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rows={[
+    {
+      label: 'Spend',
+      best: ['AI SDK + AI Gateway', 'LiteLLM'],
+      cells: {
+        VernLLM: { level: 'limited', detail: 'Tokens, cache split, reservation hooks' },
+        'AI SDK + AI Gateway': {
+          level: 'excellent',
+          detail: 'Cost per request, budgets',
+          via: 'hosted',
+        },
+        LiteLLM: { level: 'excellent', detail: 'Cost calculator, budgets', via: 'proxy' },
+        Portkey: { level: 'strong', detail: 'Pricing and budget limits', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Structured output',
+      best: ['VernLLM', 'AI SDK + AI Gateway'],
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Any validator or native jsonSchema' },
+        'AI SDK + AI Gateway': { level: 'excellent', detail: 'Output.object()' },
+        LiteLLM: { level: 'partial', detail: 'OpenAI style params' },
+        Portkey: { level: 'partial', detail: 'OpenAI style params' },
+      },
+    },
+    {
+      label: 'Tools',
+      best: 'AI SDK + AI Gateway',
+      cells: {
+        VernLLM: { level: 'good', detail: 'Typed calls, never executed' },
+        'AI SDK + AI Gateway': { level: 'excellent', detail: 'Runs multi step loops' },
+        LiteLLM: { level: 'partial', detail: 'OpenAI format' },
+        Portkey: { level: 'partial', detail: 'OpenAI format' },
+      },
+    },
+    {
+      label: 'Provider coverage',
+      best: ['AI SDK + AI Gateway', 'LiteLLM', 'Portkey'],
+      cells: {
+        VernLLM: { level: 'partial', detail: 'OpenAI compatible, Anthropic, Gemini, Bedrock' },
+        'AI SDK + AI Gateway': {
+          level: 'excellent',
+          detail: 'Large hosted catalog',
+          via: 'hosted',
+        },
+        LiteLLM: { level: 'excellent', detail: 'Very large' },
+        Portkey: { level: 'excellent', detail: 'Very large', via: 'gateway' },
+      },
+    },
+  ]}
+/>
 
-| Tool                    | Approach                                                                                                                                                                                                                      |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **VernLLM**             | `schema` for any validator such as Zod, or provider native `jsonSchema`. Tool calls come back as typed data and are never executed. Streams return `{ chunks, finalResult }`, with retries and the breaker covering the open. |
-| **AI SDK + AI Gateway** | `Output.object()` for structured output. Tools can carry an `execute` function and run in multi step loops. Streaming comes with UI hooks for React, Vue, Svelte, and Angular.                                                |
-| **LiteLLM**             | OpenAI format in, translated for each provider. `drop_params` skips parameters a provider does not support.                                                                                                                   |
-| **Portkey**             | The SDK mirrors the OpenAI SDK signature, so these go through as OpenAI style params.                                                                                                                                         |
+## Built to be depended on
 
-## Reasoning controls
-
-| Tool                    | Approach                                                                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **VernLLM**             | `reasoningEffort` tiers and a raw `budgetTokens`, converted both ways for each adapter. Tier defaults are 1024, 4096, 16000, and 32000 tokens, and `reasoningEffortTokens` overrides them per adapter. |
-| **AI SDK + AI Gateway** | A portable `reasoning` level from `none` up to `xhigh` on every call. Exact token budgets go through provider options.                                                                                 |
-| **LiteLLM**             | `reasoning_effort` maps to thinking budgets, with defaults you can change through environment variables.                                                                                               |
-| **Portkey**             | OpenAI style parameters pass through.                                                                                                                                                                  |
+The core package has no runtime dependencies, so there is nothing transitive to audit, and CI caps
+each published bundle at 120 KB. It ships with over 2,400 tests, CodeQL scanning, and coverage
+gates, and every behavior change lands with a changeset that spells out what changes at runtime.
 
 ## Using them together
 
-VernLLM has 38 OpenAI compatible adapters, including `fromVercelAIGateway`, and a generic
-`fromOpenAICompatible` for anything else. LiteLLM Proxy and Portkey Gateway both speak the OpenAI
-format, so the generic adapter can point at either. A gateway can then own keys, budgets, and routing
-while VernLLM adds retry budgets, breakers, and per target limits in your process.
+VernLLM has 38 OpenAI compatible adapters in `vern-llm/adapters`, including `fromVercelAIGateway`,
+and a generic `fromOpenAICompatible`. LiteLLM Proxy and Portkey Gateway both speak the OpenAI format,
+so a gateway can own keys, budgets, and the model catalog while VernLLM adds retry budgets, breakers,
+and per target limits in your process.
 
-Each layer retries on its own, so pick one retry owner. A gateway side fallback can also hide a
+Pick one retry owner, since each tool retries on its own. A gateway side fallback can also hide a
 failing provider from VernLLM's breaker.
 
 ## Where each fits
 
 <Cards>
   <Card title="AI SDK + AI Gateway">
-    Chat UIs, agents, and streaming apps in TypeScript, with many providers and tools that execute
-    for you, and managed routing.
+    Chat UIs, agents, and streaming apps in TypeScript, with tools that execute for you and managed
+    routing, budgets, and logs.
   </Card>
   <Card title="LiteLLM">
     Python stacks, or one central gateway for many teams with keys, budgets, and dashboards.
@@ -288,19 +1118,20 @@ failing provider from VernLLM's breaker.
     through a gateway.
   </Card>
   <Card title="VernLLM">
-    TypeScript apps that want retries, breakers, fallback, and rate limits in process, with no extra
-    hop, good observability and no server to run.
+    TypeScript services where a failed LLM call is an incident: resilience you can tune, every
+    decision observable, and routing policy in your own code, with no hop and no server.
   </Card>
 </Cards>
 
 ## Honest tradeoffs
 
-1. VernLLM is a call framework, not a gateway. No proxy, dashboard, key management, or server side limits
-   on your callers.
+1. VernLLM is an LLM call framework, not a gateway. No proxy, dashboard, key management, or limits on your
+   own callers.
 2. State is per process until you add [`vern-llm-redis`](/docs/integrations/redis).
-3. No pricing table or cost tracking. Usage is token counts.
+3. No pricing table. Usage is token counts.
 4. It is not an agent or UI framework, and it never executes tools for you.
 5. Semantic caching is a [worked guide](/docs/guides/caching-methods/semantic), not a built in
    adapter.
-6. It covers OpenAI compatible providers, Anthropic, Gemini, and Bedrock, plus `fromFetch` for the
-   rest. The others list far more.
+6. It covers OpenAI compatible providers, Anthropic, and Gemini, Bedrock through
+   [`vern-llm-bedrock`](/docs/integrations/bedrock), and `fromFetch` for the rest. The others list far
+   more.

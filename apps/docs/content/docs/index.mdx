@@ -37,7 +37,7 @@ bun add vern-llm # [!code word:add]
   </Tab>
 </Tabs>
 
-### Dont forget to install your AI provider!
+### Don't forget to install your AI provider!
 
 In this example we will be using OpenAI. See the [Adapters](/docs/adapters) documentation for supported AI providers.
 
@@ -79,7 +79,7 @@ import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
 import { fromOpenAI } from 'vern-llm/adapters';
 
-const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 }));
 
 const llm = new VernLLM({
   client: openai,
@@ -93,6 +93,12 @@ const parsed = await llm.call({
 ```
 
 <Callout title="JSON mode">`jsonMode: false` returns the raw string without JSON parsing.</Callout>
+
+<Callout title="One retry owner" type="warn">
+  Provider SDKs such as `openai` retry on their own. `maxRetries: 0` makes VernLLM the only retry
+  authority, so its circuit breaker, rate limiter, and events see every failure. See [SDK internal
+  retries](/docs/core/retries#sdk-internal-retries).
+</Callout>
 
 `systemPrompt` is optional, omit it and no system message is sent at all:
 
@@ -141,14 +147,63 @@ const result = await finalResult;
 See [Streaming](/docs/core/streaming) for the full contract, including tool calling,
 caching, and retry behavior while streaming.
 
+## Per call control
+
+Add a fallback target with the same OpenAI SDK, then let each call choose which targets to try and
+attach a `context` that every middleware, event, and usage report carries:
+
+```ts title="call-control.ts"
+import { fromGroq } from 'vern-llm/adapters';
+
+const groq = fromGroq(
+  new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: 'https://api.groq.com/openai/v1',
+    maxRetries: 0,
+  }),
+);
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  circuitBreaker: true,
+  fallback: { name: 'groq', client: groq, model: 'llama-3.3-70b-versatile', circuitBreaker: true },
+});
+
+await llm.call({
+  userContent: '...',
+  targets: ['groq', 'primary'], // try groq first for this call only
+  context: { tenantId: 't1' },
+  deadlineMs: 20_000, // one clock across every retry and fallback
+});
+```
+
 ## Next steps
 
-A single call above already gets retries, timeouts, and JSON parsing for free. Beyond that,
-VernLLM ships a few more resilience primitives worth knowing about early:
+A single call above already gets retries, timeouts, and JSON parsing. From there, VernLLM is built
+around three things:
 
-- [Provider Fallback](/docs/core/provider-fallback): declare backup targets tried in order when the primary fails
-- [Rate Limiting](/docs/core/rate-limiting): queue locally to stay under a provider's requests/tokens-per-minute ceiling
-- [Circuit Breaker](/docs/core/circuit-breaker): stop hammering a provider that's already down
-- [Observability](/docs/core/observability): one `onEvent` stream for retries, fallovers, circuit transitions, and rate-limit waits
+**Resilience**
 
-See [Features Overview](/docs/core) for everything opt-in beyond the defaults above.
+- [Provider Fallback](/docs/core/provider-fallback): backup targets, each with its own retries,
+  breaker, and limiter
+- [Circuit Breaker](/docs/core/circuit-breaker): stop sending to a provider that is already down
+- [Retry Budget](/docs/core/retry-budget): keep an outage from turning into a retry storm
+- [Rate Limiting](/docs/core/rate-limiting): queue under your provider's request and token limits
+- [Caching](/docs/core/caching): stampede safe, and a broken cache never fails a call
+
+**Observability**
+
+- [Observability](/docs/core/observability): one `onEvent` stream for every decision a call makes
+- [Error Handling](/docs/core/error-handling): typed errors with the history of every attempt
+- [OpenTelemetry](/docs/integrations/otel): traces and metrics through `vern-llm-otel`
+
+**Control**
+
+- [Middleware](/docs/core/middleware): wrap the whole call, choose targets, share typed state
+- [Budget Reservation](/docs/core/budget-reservation): check your own billing before any provider
+  is contacted
+
+Need state shared across processes? Add [`vern-llm-redis`](/docs/integrations/redis). On AWS, use
+[`vern-llm-bedrock`](/docs/integrations/bedrock). See [Features Overview](/docs/core) for everything
+else, and [Why VernLLM](/docs/why) for how it compares with gateways.
