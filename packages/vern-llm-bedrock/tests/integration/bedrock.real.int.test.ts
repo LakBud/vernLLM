@@ -853,6 +853,26 @@ describe('Bedrock adapter, SDK retry warning (real BedrockRuntimeClient)', () =>
 
     expect(first.warn).toHaveBeenCalledTimes(1);
     expect(later.warn).not.toHaveBeenCalled();
+
+    // After the warning, a new client's config isn't even resolved again.
+    const afterWarning = vi.fn(async () => 3);
+    new VernLLM({ client: fromBedrock(client(afterWarning)), model: 'm', logger: later });
+    // Resolving would happen in a promise chain, so let it run before asserting it didn't.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(afterWarning).not.toHaveBeenCalled();
+    expect(later.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent for a hand written client with no AWS config', async () => {
+    const logger = spyLogger();
+    const wrapper = { send: vi.fn() } as unknown as BedrockRuntimeClient;
+
+    new VernLLM({ client: fromBedrock(wrapper), model: 'm', logger });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('stays silent with maxAttempts: 1, or a maxAttempts provider that rejects', async () => {

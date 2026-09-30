@@ -38,7 +38,8 @@ function noEligibleTargets(message: string): LLMError {
 /**
  * Applies `requested` on top of `current`, both by target name. Names in `all` but outside
  * `current` were removed by an outer layer, so they are dropped and reported through `onDropped`
- * rather than added back. Throws `invalid_params` before any provider is contacted:
+ * rather than added back. `onDropped` is optional since, when `current` is `all`, nothing can have
+ * been removed. Throws `invalid_params` before any provider is contacted:
  * `unknown_target` for a name in no target, `no_eligible_targets` for an empty or repeating list
  * or one that ends up empty.
  */
@@ -46,7 +47,7 @@ export function narrowTargets(
   all: readonly ResolvedTarget[],
   current: readonly ResolvedTarget[],
   requested: readonly string[] | undefined,
-  onDropped: (name: string) => void,
+  onDropped?: (name: string) => void,
 ): ResolvedTarget[] {
   if (requested === undefined) return [...current];
 
@@ -72,7 +73,7 @@ export function narrowTargets(
     const allowed = current.find((target) => target.executor.providerName === name);
 
     if (allowed) narrowed.push(allowed);
-    else onDropped(name);
+    else onDropped?.(name);
   }
 
   if (narrowed.length === 0) {

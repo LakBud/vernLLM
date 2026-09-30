@@ -26,11 +26,13 @@ export function bedrockRetryWarning(client: BedrockRuntimeClient): (logger: Logg
   return (logger) => {
     if (warned) return;
 
-    const maxAttempts = (client as { config?: { maxAttempts?: unknown } }).config?.maxAttempts;
-    if (typeof maxAttempts !== 'function') return;
-
     Promise.resolve()
-      .then(() => (maxAttempts as () => unknown)())
+      .then(() => {
+        // A hand written client without `config.maxAttempts` throws here and lands in the `catch`,
+        // the same as a provider that rejects.
+        const { maxAttempts } = (client as { config: { maxAttempts: () => unknown } }).config;
+        return maxAttempts();
+      })
       .then((attempts) => {
         // Checked again here: several clients can resolve at once, and only the first may warn.
         // `> 1` also rejects NaN and anything that isn't a number.

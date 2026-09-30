@@ -34,15 +34,16 @@ function geminiProvider(client: GeminiClient): { provider?: string } {
  * Retries the client makes on its own. `@google/genai` only retries when
  * `httpOptions.retryOptions` is set, and then `attempts`, which counts the
  * first call, defaults to 5. The SDK types `httpOptions` as private, so it is
- * read structurally and anything unexpected counts as no retry.
+ * read structurally.
  */
 function geminiRetries(client: GeminiClient): number | undefined {
   const retryOptions = (client as { httpOptions?: { retryOptions?: { attempts?: unknown } } })
     .httpOptions?.retryOptions;
   if (!retryOptions || typeof retryOptions !== 'object') return undefined;
 
-  const attempts = retryOptions.attempts ?? 5;
-  return typeof attempts === 'number' ? attempts - 1 : undefined;
+  // Mirrors the SDK's own `Math.max(1, attempts)`, so a numeric string from untyped config counts
+  // the way the SDK counts it, and anything else becomes NaN, which never warns.
+  return Math.max(1, Number(retryOptions.attempts ?? 5)) - 1;
 }
 
 /**
