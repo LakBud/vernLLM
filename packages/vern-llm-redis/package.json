@@ -123,8 +123,8 @@
   "devDependencies": {
     "vern-llm": "workspace:^",
     "@types/node": "^26.4.1",
-    "ioredis": "^5.11.1",
-    "redis": "^4.7.1",
+    "ioredis": "^6.0.0",
+    "redis": "^6.3.0",
     "typescript": "^5.9.3",
     "tsdown": "^0.23.0",
     "publint": "^0.3.24",
