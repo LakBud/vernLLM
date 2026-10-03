@@ -314,7 +314,7 @@ importers:
         specifier: ^0.23.0
         version: 0.23.0(publint@0.3.24)(typescript@5.9.3)(unplugin-unused@0.6.0(esbuild@0.28.2)(rolldown@1.2.7)(vite@8.1.5(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.0)))
       typescript:
-        specifier: ^5.5.0
+        specifier: ^5.9.3
         version: 5.9.3
       unplugin-unused:
         specifier: ^0.6.0
@@ -359,7 +359,7 @@ importers:
         specifier: ^0.23.0
         version: 0.23.0(publint@0.3.24)(typescript@5.9.3)(unplugin-unused@0.6.0(esbuild@0.28.2)(rolldown@1.2.7)(vite@8.1.5(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.0)))
       typescript:
-        specifier: ^5.5.0
+        specifier: ^5.9.3
         version: 5.9.3
       unplugin-unused:
         specifier: ^0.6.0
