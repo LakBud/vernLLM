@@ -68,7 +68,7 @@
     "@smithy/util-utf8": "^4.5.2",
     "@types/node": "^26.4.1",
     "@vitest/coverage-v8": "^4.1.11",
-    "publint": "^0.3.24",
+    "publint": "^0.3.25",
     "size-limit": "13.1.1",
     "tsdown": "^0.23.0",
     "typescript": "^5.9.3",
@@ -77,7 +77,7 @@
     "vitest": "^4.1.11"
   },
   "license": "MIT",
-  "packageManager": "pnpm@11.27.0",
+  "packageManager": "pnpm@11.28.3",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LakBud/vernLLM.git",
