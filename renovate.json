@@ -44,18 +44,6 @@
     },
 
     {
-      "description": "Group Redis clients into their own PR",
-      "groupName": "redis",
-      "matchPackageNames": ["ioredis", "redis"]
-    },
-
-    {
-      "description": "Group OpenTelemetry into its own PR",
-      "groupName": "opentelemetry",
-      "matchPackageNames": ["@opentelemetry/**"]
-    },
-
-    {
       "description": "Group Bedrock provider (SDK + smithy internals) into its own PR",
       "groupName": "aws bedrock provider",
       "matchPackageNames": [
@@ -67,8 +55,16 @@
     },
 
     {
-      "description": "Keep provider SDKs ungrouped so each gets its own PR",
-      "matchPackageNames": ["@anthropic-ai/sdk", "@google/genai", "groq-sdk", "openai"],
+      "description": "Keep provider SDKs, Redis clients and OpenTelemetry ungrouped so each dependency gets its own PR",
+      "matchPackageNames": [
+        "@anthropic-ai/sdk",
+        "@google/genai",
+        "groq-sdk",
+        "openai",
+        "ioredis",
+        "redis",
+        "@opentelemetry/**"
+      ],
       "groupName": null
     },
 

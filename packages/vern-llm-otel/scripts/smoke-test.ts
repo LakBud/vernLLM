@@ -18,9 +18,18 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const scratchDir = mkdtempSync(path.join(tmpdir(), 'vern-llm-otel-smoke-'));
 
-// The lowest API release the peer range allows, so a feature this package started to rely on
-// from a later release fails here instead of in a consumer's app.
-const LOWEST_API = '1.9.0';
+// The lowest API release the peer range allows, read from the manifest so it cannot drift when
+// the range is bumped. A feature this package started to rely on from a later release fails
+// here instead of in a consumer's app.
+const sourceManifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8')) as {
+  peerDependencies?: Record<string, string>;
+};
+const declaredApiRange = sourceManifest.peerDependencies?.['@opentelemetry/api'] ?? '';
+const LOWEST_API = declaredApiRange.match(/\d+\.\d+\.\d+/)?.[0];
+if (!LOWEST_API)
+  throw new Error(
+    `Cannot derive the lowest @opentelemetry/api from peer range: ${declaredApiRange}`,
+  );
 
 function pack(cwd: string): string {
   // `pnpm pack` rewrites `workspace:` ranges into real semver ranges, as publishing does. `npm
