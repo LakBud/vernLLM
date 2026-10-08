@@ -1,6 +1,6 @@
 ---
 title: Custom Providers
-description: Raw HTTP escape hatch for providers with no SDK with fromFetch
+description: Use fromFetch as a raw HTTP escape hatch to connect VernLLM to any LLM provider that has no SDK, with your own URL and headers.
 ---
 
 For a provider with no SDK, or where pulling one in isn't worth it, `fromFetch` is a raw HTTP escape hatch; supply the URL, headers, and two small mapping functions, and retries/timeouts/circuit-breaker/JSON handling all still apply.

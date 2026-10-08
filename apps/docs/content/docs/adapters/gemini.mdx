@@ -1,6 +1,6 @@
 ---
 title: Gemini
-description: Access the Gemini API using the fromGemini adapter
+description: Use the fromGemini adapter to call the Gemini API through the Google GenAI client, and how SDK retries interact with VernLLM retries.
 ---
 
 `fromGemini` wraps the raw Gemini client, not a pre-configured model instance, since the adapter passes `model` through on every call rather than baking it in up front.

@@ -1,3 +1,5 @@
+import type { Metadata } from 'next';
+
 import { ServerCodeBlock } from '@fumadocs/base-ui/components/codeblock.rsc';
 import { transformerIcon } from 'fumadocs-core/mdx-plugins';
 import Link from 'next/link';
@@ -9,7 +11,15 @@ import { AuroraBarsClient } from '@/components/aurora-bars-client';
 import { InstallCommand } from '@/components/install-command';
 import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
 import { annotations, codeExample, faqItems, providers } from '@/lib/home.utils';
-import { generateSoftwareApplication, JsonLd } from '@/lib/seo/jsonld';
+import {
+  generateFaqPage,
+  generateOrganization,
+  generateSoftwareApplication,
+  generateWebSite,
+  JsonLd,
+} from '@/lib/seo/jsonld';
+import { appName, siteDescription } from '@/lib/shared';
+import { baseUrl } from '@/lib/utils';
 
 const buttonGroupClass = 'flex gap-2';
 
@@ -19,17 +29,25 @@ const primaryButtonClass =
 const secondaryButtonClass =
   'inline-flex items-center gap-1.5 rounded-md border border-fd-border bg-fd-card px-3 py-1.5 text-sm font-medium text-fd-foreground transition-colors hover:bg-fd-accent';
 
+export const metadata: Metadata = {
+  alternates: { canonical: '/' },
+};
+
 export default function HomePage() {
   return (
     <div className="flex flex-1 flex-col bg-fd-background overflow-x-hidden">
       <JsonLd
         data={generateSoftwareApplication({
-          name: 'VernLLM',
-          description:
-            'The LLM call framework. Resilience, observability, and control for every call.',
-          url: 'https://vernllm.dev',
+          name: appName,
+          description: siteDescription,
+          url: baseUrl,
         })}
       />
+      <JsonLd
+        data={generateWebSite({ name: appName, description: siteDescription, url: baseUrl })}
+      />
+      <JsonLd data={generateOrganization()} />
+      <JsonLd data={generateFaqPage(faqItems)} />
 
       {/* HERO */}
       <section className="relative overflow-hidden">

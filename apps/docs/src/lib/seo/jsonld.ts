@@ -1,5 +1,8 @@
 import { createElement } from 'react';
 
+import { appName, gitConfig, npmUrl } from '@/lib/shared';
+import { baseUrl } from '@/lib/utils';
+
 export function JsonLd({ data }: { data: object }) {
   // Escape characters that could break out of the script tag or be
   // interpreted as HTML (e.g. a title/description containing the
@@ -16,19 +19,42 @@ export function JsonLd({ data }: { data: object }) {
   });
 }
 
+const githubUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
+
+const publisher = {
+  '@type': 'Organization',
+  name: appName,
+  url: baseUrl,
+  logo: { '@type': 'ImageObject', url: `${baseUrl}/logo.png` },
+};
+
 interface TechArticleInput {
   title: string;
   description?: string;
   url: string;
+  image?: string;
+  dateModified?: Date;
 }
 
-export function generateTechArticle({ title, description, url }: TechArticleInput) {
+export function generateTechArticle({
+  title,
+  description,
+  url,
+  image,
+  dateModified,
+}: TechArticleInput) {
   return {
     '@context': 'https://schema.org',
     '@type': 'TechArticle',
     headline: title,
     description,
     url,
+    mainEntityOfPage: url,
+    inLanguage: 'en',
+    image,
+    dateModified: dateModified?.toISOString(),
+    author: publisher,
+    publisher,
   };
 }
 
@@ -64,6 +90,49 @@ export function generateSoftwareApplication({ name, description, url }: Software
     description,
     url,
     programmingLanguage: 'TypeScript',
-    codeRepository: 'https://github.com/LakBud/vernLLM',
+    codeRepository: githubUrl,
+  };
+}
+
+interface WebSiteInput {
+  name: string;
+  description: string;
+  url: string;
+}
+
+export function generateWebSite({ name, description, url }: WebSiteInput) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name,
+    description,
+    url,
+    inLanguage: 'en',
+    publisher,
+  };
+}
+
+export function generateOrganization() {
+  return {
+    '@context': 'https://schema.org',
+    ...publisher,
+    sameAs: [githubUrl, npmUrl],
+  };
+}
+
+interface FaqItem {
+  question: string;
+  answer: string;
+}
+
+export function generateFaqPage(items: FaqItem[]) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: items.map((item) => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: { '@type': 'Answer', text: item.answer },
+    })),
   };
 }

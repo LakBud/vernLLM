@@ -7,6 +7,7 @@ import { RootProvider } from 'fumadocs-ui/provider/next';
 import { Inter } from 'next/font/google';
 
 import CustomSearchDialog from '@/components/search-dialog';
+import { appName, siteDescription, siteTitle } from '@/lib/shared';
 import { baseUrl } from '@/lib/utils';
 
 const inter = Inter({
@@ -16,8 +17,12 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   metadataBase: baseUrl,
-  title: 'VernLLM',
-  description: 'The LLM call framework. Resilience, observability, and control for every call.',
+  title: {
+    default: 'VernLLM',
+    template: `%s | ${appName}`,
+  },
+  description: siteDescription,
+  applicationName: appName,
   icons: {
     icon: '/favicon.ico',
   },
@@ -28,16 +33,16 @@ export const metadata: Metadata = {
     ],
   },
   openGraph: {
-    title: 'VernLLM',
-    description: 'The LLM call framework. Resilience, observability, and control for every call.',
+    title: siteTitle,
+    description: siteDescription,
     url: baseUrl,
-    siteName: 'VernLLM',
+    siteName: appName,
     images: [
       {
         url: '/banner.png',
         width: 1200,
         height: 630,
-        alt: 'VernLLM',
+        alt: siteTitle,
       },
     ],
     locale: 'en_US',
@@ -45,8 +50,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'VernLLM',
-    description: 'VernLLM documentation',
+    title: siteTitle,
+    description: siteDescription,
     images: ['/banner.png'],
   },
 };

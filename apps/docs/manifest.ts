@@ -1,10 +1,12 @@
 import type { MetadataRoute } from 'next';
 
+import { siteDescription } from '@/lib/shared';
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: 'VernLLM Documentation',
     short_name: 'VernLLM',
-    description: 'The LLM call framework. Resilience, observability, and control for every call.',
+    description: siteDescription,
     start_url: '/',
     display: 'standalone',
     background_color: '#ffffff',

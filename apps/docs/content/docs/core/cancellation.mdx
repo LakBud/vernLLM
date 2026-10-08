@@ -1,6 +1,6 @@
 ---
 title: Cancellation & Timeouts
-description: How AbortSignal, per-attempt timeouts, and retries interact
+description: How AbortSignal, per attempt timeouts and retries work together when you cancel or time out LLM calls in VernLLM.
 ---
 
 `call()` and `cachedCall()` accept a standard `AbortSignal`, which composes with VernLLM's own per-attempt timeout rather than replacing it.

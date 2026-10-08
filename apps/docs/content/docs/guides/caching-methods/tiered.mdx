@@ -1,6 +1,6 @@
 ---
 title: Tiered Caching
-description: Combining a fast local cache with a shared backing store
+description: Combine a fast in memory cache with a shared Redis or Upstash store using TieredCacheAdapter to cut latency and repeat LLM calls.
 ---
 
 `InMemoryCacheAdapter` is fast but per-process; a Redis/Upstash-backed adapter is shared across

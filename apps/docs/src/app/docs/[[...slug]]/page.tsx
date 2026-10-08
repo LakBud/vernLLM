@@ -10,12 +10,27 @@ import {
 } from 'fumadocs-ui/layouts/docs/page';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
 import { notFound } from 'next/navigation';
+import path from 'node:path';
 
 import { getMDXComponents } from '@/components/mdx';
 import { generateBreadcrumbList, generateTechArticle, JsonLd } from '@/lib/seo/jsonld';
+import { getLastModified } from '@/lib/seo/last-modified';
+import { buildSeoTitles } from '@/lib/seo/titles';
 import { gitConfig } from '@/lib/shared';
 import { getPageImage, getPageMarkdownUrl, source } from '@/lib/source';
 import { baseUrl } from '@/lib/utils';
+
+const seoTitles = buildSeoTitles(
+  source.getPages().map((page) => ({ slugs: page.slugs, title: page.data.title })),
+);
+
+function getSeoTitle(page: { slugs: string[]; data: { title: string } }) {
+  return seoTitles.get(page.slugs.join('/')) ?? page.data.title;
+}
+
+function getDateModified(page: { path: string }) {
+  return getLastModified(path.join(process.cwd(), 'content', 'docs', page.path));
+}
 
 export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const params = await props.params;
@@ -27,19 +42,24 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
 
   const breadcrumbItems = [
     { name: 'Docs', url: `${baseUrl}/docs` },
-    ...page.slugs.map((slug, i) => ({
-      name: slug,
-      url: `${baseUrl}/docs/${page.slugs.slice(0, i + 1).join('/')}`,
-    })),
+    ...page.slugs.map((slug, i) => {
+      const trail = page.slugs.slice(0, i + 1);
+      return {
+        name: source.getPage(trail)?.data.title ?? slug,
+        url: `${baseUrl}/docs/${trail.join('/')}`,
+      };
+    }),
   ];
 
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
       <JsonLd
         data={generateTechArticle({
-          title: page.data.title,
+          title: getSeoTitle(page),
           description: page.data.description,
           url: `${baseUrl}${page.url}`,
+          image: `${baseUrl}${getPageImage(page).url}`,
+          dateModified: getDateModified(page),
         })}
       />
       <JsonLd data={generateBreadcrumbList(breadcrumbItems)} />
@@ -74,23 +94,26 @@ export async function generateMetadata(props: PageProps<'/docs/[[...slug]]'>): P
   if (!page) notFound();
 
   const image = getPageImage(page).url;
+  const title = getSeoTitle(page);
+  const modifiedTime = getDateModified(page)?.toISOString();
 
   return {
-    title: page.data.title,
+    title,
     description: page.data.description,
     alternates: {
       canonical: page.url,
     },
     openGraph: {
-      title: page.data.title,
+      title,
       description: page.data.description,
       type: 'article',
       url: page.url,
       images: image,
+      modifiedTime,
     },
     twitter: {
       card: 'summary_large_image',
-      title: page.data.title,
+      title,
       description: page.data.description,
       images: image,
     },
