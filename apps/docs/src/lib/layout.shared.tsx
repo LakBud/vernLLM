@@ -1,8 +1,22 @@
 import Image from 'next/image';
+import { siX } from 'simple-icons';
 
 import { appName, gitConfig } from './shared';
 
-import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
+import type { BaseLayoutProps, LinkItemType } from 'fumadocs-ui/layouts/shared';
+
+export const xLink: LinkItemType = {
+  type: 'icon',
+  url: 'https://x.com/VernLLM',
+  text: 'X',
+  label: 'VernLLM on X',
+  external: true,
+  icon: (
+    <svg aria-hidden="true" viewBox="-1.5 -2.5 27 27" fill="currentColor">
+      <path d={siX.path} />
+    </svg>
+  ),
+};
 
 export function baseOptions(): BaseLayoutProps {
   return {
@@ -41,6 +55,7 @@ export function baseOptions(): BaseLayoutProps {
         url: '/docs/adapters',
         active: 'nested-url',
       },
+      xLink,
     ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
   };

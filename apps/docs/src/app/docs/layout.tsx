@@ -2,14 +2,14 @@ import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { Blocks } from 'lucide-react';
 import Image from 'next/image';
 
-import { baseOptions } from '@/lib/layout.shared';
+import { baseOptions, xLink } from '@/lib/layout.shared';
 import { source } from '@/lib/source';
 
 export default function Layout({ children }: LayoutProps<'/docs'>) {
   return (
     <DocsLayout
       {...baseOptions()}
-      links={[]}
+      links={[xLink]}
       tree={source.pageTree}
       sidebar={{
         tabs: [
