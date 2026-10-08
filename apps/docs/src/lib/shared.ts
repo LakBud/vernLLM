@@ -1,5 +1,5 @@
 export const appName = 'VernLLM';
-export const siteTitle = 'VernLLM: Resilience, observability, and control for every call.';
+export const siteTitle = 'VernLLM: Resilience and observability for every call.';
 export const siteDescription =
   'The LLM call framework. Retry budgets, provider fallback, rate limiting and circuit breaking for every call, typed and dependency-light.';
 export const npmUrl = 'https://www.npmjs.com/package/vern-llm';
