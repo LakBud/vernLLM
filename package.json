@@ -38,14 +38,14 @@
     "@changesets/cli": "^3.0.3",
     "@vitest/coverage-v8": "^4.1.11",
     "husky": "^9.1.7",
-    "lint-staged": "^17.5.1",
-    "nx": "^23.2.1",
-    "oxfmt": "^0.68.0",
-    "oxlint": "^1.83.0",
+    "lint-staged": "^17.6.0",
+    "nx": "^23.3.0",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
     "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=22.0.0"
   },
-  "packageManager": "pnpm@11.27.0"
+  "packageManager": "pnpm@11.28.5"
 }
