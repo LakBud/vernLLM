@@ -68,7 +68,7 @@
     "size": "size-limit"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
+    "@anthropic-ai/sdk": "^0.133.0",
     "@changesets/cli": "^3.0.3",
     "@google/genai": "^2.23.0",
     "@size-limit/file": "^13.1.1",
