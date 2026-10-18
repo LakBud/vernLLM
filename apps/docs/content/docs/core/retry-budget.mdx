@@ -6,6 +6,12 @@ description: Cap how much of a provider's traffic can be retries with a VernLLM 
 Retry budgets sit on top of per attempt retries. Read [Retries](/docs/core/retries) first if you need the backoff basics.
 
 ```ts title="retry-budget-setup.ts"
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
+
 const llm = new VernLLM({
   client: fromOpenAI(openai),
   model: 'gpt-4o',
