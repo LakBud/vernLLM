@@ -61,10 +61,11 @@ or `await budget.readState()`, asks Redis for the live window and refreshes that
 
 ## Redis unavailable
 
-The budget fails open. A failed record is caught, logged, and swallowed, and the local copy keeps
-counting this process's attempts. Once no reply has landed for longer than `windowMs`, the copy
-reads as empty and retries go ahead, bounded only by `maxRetries` and the circuit breaker.
-`readState` rejects with `LLMError('network')` and code `connection_failed`, the original error as
+The budget falls back to core's own [Retry Budget](/docs/core/retry-budget), built from the same
+options and fed every attempt this process makes. It decides whenever a Redis call has failed, and
+whenever no reply has landed for longer than `windowMs`, which also covers a Redis that hangs. So
+each process still caps its own retries during an outage. The first reply that lands switches back
+to the shared window. A failed record is caught, logged, and swallowed. `readState` rejects with `LLMError('network')` and code `connection_failed`, the original error as
 its `cause`.
 
 ## Shutting down

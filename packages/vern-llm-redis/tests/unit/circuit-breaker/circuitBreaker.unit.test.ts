@@ -223,6 +223,8 @@ describe('redisCircuitBreaker', () => {
         logger: 'silent',
         cooldownMs: 1000,
         pollIntervalMs: 500,
+        // Fake time moves a full second before replies land; this test is about the trial, not a stall.
+        prepareTimeoutMs: 5000,
       });
 
       breaker.recordFailure('gpt-4o');

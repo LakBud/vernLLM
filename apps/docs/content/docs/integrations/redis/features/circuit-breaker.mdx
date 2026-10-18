@@ -27,22 +27,22 @@ const breaker = redisCircuitBreaker(client, {
 
 ## Options
 
-| Option                 | Default               | Notes                                                                                                                                                                              |
-| ---------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `threshold`            | `5`                   | Consecutive failures before the circuit opens. An integer of at least 1.                                                                                                           |
-| `cooldownMs`           | `30000`               | How long the circuit stays open before a trial request is allowed.                                                                                                                 |
-| `isolateByModel`       | `false`               | Track a separate circuit per model under `keyPrefix:model`. A call with no model uses `keyPrefix` itself, apart from any model named `default`.                                    |
-| `keyPrefix`            | `'vernllm:cb'`        | Prefix for every Redis key this adapter writes. A non-empty string.                                                                                                                |
-| `onStateChange`        | none                  | Called once per real state transition in each process, the same handler shape as the built-in in-process breaker.                                                                  |
-| `subscriber`           | none                  | A dedicated pub or sub connection (`fromIoredisSubscriber`/`fromNodeRedisSubscriber`). Enables push based state updates.                                                           |
-| `pollIntervalMs`       | `5000`                | Poll bound for a transition on an idle key. Skipped while `subscriber` is connected, used as a fallback if it fails to connect. Set `0` to disable.                                |
-| `halfOpenProbes`       | `1`                   | Trial calls allowed per half-open cycle, shared across every process.                                                                                                              |
-| `halfOpenSuccessRatio` | `1`                   | Fraction of the probes that must succeed to close the circuit.                                                                                                                     |
-| `cooldownBackoff`      | none                  | `{ multiplier, maxMs }`. Grows the cooldown on each repeat open. Jitter only spreads the growth, so no cooldown is shorter than `cooldownMs` unless `maxMs` is.                    |
-| `tripping`             | consecutive           | `{ kind: 'consecutive', threshold }` or `{ kind: 'rolling', windowMs, minCalls, failureRatio }`. Shared by every process.                                                          |
-| `logger`               | the instance's logger | Where background failures are reported. Defaults to the `logger` of the `VernLLM` it is passed to, or the one created last if several share the adapter. `'silent'` discards them. |
-| `prepareTimeoutMs`     | `250`                 | How long a call waits for the refresh described in [Refreshing before a check](#refreshing-before-a-check) before it carries on with local state.                                  |
-| `probeLeaseMs`         | `60000`               | How long a trial slot may go unreported before Redis hands the trial to someone else. A running trial call renews it, so it only matters for a holder that crashed or lost Redis.  |
+| Option                 | Default               | Notes                                                                                                                                                                                                                                                            |
+| ---------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `threshold`            | `5`                   | Consecutive failures before the circuit opens. An integer of at least 1.                                                                                                                                                                                         |
+| `cooldownMs`           | `30000`               | How long the circuit stays open before a trial request is allowed.                                                                                                                                                                                               |
+| `isolateByModel`       | `false`               | Track a separate circuit per model under `keyPrefix:model`. A call with no model uses `keyPrefix` itself, apart from any model named `default`.                                                                                                                  |
+| `keyPrefix`            | `'vernllm:cb'`        | Prefix for every Redis key this adapter writes. A non-empty string.                                                                                                                                                                                              |
+| `onStateChange`        | none                  | Called once per real state transition in each process, the same handler shape as the built-in in-process breaker.                                                                                                                                                |
+| `subscriber`           | none                  | A dedicated pub or sub connection (`fromIoredisSubscriber`/`fromNodeRedisSubscriber`). Enables push based state updates.                                                                                                                                         |
+| `pollIntervalMs`       | `5000`                | Poll bound for a transition on an idle key. Skipped while `subscriber` is connected, used as a fallback if it fails to connect. Set `0` to disable.                                                                                                              |
+| `halfOpenProbes`       | `1`                   | Trial calls allowed per half-open cycle, shared across every process.                                                                                                                                                                                            |
+| `halfOpenSuccessRatio` | `1`                   | Fraction of the probes that must succeed to close the circuit.                                                                                                                                                                                                   |
+| `cooldownBackoff`      | none                  | `{ multiplier, maxMs }`. Grows the cooldown on each repeat open. Jitter only spreads the growth, so no cooldown is shorter than `cooldownMs` unless `maxMs` is.                                                                                                  |
+| `tripping`             | consecutive           | `{ kind: 'consecutive', threshold }` or `{ kind: 'rolling', windowMs, minCalls, failureRatio }`. Shared by every process.                                                                                                                                        |
+| `logger`               | the instance's logger | Where background failures are reported. Defaults to the `logger` of the `VernLLM` it is passed to, or the one created last if several share the adapter. `'silent'` discards them.                                                                               |
+| `prepareTimeoutMs`     | `250`                 | How long a call waits for the refresh described in [Refreshing before a check](#refreshing-before-a-check) before it carries on with local state. A Redis call pending longer than this counts as Redis being down, see [Redis unavailable](#redis-unavailable). |
+| `probeLeaseMs`         | `60000`               | How long a trial slot may go unreported before Redis hands the trial to someone else. A running trial call renews it, so it only matters for a holder that crashed or lost Redis.                                                                                |
 
 ## Behavior with and without a subscriber
 
@@ -138,16 +138,22 @@ no slot free. These match the built-in breaker, so error handling written agains
 
 ## Redis unavailable
 
-Writes fail closed: a failed `recordFailure`, `recordSuccess`, or background transition attempt is
-caught, logged, and swallowed rather than thrown, so a Redis outage does not itself take down every
-call through VernLLM. `prepare` and `readState` reject with `LLMError('network')` and code
-`connection_failed`, the original error as its `cause`.
+The first Redis call that fails, or is still pending after `prepareTimeoutMs`, switches this
+process to core's own [Circuit Breaker](/docs/core/circuit-breaker), built from the same options.
+Counting a stalled call covers a connection that hangs, which a client may not reject for a long
+while. The local breaker starts closed with no history and counts this process's calls alone, so a
+circuit can still open during an outage, from this process's own failures. Its changes fire
+`onStateChange` and the `circuit_state` event like shared ones. Calls keep going to Redis meanwhile,
+without claiming a trial slot, and the first one that answers switches back to the shared state and
+drops the local breaker.
+
+A failed write is caught, logged, and swallowed rather than thrown, so a Redis outage does not
+itself take down every call through VernLLM. `prepare` and `readState` reject with
+`LLMError('network')` and code `connection_failed`, the original error as its `cause`.
 
 <Callout type="warn">
-  `assertClosed` itself never calls Redis, it decides from the local copy, and `prepare` does the
-  refreshing. An outage changes two things. A refresh that cannot complete leaves the call deciding
-  from that copy, which can be stale because the background writes that keep it fresh are failing
-  too, and a key this process has never seen is then treated as closed. And a refresh that hangs
-  delays the first calls by `prepareTimeoutMs`, see [Refreshing before a
-  check](#refreshing-before-a-check). Lower it if your calls cannot spare that.
+  A Redis that answers slower than `prepareTimeoutMs` counts as down until a reply lands, and a
+  refresh that hangs delays the first calls by `prepareTimeoutMs`, see [Refreshing before a
+  check](#refreshing-before-a-check). Raise it if your Redis is that slow, lower it if your calls
+  cannot spare the wait.
 </Callout>

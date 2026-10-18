@@ -10,13 +10,13 @@ import { recoverDelay, retryWithBackoff, shouldRetry } from '../retry/retry.util
 
 import type { CircuitBreakerAdapter } from '../../../../circuitBreaker.js';
 import type { Logger } from '../../../../logger.js';
+import type { RetryBudgetAdapter } from '../../../../retryBudget.js';
 import type {
   AdapterInfo,
   MiddlewareStateBag,
   VernLLMEvent,
   VernLLMMiddleware,
 } from '../../../../types/index.js';
-import type { RetryBudgetAdapter } from '../../../retryBudget.js';
 
 /** Everything `runAttemptLoop` needs besides the per attempt `fn`. */
 export interface RunAttemptLoopParams<T> {

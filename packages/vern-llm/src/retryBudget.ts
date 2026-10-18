@@ -1,8 +1,8 @@
-import { LLMError } from '../types/errors.js';
-import { RollingRatio } from './rollingRatio.js';
-import { validateMinCalls, validateRatio } from './utils/validate.utils.js';
+import { RollingRatio } from './internal/rollingRatio.js';
+import { validateMinCalls, validateRatio } from './internal/utils/validate.utils.js';
+import { LLMError } from './types/errors.js';
 
-import type { Logger } from '../logger.js';
+import type { Logger } from './logger.js';
 
 /**
  * `windowMs` and `minCalls` work as in `RollingTripping`: `minCalls` keeps a cold start from

@@ -1,9 +1,9 @@
-import { LLMError } from '../../../types/errors.js';
 import {
   RetryBudget,
   type RetryBudgetAdapter,
   type RetryBudgetOptions,
-} from '../../retryBudget.js';
+} from '../../../retryBudget.js';
+import { LLMError } from '../../../types/errors.js';
 
 import type { Logger } from '../../../logger.js';
 

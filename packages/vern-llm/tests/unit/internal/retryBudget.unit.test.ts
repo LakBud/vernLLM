@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { RetryBudget } from '../../../src/internal/retryBudget.js';
+import { RetryBudget } from '../../../src/retryBudget.js';
 import { isLLMError } from '../../../src/types/errors.js';
 
 describe('RetryBudget (unit)', () => {

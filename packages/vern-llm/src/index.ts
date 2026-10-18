@@ -29,7 +29,7 @@ export {
   type RetryBudgetAdapter,
   type RetryBudgetOptions,
   type RetryBudgetSnapshot,
-} from './internal/retryBudget.js';
+} from './retryBudget.js';
 export { ConsoleLogger, type Logger } from './logger.js';
 
 export {

@@ -72,8 +72,8 @@ import { createMiddlewareStateBag, type MiddlewareStateBag } from './types/middl
 
 import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
-import type { RetryBudgetSnapshot } from './internal/retryBudget.js';
 import type { RateLimitState } from './rateLimit.js';
+import type { RetryBudgetSnapshot } from './retryBudget.js';
 
 /**
  * The LLM call framework: retries, timeouts, circuit breaking, fallback, rate limiting, caching and

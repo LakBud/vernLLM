@@ -1,5 +1,6 @@
 import {
   LLMError,
+  RetryBudget,
   type RetryBudgetAdapter,
   type RetryBudgetOptions,
   type RetryBudgetSnapshot,
@@ -46,6 +47,11 @@ export function redisRetryBudget(
   const log = createAdapterLogger('redisRetryBudget', options.logger);
   let disposed = false;
 
+  // Core's own budget over this process's attempts alone, fed every attempt and used while Redis
+  // is down or its last reply is older than the window, which also covers a Redis that hangs.
+  const fallback = new RetryBudget({ windowMs, minCalls, retryRatio });
+  let reachable = true;
+
   // This process's copy of the shared window, replaced by every reply. A reply covers every
   // attempt Redis ran before it, but not this process's records still in flight behind it, so
   // those are added back, or an early reply would hide a burst the local count had caught.
@@ -60,18 +66,21 @@ export function redisRetryBudget(
 
   const observe = (next: WindowCounts) => {
     if (disposed) return;
+    reachable = true;
     counts = add(next, inFlight);
     observedAt = Date.now();
   };
 
-  // A reply older than the window says nothing about it any more. Reading that as empty is what
-  // makes a long Redis outage fail open instead of freezing the last verdict.
+  const degraded = () => !reachable || Date.now() - observedAt > windowMs;
+
   const current = (): RetryBudgetSnapshot =>
-    toSnapshot(Date.now() - observedAt > windowMs ? { attempts: 0, retries: 0 } : counts);
+    degraded() ? fallback.getSnapshot() : toSnapshot(counts);
 
   return {
     assertAvailable() {
-      const snapshot = current();
+      if (degraded()) return fallback.assertAvailable();
+
+      const snapshot = toSnapshot(counts);
       // Core's rule, so a budget tuned in process behaves the same shared.
       if (snapshot.attempts >= minCalls && snapshot.retryRatio >= retryRatio) {
         throw new LLMError('Retry budget exhausted', 'rate_limited', {
@@ -82,6 +91,7 @@ export function redisRetryBudget(
 
     recordAttempt(isRetry) {
       if (disposed) return;
+      fallback.recordAttempt(isRetry);
       const attempt = { attempts: 1, retries: isRetry ? 1 : 0 };
       counts = add(counts, attempt);
       inFlight = add(inFlight, attempt);
@@ -103,6 +113,7 @@ export function redisRetryBudget(
         })
         .catch((error: unknown) => {
           settle();
+          reachable = false;
           log.failure('recordAttempt', error, key);
         });
     },
@@ -115,6 +126,7 @@ export function redisRetryBudget(
         .eval(READ_SCRIPT, 1, key, bucketWidthMs)
         .then(parseWindowReply)
         .catch((error: unknown) => {
+          reachable = false;
           throw toRedisError('readState', error);
         });
 

@@ -120,20 +120,59 @@ describe('redisRetryBudget', () => {
     expect(budget.getSnapshot()).toEqual({ attempts: 1, retryRatio: 0 });
   });
 
-  it('fails open once no reply has landed for longer than the window', () => {
+  it("uses this process's own budget once no reply has landed for longer than the window", () => {
     vi.useFakeTimers();
     const redis = fakeRedisClient();
+    // A Redis that hangs rather than rejecting.
     redis.eval.mockReturnValue(new Promise(() => {}));
     const budget = redisRetryBudget(redis, options);
 
+    vi.advanceTimersByTime(600);
     budget.recordAttempt(true);
     budget.recordAttempt(true);
+    vi.advanceTimersByTime(401);
+
+    // Stale: decided by core's budget over this process's attempts, still inside its window.
+    expect(budget.getSnapshot()).toEqual({ attempts: 2, retryRatio: 1 });
     expect(() => budget.assertAvailable()).toThrow(LLMError);
 
-    vi.advanceTimersByTime(1001);
-
-    expect(() => budget.assertAvailable()).not.toThrow();
+    vi.advanceTimersByTime(1000);
     expect(budget.getSnapshot()).toEqual({ attempts: 0, retryRatio: 0 });
+    expect(() => budget.assertAvailable()).not.toThrow();
+  });
+
+  it("uses this process's own budget once a record fails, and Redis again on the next reply", async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockRejectedValueOnce(new Error('down')).mockRejectedValueOnce(new Error('down'));
+    const budget = redisRetryBudget(redis, options);
+
+    budget.recordAttempt(false);
+    budget.recordAttempt(true);
+    await flush();
+
+    expect(budget.getSnapshot()).toEqual({ attempts: 2, retryRatio: 0.5 });
+    expect(() => budget.assertAvailable()).toThrow(LLMError);
+
+    redis.eval.mockResolvedValueOnce([10, 0]);
+    budget.recordAttempt(false);
+    await flush();
+
+    expect(budget.getSnapshot()).toEqual({ attempts: 10, retryRatio: 0 });
+    expect(() => budget.assertAvailable()).not.toThrow();
+  });
+
+  it("switches to this process's own budget when readState fails", async () => {
+    const redis = fakeRedisClient();
+    redis.eval.mockResolvedValueOnce([50, 0]);
+    const budget = redisRetryBudget(redis, options);
+    budget.recordAttempt(true);
+    await flush();
+    expect(budget.getSnapshot()).toEqual({ attempts: 50, retryRatio: 0 });
+
+    redis.eval.mockRejectedValueOnce(new Error('down'));
+    await expect(budget.readState()).rejects.toMatchObject({ type: 'network' });
+
+    expect(budget.getSnapshot()).toEqual({ attempts: 1, retryRatio: 1 });
   });
 
   it('readState returns the live window and refreshes the local copy', async () => {

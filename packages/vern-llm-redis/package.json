@@ -160,7 +160,7 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "12 KB",
+      "limit": "12.25 KB",
       "ignore": [
         "vern-llm"
       ]
@@ -216,14 +216,14 @@
     },
     {
       "path": "dist/retryBudget.mjs",
-      "limit": "2.25 KB",
+      "limit": "2.5 KB",
       "ignore": [
         "vern-llm"
       ]
     },
     {
       "path": "dist/retryBudget.cjs",
-      "limit": "2.25 KB",
+      "limit": "2.5 KB",
       "ignore": [
         "vern-llm"
       ]

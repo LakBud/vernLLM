@@ -1,3 +1,4 @@
+import { unrefTimer } from '../../shared/timing/timers.utils.js';
 import {
   buildTransitionArgs,
   parseTransitionResult,
@@ -19,6 +20,12 @@ export interface TransitionOptions {
   code?: string;
   /** Whether a 'check' may win a half-open trial slot. Default true. */
   grant?: boolean;
+}
+
+/** Told after every transition whether Redis answered with a usable reply, and when one stalls. */
+export interface Reachability {
+  up(): void;
+  down(): void;
 }
 
 /** Reports through the adapter's current onStateChange. */
@@ -51,8 +58,11 @@ export function createTransitionRunner(deps: {
   local: LocalCircuitCache;
   log: AdapterLogger;
   notify: Notify;
+  reachability: Reachability;
+  /** A transition still pending after this long counts as Redis being down. The call carries on. */
+  stallMs: number;
 }): TransitionRunner {
-  const { redis, config, local, log, notify } = deps;
+  const { redis, config, local, log, notify, reachability, stallMs } = deps;
   const { isolateByModel, keyPrefix, channel } = config;
 
   async function transition(
@@ -62,21 +72,40 @@ export function createTransitionRunner(deps: {
   ): Promise<Change | undefined> {
     const key = bucketKey(keyPrefix, isolateByModel, model);
 
-    const result = parseTransitionResult(
-      await redis.eval(
-        TRANSITION_SCRIPT,
-        1,
-        key,
-        ...buildTransitionArgs(config, {
-          outcome,
-          channel,
-          token: opts.token ?? '',
-          grant: opts.grant !== false,
-          code: opts.code ?? '',
-          rand: Math.random(),
-        }),
-      ),
-    );
+    // A hung connection rejects nothing, often for a long while, so a stall is a signal too. The
+    // timer only arms a check one event loop turn later: after a blocked loop it can fire before a
+    // reply that already arrived is read, and that reply must win.
+    let settled = false;
+    const stall = setTimeout(() => {
+      setImmediate(() => !settled && reachability.down());
+    }, stallMs);
+    unrefTimer(stall);
+
+    let result: ReturnType<typeof parseTransitionResult>;
+    try {
+      result = parseTransitionResult(
+        await redis.eval(
+          TRANSITION_SCRIPT,
+          1,
+          key,
+          ...buildTransitionArgs(config, {
+            outcome,
+            channel,
+            token: opts.token ?? '',
+            grant: opts.grant !== false,
+            code: opts.code ?? '',
+            rand: Math.random(),
+          }),
+        ),
+      );
+    } catch (error) {
+      reachability.down();
+      throw error;
+    } finally {
+      settled = true;
+      clearTimeout(stall);
+    }
+    reachability.up();
 
     return applyObservation(local, key, {
       from: result.from,
