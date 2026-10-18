@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { LLMError } from '../../../src/types/errors.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import { createMockClient, FakeApiError, jsonResponse } from '../../helpers.js';
 
@@ -127,5 +128,58 @@ describe('retry budget end to end', () => {
     const result = await llm.call({ userContent: 'hello' });
     expect(result).toBeDefined();
     expect(llm.getRetryBudgetState()).toEqual({ attempts: 1, retryRatio: 0 });
+  });
+
+  it('a RetryBudgetAdapter passed as retryBudget gates retries and sees every attempt', async () => {
+    const { client } = createMockClient([new FakeApiError('down', 500)]);
+    const recorded: boolean[] = [];
+    const setLogger = vi.fn();
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 5,
+      baseDelayMs: 1,
+      retryBudget: {
+        // Lets one retry through, then stops, as a shared budget would once other processes spent it.
+        assertAvailable: () => {
+          if (recorded.length >= 2) {
+            throw new LLMError('Retry budget exhausted', 'rate_limited', {
+              code: 'retry_budget_exhausted',
+            });
+          }
+        },
+        recordAttempt: (isRetry) => {
+          recorded.push(isRetry);
+        },
+        getSnapshot: () => ({
+          attempts: recorded.length,
+          retryRatio: recorded.filter(Boolean).length / recorded.length,
+        }),
+        setLogger,
+      },
+    });
+
+    await expect(llm.call({ userContent: 'hello' })).rejects.toMatchObject({
+      code: 'retry_budget_exhausted',
+      // Only the attempt retried past is listed; the second is the one the budget stopped.
+      attempts: [expect.objectContaining({ index: 0 })],
+    });
+    expect(recorded).toEqual([false, true]);
+    expect(llm.getRetryBudgetState()).toEqual({ attempts: 2, retryRatio: 0.5 });
+    expect(setLogger).toHaveBeenCalledOnce();
+  });
+
+  it('a half built adapter is rejected at construction', () => {
+    const { client } = createMockClient([]);
+
+    expect(
+      () =>
+        new VernLLM({
+          client,
+          model: 'test-model',
+          retryBudget: { assertAvailable: () => {} } as never,
+        }),
+    ).toThrow(expect.objectContaining({ type: 'invalid_params' }));
   });
 });

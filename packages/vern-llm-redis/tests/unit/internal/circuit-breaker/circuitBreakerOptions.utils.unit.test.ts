@@ -203,3 +203,11 @@ describe('resolveCircuitBreakerOptions validation', () => {
     ).not.toThrow();
   });
 });
+
+describe('resolveCircuitBreakerOptions keyPrefix', () => {
+  it('rejects an empty keyPrefix', () => {
+    expect(() => resolveCircuitBreakerOptions({ keyPrefix: '' })).toThrow(
+      'keyPrefix must be a non-empty string (got "").',
+    );
+  });
+});

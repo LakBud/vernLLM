@@ -1,10 +1,10 @@
 ---
 title: Features Overview
-description: The three Redis backed adapters in vern-llm-redis for a shared circuit breaker, rate limiter and cache across VernLLM processes.
+description: The four Redis backed adapters in vern-llm-redis for a shared circuit breaker, rate limiter, retry budget and cache across VernLLM processes.
 ---
 
-`vern-llm-redis` ships three adapters, each implementing an interface VernLLM already exposes for
-customization. Wire in one, two, or all three, they're independent options on the `VernLLM`
+`vern-llm-redis` ships four adapters, each implementing an interface VernLLM already exposes for
+customization. Wire in any of them, they're independent options on the `VernLLM`
 constructor and don't depend on each other.
 
 <Cards>
@@ -14,6 +14,9 @@ constructor and don't depend on each other.
   <Card title="Rate Limit" href="/docs/integrations/redis/features/rate-limit">
     redisRateLimit: limits enforced across processes, with optional AIMD support.
   </Card>
+  <Card title="Retry Budget" href="/docs/integrations/redis/features/retry-budget">
+    redisRetryBudget: one retry budget shared across processes, failing open on an outage.
+  </Card>
   <Card title="Cache" href="/docs/integrations/redis/features/cache">
     redisCache: cached responses shared across processes with a configurable TTL.
   </Card>
@@ -21,11 +24,12 @@ constructor and don't depend on each other.
 
 ## On a Redis outage
 
-The three adapters don't share a failure contract, each page above covers its own in full, but
+The four adapters don't share a failure contract, each page above covers its own in full, but
 here's the difference at a glance:
 
 | Adapter         | On a Redis outage                                                                                                                                                                                                  |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Circuit Breaker | Writes (`recordSuccess`/`recordFailure`) fail closed: logged and swallowed. `assertClosed` never touches Redis, it reads the local copy, and the async `prepare` step refreshes it, bounded by `prepareTimeoutMs`. |
 | Rate Limit      | No fail-open path anywhere in the stack. A rejected Redis call propagates and genuinely fails the LLM call.                                                                                                        |
+| Retry Budget    | Fails open. A failed record is logged and swallowed, and `assertAvailable` reads the local copy, which reads as empty once no reply has landed for `windowMs`.                                                     |
 | Cache           | Fails open, but this comes from `vern-llm` core's `CacheOrchestrator`, universal to any `CacheAdapter`, not something `redisCache` implements itself.                                                              |

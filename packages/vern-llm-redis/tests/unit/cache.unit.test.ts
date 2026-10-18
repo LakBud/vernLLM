@@ -125,3 +125,11 @@ describe('redisCache TTL handling', () => {
     expect(redis.set).toHaveBeenCalledWith('c:k', '1', 'PX', Number.MAX_SAFE_INTEGER);
   });
 });
+
+describe('redisCache keyPrefix', () => {
+  it('rejects an empty keyPrefix at construction', () => {
+    expect(() => redisCache(fakeRedisClient(), { keyPrefix: '' })).toThrow(
+      expect.objectContaining({ type: 'invalid_params' }),
+    );
+  });
+});

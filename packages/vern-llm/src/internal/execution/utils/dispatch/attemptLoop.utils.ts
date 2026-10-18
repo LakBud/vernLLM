@@ -1,5 +1,7 @@
 import { LLMError, type LLMRequestSnapshot, type RetryAttempt } from '../../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../../types/middleware.js';
+import { reportRejection } from '../../../utils/circuit-breaker/circuitBreaker.utils.js';
+import { logError } from '../../../utils/logger.utils.js';
 import { middlewareContextNames } from '../../../utils/middlewareLabels.utils.js';
 import { createBreakerGateway, type BreakerGateway } from '../../circuitBreakerContext.js';
 import { describeError, extractStatus, normalizeError } from '../errors.utils.js';
@@ -14,7 +16,7 @@ import type {
   VernLLMEvent,
   VernLLMMiddleware,
 } from '../../../../types/index.js';
-import type { RetryBudget } from '../../../retryBudget.js';
+import type { RetryBudgetAdapter } from '../../../retryBudget.js';
 
 /** Everything `runAttemptLoop` needs besides the per attempt `fn`. */
 export interface RunAttemptLoopParams<T> {
@@ -34,10 +36,10 @@ export interface RunAttemptLoopParams<T> {
   breaker?: CircuitBreakerAdapter;
   /**
    * Caps how much of this target's recent traffic is allowed to be
-   * retries, independent of `breaker`. See `RetryBudget`. Undefined
-   * means no budget, exactly today's behavior.
+   * retries, independent of `breaker`. See `RetryBudgetAdapter`.
+   * Undefined means no budget, exactly today's behavior.
    */
-  budget?: RetryBudget;
+  budget?: RetryBudgetAdapter;
   maxRetries: number;
   baseDelayMs: number;
   /** See `VernLLMOptions.maxRetryAfterMs`. Omitted means the 10s default. */
@@ -123,7 +125,7 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
   try {
     return await retryWithBackoff({
       fn: (attempt, onRequest) => {
-        budget?.recordAttempt(attempt > 0);
+        if (budget) recordBudgetAttempt(budget, attempt > 0, logger);
         return fn(attempt, onRequest, resolvedState, gateway);
       },
       maxRetries,
@@ -136,7 +138,13 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
           try {
             budget.assertAvailable();
           } catch (err) {
-            budgetExhaustedError = err as LLMError;
+            // Only an LLMError is a decision. Anything else is a broken adapter, and a broken
+            // budget must not cost the call its retries, so it fails open.
+            if (!(err instanceof LLMError)) {
+              logError(logger, '[VernLLM] retryBudget.assertAvailable threw a non-LLMError', err);
+              return true;
+            }
+            budgetExhaustedError = err;
             return false;
           }
         }
@@ -190,5 +198,22 @@ export async function runAttemptLoop<T>(params: RunAttemptLoopParams<T>): Promis
     logger.debug(`[VernLLM:${requestId}] ${logLabel}:\n${redactText(describeError(error))}`);
 
     throw normalized;
+  }
+}
+
+/**
+ * Records an attempt without letting the budget break the call: a remote adapter's throw or
+ * rejected promise is logged, never thrown or left unhandled.
+ */
+function recordBudgetAttempt(budget: RetryBudgetAdapter, isRetry: boolean, logger: Logger): void {
+  try {
+    // Declared `void`, but a remote adapter may return a promise anyway.
+    reportRejection(
+      logger,
+      '[VernLLM] retryBudget.recordAttempt rejected',
+      budget.recordAttempt(isRetry),
+    );
+  } catch (error) {
+    logError(logger, '[VernLLM] retryBudget.recordAttempt threw', error);
   }
 }

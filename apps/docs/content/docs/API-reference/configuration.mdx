@@ -181,9 +181,9 @@ rate-limit rejections. See [Error codes](/docs/core/error-handling#error-codes).
 
 ## Retry budget
 
-| Option        | Default  | Notes                                                                                                                                                                                    |
-| ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `retryBudget` | disabled | `{ windowMs, minCalls, retryRatio }`. Caps how much of a target's recent traffic is allowed to be retries, independent of `circuitBreaker`. See [Retry Budget](/docs/core/retry-budget). |
+| Option        | Default  | Notes                                                                                                                                                                                                                                 |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retryBudget` | disabled | `{ windowMs, minCalls, retryRatio }`, or a `RetryBudgetAdapter` for cross-process. Caps how much of a target's recent traffic is allowed to be retries, independent of `circuitBreaker`. See [Retry Budget](/docs/core/retry-budget). |
 
 Once at least `minCalls` calls have landed in the trailing `windowMs` and the retry ratio among
 them reaches `retryRatio`, further retries against that target fail immediately with

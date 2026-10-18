@@ -24,7 +24,12 @@ export {
   type RateLimitState,
   type WireRequest,
 } from './rateLimit.js';
-export { RetryBudget, type RetryBudgetOptions } from './internal/retryBudget.js';
+export {
+  RetryBudget,
+  type RetryBudgetAdapter,
+  type RetryBudgetOptions,
+  type RetryBudgetSnapshot,
+} from './internal/retryBudget.js';
 export { ConsoleLogger, type Logger } from './logger.js';
 
 export {

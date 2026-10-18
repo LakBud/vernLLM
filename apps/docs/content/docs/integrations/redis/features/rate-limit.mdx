@@ -38,7 +38,7 @@ const limiter = redisRateLimit(client, {
 | `concurrencyLeaseMs` | `30000`                 | How long a concurrency slot may go unrenewed before Redis frees it. Live calls renew automatically.                                                      |
 | `pollIntervalMs`     | `250`                   | Fallback poll interval used only while waiting on the concurrency bucket without a subscriber.                                                           |
 | `estimateTokens`     | `defaultEstimateTokens` | Same tokenizer seam described in [Customization → Tokenizer](/docs/customization/tokenizer).                                                             |
-| `keyPrefix`          | `'vernllm:rl'`          | Prefix for every Redis key this adapter writes.                                                                                                          |
+| `keyPrefix`          | `'vernllm:rl'`          | Prefix for every Redis key this adapter writes. A non-empty string.                                                                                      |
 | `aimd`               | none                    | AIMD against the requests-per-minute bucket, shared across every process. Requires `requestsPerMinute`.                                                  |
 | `subscriber`         | none                    | A dedicated pub or sub connection. Enables push based wake-ups for concurrency waits.                                                                    |
 

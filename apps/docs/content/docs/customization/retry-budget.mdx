@@ -1,0 +1,129 @@
+---
+title: Retry Budget
+description: Write a custom RetryBudgetAdapter for VernLLM, to decide with your own policy or your own store when a target may still retry.
+---
+
+<Callout type="info">
+  This page covers writing a custom `RetryBudgetAdapter`. See [Retry
+  Budget](/docs/core/retry-budget) in Core for the full behavior: the trailing window, `minCalls`,
+  and how the budget sits beside the circuit breaker.
+</Callout>
+
+VernLLM ships `RetryBudget`, an in-process budget built from `retryBudget`'s options, plus a
+`RetryBudgetAdapter` interface for bringing your own: a different policy, such as a fixed number of
+retries per minute, or a budget whose counts live in a store shared by several processes.
+
+```ts
+interface RetryBudgetAdapter {
+  assertAvailable(): void;
+  recordAttempt(isRetry: boolean): void;
+  getSnapshot?(): RetryBudgetSnapshot;
+  readState?(): Promise<RetryBudgetSnapshot>;
+  setLogger?(logger: Logger): void;
+}
+
+interface RetryBudgetSnapshot {
+  attempts: number;
+  retryRatio: number;
+}
+```
+
+## Bringing your own budget
+
+Pass the adapter where the options would go. This one caps retries at a fixed number per rolling
+minute instead of a ratio:
+
+```ts title="retry-cap.ts"
+import { LLMError, VernLLM, type RetryBudgetAdapter } from 'vern-llm';
+
+class RetryCap implements RetryBudgetAdapter {
+  private log: { at: number; isRetry: boolean }[] = [];
+
+  constructor(private readonly retriesPerMinute: number) {}
+
+  private prune() {
+    const cutoff = Date.now() - 60_000;
+    while (this.log.length > 0 && this.log[0]!.at <= cutoff) this.log.shift();
+  }
+
+  assertAvailable() {
+    this.prune();
+    const retries = this.log.filter((entry) => entry.isRetry).length;
+    if (retries >= this.retriesPerMinute) {
+      throw new LLMError('Retry budget exhausted', 'rate_limited', {
+        code: 'retry_budget_exhausted',
+      });
+    }
+  }
+
+  recordAttempt(isRetry: boolean) {
+    this.log.push({ at: Date.now(), isRetry });
+  }
+
+  getSnapshot() {
+    this.prune();
+    const retries = this.log.filter((entry) => entry.isRetry).length;
+    return {
+      attempts: this.log.length,
+      retryRatio: this.log.length === 0 ? 0 : retries / this.log.length,
+    };
+  }
+}
+
+const llm = new VernLLM({ client: openai, model: 'gpt-4o', retryBudget: new RetryCap(20) });
+```
+
+<Callout>
+  `assertAvailable` and `recordAttempt` are required. An object with only one of them, or with an
+  optional member set to something other than a function, throws `LLMError('invalid_params')` when
+  `VernLLM` is constructed, rather than being read as options. A falsy `retryBudget` means no
+  budget.
+</Callout>
+
+## When each method runs
+
+| Method            | Called                                                                      | What VernLLM does with it                                                                                                           |
+| ----------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `recordAttempt`   | Before every attempt against the target. `isRetry` is `false` for the first | Fire and forget. A throw, or a returned promise that rejects, is logged and the attempt runs anyway.                                |
+| `assertAvailable` | After a failed attempt, only when it is about to be retried                 | A thrown `LLMError` stops the retries and becomes the call's error, with the earlier attempts attached. Returning allows the retry. |
+
+The attempt that just failed has already been recorded when `assertAvailable` runs, so it counts
+toward the decision. `assertAvailable` never gates a call's first attempt: a call with
+`maxRetries: 0` never reaches it.
+
+## Keeping it synchronous
+
+Both required methods run on the call path and return nothing, so VernLLM never waits on them. A
+budget backed by a remote store keeps a local copy for `assertAvailable` and refreshes it from the
+store's replies to `recordAttempt`, which land while the provider call is still running. Count an
+attempt locally as soon as `recordAttempt` is called, so a burst is capped before the store answers.
+
+## Errors
+
+Throw `LLMError` with `type: 'rate_limited'` and `code: 'retry_budget_exhausted'`, as the built in
+budget does, so error handling and circuit breaker accounting treat yours the same way. A throw that
+is not an `LLMError` is treated as a bug in the adapter: VernLLM logs it and lets the retry go
+ahead, so a broken budget never costs a call its retries.
+
+## Optional members
+
+| Member        | Purpose                                                                                                                |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `getSnapshot` | Synchronous counts for `llm.getRetryBudgetState()`. Without it, `getRetryBudgetState()` returns `undefined`.           |
+| `readState`   | A live read for `llm.readRetryBudgetState()`. Without it, `readRetryBudgetState()` is answered from `getSnapshot`.     |
+| `setLogger`   | Receives the instance's `Logger`, so the adapter follows the same `logger` and `'silent'` settings as everything else. |
+
+`readState` is for a budget whose real counts live in a remote store: `getSnapshot` cannot wait for
+that store, so the two answer different questions, "what do I know right now" and "what is the
+truth". A failing `readState` rejects, since a live answer was asked for.
+
+## Sharing one budget
+
+A budget is per target and never inherited by `fallback` targets. Pass the same adapter instance to
+several targets, or several `VernLLM` instances, to have them draw on one budget. Each of them calls
+`setLogger` when it wires the adapter in, and the last one wins.
+
+<Callout>
+  [vern-llm-redis](/docs/integrations/redis/features/retry-budget) ships `redisRetryBudget`, a
+  budget shared across processes through Redis, built on this interface.
+</Callout>

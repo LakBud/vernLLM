@@ -7,6 +7,14 @@ icon: TriangleAlert
 This page tracks breaking changes in `vern-llm-redis`. For `vern-llm` itself, see
 [Migration Notes](/docs/migration-notes).
 
+## 0.4.0: `keyPrefix` is validated
+
+`redisCircuitBreaker`, `redisRateLimit` and `redisCache` throw `LLMError('invalid_params')` at
+construction when `keyPrefix` is set to anything but a non-empty string. `null` still means the
+default. An empty string used to be
+accepted and wrote keys such as `:concurrency` or `:k`. Leave `keyPrefix` unset for the default, or
+give it a name.
+
 ## 0.3.0: Stricter options, network errors, shared state
 
 Released alongside `vern-llm` 3.0.0, which it now requires as a peer.

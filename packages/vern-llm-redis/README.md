@@ -10,7 +10,7 @@
 
 <h1 align="center">vern-llm-redis</h1>
 
-<p align="center">Redis backed circuit breaker, rate limiter, and cache adapters for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>. Use these when you run more than one process and need shared state instead of each process tracking its own.</p>
+<p align="center">Redis backed circuit breaker, rate limiter, retry budget, and cache adapters for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>. Use these when you run more than one process and need shared state instead of each process tracking its own.</p>
 
 <p align="center"><sub>Redis® is a registered trademark of Redis Ltd. This is an unofficial community integration, not affiliated with or endorsed by Redis Ltd.</sub></p>
 
@@ -27,7 +27,7 @@ npm i vern-llm-redis
 ```ts
 import Redis from 'ioredis';
 import { VernLLM } from 'vern-llm';
-import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
+import { redisCircuitBreaker, redisRateLimit, redisRetryBudget, redisCache } from 'vern-llm-redis';
 import { fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis/clients';
 
 const redis = new Redis();
@@ -41,6 +41,7 @@ const llm = new VernLLM({
     aimd: { increaseBy: 5, decreaseFactor: 0.5, minCapacity: 10, maxCapacity: 200 },
     subscriber,
   }),
+  retryBudget: redisRetryBudget(client, { windowMs: 60000, minCalls: 10, retryRatio: 0.1 }),
   cache: redisCache(client),
 });
 ```
@@ -77,7 +78,9 @@ It keeps the built in breaker's failure rules wherever they can run inside Redis
 
 **redisRateLimit** enforces requests per minute, tokens per minute, and concurrency across processes, including a shared AIMD ceiling when `aimd` is set. Requests/min and tokens/min waits are always precise: the exact refill time is computed from live bucket state and slept, never polled. Concurrency waits, which only clear via an external release, wake on that release's pub/sub notification when `subscriber` is set; without one they fall back to polling every `pollIntervalMs` (default 250), since nothing else can know when a slot freed. Waiters are served first come first served across processes (`fairQueue`, on by default), and a crashed holder's slot comes back after `concurrencyLeaseMs`. See the [docs](https://vernllm.dev/docs/integrations/redis/features/rate-limit) for every option.
 
-Both adapters return a `dispose()` method, call it before closing the Redis client. Redis 5 or newer is required, since scripts read the server clock.
+**redisRetryBudget** caps the share of a target's traffic, across every process, that may be retries. `assertAvailable` reads a local copy of the shared window, refreshed by the reply to each attempt's record script, so the retry check never waits on Redis. It fails open: on a Redis outage the copy ages out after `windowMs` and retries go ahead. Give each target its own `keyPrefix`. See the [docs](https://vernllm.dev/docs/integrations/redis/features/retry-budget) for every option.
+
+The circuit breaker, rate limiter and retry budget return a `dispose()` method, call it before closing the Redis client. Redis 5 or newer is required, since scripts read the server clock.
 
 **redisCache** matches `vern-llm`'s own `CacheAdapter` shape. Drop it in anywhere `InMemoryCacheAdapter` is used today.
 

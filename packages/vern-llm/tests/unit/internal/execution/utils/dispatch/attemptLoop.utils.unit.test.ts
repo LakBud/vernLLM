@@ -308,4 +308,80 @@ describe('runAttemptLoop, retry budget', () => {
 
     expect(recordFailureSpy).not.toHaveBeenCalled();
   });
+
+  it('fails open when an adapter throws something other than an LLMError, logging it and retrying', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const budget = {
+      assertAvailable: () => {
+        throw new TypeError('adapter bug');
+      },
+      recordAttempt: () => {},
+    };
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls++;
+      if (calls < 2) throw new LLMError('transient', 'api');
+      return 'ok';
+    });
+
+    await expect(runAttemptLoop(baseParams({ fn, maxRetries: 1, budget, logger }))).resolves.toBe(
+      'ok',
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VernLLM] retryBudget.assertAvailable threw a non-LLMError',
+      expect.objectContaining({ message: 'adapter bug' }),
+    );
+  });
+
+  it("uses an adapter's own LLMError as the terminal error, whatever its code", async () => {
+    const budget = {
+      assertAvailable: () => {
+        throw new LLMError('custom stop', 'rate_limited', { code: 'retry_budget_exhausted' });
+      },
+      recordAttempt: () => {},
+    };
+    const fn = vi.fn(async () => {
+      throw new LLMError('provider down', 'api', { code: 'server_error' });
+    });
+
+    await expect(runAttemptLoop(baseParams({ fn, maxRetries: 3, budget }))).rejects.toMatchObject({
+      message: 'custom stop',
+      code: 'retry_budget_exhausted',
+    });
+    expect(fn).toHaveBeenCalledOnce();
+  });
+
+  it('logs a recordAttempt that throws and still runs the attempt', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const budget = {
+      assertAvailable: () => {},
+      recordAttempt: () => {
+        throw new Error('record broke');
+      },
+    };
+    const fn = vi.fn(async () => 'ok');
+
+    await expect(runAttemptLoop(baseParams({ fn, budget, logger }))).resolves.toBe('ok');
+    expect(fn).toHaveBeenCalledOnce();
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VernLLM] retryBudget.recordAttempt threw',
+      expect.objectContaining({ message: 'record broke' }),
+    );
+  });
+
+  it('logs a recordAttempt that returns a rejected promise instead of leaving it unhandled', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const budget = {
+      assertAvailable: () => {},
+      // Declared void, but a remote adapter may hand back a promise anyway.
+      recordAttempt: (() => Promise.reject(new Error('redis down'))) as () => void,
+    };
+
+    await expect(runAttemptLoop(baseParams({ budget, logger }))).resolves.toBe('ok');
+    await vi.waitFor(() =>
+      expect(logger.error).toHaveBeenCalledWith('[VernLLM] retryBudget.recordAttempt rejected', {
+        message: 'redis down',
+      }),
+    );
+  });
 });

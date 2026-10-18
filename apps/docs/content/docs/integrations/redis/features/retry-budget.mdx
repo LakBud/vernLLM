@@ -1,0 +1,79 @@
+---
+title: Retry Budget
+description: Use redisRetryBudget from vern-llm-redis to share one retry budget across every VernLLM process, so a fleet cannot retry its way into a provider outage.
+---
+
+`redisRetryBudget` is a `RetryBudgetAdapter` backed by Redis, so every process using the same key
+counts against one trailing window. See [Retry Budget](/docs/core/retry-budget) for the behavior it
+shares with the built in in-process budget.
+
+```ts title="redis-retry-budget.ts"
+import Redis from 'ioredis';
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
+import { redisRetryBudget } from 'vern-llm-redis';
+import { fromIoredis } from 'vern-llm-redis/clients';
+
+const client = fromIoredis(new Redis());
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
+
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-4o',
+  retryBudget: redisRetryBudget(client, {
+    windowMs: 60_000,
+    minCalls: 10,
+    retryRatio: 0.1,
+    keyPrefix: 'vernllm:rb:openai',
+  }),
+});
+```
+
+## Options
+
+| Option       | Default               | Notes                                                                                                                                                                              |
+| ------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `windowMs`   | required              | Trailing window, in ms. Greater than 0, at most about 142,000 years.                                                                                                               |
+| `minCalls`   | required              | Calls in the window, across every process, before the budget can trip. A non-negative integer.                                                                                     |
+| `retryRatio` | required              | Share of calls in the window that may be retries, from 0 to 1.                                                                                                                     |
+| `keyPrefix`  | `'vernllm:rb'`        | A non-empty string. The window lives at `keyPrefix:window`. Give each target its own, otherwise targets on the default prefix share one budget.                                    |
+| `logger`     | the instance's logger | Where background failures are reported. Defaults to the `logger` of the `VernLLM` it is passed to, or the one created last if several share the adapter. `'silent'` discards them. |
+
+Every bad option throws `LLMError('invalid_params')` at construction, where core throws
+`RangeError`.
+
+## How it stays synchronous
+
+The retry check runs inside the retry loop and never waits on Redis. Each attempt runs one script
+that counts it and returns the window's totals, and the adapter keeps those totals as a local copy.
+The reply lands while the provider call is still running, so the check before a retry reads near
+live totals at no extra round trip. An attempt also counts locally at once, so a burst inside one
+process is capped before Redis replies.
+
+The window is split into 10 sub buckets, the same as core's, all in one hash at `keyPrefix:window`, so the budget works on
+Redis Cluster without hash tags. Time comes from Redis, so a skewed process clock cannot shift the
+window. The key expires after twice `windowMs` of no traffic.
+
+A process that has never recorded an attempt starts from an empty copy. `await llm.readRetryBudgetState()`,
+or `await budget.readState()`, asks Redis for the live window and refreshes that copy.
+`getRetryBudgetState()` reports the local copy.
+
+## Redis unavailable
+
+The budget fails open. A failed record is caught, logged, and swallowed, and the local copy keeps
+counting this process's attempts. Once no reply has landed for longer than `windowMs`, the copy
+reads as empty and retries go ahead, bounded only by `maxRetries` and the circuit breaker.
+`readState` rejects with `LLMError('network')` and code `connection_failed`, the original error as
+its `cause`.
+
+## Shutting down
+
+`dispose()` mutes the logger and ignores replies still in flight. Call it before closing the Redis
+client. The window already in Redis is untouched.
+
+## Errors
+
+`assertAvailable` throws `LLMError` with `type: 'rate_limited'` and `code: 'retry_budget_exhausted'`,
+the same as the built in budget, so error handling written against
+[Retry Budget](/docs/core/retry-budget) works unchanged.

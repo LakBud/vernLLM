@@ -104,6 +104,7 @@ try {
     assert.equal(typeof main.redisCache, 'function', 'ESM: redisCache missing from main entry');
     assert.equal(typeof main.redisCircuitBreaker, 'function', 'ESM: redisCircuitBreaker missing from main entry');
     assert.equal(typeof main.redisRateLimit, 'function', 'ESM: redisRateLimit missing from main entry');
+    assert.equal(typeof main.redisRetryBudget, 'function', 'ESM: redisRetryBudget missing from main entry');
     assert.equal(main.fromIoredis, undefined, 'ESM: fromIoredis must not be on the main entry');
     assert.equal(main.fromNodeRedis, undefined, 'ESM: fromNodeRedis must not be on the main entry');
 
@@ -111,6 +112,8 @@ try {
     assert.equal(typeof cb.redisCircuitBreaker, 'function', 'ESM: circuitBreaker subpath missing its export');
     const rl = await import('vern-llm-redis/rateLimit');
     assert.equal(typeof rl.redisRateLimit, 'function', 'ESM: rateLimit subpath missing its export');
+    const rb = await import('vern-llm-redis/retryBudget');
+    assert.equal(typeof rb.redisRetryBudget, 'function', 'ESM: retryBudget subpath missing its export');
     const cache = await import('vern-llm-redis/cache');
     assert.equal(typeof cache.redisCache, 'function', 'ESM: cache subpath missing its export');
     const clients = await import('vern-llm-redis/clients');
@@ -132,6 +135,11 @@ try {
       'ESM: redisCircuitBreaker failed to construct from the installed entry',
     );
     assert.ok(main.redisRateLimit(fakeClient), 'ESM: redisRateLimit failed to construct from the installed entry');
+    assert.deepEqual(
+      main.redisRetryBudget(fakeClient, { windowMs: 1000, minCalls: 1, retryRatio: 0.5 }).getSnapshot(),
+      { attempts: 0, retryRatio: 0 },
+      'ESM: redisRetryBudget failed to construct from the installed entry',
+    );
     console.log('ESM entry points ok');
   `;
   const esmFile = path.join(consumerDir, 'esm-check.mjs');
@@ -147,6 +155,7 @@ try {
     assert.equal(typeof main.redisCache, 'function', 'CJS: redisCache missing from main entry');
     assert.equal(typeof main.redisCircuitBreaker, 'function', 'CJS: redisCircuitBreaker missing from main entry');
     assert.equal(typeof main.redisRateLimit, 'function', 'CJS: redisRateLimit missing from main entry');
+    assert.equal(typeof main.redisRetryBudget, 'function', 'CJS: redisRetryBudget missing from main entry');
     assert.equal(main.fromIoredis, undefined, 'CJS: fromIoredis must not be on the main entry');
     assert.equal(main.fromNodeRedis, undefined, 'CJS: fromNodeRedis must not be on the main entry');
 
@@ -154,6 +163,8 @@ try {
     assert.equal(typeof cb.redisCircuitBreaker, 'function', 'CJS: circuitBreaker subpath missing its export');
     const rl = require('vern-llm-redis/rateLimit');
     assert.equal(typeof rl.redisRateLimit, 'function', 'CJS: rateLimit subpath missing its export');
+    const rb = require('vern-llm-redis/retryBudget');
+    assert.equal(typeof rb.redisRetryBudget, 'function', 'CJS: retryBudget subpath missing its export');
     const cache = require('vern-llm-redis/cache');
     assert.equal(typeof cache.redisCache, 'function', 'CJS: cache subpath missing its export');
     const clients = require('vern-llm-redis/clients');
@@ -175,6 +186,11 @@ try {
       'CJS: redisCircuitBreaker failed to construct from the installed entry',
     );
     assert.ok(main.redisRateLimit(fakeClient), 'CJS: redisRateLimit failed to construct from the installed entry');
+    assert.deepEqual(
+      main.redisRetryBudget(fakeClient, { windowMs: 1000, minCalls: 1, retryRatio: 0.5 }).getSnapshot(),
+      { attempts: 0, retryRatio: 0 },
+      'CJS: redisRetryBudget failed to construct from the installed entry',
+    );
     console.log('CJS entry points ok');
   `;
   const cjsFile = path.join(consumerDir, 'cjs-check.cjs');

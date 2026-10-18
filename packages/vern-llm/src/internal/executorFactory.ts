@@ -1,9 +1,9 @@
 import { CallExecutor } from './execution/callExecutor.js';
 import { DEFAULT_MAX_DELAY_MS } from './execution/utils/retry/retry.utils.js';
-import { RetryBudget } from './retryBudget.js';
 import { resolveAdapterInfo } from './utils/adapterInfo.utils.js';
 import { buildCircuitBreaker } from './utils/circuit-breaker/circuitBreakerAdapter.utils.js';
 import { buildRateLimit } from './utils/rate-limit/rateLimitAdapter.utils.js';
+import { buildRetryBudget } from './utils/retry-budget/retryBudgetAdapter.utils.js';
 import { resolveTargetNames } from './utils/targetNames.utils.js';
 
 import type { Logger } from '../logger.js';
@@ -78,7 +78,7 @@ export function buildExecutors(
     // Independent of `breaker`, never inherited from `shared`, same as
     // `circuitBreaker`/`rateLimit`: a budget tuned for one target's
     // capacity is rarely right for another's.
-    const budget = target.retryBudget ? new RetryBudget(target.retryBudget) : undefined;
+    const budget = buildRetryBudget(target.retryBudget, shared.logger);
 
     return new CallExecutor(name, target.client, target.model, {
       maxRetries: target.maxRetries ?? shared.maxRetries ?? 1,

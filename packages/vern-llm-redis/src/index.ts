@@ -9,6 +9,9 @@ export type {
 export { redisRateLimit } from './rateLimit.js';
 export type { AimdOptions, RedisRateLimitOptions, RedisRateLimiterAdapter } from './rateLimit.js';
 
+export { redisRetryBudget } from './retryBudget.js';
+export type { RedisRetryBudgetAdapter, RedisRetryBudgetOptions } from './retryBudget.js';
+
 export { redisCache } from './cache.js';
 export type { RedisCacheOptions } from './cache.js';
 

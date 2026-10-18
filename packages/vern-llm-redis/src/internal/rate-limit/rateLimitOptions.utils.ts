@@ -1,6 +1,10 @@
 import { defaultEstimateTokens, LLMError, type WireRequest } from 'vern-llm';
 
-import { assertPositiveFinite, invalidParams } from '../shared/errors/validate.utils.js';
+import {
+  assertPositiveFinite,
+  invalidParams,
+  resolveKeyPrefix,
+} from '../shared/errors/validate.utils.js';
 import { assertValidAimd, type AimdOptions } from './aimd.utils.js';
 
 import type { RedisRateLimitOptions } from '../../rateLimit.js';
@@ -68,7 +72,7 @@ function assertValidLimits(options: RedisRateLimitOptions, maxQueueMs: number): 
 
 /** Applies defaults and throws `LLMError('invalid_params')` on the first bad value. */
 export function resolveRateLimitOptions(options: RedisRateLimitOptions): ResolvedRateLimitOptions {
-  const keyPrefix = options.keyPrefix ?? 'vernllm:rl';
+  const keyPrefix = resolveKeyPrefix(options.keyPrefix, 'vernllm:rl');
   const maxQueueMs = options.maxQueueMs ?? 30_000;
   const maxQueueSize = options.maxQueueSize ?? 0;
   const pollIntervalMs = options.pollIntervalMs ?? 250;

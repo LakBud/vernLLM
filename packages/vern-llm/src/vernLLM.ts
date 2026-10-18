@@ -72,6 +72,7 @@ import { createMiddlewareStateBag, type MiddlewareStateBag } from './types/middl
 
 import type { CircuitState } from './circuitBreaker.js';
 import type { InternalCacheParams } from './internal/cache/utils/cache.utils.js';
+import type { RetryBudgetSnapshot } from './internal/retryBudget.js';
 import type { RateLimitState } from './rateLimit.js';
 
 /**
@@ -574,9 +575,7 @@ export class VernLLM {
    * Budgets are per target, not per model.
    * @throws {RangeError} If `target.index` names no target.
    */
-  getRetryBudgetState(
-    target?: Pick<CircuitTarget, 'index'>,
-  ): { attempts: number; retryRatio: number } | undefined {
+  getRetryBudgetState(target?: Pick<CircuitTarget, 'index'>): RetryBudgetSnapshot | undefined {
     const executor = resolveExecutor(this.executors, target?.index ?? 0, 'getRetryBudgetState');
     return executor.getRetryBudgetState();
   }
@@ -637,6 +636,20 @@ export class VernLLM {
         state: await executor.readCircuitState(model ?? executor.model),
       })),
     );
+  }
+
+  /**
+   * The live counterpart of `getRetryBudgetState`, asking the budget for its current window.
+   *
+   * @param target.index Which target to read. Defaults to the primary.
+   * @returns This target's live retry traffic and ratio, or `undefined` without a budget.
+   * @throws {RangeError} If `target.index` names no target.
+   */
+  async readRetryBudgetState(
+    target?: Pick<CircuitTarget, 'index'>,
+  ): Promise<RetryBudgetSnapshot | undefined> {
+    const executor = resolveExecutor(this.executors, target?.index ?? 0, 'readRetryBudgetState');
+    return executor.readRetryBudgetState();
   }
 
   /**
