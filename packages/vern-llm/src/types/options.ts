@@ -1,7 +1,7 @@
-import type { RetryBudgetOptions } from '../internal/retryBudget.js';
 import type { CacheOption } from '../internal/utils/cache/cacheAdapter.utils.js';
 import type { CircuitBreakerOption } from '../internal/utils/circuit-breaker/circuitBreakerAdapter.utils.js';
 import type { RateLimitOption } from '../internal/utils/rate-limit/rateLimitAdapter.utils.js';
+import type { RetryBudgetOption } from '../internal/utils/retry-budget/retryBudgetAdapter.utils.js';
 import type { Logger } from '../logger.js';
 import type { DetectSoftFailure } from './call.js';
 import type { LLMClient } from './client.js';
@@ -112,9 +112,10 @@ export interface VernLLMOptions {
   /**
    * Caps the share of this target's recent traffic that may be retries. Once `minCalls` calls land
    * in `windowMs` and the retry ratio reaches `retryRatio`, retries throw `retry_budget_exhausted`,
-   * even while the breaker is closed. Not inherited by fallback targets.
+   * even while the breaker is closed. Pass a `RetryBudgetAdapter` for cross-process. Not inherited
+   * by fallback targets.
    */
-  retryBudget?: RetryBudgetOptions;
+  retryBudget?: RetryBudgetOption;
   /**
    * Targets tried in order after the primary is exhausted. VernLLM never reorders them. Each keeps
    * its own retries, breaker and limiter. A single target equals `[target]`.

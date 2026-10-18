@@ -2,6 +2,7 @@ import {
   assertNonNegativeFinite,
   assertPositiveFinite,
   invalidParams,
+  resolveKeyPrefix,
 } from '../shared/errors/validate.utils.js';
 
 import type {
@@ -90,7 +91,7 @@ export function resolveCircuitBreakerOptions(
   options: RedisCircuitBreakerOptions,
 ): ResolvedCircuitBreakerOptions {
   const cooldownMs = options.cooldownMs ?? 30_000;
-  const keyPrefix = options.keyPrefix ?? 'vernllm:cb';
+  const keyPrefix = resolveKeyPrefix(options.keyPrefix, 'vernllm:cb');
   const pollIntervalMs = options.pollIntervalMs ?? 5_000;
   const probeLeaseMs = options.probeLeaseMs ?? 60_000;
   const prepareTimeoutMs = options.prepareTimeoutMs ?? 250;

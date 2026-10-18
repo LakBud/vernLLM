@@ -1,7 +1,7 @@
 {
   "name": "vern-llm-redis",
   "version": "0.3.0",
-  "description": "Redis-backed circuit breaker, rate limiter, and cache adapters for vern-llm",
+  "description": "Redis-backed circuit breaker, rate limiter, retry budget, and cache adapters for vern-llm",
   "keywords": [
     "vern-llm",
     "redis",
@@ -12,6 +12,7 @@
     "rate-limit",
     "rate-limiter",
     "circuit-breaker",
+    "retry-budget",
     "typescript"
   ],
   "type": "module",
@@ -61,6 +62,16 @@
       "require": {
         "types": "./dist/cache.d.cts",
         "default": "./dist/cache.cjs"
+      }
+    },
+    "./retryBudget": {
+      "import": {
+        "types": "./dist/retryBudget.d.mts",
+        "default": "./dist/retryBudget.mjs"
+      },
+      "require": {
+        "types": "./dist/retryBudget.d.cts",
+        "default": "./dist/retryBudget.cjs"
       }
     },
     "./clients": {
@@ -199,6 +210,20 @@
     {
       "path": "dist/cache.cjs",
       "limit": "1.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/retryBudget.mjs",
+      "limit": "2.25 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/retryBudget.cjs",
+      "limit": "2.25 KB",
       "ignore": [
         "vern-llm"
       ]

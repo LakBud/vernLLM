@@ -1,3 +1,4 @@
+import { resolveKeyPrefix } from './internal/shared/errors/validate.utils.js';
 import { ttlToPx } from './internal/ttl.utils.js';
 
 import type { RedisClient } from './types.js';
@@ -13,7 +14,7 @@ export function redisCache<T = unknown>(
   redis: RedisClient,
   options: RedisCacheOptions = {},
 ): CacheAdapter<T> {
-  const keyPrefix = options.keyPrefix ?? 'vernllm:cache';
+  const keyPrefix = resolveKeyPrefix(options.keyPrefix, 'vernllm:cache');
 
   function fullKey(key: string): string {
     return `${keyPrefix}:${key}`;

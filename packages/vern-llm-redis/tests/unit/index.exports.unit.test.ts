@@ -6,6 +6,7 @@ import {
   redisCache,
   redisCircuitBreaker,
   redisRateLimit,
+  redisRetryBudget,
   type RedisCacheOptions,
   type RedisCircuitBreakerAdapter,
   type RedisCircuitBreakerOptions,
@@ -13,6 +14,8 @@ import {
   type RedisCooldownBackoff,
   type RedisRateLimitOptions,
   type RedisRateLimiterAdapter,
+  type RedisRetryBudgetAdapter,
+  type RedisRetryBudgetOptions,
   type RedisSubscriber,
   type RedisTrippingOption,
 } from '../../src/index.js';
@@ -23,6 +26,7 @@ describe('package entrypoint exports', () => {
       'redisCache',
       'redisCircuitBreaker',
       'redisRateLimit',
+      'redisRetryBudget',
     ]);
   });
 
@@ -30,6 +34,7 @@ describe('package entrypoint exports', () => {
     expect(typeof redisCache).toBe('function');
     expect(typeof redisCircuitBreaker).toBe('function');
     expect(typeof redisRateLimit).toBe('function');
+    expect(typeof redisRetryBudget).toBe('function');
 
     const cacheOptions: RedisCacheOptions = { keyPrefix: 'app' };
     const client: RedisClient = {
@@ -55,6 +60,8 @@ describe('package entrypoint exports', () => {
     const assertRateLimitOptions = (_opts: RedisRateLimitOptions) => _opts;
     const assertRateLimiterAdapter = (_adapter: RedisRateLimiterAdapter) => _adapter;
     const assertTrippingOption = (_value: RedisTrippingOption) => _value;
+    const assertRetryBudgetOptions = (_opts: RedisRetryBudgetOptions) => _opts;
+    const assertRetryBudgetAdapter = (_adapter: RedisRetryBudgetAdapter) => _adapter;
 
     expect(assertCacheOptions).toBeDefined();
     expect(assertBreakerOptions).toBeDefined();
@@ -63,6 +70,8 @@ describe('package entrypoint exports', () => {
     expect(assertRateLimitOptions).toBeDefined();
     expect(assertRateLimiterAdapter).toBeDefined();
     expect(assertTrippingOption).toBeDefined();
+    expect(assertRetryBudgetOptions).toBeDefined();
+    expect(assertRetryBudgetAdapter).toBeDefined();
   });
 });
 

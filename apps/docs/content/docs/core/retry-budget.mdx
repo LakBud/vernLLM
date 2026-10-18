@@ -87,6 +87,21 @@ llm.getRetryBudgetState({ index: 1 }); // first fallback target
 `undefined` means that target has no retry budget configured. `attempts` and `retryRatio` are always
 scoped to that target's own trailing window, independent of `getCircuitState()`/`getFailureBreakdown`.
 
+`getRetryBudgetState()` is synchronous and reports what this process holds. `await
+llm.readRetryBudgetState()` asks the budget for its live window instead, which matters for a budget
+shared across processes. It falls back to `getRetryBudgetState()` for a budget with no live read, the
+built in one included.
+
+```ts
+await llm.readRetryBudgetState(); // { attempts: 420, retryRatio: 0.09 }
+```
+
+## Sharing a budget across processes
+
+`retryBudget` also accepts a `RetryBudgetAdapter`, so one budget can cover every process calling a
+provider. [vern-llm-redis](/docs/integrations/redis/features/retry-budget) ships a Redis backed one,
+and [Customization](/docs/customization/retry-budget) covers writing your own.
+
 ## Options reference
 
 | Option       | Notes                                                                                                                                                                     |

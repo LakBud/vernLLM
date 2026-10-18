@@ -5,6 +5,7 @@ import { redisCache } from '../../src/cache.js';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fromIoredis, fromIoredisSubscriber } from '../../src/clients/ioredis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
+import { redisRetryBudget } from '../../src/retryBudget.js';
 import { claimTrial, sleep } from '../breakerHelpers.js';
 import { uniquePrefix, waitForCluster, waitUntil } from '../helpers.js';
 
@@ -164,6 +165,25 @@ describe.skipIf(nodes.length === 0)('against a real Redis Cluster', () => {
 
     holder.dispose();
     other.dispose();
+  });
+
+  it('retry budget: two processes share one window across nodes', async () => {
+    const options = {
+      windowMs: 60_000,
+      minCalls: 2,
+      retryRatio: 0.5,
+      keyPrefix: uniquePrefix('rb'),
+      logger: 'silent' as const,
+    };
+    const a = track(redisRetryBudget(fromIoredis(connect()), options));
+    const b = track(redisRetryBudget(fromIoredis(connect()), options));
+
+    a.recordAttempt(false);
+    a.recordAttempt(true);
+    await waitUntil(async () => (await b.readState()).attempts === 2);
+
+    expect(b.getSnapshot()).toEqual({ attempts: 2, retryRatio: 0.5 });
+    expect(() => b.assertAvailable()).toThrow();
   });
 
   it('rate limit: leases, fair queue and readState work with keys on different slots', async () => {

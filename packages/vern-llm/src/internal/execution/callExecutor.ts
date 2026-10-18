@@ -1,4 +1,4 @@
-import { type RetryBudget } from '../retryBudget.js';
+import { type RetryBudgetAdapter } from '../retryBudget.js';
 import { resolveAdapterInfo } from '../utils/adapterInfo.utils.js';
 import {
   makeEventReporter,
@@ -72,7 +72,7 @@ export interface CallExecutorOptions {
   onEvent?: (event: VernLLMEvent) => void;
   breaker?: CircuitBreakerAdapter;
   /** Caps retries against this target independent of `breaker`. See `VernLLMOptions.retryBudget`. */
-  budget?: RetryBudget;
+  budget?: RetryBudgetAdapter;
   limiter?: RateLimiterAdapter;
   /** True for every target after the primary. Stamped onto reported `TokenUsage`. */
   isFallback?: boolean;
@@ -99,7 +99,7 @@ export class CallExecutor {
   private readonly nonRetryableStatus: number[];
   private readonly logger: Logger;
   private readonly breaker?: CircuitBreakerAdapter;
-  private readonly budget?: RetryBudget;
+  private readonly budget?: RetryBudgetAdapter;
   private readonly limiter?: RateLimiterAdapter;
   private readonly isFallback: boolean;
   private readonly supportsJsonObjectMode: boolean;
@@ -213,7 +213,12 @@ export class CallExecutor {
   }
 
   getRetryBudgetState() {
-    return this.budget?.getSnapshot();
+    return this.budget?.getSnapshot?.();
+  }
+
+  /** The budget's `readState` if it has one, otherwise `getSnapshot`. */
+  async readRetryBudgetState() {
+    return this.budget?.readState ? this.budget.readState() : this.budget?.getSnapshot?.();
   }
 
   getRateLimitState() {

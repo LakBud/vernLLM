@@ -4,6 +4,7 @@ import { redisCache } from '../../src/cache.js';
 import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fromNodeRedis, fromNodeRedisSubscriber } from '../../src/clients/nodeRedis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
+import { redisRetryBudget } from '../../src/retryBudget.js';
 import { connectNodeRedis, expectNearInstant, uniquePrefix, waitUntil } from '../helpers.js';
 
 import type { RedisClientType } from 'redis';
@@ -90,6 +91,24 @@ describe('fromNodeRedis, real Redis', () => {
 
     controller.abort();
     await thirdPromise;
+  });
+
+  it('redisRetryBudget records and reads the shared window through the translated eval calls', async () => {
+    const budget = redisRetryBudget(fromNodeRedis(client), {
+      windowMs: 60_000,
+      minCalls: 2,
+      retryRatio: 0.5,
+      keyPrefix: uniquePrefix('rb'),
+      logger: 'silent',
+    });
+
+    budget.recordAttempt(false);
+    budget.recordAttempt(true);
+    await waitUntil(async () => (await budget.readState()).attempts === 2);
+
+    expect(budget.getSnapshot()).toEqual({ attempts: 2, retryRatio: 0.5 });
+    expect(() => budget.assertAvailable()).toThrow();
+    budget.dispose();
   });
 });
 

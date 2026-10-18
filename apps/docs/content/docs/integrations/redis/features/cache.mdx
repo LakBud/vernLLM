@@ -19,9 +19,9 @@ const cache = redisCache(client);
 
 ## Options
 
-| Option      | Default           | Notes                                           |
-| ----------- | ----------------- | ----------------------------------------------- |
-| `keyPrefix` | `'vernllm:cache'` | Prefix for every Redis key this adapter writes. |
+| Option      | Default           | Notes                                                               |
+| ----------- | ----------------- | ------------------------------------------------------------------- |
+| `keyPrefix` | `'vernllm:cache'` | Prefix for every Redis key this adapter writes. A non-empty string. |
 
 ```ts title="redis-cache-per-call-ttl.ts"
 const result = await llm.cachedCall({

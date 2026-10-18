@@ -148,3 +148,11 @@ describe('resolveRateLimitOptions limit edges', () => {
     expect(() => resolveRateLimitOptions(options)).not.toThrow();
   });
 });
+
+describe('resolveRateLimitOptions keyPrefix', () => {
+  it('rejects an empty keyPrefix', () => {
+    expect(() => resolveRateLimitOptions({ keyPrefix: '' })).toThrow(
+      'keyPrefix must be a non-empty string (got "").',
+    );
+  });
+});

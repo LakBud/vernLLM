@@ -24,3 +24,17 @@ export function assertNonNegativeInteger(name: string, value: number | undefined
     invalidParams(`${name} must be a non-negative integer (got ${value}).`);
   }
 }
+
+/**
+ * Resolves an adapter's `keyPrefix`: `undefined` or `null` takes `fallback`, as `??` did before,
+ * and anything but a non-empty string throws. Redis accepts any bytes in a key, so the content itself is not restricted.
+ */
+export function resolveKeyPrefix(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'string' || value === '') {
+    invalidParams(
+      `keyPrefix must be a non-empty string (got ${typeof value === 'string' ? '""' : String(value)}).`,
+    );
+  }
+  return value;
+}

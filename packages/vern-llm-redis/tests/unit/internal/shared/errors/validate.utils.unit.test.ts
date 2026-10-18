@@ -5,6 +5,7 @@ import {
   assertNonNegativeInteger,
   assertPositiveFinite,
   invalidParams,
+  resolveKeyPrefix,
 } from '../../../../../src/internal/shared/errors/validate.utils.js';
 
 describe('invalidParams', () => {
@@ -50,6 +51,29 @@ describe('assertNonNegativeInteger', () => {
   it.each([-1, 1.5, Number.NaN, Infinity])('rejects %s, naming the option and value', (value) => {
     expect(() => assertNonNegativeInteger('x', value)).toThrow(
       `x must be a non-negative integer (got ${value}).`,
+    );
+  });
+});
+
+describe('resolveKeyPrefix', () => {
+  it.each([undefined, null])('takes the fallback for %s', (value) => {
+    expect(resolveKeyPrefix(value, 'vernllm:x')).toBe('vernllm:x');
+  });
+
+  it.each(['app', ' ', 'a:b{c}'])('keeps %j as given', (value) => {
+    expect(resolveKeyPrefix(value, 'vernllm:x')).toBe(value);
+  });
+
+  it.each([
+    ['', '""'],
+    [42, '42'],
+    [{}, '[object Object]'],
+  ])('rejects %j', (value, shown) => {
+    expect(() => resolveKeyPrefix(value, 'vernllm:x')).toThrow(
+      expect.objectContaining({
+        type: 'invalid_params',
+        message: `keyPrefix must be a non-empty string (got ${shown}).`,
+      }),
     );
   });
 });

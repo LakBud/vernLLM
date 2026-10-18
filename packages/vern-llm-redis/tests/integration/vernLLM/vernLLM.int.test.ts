@@ -5,6 +5,7 @@ import { redisCache } from '../../../src/cache.js';
 import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
 import { fromIoredis } from '../../../src/clients/ioredis.js';
 import { redisRateLimit } from '../../../src/rateLimit.js';
+import { redisRetryBudget } from '../../../src/retryBudget.js';
 import { connect, createMockClient, spyOnScripts, uniquePrefix, waitUntil } from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
@@ -187,5 +188,62 @@ describe('VernLLM, wired with real Redis-backed adapters', () => {
     limiter.dispose();
     breaker.dispose();
     await limiterRedis.quit();
+  });
+
+  it("two VernLLM instances share one Redis retry budget: the second is cut off by the first one's retries", async () => {
+    const keyPrefix = uniquePrefix('rb');
+    const budgetOptions = { windowMs: 60_000, minCalls: 3, retryRatio: 0.5, keyPrefix };
+    const otherRedis = connect();
+    const budgetA = redisRetryBudget(fromIoredis(redis), { ...budgetOptions, logger: 'silent' });
+    const budgetB = redisRetryBudget(fromIoredis(otherRedis), {
+      ...budgetOptions,
+      logger: 'silent',
+    });
+
+    const { client: clientA } = createMockClient([
+      new Error('down'),
+      new Error('down'),
+      new Error('down'),
+    ]);
+    const llmA = new VernLLM({
+      client: clientA,
+      model: 'test-model',
+      maxRetries: 2,
+      baseDelayMs: 1,
+      logger: 'silent',
+      retryBudget: budgetA,
+    });
+
+    // A: one first attempt and two retries, all failing, before the budget has enough calls to judge.
+    await expect(llmA.call({ userContent: 'hi', jsonMode: false })).rejects.toBeInstanceOf(
+      LLMError,
+    );
+    await waitUntil(async () => (await llmA.readRetryBudgetState())?.attempts === 3);
+
+    const { client: clientB, create: createB } = createMockClient([
+      new Error('down'),
+      { content: 'recovered' },
+    ]);
+    const llmB = new VernLLM({
+      client: clientB,
+      model: 'test-model',
+      maxRetries: 3,
+      baseDelayMs: 1,
+      logger: 'silent',
+      retryBudget: budgetB,
+    });
+
+    // B learns A's window (3 attempts, 2 retries) up front, so the check below does not race
+    // its own record's reply. With B's first attempt it is 4 and 2: the retry is refused.
+    await expect(llmB.readRetryBudgetState()).resolves.toEqual({ attempts: 3, retryRatio: 2 / 3 });
+    await expect(llmB.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+      code: 'retry_budget_exhausted',
+    });
+    expect(createB).toHaveBeenCalledOnce();
+    await waitUntil(async () => (await llmB.readRetryBudgetState())?.attempts === 4);
+
+    budgetA.dispose();
+    budgetB.dispose();
+    await otherRedis.quit();
   });
 });

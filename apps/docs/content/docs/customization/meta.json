@@ -7,6 +7,7 @@
     "circuit-breaker",
     "caching",
     "rate-limiting",
+    "retry-budget",
     "tokenizer",
     "schema",
     "provider",

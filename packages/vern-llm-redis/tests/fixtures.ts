@@ -3,6 +3,7 @@ import { test as base } from 'vitest';
 import { redisCircuitBreaker, type RedisCircuitBreakerAdapter } from '../src/circuitBreaker.js';
 import { fromIoredis } from '../src/clients/ioredis.js';
 import { redisRateLimit, type RedisRateLimiterAdapter } from '../src/rateLimit.js';
+import { redisRetryBudget, type RedisRetryBudgetAdapter } from '../src/retryBudget.js';
 import { connect } from './helpers.js';
 
 import type { Redis } from 'ioredis';
@@ -28,6 +29,14 @@ interface RedisFixtures {
     options?: Parameters<typeof redisRateLimit>[1],
     connection?: Redis,
   ) => RedisRateLimiterAdapter;
+  /**
+   * Builds a retry budget, quiet unless told otherwise, on `redis` or on the
+   * connection you pass (one per simulated process). Disposed once the test is done.
+   */
+  makeBudget: (
+    options: Parameters<typeof redisRetryBudget>[1],
+    connection?: Redis,
+  ) => RedisRetryBudgetAdapter;
 }
 
 /**
@@ -48,6 +57,7 @@ export const it = base.extend<RedisFixtures>({
   // eslint-disable-next-line no-empty-pattern
   redis: async ({}, use) => {
     const redis = connect();
+    await redis.ping();
     await use(redis);
     await redis.quit();
   },
@@ -85,5 +95,15 @@ export const it = base.extend<RedisFixtures>({
       return limiter;
     });
     for (const limiter of made) limiter.dispose();
+  },
+
+  makeBudget: async ({ redis }, use) => {
+    const made: RedisRetryBudgetAdapter[] = [];
+    await use((options, connection = redis) => {
+      const budget = redisRetryBudget(fromIoredis(connection), { logger: 'silent', ...options });
+      made.push(budget);
+      return budget;
+    });
+    for (const budget of made) budget.dispose();
   },
 });

@@ -1,5 +1,5 @@
 {
   "title": "Features",
   "icon": "Sparkles",
-  "pages": ["index", "circuit-breaker", "rate-limit", "cache"]
+  "pages": ["index", "circuit-breaker", "rate-limit", "retry-budget", "cache"]
 }

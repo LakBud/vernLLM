@@ -27,7 +27,7 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
       keyPrefix: uniquePrefix('cb'),
       threshold: 1,
       cooldownMs: 150,
-      probeLeaseMs: 300,
+      probeLeaseMs: 1200,
       onStateChange: (from, to) => {
         if (from === 'half-open' && to === 'closed') resolveClosed();
       },
@@ -41,7 +41,7 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
 
     const slow = await claimTrial(holder);
     // Three leases long. Without renewal the other process takes the trial over.
-    await expect(claimTrial(other, { timeoutMs: 900 })).rejects.toThrow('admitted 0 of 1');
+    await expect(claimTrial(other, { timeoutMs: 3600 })).rejects.toThrow('admitted 0 of 1');
 
     holder.recordSuccess('m', slow);
     await closed;
