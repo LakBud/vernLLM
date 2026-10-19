@@ -102,6 +102,24 @@ export function redisCircuitBreaker(
   /** Keys with a slot request from `assertClosed` still in flight. One at a time, so retries can't win extra slots. */
   const grantsInFlight = new Set<string>();
 
+  /** The local breaker, when it decides: only while Redis is unreachable and the last known state is closed. */
+  const fallbackFor = (model: string | undefined): CircuitBreaker | undefined =>
+    local.get(keyFor(model)).state === 'closed' ? fallback : undefined;
+
+  /** The error `assertClosed` throws for a call the shared state does not admit. */
+  const rejection = (model: string | undefined, state: string): LLMError =>
+    state === 'half-open'
+      ? new LLMError(
+          `Circuit half-open, no trial available for ${model ?? 'default'}`,
+          'circuit_open',
+          {
+            code: 'circuit_trial_in_flight',
+          },
+        )
+      : new LLMError(`Circuit open for ${model ?? 'default'}`, 'circuit_open', {
+          code: 'circuit_cooling_down',
+        });
+
   // Looked up per report: core may wrap onStateChange after construction.
   const notify: Notify = (change, model, context) => {
     if (change) adapter.onStateChange(change.from, change.to, change.failures, model, context);
@@ -194,11 +212,13 @@ export function redisCircuitBreaker(
     isolateByModel,
 
     getState(model) {
-      return fallback ? fallback.getState(model) : local.get(keyFor(model)).state;
+      const localBreaker = fallbackFor(model);
+      return localBreaker ? localBreaker.getState(model) : local.get(keyFor(model)).state;
     },
 
     getFailureBreakdown(model) {
-      if (fallback) return fallback.getFailureBreakdown(model);
+      const localBreaker = fallbackFor(model);
+      if (localBreaker) return localBreaker.getFailureBreakdown(model);
       return { ...local.get(keyFor(model)).breakdown } as Partial<
         Record<LLMErrorCode | 'unknown', number>
       >;
@@ -208,8 +228,15 @@ export function redisCircuitBreaker(
       if (fallback) {
         // Never wins a Redis slot here: the trial, if any, belongs to the local breaker.
         void run('assertClosed transition', model, 'check', context, { grant: false });
-        fallback.assertClosed(model, context);
-        return;
+        const localBreaker = fallbackFor(model);
+        if (localBreaker) {
+          localBreaker.assertClosed(model, context);
+          return;
+        }
+        // Trial-confirmation exception: a state Redis last reported open or half-open keeps
+        // rejecting until a reply lands. A stall is not proof the circuit was lost, and a local
+        // breaker that starts closed would admit calls and trials Redis never granted.
+        throw rejection(model, local.get(keyFor(model)).state);
       }
 
       const key = keyFor(model);
@@ -234,17 +261,7 @@ export function redisCircuitBreaker(
         if (grant) grantsInFlight.delete(key);
       });
 
-      if (!allowed) {
-        throw priorState === 'half-open'
-          ? new LLMError(
-              `Circuit half-open, no trial available for ${model ?? 'default'}`,
-              'circuit_open',
-              { code: 'circuit_trial_in_flight' },
-            )
-          : new LLMError(`Circuit open for ${model ?? 'default'}`, 'circuit_open', {
-              code: 'circuit_cooling_down',
-            });
-      }
+      if (!allowed) throw rejection(model, priorState);
     },
 
     recordSuccess(model, context) {

@@ -143,9 +143,13 @@ process to core's own [Circuit Breaker](/docs/core/circuit-breaker), built from 
 Counting a stalled call covers a connection that hangs, which a client may not reject for a long
 while. The local breaker starts closed with no history and counts this process's calls alone, so a
 circuit can still open during an outage, from this process's own failures. Its changes fire
-`onStateChange` and the `circuit_state` event like shared ones. Calls keep going to Redis meanwhile,
-without claiming a trial slot, and the first one that answers switches back to the shared state and
-drops the local breaker.
+`onStateChange` and the `circuit_state` event like shared ones.
+
+A circuit that Redis last reported open or half-open stays rejected during an outage. The local
+breaker only decides for a circuit that was closed, so a stall never admits calls Redis had held
+back, and no trial is granted locally. Calls keep going to Redis meanwhile, without claiming a trial
+slot, and the first reply switches back to the shared state and drops the local breaker. A circuit
+rejected during the outage therefore waits for Redis to answer before it can be tried again.
 
 A failed write is caught, logged, and swallowed rather than thrown, so a Redis outage does not
 itself take down every call through VernLLM. `prepare` and `readState` reject with

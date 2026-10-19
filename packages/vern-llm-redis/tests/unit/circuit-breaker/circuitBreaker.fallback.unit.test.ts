@@ -39,6 +39,57 @@ describe('redisCircuitBreaker while Redis is unreachable', () => {
     expect(breaker.getState?.('m')).toBe('open');
   });
 
+  it('keeps rejecting a state Redis last reported open while a stalled call is pending', async () => {
+    vi.useFakeTimers();
+    const { redis, breaker } = downBreaker({ threshold: 1, prepareTimeoutMs: 100 });
+    redis.eval.mockResolvedValueOnce(
+      transitionReply('closed', 'open', { failures: 1, openedAt: 1000 }),
+    );
+
+    breaker.recordFailure('m');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(breaker.getState?.('m')).toBe('open');
+
+    // Hung from here on. The stall timer switches to the local breaker, which starts closed.
+    redis.eval.mockReturnValue(new Promise(() => {}));
+    breaker.recordFailure('m');
+    await vi.advanceTimersByTimeAsync(102);
+
+    expect(() => breaker.assertClosed('m')).toThrow(
+      expect.objectContaining({ type: 'circuit_open', code: 'circuit_cooling_down' }),
+    );
+    expect(breaker.getState?.('m')).toBe('open');
+  });
+
+  it('keeps a shared half-open state rejected during a stall, with no local trial', async () => {
+    vi.useFakeTimers();
+    const onStateChange = vi.fn();
+    const { redis, breaker } = downBreaker({ threshold: 1, prepareTimeoutMs: 100, onStateChange });
+    redis.eval.mockResolvedValueOnce(
+      transitionReply('open', 'half-open', { failures: 1, openedAt: 1000 }),
+    );
+
+    breaker.recordFailure('m');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(breaker.getState?.('m')).toBe('half-open');
+    onStateChange.mockClear();
+
+    redis.eval.mockReturnValue(new Promise(() => {}));
+    breaker.recordFailure('m');
+    await vi.advanceTimersByTimeAsync(102);
+
+    // A fresh local breaker would admit every call here. None may pass, and none may claim a trial.
+    for (let i = 0; i < 3; i += 1) {
+      expect(() => breaker.assertClosed('m')).toThrow(
+        expect.objectContaining({ type: 'circuit_open', code: 'circuit_trial_in_flight' }),
+      );
+    }
+    expect(breaker.getState?.('m')).toBe('half-open');
+    expect(onStateChange).not.toHaveBeenCalled();
+    const grants = redis.eval.mock.calls.filter((call) => call[3] === 'check' && call[9] === '1');
+    expect(grants).toHaveLength(0);
+  });
+
   it('lets a reply read after a blocked event loop win over the stall timer', async () => {
     vi.useFakeTimers();
     const onStateChange = vi.fn();
