@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { CircuitBreaker } from '../../../../../../src/circuitBreaker.js';
 import { runAttemptLoop } from '../../../../../../src/internal/execution/utils/dispatch/attemptLoop.utils.js';
-import { RetryBudget } from '../../../../../../src/internal/retryBudget.js';
 import { NoopLogger } from '../../../../../../src/internal/utils/logger.utils.js';
+import { RetryBudget } from '../../../../../../src/retryBudget.js';
 import { LLMError } from '../../../../../../src/types/errors.js';
 
 function baseParams(

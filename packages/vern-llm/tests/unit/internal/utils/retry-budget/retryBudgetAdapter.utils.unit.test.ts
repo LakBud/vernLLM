@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { RetryBudget, type RetryBudgetAdapter } from '../../../../../src/internal/retryBudget.js';
 import { NoopLogger } from '../../../../../src/internal/utils/logger.utils.js';
 import { buildRetryBudget } from '../../../../../src/internal/utils/retry-budget/retryBudgetAdapter.utils.js';
+import { RetryBudget, type RetryBudgetAdapter } from '../../../../../src/retryBudget.js';
 import { LLMError } from '../../../../../src/types/errors.js';
 
 const options = { windowMs: 60_000, minCalls: 10, retryRatio: 0.5 };

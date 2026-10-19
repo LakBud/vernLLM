@@ -1,4 +1,5 @@
 import {
+  CircuitBreaker,
   LLMError,
   type CircuitBreakerAdapter,
   type CircuitBreakerStateChangeHandler,
@@ -67,7 +68,7 @@ export interface RedisCircuitBreakerOptions {
   tripping?: RedisTrippingOption;
   /** How long an unreported trial slot is held before reclaim, in ms. Default 60000. */
   probeLeaseMs?: number;
-  /** How long VernLLM waits for `prepare`, in ms. Default 250. */
+  /** How long VernLLM waits for `prepare`, and how long a Redis call may take before Redis counts as down, in ms. Default 250. */
   prepareTimeoutMs?: number;
   /** Where background failures go. Defaults to the VernLLM logger. `'silent'` discards them. */
   logger?: AdapterLoggerOption;
@@ -101,12 +102,62 @@ export function redisCircuitBreaker(
   /** Keys with a slot request from `assertClosed` still in flight. One at a time, so retries can't win extra slots. */
   const grantsInFlight = new Set<string>();
 
+  /** The local breaker, when it decides: only while Redis is unreachable and the last known state is closed. */
+  const fallbackFor = (model: string | undefined): CircuitBreaker | undefined =>
+    local.get(keyFor(model)).state === 'closed' ? fallback : undefined;
+
+  /** The error `assertClosed` throws for a call the shared state does not admit. */
+  const rejection = (model: string | undefined, state: string): LLMError =>
+    state === 'half-open'
+      ? new LLMError(
+          `Circuit half-open, no trial available for ${model ?? 'default'}`,
+          'circuit_open',
+          {
+            code: 'circuit_trial_in_flight',
+          },
+        )
+      : new LLMError(`Circuit open for ${model ?? 'default'}`, 'circuit_open', {
+          code: 'circuit_cooling_down',
+        });
+
   // Looked up per report: core may wrap onStateChange after construction.
   const notify: Notify = (change, model, context) => {
     if (change) adapter.onStateChange(change.from, change.to, change.failures, model, context);
   };
 
-  const { transition, run } = createTransitionRunner({ redis, config, local, log, notify });
+  // Core's own breaker, built from the same options on the first Redis call that fails or stalls
+  // past `prepareTimeoutMs`, and dropped on the first one that answers. Without it a closed circuit could never open while
+  // Redis is down, since only Redis replies move the local copy. Calls keep going to Redis
+  // meanwhile, which is how recovery is noticed.
+  let fallback: CircuitBreaker | undefined;
+  const reachability = {
+    up() {
+      fallback = undefined;
+    },
+    down() {
+      if (disposed || fallback) return;
+      fallback = new CircuitBreaker({
+        threshold: options.threshold,
+        cooldownMs: options.cooldownMs,
+        isolateByModel,
+        halfOpenProbes: options.halfOpenProbes,
+        halfOpenSuccessRatio: options.halfOpenSuccessRatio,
+        cooldownBackoff: options.cooldownBackoff,
+        tripping: options.tripping,
+        onStateChange: (...change) => adapter.onStateChange(...change),
+      });
+    },
+  };
+
+  const { transition, run } = createTransitionRunner({
+    redis,
+    config,
+    local,
+    log,
+    notify,
+    reachability,
+    stallMs: prepareTimeoutMs,
+  });
 
   const permits = createPermits({
     heartbeats,
@@ -161,16 +212,33 @@ export function redisCircuitBreaker(
     isolateByModel,
 
     getState(model) {
-      return local.get(keyFor(model)).state;
+      const localBreaker = fallbackFor(model);
+      return localBreaker ? localBreaker.getState(model) : local.get(keyFor(model)).state;
     },
 
     getFailureBreakdown(model) {
+      const localBreaker = fallbackFor(model);
+      if (localBreaker) return localBreaker.getFailureBreakdown(model);
       return { ...local.get(keyFor(model)).breakdown } as Partial<
         Record<LLMErrorCode | 'unknown', number>
       >;
     },
 
     assertClosed(model, context) {
+      if (fallback) {
+        // Never wins a Redis slot here: the trial, if any, belongs to the local breaker.
+        void run('assertClosed transition', model, 'check', context, { grant: false });
+        const localBreaker = fallbackFor(model);
+        if (localBreaker) {
+          localBreaker.assertClosed(model, context);
+          return;
+        }
+        // Trial-confirmation exception: a state Redis last reported open or half-open keeps
+        // rejecting until a reply lands. A stall is not proof the circuit was lost, and a local
+        // breaker that starts closed would admit calls and trials Redis never granted.
+        throw rejection(model, local.get(keyFor(model)).state);
+      }
+
       const key = keyFor(model);
       const bucket = local.get(key);
       const priorState = bucket.state;
@@ -193,26 +261,18 @@ export function redisCircuitBreaker(
         if (grant) grantsInFlight.delete(key);
       });
 
-      if (!allowed) {
-        throw priorState === 'half-open'
-          ? new LLMError(
-              `Circuit half-open, no trial available for ${model ?? 'default'}`,
-              'circuit_open',
-              { code: 'circuit_trial_in_flight' },
-            )
-          : new LLMError(`Circuit open for ${model ?? 'default'}`, 'circuit_open', {
-              code: 'circuit_cooling_down',
-            });
-      }
+      if (!allowed) throw rejection(model, priorState);
     },
 
     recordSuccess(model, context) {
+      fallback?.recordSuccess(model, context);
       void run('recordSuccess transition', model, 'success', context, {
         token: permits.takeToken(keyFor(model), context),
       });
     },
 
     recordFailure(model, context, code) {
+      fallback?.recordFailure(model, context, code);
       void run('recordFailure transition', model, 'failure', context, {
         token: permits.takeToken(keyFor(model), context),
         code,
@@ -220,6 +280,7 @@ export function redisCircuitBreaker(
     },
 
     releaseTrial(model, context) {
+      fallback?.releaseTrial(model, context);
       if (!context) return;
 
       const permit = permits.take(keyFor(model), context);
@@ -229,10 +290,12 @@ export function redisCircuitBreaker(
     },
 
     open(model, context) {
+      fallback?.open(model, context);
       void run('open transition', model, 'open', context);
     },
 
     close(model, context) {
+      fallback?.close(model, context);
       void run('close transition', model, 'close', context);
     },
 
@@ -257,11 +320,14 @@ export function redisCircuitBreaker(
 
     async readState(model) {
       const key = keyFor(model);
-      const entry = parseSnapshotResult(
-        await redis.eval(READ_BUCKETS_SCRIPT, 1, key, '1').catch((error: unknown) => {
-          throw toRedisError('readState', error);
-        }),
-      );
+      let entry: ReturnType<typeof parseSnapshotResult>;
+      try {
+        entry = parseSnapshotResult(await redis.eval(READ_BUCKETS_SCRIPT, 1, key, '1'));
+      } catch (error) {
+        reachability.down();
+        throw toRedisError('readState', error);
+      }
+      reachability.up();
 
       // Unversioned (expired or never versioned): the live read wins.
       const observed = entry ?? { state: 'closed' as const, failures: 0, openedAt: 0, version: 0 };
@@ -277,6 +343,7 @@ export function redisCircuitBreaker(
 
     dispose() {
       disposed = true;
+      fallback = undefined;
       log.mute();
 
       poller.stop();

@@ -106,13 +106,16 @@ describe.concurrent('redisCircuitBreaker prepare and readState, real Redis', () 
   });
 
   it('an open circuit is left alone until its cooldown is over, judged from the Redis clock', async ({
-    redis,
+    newConnection,
     makeBreaker,
   }) => {
+    // Its own connection: the spy counts every script on it, and the shared one serves the
+    // concurrent tests in this file.
+    const connection = newConnection();
     const prefix = uniquePrefix('cb');
-    const breaker = makeBreaker({ keyPrefix: prefix, threshold: 1, cooldownMs: 500 });
+    const breaker = makeBreaker({ keyPrefix: prefix, threshold: 1, cooldownMs: 500 }, connection);
     await trip(breaker);
-    const evalSpy = spyOnScripts(redis);
+    const evalSpy = spyOnScripts(connection);
 
     // A burst while the cooldown is running costs no Redis round trips at all.
     await Promise.all(Array.from({ length: 50 }, () => breaker.prepare?.('m')));

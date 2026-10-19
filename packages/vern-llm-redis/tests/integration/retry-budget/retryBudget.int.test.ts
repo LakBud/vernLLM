@@ -142,7 +142,7 @@ describe.concurrent('redisRetryBudget, real Redis', () => {
     expect((await redis.hkeys(`${keyPrefix}:window`))[0]).toMatch(/^wt:/);
   });
 
-  it('fails open while Redis rejects: attempts are logged and the window ages out', async ({
+  it("falls back to this process's own budget while Redis rejects, and back to Redis after", async ({
     makeBudget,
     redis,
   }) => {
@@ -166,9 +166,13 @@ describe.concurrent('redisRetryBudget, real Redis', () => {
       code: 'connection_failed',
     });
 
-    // No reply has landed for longer than the window: the budget lets retries through.
+    // This process's own attempts age out of core's budget like they would in Redis.
     await waitUntil(() => !isExhausted(budget), { timeoutMs: 2000 });
+
     scripts.restore();
+    budget.recordAttempt(false);
+    await waitUntil(async () => (await budget.readState()).attempts === 1);
+    expect(budget.getSnapshot()).toEqual({ attempts: 1, retryRatio: 0 });
   });
 
   it('stops talking to Redis once disposed', async ({ makeBudget, redis }) => {

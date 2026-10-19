@@ -1,4 +1,4 @@
-import { type RetryBudgetAdapter } from '../retryBudget.js';
+import { type RetryBudgetAdapter } from '../../retryBudget.js';
 import { resolveAdapterInfo } from '../utils/adapterInfo.utils.js';
 import {
   makeEventReporter,

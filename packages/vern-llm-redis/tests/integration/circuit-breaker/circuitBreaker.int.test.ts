@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { redisCircuitBreaker } from '../../../src/circuitBreaker.js';
 import { fromIoredis, fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
-import { connect, uniquePrefix, waitForSubscribers, waitUntil } from '../../helpers.js';
+import {
+  connect,
+  spyOnScripts,
+  uniquePrefix,
+  waitForSubscribers,
+  waitUntil,
+} from '../../helpers.js';
 
 import type { Redis } from 'ioredis';
 
@@ -93,6 +99,43 @@ describe('redisCircuitBreaker, real Redis, single process', () => {
         return false;
       }
     });
+  });
+
+  it('trips on its own while Redis is down, and goes back to the shared state once Redis answers', async () => {
+    const breaker = redisCircuitBreaker(fromIoredis(redis), {
+      threshold: 2,
+      keyPrefix: uniquePrefix('cb'),
+      pollIntervalMs: 0,
+      logger: 'silent',
+    });
+    const scripts = spyOnScripts(redis);
+    scripts.mockRejectedValue(new Error('Redis is down'));
+
+    breaker.recordFailure('m');
+    // The call that finds Redis down switches to the local breaker once its script rejects.
+    await Promise.resolve(scripts.mock.results[0]?.value).catch(() => {});
+    // Then a macrotask, so the rejection has passed every promise between here and the breaker.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    breaker.recordFailure('m');
+    breaker.recordFailure('m');
+
+    // Without the local breaker this circuit could never open while Redis is down.
+    expect(breaker.getState?.('m')).toBe('open');
+    expect(() => breaker.assertClosed('m')).toThrow();
+
+    // Redis never saw a failure, so once it answers the shared circuit is closed again.
+    scripts.restore();
+    await waitUntil(() => {
+      try {
+        breaker.assertClosed('m');
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(breaker.getState?.('m')).toBe('closed');
+
+    breaker.dispose();
   });
 
   it('isolateByModel keeps a failing model from blocking a different, healthy model', async () => {
