@@ -41,6 +41,11 @@ leaving the others unset.
   the GenAI semantic conventions.
 </Callout>
 
+<Callout>
+  Want one structured record per call and rolling latency percentiles, with no metrics backend? The
+  [logger extension](/docs/extensions/logger) builds both from these same events.
+</Callout>
+
 ## Fire and forget
 
 `onEvent` mirrors `onUsage`: it is synchronous, fire and forget, and wrapped in a try/catch at the

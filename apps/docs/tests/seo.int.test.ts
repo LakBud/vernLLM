@@ -67,6 +67,7 @@ describe('docs SEO', () => {
       { slugs: ['integrations', 'redis', 'features', 'cache'], title: 'Caching' },
       { slugs: ['changelog'], title: 'Changelog' },
       { slugs: ['integrations', 'otel', 'changelog'], title: 'Changelog' },
+      { slugs: ['extensions', 'logger', 'changelog'], title: 'Changelog' },
       { slugs: ['core', 'retries'], title: 'Retries' },
     ]);
 
@@ -75,6 +76,7 @@ describe('docs SEO', () => {
       'integrations/redis/features/cache': 'Caching (Redis)',
       changelog: 'Changelog',
       'integrations/otel/changelog': 'Changelog (OpenTelemetry)',
+      'extensions/logger/changelog': 'Changelog (Logger)',
       'core/retries': 'Retries',
     });
   });

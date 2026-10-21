@@ -1,0 +1,136 @@
+---
+title: Call Records
+description: How one VernLLM call becomes one frozen record, with its outcome, attempt path, timings, and token counts.
+---
+
+Every `llm.call()` and `llm.cachedCall()` writes exactly one `call` entry. The record is built once
+when the call ends, frozen, and handed to the pipeline, so nothing a sink holds can change what the
+next one reads.
+
+## How a call becomes a record
+
+<Steps>
+<Step>
+
+### The call starts
+
+The logger opens a recorder for the call and keeps it in `ctx.state`, so two concurrent calls never
+share one.
+
+</Step>
+<Step>
+
+### Each attempt is timed
+
+`dispatch` marks when the response arrived, but it does not decide the result. Validation, JSON
+parsing, and `detectSoftFailure` all run after it and can still trigger a retry, so an attempt stays
+open until the next retry, fallback, or the end of the call closes it.
+
+</Step>
+<Step>
+
+### Events fill in the rest
+
+`rate_limited` adds queue wait, `retry` adds a retry and its delay, `fallback` closes a target and
+opens the next one, and `usage` supplies the token counts. Circuit breaker changes, middleware
+notes, and kept custom events are appended.
+
+</Step>
+<Step>
+
+### The call ends
+
+The record is built, then passes through stats, slow call marking, error grouping, sampling, and the
+level filter before it reaches your [sink](/docs/extensions/logger/features/sinks). Events that
+arrive after this point are dropped.
+
+</Step>
+</Steps>
+
+For a stream, `wrap` returns before the answer is complete, so the record is written when
+`finalResult` settles. A stream that fails after its first chunk is recorded as an error even though
+the call already returned. `ttftMs` is the time from the call's start to the first content chunk, so
+a keep alive ping before content does not count.
+
+## Outcomes
+
+One function decides the outcome, so every rule lives in one place:
+
+| Outcome    | When                                                                                 | Level                            | Grouped | Timed |
+| ---------- | ------------------------------------------------------------------------------------ | -------------------------------- | ------- | ----- |
+| `ok`       | The call resolved. For a stream, `finalResult` resolved                              | `info`, raised to `warn` if slow | no      | yes   |
+| `error`    | Any other `LLMError`, or a thrown value that is not one                              | `error`                          | yes     | no    |
+| `aborted`  | The caller cancelled (`error.type` is `aborted`)                                     | `info`                           | no      | no    |
+| `rejected` | A budget or policy said no on purpose: `quota_exceeded`, or the code `policy_denied` | `warn`                           | no      | no    |
+
+<Callout type="info">
+  `rejected` exists because a denial is the system working, not a fault. Logging it as `error` would
+  page someone when a tenant reaches its limit, and grouping it with provider failures would hide a
+  real outage. Rejections are counted per series, so "this tenant hit its budget 40 times today"
+  stays visible in [Rolling Stats](/docs/extensions/logger/features/stats). The core raises
+  `quota_exceeded` from a [budget reservation](/docs/core/budget-reservation).
+</Callout>
+
+## The attempt path
+
+`path` has one entry per target the call tried, in order. Each entry carries the target's
+`provider` and `model`, how many `attempts` went to it, whether it ended `ok` or `error`, how long
+the call spent on it (`elapsedMs`), and the `errorCode` that ended it.
+
+```json title="path-example.json"
+"path": [
+  { "provider": "primary", "model": "gpt-4o", "attempts": 2, "outcome": "error", "elapsedMs": 4210, "errorCode": "request_timeout" },
+  { "provider": "fallback[0]", "model": "claude-sonnet-5-5", "attempts": 1, "outcome": "ok", "elapsedMs": 1180 }
+]
+```
+
+The top level `provider`, `model`, and `fallbackIndex` name the target that answered
+(`fallbackIndex` is `-1` for the primary). `attempts` counts every request sent across all targets,
+`retries` counts the retries between them, and `retryDelayMs` and `queueWaitMs` are the time spent
+waiting on backoff and on a rate limit.
+
+## Cache hits and joins
+
+For `cachedCall`, `cache` is set only when no attempt of the call's own ran:
+
+| Value  | Meaning                                                                       |
+| ------ | ----------------------------------------------------------------------------- |
+| `hit`  | The answer came from the cache                                                |
+| `join` | The call shared another caller's in flight request instead of sending its own |
+
+A miss has no `cache` field, because the call then ran like any other. Hits and joins are counted
+but never timed, or a stored value would pull the percentiles toward zero and a shared call would be
+counted twice.
+
+## What is never recorded
+
+| Never recorded                     | What you get instead                                                                                   |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Prompt text and output text        | Token counts only, in `usage`                                                                          |
+| The error message                  | `error.type`, `error.code`, and `error.status`                                                         |
+| Any `context` key you did not list | Only the keys you allowlist, see [Context and Enrichment](/docs/extensions/logger/features/enrichment) |
+
+Error messages can contain prompt text, so they stay out of every record. Use the
+[OpenTelemetry integration](/docs/integrations/otel/features/content-capture) when you need content,
+which has redaction, truncation, and per call gating built for it.
+
+## Edge cases
+
+<Accordions>
+  <Accordion title="A request that never reached a provider">
+    An attempt rejected before anything was sent, such as `unsupported_capability`, does not count
+    toward `attempts` or `attemptMs`. The call still records its outcome as normal.
+  </Accordion>
+  <Accordion title="Usage spent on an attempt that then failed">
+    The record carries that `usage` and sets `usageFailed: true`, so the tokens you paid for still
+    show up.
+  </Accordion>
+  <Accordion title="A middleware that answered the call">
+    When a `wrap` returns without calling `next()`, `shortCircuitedBy` names it and the call is not
+    timed, since no provider was involved.
+  </Accordion>
+  <Accordion title="A thrown value that is not an LLMError">
+    The outcome is `error` with `error.type` set to `unknown`. Errors are recognised by their shape
+    rather than `instanceof`, because the ESM and CJS builds of `vern-llm` have separate classes.
+  </Accordion>
+</Accordions>

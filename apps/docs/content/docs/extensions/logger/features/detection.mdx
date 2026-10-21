@@ -1,0 +1,112 @@
+---
+title: Detection and Sampling
+description: How the logger marks slow calls, groups repeated errors, writes circuit breaker changes on their own, and samples plain successes.
+---
+
+After a record is built it passes through a short pipeline. Each step is independent, and the order
+is fixed:
+
+```text title="logger-pipeline.txt"
+record
+  → stats        timed calls feed the percentiles, the rest are counted
+  → slow call    over the threshold or the live percentile, marks the record
+  → level        from the outcome, raised to warn when slow
+  → error group  the first of a burst passes, the rest are counted
+  → sampling     plain successes only
+  → level filter below `level` is dropped
+  → sink
+```
+
+## Slow calls
+
+Off until you set a rule. A call is slow when it is over a fixed threshold, over its own series'
+live percentile, or either:
+
+```ts title="detection-slow-call.ts"
+loggerMiddleware({
+  slowCall: { thresholdMs: 8_000, aboveLivePercentile: 0.99 },
+});
+```
+
+A slow call gets `reason: 'slow'` and its level is raised to `warn`, never lowered, so a failure
+that is also slow keeps its own level. Only timed calls can be slow.
+
+`aboveLivePercentile` compares a call with the p99 of its own provider and model, so "slow" means
+slow for that target. It waits for `minSamples` calls first, and the percentile it reads is cached
+and refreshed as the window rotates, so the check costs nothing per call.
+
+## Error groups
+
+Repeated errors become one entry instead of a flood. The first error for a fingerprint, which is
+`provider` plus `type` plus `code`, is written on its own. The rest in that window are counted, and
+one `error_group` entry is written when the window closes:
+
+```json title="error-group.json"
+{
+  "kind": "error_group",
+  "v": 1,
+  "provider": "primary",
+  "type": "api",
+  "code": "server_error",
+  "count": 214,
+  "windowMs": 60000,
+  "firstRequestId": "req_a1",
+  "lastRequestId": "req_zz"
+}
+```
+
+`count` includes the first error. Only `error` outcomes are grouped: `rejected` and `aborted` calls
+are not faults, so they never hide one. At most 500 fingerprints are tracked at once, and one past
+that is simply written on its own. Set `errorGrouping: false` to write every error. `dispose()`
+writes any pending group, and after it every error passes on its own.
+
+## Circuit breaker changes
+
+A breaker changing state during a call is recorded in that call's `breaker` list. A change outside
+any call has no record to join, so it is written as its own `breaker` entry:
+
+```json title="breaker-entry.json"
+{
+  "kind": "breaker",
+  "v": 1,
+  "provider": "primary",
+  "model": "gpt-4o",
+  "from": "closed",
+  "to": "open",
+  "consecutiveFailures": 5
+}
+```
+
+This happens when you call `openCircuit()` by hand, or when a shared
+[Redis breaker](/docs/integrations/redis/features/circuit-breaker) was changed by another process.
+An entry is written at `warn` when the circuit opens and `info` otherwise.
+
+## Tail sampling
+
+Only plain successes can be dropped. Errors, slow calls, aborts, rejections, and any call that saw a
+breaker change are always kept:
+
+```ts title="detection-sampling.ts"
+loggerMiddleware({
+  sample: { success: 0.1 }, // keep 10% of plain successes
+});
+```
+
+The decision is a hash of the `requestId`, so the same request is kept or dropped the same way
+every time, with no random state to seed.
+
+<Callout type="info">
+  Sampling happens after stats, so a 1% sample rate does not make percentiles less accurate. The
+  dropped calls were still counted and timed.
+</Callout>
+
+## Levels
+
+| Level   | What gets it                                                     |
+| ------- | ---------------------------------------------------------------- |
+| `info`  | `ok` and `aborted` calls, summaries, a breaker that did not open |
+| `warn`  | Slow calls, `rejected` calls, a breaker opening                  |
+| `error` | `error` calls, `error_group` entries                             |
+
+`level` is the lowest one that reaches the sink. The default `info` writes everything above. The
+logger never writes below `info`, so `debug` behaves the same as `info`.

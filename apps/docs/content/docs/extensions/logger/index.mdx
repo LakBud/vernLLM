@@ -1,0 +1,154 @@
+---
+title: Logger Overview
+description: One structured record per call, rolling latency percentiles, and slow call and error detection for every VernLLM call
+---
+
+`vern-llm-logger` is one middleware that writes a structured record for every call. It keeps
+rolling latency percentiles per provider and model, marks slow calls, groups repeated errors,
+samples plain successes, and writes periodic summaries. Retries, fallbacks, rate limit waits, cache
+hits, and circuit breaker changes all land in the record, with no change to how you call VernLLM.
+
+<Callout type="info">
+  A failure inside the logger never changes a call. Prompt text, output text, and error messages are
+  never recorded, only the error `type`, `code`, and `status`. For traces, metrics, and opt in
+  content capture, use the [OpenTelemetry integration](/docs/integrations/otel).
+</Callout>
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-logger # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-logger # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-logger # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-logger # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` is a peer dependency, so the package shares the copy your app already uses, and it has
+no other dependency. It needs a `vern-llm` release that includes `CallResult.cache`, which is how it
+tells a cache hit from a shared in flight call.
+
+<Cards>
+  <Card title="Features" href="/docs/extensions/logger/features">
+    Call records, rolling stats, detection, sinks, and enrichment.
+  </Card>
+  <Card title="API Reference" href="/docs/extensions/logger/API-reference">
+    Every option, and every field of every entry.
+  </Card>
+</Cards>
+
+## Basic usage
+
+```ts title="logger-basic-usage.ts"
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+import { jsonSink, loggerMiddleware } from 'vern-llm-logger';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const logger = loggerMiddleware({ sink: jsonSink() });
+
+const llm = new VernLLM({
+  client: openai,
+  model: 'gpt-4o',
+  middleware: [logger],
+});
+```
+
+Every call now writes one line of JSON to `console.log`. Pass `consoleSink()` for a readable line
+in a terminal, or any object with a `write(level, entry)` method to send entries anywhere else, see
+[Sinks](/docs/extensions/logger/features/sinks).
+
+Register the middleware once per `VernLLM`: two entries in one `middleware` array throw at
+construction. One `loggerMiddleware()` object can serve several `VernLLM` instances, and they then
+share its stats.
+
+Call `dispose()` on shutdown. It stops the timer and writes any error groups still pending:
+
+```ts title="logger-dispose.ts"
+process.on('SIGTERM', () => {
+  logger.dispose();
+});
+```
+
+## What one call looks like
+
+A call whose primary timed out once and was answered by a fallback:
+
+<Tabs items={['JSON', 'Console']}>
+  <Tab value="JSON">
+
+```json title="call-record.json"
+{
+  "kind": "call",
+  "v": 1,
+  "ts": "2026-10-21T16:14:03.512Z",
+  "requestId": "req_abc",
+  "outcome": "ok",
+  "level": "info",
+  "provider": "fallback[0]",
+  "model": "claude-sonnet-5-5",
+  "fallbackIndex": 0,
+  "attempts": 2,
+  "retries": 0,
+  "streaming": false,
+  "durationMs": 9412.4,
+  "attemptMs": 1210.8,
+  "queueWaitMs": 0,
+  "retryDelayMs": 0,
+  "outputTokensPerSec": 71.853,
+  "path": [
+    {
+      "provider": "primary",
+      "model": "gpt-4o",
+      "attempts": 1,
+      "outcome": "error",
+      "elapsedMs": 8120,
+      "errorCode": "request_timeout"
+    },
+    {
+      "provider": "fallback[0]",
+      "model": "claude-sonnet-5-5",
+      "attempts": 1,
+      "outcome": "ok",
+      "elapsedMs": 1210.8
+    }
+  ],
+  "usage": { "promptTokens": 412, "completionTokens": 87, "totalTokens": 499 }
+}
+```
+
+  </Tab>
+  <Tab value="Console">
+
+```text title="call-record.txt"
+[VernLLM] ok fallback[0]/claude-sonnet-5-5 9.41s 2 attempts req_abc
+```
+
+  </Tab>
+</Tabs>
+
+See [Call Records](/docs/extensions/logger/features/call-records) for how each field is decided.

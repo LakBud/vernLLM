@@ -1,0 +1,66 @@
+---
+title: API Reference Overview
+description: The public exports of vern-llm-logger, and where each option and entry is documented
+---
+
+`vern-llm-logger` has a small surface: one factory, one ref, three sinks, one helper for
+dimensions, and the types for options and entries.
+
+| Export                    | Kind     | What it is                                                                                                                           |
+| ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `loggerMiddleware`        | Function | Takes `LoggerMiddlewareOptions` and returns one middleware with `stats` and `dispose()`. Register it once per `VernLLM`.             |
+| `loggerMiddlewareRef`     | Constant | The `MiddlewareRef` of that entry, so a second one in the same `VernLLM` is rejected.                                                |
+| `jsonSink`                | Function | One JSON line per entry, see [Sinks](/docs/extensions/logger/features/sinks).                                                        |
+| `consoleSink`             | Function | One readable line per entry.                                                                                                         |
+| `memorySink`              | Function | Keeps entries in an array, for tests.                                                                                                |
+| `fromEvent`               | Function | A dimension read from a kept custom event, see [Rolling Stats](/docs/extensions/logger/features/stats#dimensions).                   |
+| `LoggerMiddlewareOptions` | Type     | Every option, see [Configuration](/docs/extensions/logger/API-reference/configuration).                                              |
+| `LoggerMiddleware`        | Type     | The middleware plus `stats` and `dispose()`.                                                                                         |
+| `LogEntry`                | Type     | `CallLogRecord`, `SummaryEntry`, `ErrorGroupEntry`, or `BreakerEntry`, see [Entries](/docs/extensions/logger/API-reference/entries). |
+
+```ts title="logger-exports.ts"
+import {
+  loggerMiddleware,
+  loggerMiddlewareRef,
+  jsonSink,
+  consoleSink,
+  memorySink,
+  fromEvent,
+} from 'vern-llm-logger';
+import type {
+  LoggerMiddleware,
+  LoggerMiddlewareOptions,
+  LogSink,
+  LogLevel,
+  LogEntry,
+  CallLogRecord,
+  SummaryEntry,
+  ErrorGroupEntry,
+  BreakerEntry,
+  StatsApi,
+  StatsSnapshot,
+  SeriesSnapshot,
+  MetricName,
+} from 'vern-llm-logger';
+```
+
+<Cards>
+  <Card title="Configuration" href="/docs/extensions/logger/API-reference/configuration">
+    Every option with its type and default, ordering, and construction errors.
+  </Card>
+  <Card title="Entries" href="/docs/extensions/logger/API-reference/entries">
+    Every field of every entry the logger writes.
+  </Card>
+</Cards>
+
+## The returned middleware
+
+`loggerMiddleware()` returns a normal middleware, so it goes in the `middleware` array like any
+other. Two members are added to it:
+
+| Member                               | What it does                                                                                    |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `stats.snapshot()`                   | Every live series with its quantiles and counters                                               |
+| `stats.quantile(filter, q, metric?)` | One quantile over the window, `undefined` below `minSamples`. `metric` defaults to `durationMs` |
+| `stats.reset()`                      | Clears every series and counter                                                                 |
+| `dispose()`                          | Stops the timer and writes pending error groups. Call it on shutdown                            |

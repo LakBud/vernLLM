@@ -18,13 +18,50 @@ only what you use.
 
 See [Integrations](/docs/integrations) for the packages that reach outside your process.
 
+## Available extensions
+
+<Cards>
+  <Card title="Logger" href="/docs/extensions/logger">
+    One structured record per call, rolling latency percentiles, slow call and error detection.
+  </Card>
+</Cards>
+
 ## Planned extensions
 
-| Package           | Capability                                                                         |
-| ----------------- | ---------------------------------------------------------------------------------- |
-| `vern-llm-logger` | One structured record per call, rolling percentiles, slow call and error detection |
-| `vern-llm-usage`  | Cost from your own price table, token and dollar budgets                           |
-| `vern-llm-router` | Order targets by rules, health, latency, or cost                                   |
-| `vern-llm-policy` | Remove forbidden targets, fail safe, audit every decision                          |
+| Package           | Capability                                                |
+| ----------------- | --------------------------------------------------------- |
+| `vern-llm-usage`  | Cost from your own price table, token and dollar budgets  |
+| `vern-llm-router` | Order targets by rules, health, latency, or cost          |
+| `vern-llm-policy` | Remove forbidden targets, fail safe, audit every decision |
 
 None of these has shipped yet. This section grows as each one lands.
+
+## What every extension follows
+
+Extensions are plain [middleware](/docs/core/middleware), so each one is learned once and they
+compose without knowing about each other. These rules hold for every package, and the logger is the
+reference implementation.
+
+| Rule                             | What it means                                                                                                                       |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| No imports between extensions    | Each package depends only on `vern-llm`. Anything one reads from another goes through `ctx.state`, custom events, or a shared shape |
+| One instance per `VernLLM`       | A second one in the same `middleware` array throws at construction                                                                  |
+| A fixed place in the nesting     | Order comes from a numeric `position`, so the order you list them in never matters                                                  |
+| Namespaced, versioned events     | Custom events are named `<package>.<event>` and carry `v: 1` in their data                                                          |
+| Own diagnostics through `logger` | A `logger` option for the package's own warnings, prefixed `[VernLLM] <package>:`                                                   |
+| Never changes a call by accident | Only control extensions (usage, policy, router) change an outcome, and only by a documented means                                   |
+
+Every call nests the same way, whichever order you build the extensions in:
+
+```text title="extension-nesting.txt"
+logger   position 'outermost'   sees everything, including denials
+ └ policy position -100         removes forbidden targets
+    └ usage position -50        budgets, priced at the most expensive allowed target
+       └ router position 0      orders whatever is left
+          └ attempts, retries, fallback
+```
+
+<Callout type="info">
+  The logger is outermost, so its record includes calls that policy or a budget rejected. A
+  rejection is logged at `warn` as `rejected`, not as an error.
+</Callout>

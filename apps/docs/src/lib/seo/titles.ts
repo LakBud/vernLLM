@@ -17,9 +17,14 @@ const integrationLabels: Record<string, string> = {
   bedrock: 'AWS Bedrock',
 };
 
+const extensionLabels: Record<string, string> = {
+  logger: 'Logger',
+};
+
 function sectionLabel(slugs: string[]): string | undefined {
-  const [section, integration] = slugs;
-  if (section === 'integrations') return integration ? integrationLabels[integration] : undefined;
+  const [section, name] = slugs;
+  if (section === 'integrations') return name ? integrationLabels[name] : undefined;
+  if (section === 'extensions') return name ? extensionLabels[name] : undefined;
   return section ? sectionLabels[section] : undefined;
 }
 

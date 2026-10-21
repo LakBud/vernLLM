@@ -1,0 +1,80 @@
+---
+title: Context and Enrichment
+description: Put tenant ids, trace ids, and events from other extensions on every record with the context allowlist, enrich, and customEvents.
+---
+
+A record says what happened to a call. Three options say whose call it was and what else was going
+on, and none of them can leak more than you allow.
+
+| Option         | Adds                                              | Lands in         |
+| -------------- | ------------------------------------------------- | ---------------- |
+| `context`      | Allowlisted keys from the call's `context`        | `record.context` |
+| `enrich`       | Fields computed from the call, such as a trace id | `record.fields`  |
+| `customEvents` | Events a middleware reported through `ctx.emit`   | `record.custom`  |
+
+## Context
+
+`context` is an allowlist. Only the keys you name are copied from the call's `context`, so a key
+holding something sensitive never reaches a log by accident:
+
+```ts title="enrichment-context.ts"
+const logger = loggerMiddleware({ context: ['tenantId', 'feature'] });
+
+await llm.call({
+  userContent: 'Summarize this',
+  jsonMode: false,
+  context: { tenantId: 'acme', feature: 'summaries', userEmail: 'a@b.com' },
+});
+// record.context is { tenantId: 'acme', feature: 'summaries' }, the email is dropped
+```
+
+## Enrich
+
+`enrich` takes one function or a list. Each runs on its own, so a helper that throws loses only its
+own fields, and the results are merged left to right into `fields`. Later helpers win on a shared
+key.
+
+```ts title="enrichment-enrich.ts"
+import { loggerMiddleware } from 'vern-llm-logger';
+import { otelLogFields } from 'vern-llm-otel';
+
+const logger = loggerMiddleware({
+  enrich: [otelLogFields, () => ({ region: process.env.REGION ?? 'unknown' })],
+});
+```
+
+`otelLogFields(ctx)` returns `{ traceId, spanId }` for the call, so every record can be opened from
+a trace. It works in either registration order, because the ids travel through `ctx.state` and
+neither package imports the other. See [OpenTelemetry configuration](/docs/integrations/otel/API-reference/configuration#otellogfields).
+
+<Callout type="warn">
+  An enricher must return plain JSON synchronously. A promise cannot be waited for without delaying
+  the call, so an async enricher adds nothing and its rejection is logged as `[VernLLM] logger:
+  enrich[0] failed`.
+</Callout>
+
+## Custom events
+
+A middleware can report its own events through `ctx.emit`. The logger keeps the ones matching
+`customEvents` and puts them in `record.custom`, a list of payloads per event name:
+
+```ts title="enrichment-custom-events.ts"
+loggerMiddleware({ customEvents: ['myapp.*'] });
+```
+
+The first party namespaces `usage.*`, `policy.*`, and `router.*` are always kept, so extensions show
+up with no configuration. Pass the object form to opt out of them:
+
+```ts title="enrichment-custom-events-opt-out.ts"
+loggerMiddleware({ customEvents: { defaults: false, names: ['myapp.cache_warm'] } });
+```
+
+A pattern is a plain name or a `prefix.*`. Anything else throws at construction. Kept events can
+also become [dimensions](/docs/extensions/logger/features/stats#dimensions) with `fromEvent`.
+
+## Working with other extensions
+
+The logger never imports another extension, and none imports it. They meet through `ctx.state`
+(ids and fields that `enrich` reads) and through namespaced, versioned events (which `customEvents`
+keeps). Adding an extension later means adding a line to `enrich` or a name to `dimensions`, with no
+change to how the logger works.

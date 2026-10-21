@@ -1,0 +1,73 @@
+---
+title: Troubleshooting
+description: Symptoms and fixes for missing records, empty percentiles, absent trace ids, and lost entries on shutdown
+---
+
+## Common symptoms
+
+<Accordions>
+  <Accordion title="No records appear">
+    Check three things. The `level` option may sit above what you expect, since `level: 'warn'`
+    drops every `ok` call. `sample.success` may be below 1, which drops that share of plain
+    successes. And the sink may be failing quietly: a `write` that throws is caught, and the failure
+    is logged as `[VernLLM] logger: sink.write failed` through the package `logger`, which is
+    `'silent'` if you set it so.
+  </Accordion>
+  <Accordion title="stats.quantile returns undefined, or quantiles is empty">
+    A series needs `minSamples` calls in the window (default 20) before it reports a number. The
+    window also rolls: a series that has seen no traffic for a full `window.durationMs` is empty
+    again. Only successful provider calls are timed, so a provider that is only failing, or only
+    answering from cache, has counters but no percentiles.
+  </Accordion>
+  <Accordion title="Cache hits and joins have no cache field">
+    The logger reads `CallResult.cache` to tell a stored value from a shared in flight call. A
+    `vern-llm` release without it never sets that field, so both records look alike. Upgrade
+    `vern-llm`.
+  </Accordion>
+  <Accordion title="Only the first error of a burst is written">
+    That is error grouping. The first error for each provider, type, and code is written on its own,
+    and the rest are counted into one `error_group` entry when the window closes. Set
+    `errorGrouping: false` to write every error, see [Error
+    groups](/docs/extensions/logger/features/detection#error-groups).
+  </Accordion>
+  <Accordion title="Trace ids are missing from the records">
+    `otelLogFields` returns nothing when `otelMiddleware()` is not registered on the same `VernLLM`,
+    or when the call span has no valid trace context, for example with no OpenTelemetry SDK started.
+    Register both middleware, and see [Context and
+    Enrichment](/docs/extensions/logger/features/enrichment#enrich).
+  </Accordion>
+  <Accordion title="A dimension never splits the series">
+    An extractor that throws, or returns anything but a non empty string, drops only that dimension
+    for that call. Test it against a record from a `memorySink`. Reserved names (`provider`,
+    `model`, `streaming`, `metric`) throw at construction instead.
+  </Accordion>
+  <Accordion title="Pending error groups and summaries are lost on shutdown">
+    Plain records are written the moment a call ends, so they are never at risk. Error groups and
+    summaries are written by a timer that never keeps the process alive, so a short lived process
+    can exit before the next tick. Call `logger.dispose()` before the process ends, or before a
+    serverless handler returns, and it writes every pending error group.
+  </Accordion>
+</Accordions>
+
+## A `[VernLLM] logger:` line in the logs
+
+The logger caught a failure in one of its own steps, or in a callback you gave it, logged it, and
+carried on, so the call itself was unaffected. The line is `[VernLLM] logger: <operation> failed`
+with `message` and `stack`. The operation says where:
+
+| Operation                                                                     | Where                                                     |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `startCall`, `registerRecorder`, `readRecorder`                               | Opening the call's recorder. The call runs with no record |
+| `openAttempt`, `attemptFailed`, `responded`                                   | Timing one attempt                                        |
+| `handleEvent`                                                                 | Applying a VernLLM event to the record                    |
+| `markStream`, `observeStream`                                                 | Following a stream until `finalResult` settles            |
+| `finish`                                                                      | Building the record                                       |
+| `stats.observe`, `slowCall`, `errorGroup`, `sample`                           | The pipeline steps after a record is built                |
+| `sink.write`                                                                  | Your sink threw, or returned a promise that rejected      |
+| `enrich[0]`, `enrich[1]`, ...                                                 | The enrich helper at that index                           |
+| `dimension.<name>`                                                            | The dimension extractor with that name                    |
+| `scheduler.start`, `flushErrorGroups`, `summary`, `onSummary`, `disposeFlush` | The timer's work, and your `onSummary` callback           |
+
+One warning is not a failure: `more than N distinct series, the rest are grouped as __other__`. A
+dimension has more values than `maxSeries` allows, so the extras share one series. Find the
+dimension holding an id, or raise `maxSeries`.

@@ -21,13 +21,13 @@ export default function Layout({ children }: LayoutProps<'/docs'>) {
           },
           {
             title: 'Integrations',
-            description: 'Take your LLM calls further',
+            description: 'Integrate your LLM calls',
             icon: <Blocks className="size-4 text-fd-primary" />,
             url: '/docs/integrations',
           },
           {
             title: 'Extensions',
-            description: 'Add capabilities inside VernLLM',
+            description: 'Extend your LLM calls',
             icon: <Puzzle className="size-4 text-fd-primary" />,
             url: '/docs/extensions',
           },

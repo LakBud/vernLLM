@@ -1,7 +1,7 @@
 import Image from 'next/image';
 import { siX } from 'simple-icons';
 
-import { appName, gitConfig } from './shared';
+import { appName, docsRoute, gitConfig } from './shared';
 
 import type { BaseLayoutProps, LinkItemType } from 'fumadocs-ui/layouts/shared';
 
@@ -17,6 +17,15 @@ export const xLink: LinkItemType = {
     </svg>
   ),
 };
+
+/** A nav link into one docs section, lit while any page inside it is open. */
+function docsLink(
+  text: string,
+  path: string,
+  active: 'url' | 'nested-url' = 'nested-url',
+): LinkItemType {
+  return { text, url: `${docsRoute}${path}`, active };
+}
 
 export function baseOptions(): BaseLayoutProps {
   return {
@@ -35,26 +44,13 @@ export function baseOptions(): BaseLayoutProps {
       ),
     },
     links: [
-      {
-        text: 'Get Started',
-        url: '/docs',
-        active: 'nested-url',
-      },
-      {
-        text: 'Features',
-        url: '/docs/core',
-        active: 'nested-url',
-      },
-      {
-        text: 'Customization',
-        url: '/docs/customization',
-        active: 'nested-url',
-      },
-      {
-        text: 'Adapters',
-        url: '/docs/adapters',
-        active: 'nested-url',
-      },
+      // Exact match: every docs page lives under /docs, so a nested match would keep this lit
+      // while another section is open.
+      docsLink('Get Started', '', 'url'),
+      docsLink('Features', '/core'),
+      docsLink('Adapters', '/adapters'),
+      docsLink('Extensions', '/extensions'),
+      docsLink('Integrations', '/integrations'),
       xLink,
     ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,

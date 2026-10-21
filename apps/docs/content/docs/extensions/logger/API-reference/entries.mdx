@@ -1,0 +1,252 @@
+---
+title: Entries
+description: Every field of the call, summary, error group, and breaker entries that vern-llm-logger writes to a sink.
+---
+
+A sink receives one of four entries, told apart by `kind`. Every entry carries `v: 1`. Fields that do
+not apply are left out of the entry, never written as `null` or `undefined`.
+
+```ts title="log-entry.ts"
+type LogEntry = CallLogRecord | SummaryEntry | ErrorGroupEntry | BreakerEntry;
+```
+
+## Call record
+
+`kind: 'call'`, written once for every call, see [Call Records](/docs/extensions/logger/features/call-records).
+
+<TypeTable
+  type={{
+    ts: {
+      description: 'ISO timestamp of when the call ended.',
+      type: 'string',
+      required: true,
+    },
+    requestId: {
+      description: 'The VernLLM request id, the same one every other log line carries.',
+      type: 'string',
+      required: true,
+    },
+    outcome: {
+      description:
+        'How the call ended. rejected is a deliberate denial, logged at warn and never grouped with errors.',
+      type: "'ok' | 'error' | 'aborted' | 'rejected'",
+      required: true,
+    },
+    level: {
+      description: 'The level the entry was written at.',
+      type: "'info' | 'warn' | 'error'",
+      required: true,
+    },
+    reason: {
+      description: 'Set when the call was marked slow.',
+      type: "'slow'",
+    },
+    provider: {
+      description: 'The target that answered. Not set when the call failed.',
+      type: 'string',
+    },
+    model: {
+      description: 'The model that answered.',
+      type: 'string',
+    },
+    fallbackIndex: {
+      description: '-1 when the primary answered, otherwise the index into fallback.',
+      type: 'number',
+    },
+    attempts: {
+      description:
+        'Every request sent, across all targets. A request rejected before it was sent is not counted.',
+      type: 'number',
+      required: true,
+    },
+    retries: {
+      description: 'Retries between attempts.',
+      type: 'number',
+      required: true,
+    },
+    streaming: {
+      description: 'The call returned a stream.',
+      type: 'boolean',
+      required: true,
+    },
+    cache: {
+      description: 'Only for cachedCall when no attempt of its own ran. A miss has no cache field.',
+      type: "'hit' | 'join'",
+    },
+    shortCircuitedBy: {
+      description: 'The name of the middleware that answered without calling next.',
+      type: 'string',
+    },
+    durationMs: {
+      description: 'The whole call, from start to end.',
+      type: 'number',
+      required: true,
+    },
+    attemptMs: {
+      description: 'The answering attempt, from request to response or first chunk.',
+      type: 'number',
+    },
+    ttftMs: {
+      description: 'Call start to first content chunk. Streams only.',
+      type: 'number',
+    },
+    queueWaitMs: {
+      description: 'Time spent waiting on a rate limit.',
+      type: 'number',
+      required: true,
+    },
+    retryDelayMs: {
+      description: 'Time spent in retry backoff.',
+      type: 'number',
+      required: true,
+    },
+    outputTokensPerSec: {
+      description:
+        'Completion tokens over the generation window. Left out when either is missing or zero.',
+      type: 'number',
+    },
+    path: {
+      description:
+        'One entry per target tried, in order: provider, model, attempts, outcome, elapsedMs, errorCode.',
+      type: 'PathEntry[]',
+      required: true,
+    },
+    usage: {
+      description:
+        'Token counts only: prompt, completion, total, and reasoning or cache tokens when reported.',
+      type: 'UsageFields',
+    },
+    usageFailed: {
+      description: 'The usage is from an attempt whose post processing then failed.',
+      type: 'true',
+    },
+    error: {
+      description: 'Never the message, which can contain prompt text.',
+      type: '{ type: string; code?: string; status?: number }',
+    },
+    breaker: {
+      description: 'Circuit breaker changes that happened during the call.',
+      type: 'BreakerChange[]',
+    },
+    middleware: {
+      description:
+        'Notes from middleware: a short circuit, a transform and its patched fields, or a skipped entry.',
+      type: 'MiddlewareNote[]',
+    },
+    custom: {
+      description: 'Kept custom events, a list of payloads per event name.',
+      type: 'Record<string, JsonValue[]>',
+    },
+    context: {
+      description: 'Allowlisted context keys only.',
+      type: 'Record<string, JsonValue>',
+    },
+    fields: {
+      description: 'Whatever the enrich helpers returned, merged in order.',
+      type: 'Record<string, JsonValue>',
+    },
+  }}
+/>
+
+Times are in milliseconds, rounded to the microsecond.
+
+## Summary entry
+
+`kind: 'summary'`, one per live series, written when `summary` is set. See
+[Rolling Stats](/docs/extensions/logger/features/stats#periodic-summaries).
+
+<TypeTable
+  type={{
+    series: {
+      description:
+        'metric, dimensions, count, quantiles keyed by quantile as a string, and the errors, rejections, aborts, and cacheHits counters.',
+      type: 'SeriesSnapshot',
+      required: true,
+    },
+    exemplar: {
+      description:
+        'On the durationMs series only: the slowest call in the window, with its requestId and durationMs.',
+      type: '{ requestId: string; durationMs: number; fields?: Record<string, JsonValue> }',
+    },
+  }}
+/>
+
+## Error group entry
+
+`kind: 'error_group'`, written when an error window closes. See
+[Error groups](/docs/extensions/logger/features/detection#error-groups).
+
+<TypeTable
+  type={{
+    provider: {
+      description: 'The target the errors came from.',
+      type: 'string',
+      required: true,
+    },
+    type: {
+      description: 'The LLMError type.',
+      type: 'string',
+      required: true,
+    },
+    code: {
+      description: 'The LLMError code, when it has one.',
+      type: 'string',
+    },
+    count: {
+      description: 'Errors in the window, including the first one, which was written on its own.',
+      type: 'number',
+      required: true,
+    },
+    windowMs: {
+      description: 'The length of the window.',
+      type: 'number',
+      required: true,
+    },
+    firstRequestId: {
+      description: 'The first error of the window.',
+      type: 'string',
+      required: true,
+    },
+    lastRequestId: {
+      description: 'The last error counted.',
+      type: 'string',
+      required: true,
+    },
+  }}
+/>
+
+## Breaker entry
+
+`kind: 'breaker'`, written for a circuit breaker change outside any call. See
+[Circuit breaker changes](/docs/extensions/logger/features/detection#circuit-breaker-changes).
+
+<TypeTable
+  type={{
+    provider: {
+      description: 'The target whose breaker changed.',
+      type: 'string',
+      required: true,
+    },
+    model: {
+      description: 'The model of that target.',
+      type: 'string',
+      required: true,
+    },
+    from: {
+      description: 'The previous state.',
+      type: "'closed' | 'open' | 'half-open'",
+      required: true,
+    },
+    to: {
+      description:
+        'The new state. An entry is written at warn when this is open, otherwise at info.',
+      type: "'closed' | 'open' | 'half-open'",
+      required: true,
+    },
+    consecutiveFailures: {
+      description: 'The failure count when the state changed.',
+      type: 'number',
+      required: true,
+    },
+  }}
+/>

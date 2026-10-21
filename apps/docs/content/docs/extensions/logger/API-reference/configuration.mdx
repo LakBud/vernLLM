@@ -1,0 +1,167 @@
+---
+title: Configuration
+description: Every loggerMiddleware option with its type and default, how it orders against other middleware, and what throws at construction.
+---
+
+Every option is optional. `loggerMiddleware()` with no arguments works and writes one JSON line per
+call. A bad option throws a plain `Error` at construction, never during a call.
+
+## Output
+
+<TypeTable
+  type={{
+    sink: {
+      description: 'Where entries go. Any object with a write method works.',
+      type: 'LogSink',
+      default: 'jsonSink()',
+    },
+    level: {
+      description: 'The lowest level that reaches the sink.',
+      type: "'debug' | 'info' | 'warn' | 'error'",
+      default: "'info'",
+    },
+    sample: {
+      description:
+        'The fraction of plain successes kept, from 0 to 1. Everything else is always kept.',
+      type: '{ success?: number }',
+      default: '{ success: 1 }',
+    },
+    errorGrouping: {
+      description: 'Write one error_group entry per window instead of every repeated error.',
+      type: 'boolean',
+      default: 'true',
+    },
+    summary: {
+      description:
+        'Write every live series to the sink on a timer, and hand the entries to onSummary.',
+      type: '{ everyMs?: number; onSummary?: (entries) => void }',
+      default: 'off',
+    },
+  }}
+/>
+
+`summary.everyMs` defaults to 60 000 and must be at least 1000.
+
+## Stats
+
+<TypeTable
+  type={{
+    percentiles: {
+      description: 'Quantiles to report, ascending and unique, each strictly between 0 and 1.',
+      type: 'number[]',
+      default: '[0.5, 0.9, 0.95, 0.99]',
+    },
+    window: {
+      description:
+        'The rolling window. Each slot must cover at least one second, and slots is an integer from 2 to 60.',
+      type: '{ durationMs?: number; slots?: number }',
+      default: '{ durationMs: 60000, slots: 6 }',
+    },
+    minSamples: {
+      description: 'Samples a series needs before its percentiles are reported or trusted.',
+      type: 'number',
+      default: '20',
+    },
+    maxSeries: {
+      description:
+        'Cap on distinct dimension sets. Overflow goes to one shared __other__ set, with one warning.',
+      type: 'number',
+      default: '200',
+    },
+    dimensions: {
+      description:
+        'Split percentiles by any string a record yields. The names provider, model, streaming, and metric are reserved.',
+      type: 'Record<string, (record) => string | undefined>',
+      default: 'none',
+    },
+  }}
+/>
+
+## Detection
+
+<TypeTable
+  type={{
+    slowCall: {
+      description: 'Mark slow calls. Off unless one of the two fields is set.',
+      type: '{ thresholdMs?: number; aboveLivePercentile?: number }',
+      default: 'none',
+    },
+  }}
+/>
+
+`thresholdMs` is a fixed limit in milliseconds. `aboveLivePercentile` is a quantile strictly between
+0 and 1, compared with the live percentile of the call's own provider and model once `minSamples`
+calls are in the window. Either one marks a call slow.
+
+## Record content
+
+<TypeTable
+  type={{
+    context: {
+      description: 'Allowlisted keys copied from the call context into record.context.',
+      type: 'string[]',
+      default: '[]',
+    },
+    enrich: {
+      description:
+        'One function or a list. Each is guarded on its own and merged left to right into record.fields.',
+      type: '(ctx) => Record<string, JsonValue> | undefined',
+      default: 'none',
+    },
+    customEvents: {
+      description:
+        'Custom events to keep. A list adds to the defaults, and the object form can switch them off.',
+      type: 'string[] | { defaults?: boolean; names?: string[] }',
+      default: "['usage.*', 'policy.*', 'router.*']",
+    },
+  }}
+/>
+
+## Diagnostics
+
+<TypeTable
+  type={{
+    logger: {
+      description:
+        "The package's own diagnostics, such as a failed step or a series overflow. Not where entries go.",
+      type: "Logger | 'silent'",
+      default: 'A ConsoleLogger',
+    },
+    name: {
+      description: "The middleware entry's name, shown in VernLLM middleware events.",
+      type: 'string',
+      default: "'logger'",
+    },
+  }}
+/>
+
+`sink` and `logger` are separate on purpose. `sink` receives call logs, while `logger` receives the
+package's own warnings and failures, prefixed `[VernLLM] logger:`, see
+[Troubleshooting](/docs/extensions/logger/troubleshooting#a-vernllm-logger-line-in-the-logs).
+
+## Ordering
+
+The entry wraps as `outermost`, so its record sees the whole call, including a rejection by anything
+inside it. Among several `outermost` entries the one registered first wraps outside. There is no
+`priority` or `runsAfter` option: the logger does not depend on being first, and it never reads
+another extension's output, only `ctx.state` and events.
+
+## Errors at construction
+
+Each check throws `loggerMiddleware: <field> must be ...`:
+
+| Field                          | Rule                                                             |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `sink`                         | An object with a `write` function                                |
+| `level`                        | One of `debug`, `info`, `warn`, `error`                          |
+| `percentiles`                  | A non empty, ascending, unique array of numbers in (0, 1)        |
+| `window.slots`                 | An integer from 2 to 60                                          |
+| `window.durationMs`            | A positive number, at least 1000 ms per slot                     |
+| `slowCall.thresholdMs`         | A positive number                                                |
+| `slowCall.aboveLivePercentile` | A number in (0, 1)                                               |
+| `sample.success`               | A number from 0 to 1                                             |
+| `customEvents`                 | Plain names or `prefix.*` patterns, nothing else                 |
+| `dimensions`                   | Functions, none named `provider`, `model`, `streaming`, `metric` |
+| `enrich`                       | A function, or an array of functions                             |
+| `summary.everyMs`              | A number of at least 1000                                        |
+| `logger`                       | A `Logger` or `'silent'`                                         |

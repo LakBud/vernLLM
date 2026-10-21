@@ -1,0 +1,5 @@
+{
+  "title": "Features",
+  "icon": "Sparkles",
+  "pages": ["index", "call-records", "stats", "detection", "sinks", "enrichment"]
+}

@@ -1,0 +1,156 @@
+---
+title: Rolling Stats
+description: Latency percentiles per provider and model over a rolling window, split by any dimension, readable in process and written as periodic summaries.
+---
+
+Alongside the records, the logger keeps rolling percentiles for the calls it sees. They answer
+"what is the p99 for this provider right now" without a metrics backend.
+
+## What is measured
+
+Each metric is its own series, kept per set of dimension values:
+
+| Metric               | What it measures                                               |
+| -------------------- | -------------------------------------------------------------- |
+| `durationMs`         | The whole call, from start to end                              |
+| `attemptMs`          | The answering attempt, from request to response or first chunk |
+| `ttftMs`             | Call start to first content chunk, streams only                |
+| `queueWaitMs`        | Time spent waiting on a rate limit                             |
+| `outputTokensPerSec` | Completion tokens over the generation window                   |
+
+The built in dimensions are `provider`, `model`, and `streaming`. A series with no filter is the
+all calls series, so a global figure always exists.
+
+<Callout type="info">
+  Only successful provider calls are timed. Errors, rejections, aborts, cache hits, and calls a
+  middleware answered have different latency shapes, such as a fast 400 or a slow timeout, and
+  mixing them in would make a p99 meaningless. They are counted instead: every series carries
+  `errors`, `rejections`, `aborts`, and `cacheHits`.
+</Callout>
+
+## Reading the stats
+
+`logger.stats` reads the rolling window. It is meant for dashboards and health endpoints, not the
+hot path of a call:
+
+<Tabs items={['quantile', 'snapshot', 'reset']}>
+  <Tab value="quantile">
+
+```ts title="stats-quantile.ts"
+logger.stats.quantile({ provider: 'primary' }, 0.99); // rolling p99 in ms
+logger.stats.quantile({ provider: 'primary' }, 0.5, 'ttftMs'); // another metric
+logger.stats.quantile({}, 0.99); // every call
+```
+
+A partial filter merges every matching series on read. The result is `undefined` until a series has
+`minSamples` calls (default 20), so a quiet provider never reports a number built from three calls.
+
+  </Tab>
+  <Tab value="snapshot">
+
+```ts title="stats-snapshot.ts"
+const { windowMs, series } = logger.stats.snapshot();
+```
+
+```json title="series-snapshot.json"
+{
+  "metric": "durationMs",
+  "dimensions": { "provider": "primary", "model": "gpt-4o", "streaming": "false" },
+  "count": 412,
+  "quantiles": { "0.5": 910.2, "0.9": 1840.7, "0.95": 2410.1, "0.99": 4120.5 },
+  "errors": 6,
+  "rejections": 0,
+  "aborts": 2,
+  "cacheHits": 31
+}
+```
+
+`quantiles` is empty until the series reaches `minSamples`. The all calls series has empty
+`dimensions`.
+
+  </Tab>
+  <Tab value="reset">
+
+```ts title="stats-reset.ts"
+logger.stats.reset();
+```
+
+Clears every series and counter. Useful between tests, or after a deploy you do not want old
+latencies to colour.
+
+  </Tab>
+</Tabs>
+
+## The rolling window
+
+The window defaults to one minute in six slots. Each slot remembers which period it covers, and a
+slot holding an older period is cleared before it is reused. One rule therefore covers idle gaps,
+sparse traffic, and a stalled event loop. Time comes from the monotonic clock, so changing the
+system clock cannot empty or double a window.
+
+Quantiles come from a log bucketed sketch with a relative error of 1%, so a reported p99 is within
+about 1% of the true value. Stats see every call before [sampling](/docs/extensions/logger/features/detection#tail-sampling),
+so percentiles are as accurate at a 1% sample rate as at 100%.
+
+```ts title="stats-window.ts"
+loggerMiddleware({
+  window: { durationMs: 5 * 60_000, slots: 10 }, // five minutes, 30 seconds per slot
+  percentiles: [0.5, 0.95, 0.99, 0.999],
+});
+```
+
+Each slot must cover at least one second, and `slots` is an integer from 2 to 60.
+
+## Dimensions
+
+Split percentiles by anything a record can tell you. A dimension is a function from the record to a
+string, and the call joins that series when the string is not empty:
+
+```ts title="stats-dimensions.ts"
+import { fromEvent, loggerMiddleware } from 'vern-llm-logger';
+
+const logger = loggerMiddleware({
+  context: ['tier'],
+  dimensions: {
+    tier: (record) => record.context?.tier as string | undefined,
+    route: fromEvent('router.decision', 'route'),
+  },
+});
+
+logger.stats.quantile({ tier: 'free' }, 0.99);
+```
+
+`fromEvent(name, field)` reads `field` from the last kept custom event called `name`. That is how a
+route, a policy rule, or a cost tier from another extension becomes a dimension without the logger
+knowing anything about that package.
+
+<Callout type="warn">
+  `provider`, `model`, `streaming`, and `metric` are reserved and throw at construction. An
+  extractor that throws or returns something other than a non empty string drops only that dimension
+  for that call, and a value longer than 128 characters is cut. Series are capped at `maxSeries`
+  (default 200). Past it, new sets share one `__other__` series and a single warning is logged, so a
+  dimension holding user ids cannot grow memory without bound.
+</Callout>
+
+## Periodic summaries
+
+Set `summary` to write every live series to the sink on a timer, and to hand the same entries to a
+callback:
+
+```ts title="stats-summary.ts"
+loggerMiddleware({
+  summary: {
+    everyMs: 60_000,
+    onSummary: (entries) => dashboard.push(entries),
+  },
+});
+```
+
+Each `summary` entry is one series. The `durationMs` series also carries an `exemplar`: the slowest
+call in the window, with its `requestId`, so a bad percentile points straight at a record you can
+open.
+
+<Callout type="info">
+  Stats live in one process. Two servers each report their own p99, and nothing is shared through
+  Redis. Aggregating across processes belongs to whatever collects your summaries.
+</Callout>

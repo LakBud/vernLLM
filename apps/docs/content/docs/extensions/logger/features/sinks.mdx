@@ -1,0 +1,119 @@
+---
+title: Sinks
+description: Where logger entries go, with the built in JSON, console, and memory sinks, and how to adapt pino, winston, or any other logger.
+---
+
+A sink is where entries end up. It is one method, so adapting any logger takes a few lines:
+
+```ts title="log-sink.ts"
+interface LogSink {
+  write(level: 'debug' | 'info' | 'warn' | 'error', entry: LogEntry): void | Promise<void>;
+}
+```
+
+`entry` is a call record, a `summary`, an `error_group`, or a `breaker` entry. Tell them apart by
+`entry.kind`.
+
+## Built in sinks
+
+<Tabs items={['jsonSink', 'consoleSink', 'memorySink']}>
+  <Tab value="jsonSink">
+
+One JSON line per entry, ready for any log shipper. This is the default.
+
+```ts title="sink-json.ts"
+import { jsonSink, loggerMiddleware } from 'vern-llm-logger';
+
+loggerMiddleware({ sink: jsonSink() });
+loggerMiddleware({ sink: jsonSink({ write: (line) => process.stdout.write(`${line}\n`) }) });
+```
+
+It writes with `console.log` unless you pass `write`, so it works on every runtime, not only Node.
+
+  </Tab>
+  <Tab value="consoleSink">
+
+One readable line per entry, for a terminal.
+
+```ts title="sink-console.ts"
+import { consoleSink, loggerMiddleware } from 'vern-llm-logger';
+
+loggerMiddleware({ sink: consoleSink() });
+```
+
+```text title="console-output.txt"
+[VernLLM] ok primary/gpt-4o 1.84s ttft 312ms req_abc
+[VernLLM] ok primary/gpt-4o 6.20s slow req_def
+[VernLLM] error 30.00s 3 attempts api/server_error req_ghi
+[VernLLM] error_group primary api/server_error x214 in 60.00s
+[VernLLM] breaker primary/gpt-4o closed -> open
+```
+
+Each line goes to the `console` method for its level. Pass `write(line, level)` to send it
+elsewhere.
+
+  </Tab>
+  <Tab value="memorySink">
+
+Keeps entries in an array. This is the main tool in tests.
+
+```ts title="sink-memory.ts"
+import { VernLLM } from 'vern-llm';
+import { loggerMiddleware, memorySink } from 'vern-llm-logger';
+
+const sink = memorySink();
+const llm = new VernLLM({ client, model: 'gpt-4o', middleware: [loggerMiddleware({ sink })] });
+
+await llm.call({ userContent: 'hi', jsonMode: false });
+
+const { entry } = sink.entries[0]!;
+expect(entry).toMatchObject({ kind: 'call', outcome: 'ok' });
+
+sink.clear();
+```
+
+  </Tab>
+</Tabs>
+
+## Your own logger
+
+<Tabs items={['pino', 'winston']}>
+  <Tab value="pino">
+
+```ts title="sink-pino.ts"
+import pino from 'pino';
+import { loggerMiddleware } from 'vern-llm-logger';
+
+const log = pino();
+
+loggerMiddleware({
+  sink: { write: (level, entry) => log[level](entry) },
+});
+```
+
+  </Tab>
+  <Tab value="winston">
+
+```ts title="sink-winston.ts"
+import winston from 'winston';
+import { loggerMiddleware } from 'vern-llm-logger';
+
+const log = winston.createLogger({ transports: [new winston.transports.Console()] });
+
+loggerMiddleware({
+  sink: { write: (level, entry) => log.log(level, entry.kind, entry) },
+});
+```
+
+  </Tab>
+</Tabs>
+
+## How a sink is called
+
+<Callout type="info">
+  A sink is called through a guard and never awaited. If `write` throws, or returns a promise that
+  rejects, the call is unaffected and the failure is logged once as `[VernLLM] logger: sink.write
+  failed`. A slow sink cannot add latency to the call it describes, at most it loses that entry.
+</Callout>
+
+Only entries at or above `level` reach the sink, see [Levels](/docs/extensions/logger/features/detection#levels).

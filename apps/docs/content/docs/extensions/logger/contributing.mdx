@@ -1,0 +1,119 @@
+---
+title: Contributing
+description: Set up, test and open a pull request for vern-llm-logger, the logger extension in the VernLLM monorepo.
+icon: GitPullRequest
+---
+
+This page covers `packages/extensions/vern-llm-logger` specifically. For the coding standard and PR
+checklist that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+No external service is needed. The tests use fake clients and an in memory sink, never a live
+provider.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
+explain non obvious decisions with a short comment, and keep `any` as a last resort. Four rules are
+specific to this package:
+
+- **Never change the call.** Every hook, user callback, and sink call goes through `guard`. A
+  failure is logged as `[VernLLM] logger: <step> failed` and the call carries on.
+- **Validate once.** A bad option throws at construction in `normalizeOptions`. Runtime code trusts
+  the resolved config.
+- **Never record content.** No prompt text, output text, or error message ever enters a record.
+- **Copy, don't import, across packages.** The guard, the clock, the timer helper, and the test
+  fakes are copies, so the logger depends only on `vern-llm`.
+
+## Layout
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="loggerMiddleware.ts" />
+    <File name="sinks.ts" />
+    <File name="index.ts" />
+    <Folder name="types" />
+    <Folder name="internal" defaultOpen>
+      <Folder name="recorder" />
+      <Folder name="pipeline" />
+      <Folder name="stats" />
+      <Folder name="detectors" />
+      <Folder name="options" />
+      <Folder name="middleware" />
+      <Folder name="sinks" />
+      <File name="scheduler.ts" />
+    </Folder>
+  </Folder>
+  <Folder name="tests">
+    <Folder name="unit" />
+    <Folder name="integration" />
+    <Folder name="bench" />
+  </Folder>
+  <Folder name="scripts" />
+</Files>
+
+`stats/` and `detectors/` import nothing from `vern-llm`, so they stay pure and unit testable.
+
+## Scripts
+
+Run them with `pnpm run <script>` from inside `packages/extensions/vern-llm-logger`, or
+`pnpm nx run vern-llm-logger:<script>` from the repo root:
+
+| Script                                    | What it does                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `build`, `dev`                            | Build with tsdown, or rebuild on change                            |
+| `lint`, `lint:fix`                        | Run oxlint                                                         |
+| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                                 |
+| `test`, `test:unit`, `test:int`           | Run all tests, or one project                                      |
+| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                        |
+| `size`, `smoke-test`                      | Check the bundle size, and import the build through ESM and CJS    |
+| `bench`, `bench:check`                    | Measure per call overhead, or fail when it grows past the baseline |
+| `bench:update`                            | Record a new baseline in `tests/bench/baseline.json`               |
+
+`bench:check` runs against the built package, so run `build` first.
+
+## Tests
+
+Integration tests live in
+`tests/integration/` and run a real `VernLLM` with a `memorySink`, driven by a table of scenarios
+plus focused tests for behavior a table cannot express. Unit tests live in `tests/unit/` and cover
+only what an integration test cannot make precise, such as the sketch's accuracy against an exact
+sort. Use fake timers for every timing assertion.
+
+## Before opening a PR
+
+Every PR touching `packages/extensions/vern-llm-logger` runs through the same CI workflows described
+in [Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                          | Local command                                                                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Lint                           | `pnpm nx run vern-llm-logger:lint`                                                                                                                           |
+| Typecheck source               | `pnpm nx run vern-llm-logger:typecheck`                                                                                                                      |
+| Typecheck tests                | `pnpm nx run vern-llm-logger:typecheck:test`                                                                                                                 |
+| Unit tests + coverage          | `pnpm nx run vern-llm-logger:test:unit:coverage`                                                                                                             |
+| Integration tests              | `pnpm nx run vern-llm-logger:test:int:coverage`                                                                                                              |
+| Build, size, smoke test, bench | `pnpm nx run vern-llm-logger:build && pnpm nx run vern-llm-logger:size && pnpm nx run vern-llm-logger:smoke-test && pnpm nx run vern-llm-logger:bench:check` |
+| Changeset present              | `pnpm changeset status --since=origin/main`                                                                                                                  |
+
+## Changesets
+
+Record your change with:
+
+```bash
+pnpm nx run vern-llm-logger:changeset
+```
+
+`vern-llm-logger` versions and releases independently of `vern-llm`, on its own changelog. See
+[Development](/docs/development#ci) for what drives the release itself.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

@@ -1,0 +1,38 @@
+---
+title: Features Overview
+description: Call records, rolling stats, detection and sampling, sinks, and enrichment from vern-llm-logger, built from one shared set of VernLLM events.
+---
+
+`vern-llm-logger` builds everything from the same stream of VernLLM events, so a record, a
+percentile, and a summary always agree with each other. Each part can be tuned on its own.
+
+<Cards>
+  <Card title="Call Records" href="/docs/extensions/logger/features/call-records">
+    One frozen record per call, with the attempt path, outcome, timings, and token counts.
+  </Card>
+  <Card title="Rolling Stats" href="/docs/extensions/logger/features/stats">
+    Percentiles per provider and model over a rolling window, split by any dimension you define.
+  </Card>
+  <Card title="Detection and Sampling" href="/docs/extensions/logger/features/detection">
+    Slow calls, grouped errors, circuit breaker entries, and tail sampling of plain successes.
+  </Card>
+  <Card title="Sinks" href="/docs/extensions/logger/features/sinks">
+    JSON lines, readable lines, an in memory sink for tests, or your own logger.
+  </Card>
+  <Card title="Context and Enrichment" href="/docs/extensions/logger/features/enrichment">
+    Allowlisted context keys, custom fields from other packages, and kept custom events.
+  </Card>
+</Cards>
+
+## Which one answers what
+
+| Question                                                       | Look at                                                               |
+| -------------------------------------------------------------- | --------------------------------------------------------------------- |
+| What happened to this one call, and in what order?             | [Call Records](/docs/extensions/logger/features/call-records)         |
+| What is the p99 for this provider right now?                   | [Rolling Stats](/docs/extensions/logger/features/stats)               |
+| Which calls were slow, and which errors keep repeating?        | [Detection and Sampling](/docs/extensions/logger/features/detection)  |
+| Where do the entries go, and how do I read them in a test?     | [Sinks](/docs/extensions/logger/features/sinks)                       |
+| How do I put a tenant, a trace id, or a route on every record? | [Context and Enrichment](/docs/extensions/logger/features/enrichment) |
+
+Everything is on by default except slow call marking, sampling, and summaries, which stay off until
+you set them.
