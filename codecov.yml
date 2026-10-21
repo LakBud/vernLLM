@@ -23,6 +23,12 @@ flags:
   vern-llm-bedrock-integration:
     paths:
       - 'packages/integrations/vern-llm-bedrock/**'
+  vern-llm-logger-unit:
+    paths:
+      - 'packages/extensions/vern-llm-logger/**'
+  vern-llm-logger-integration:
+    paths:
+      - 'packages/extensions/vern-llm-logger/**'
 
 coverage:
   status:
@@ -47,6 +53,11 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/integrations/vern-llm-bedrock/**'
+      vern-llm-logger:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/extensions/vern-llm-logger/**'
     patch:
       default:
         target: 80%
@@ -64,6 +75,10 @@ coverage:
         target: 80%
         paths:
           - 'packages/integrations/vern-llm-bedrock/**'
+      vern-llm-logger:
+        target: 80%
+        paths:
+          - 'packages/extensions/vern-llm-logger/**'
 
 ignore:
   - '**/index.ts'

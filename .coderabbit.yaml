@@ -109,6 +109,7 @@ reviews:
         - Errors are recognised by shape, never with instanceof or isLLMError, since vern-llm's ESM and CJS builds have separate LLMError classes. The entry stays static with no enabled function, which would make event delivery async.
         - Privacy fails closed: content is off by default, redact runs before truncation, only error codes are recorded, and metric attributes stay bounded with no request ids or messages.
         - Names live only in semconv.ts, gen_ai.* must exist in the GenAI conventions, and vern-llm and @opentelemetry/api stay unbundled peer dependencies.
+        - endAttributes is written before the package's own end attributes, so it can never replace one. otelLogFields reads ids from ctx.state, and the package never imports vern-llm-logger.
 
         For new features, require unit tests and integration tests against in memory exporters, keep coverage at 100 percent, and document public API changes.
 
@@ -120,6 +121,30 @@ reviews:
         - Meaningful assertions, with no live provider or collector, only fakes and in memory exporters and readers.
         - Scenarios that compare each case with and without the middleware, and span leaks checked with the open span tracker in the shared helpers.
         - Timing assertions with a wide margin, and any global provider or context manager removed afterwards.
+
+    - path: 'packages/extensions/vern-llm-logger/**'
+      instructions: |
+        This is vern-llm-logger: structured call logs, rolling latency percentiles, and slow call and error detection for vern-llm, built only on its public middleware system.
+
+        Review TypeScript changes with focus on:
+        - The middleware never changes what a call returns or throws. Every hook body, user callback and sink call goes through the guard, and next()'s exact error is rethrown.
+        - Streams are observed on the side only. Flag anything that replaces or wraps chunks or finalResult, or adds a promise that can reject.
+        - Never log prompt or response content or an error message, only error type, code and status.
+        - The entry stays static with no enabled function, which would make event delivery async, and it never imports another extension. Anything it reads from one goes through ctx.state or custom events.
+        - Options are validated once in normalizeOptions, an explicit null is reported rather than defaulted, and runtime code trusts the resolved config.
+        - Stats and detectors stay pure, with no vern-llm imports, and every cache and series map has a size cap.
+        - The per call path stays cheap: no merging of window slots per call (the slow check reads a cached percentile), and tests/bench/baseline.json is only updated deliberately, with the new numbers explained.
+
+        For new features, require unit tests and integration tests with a real VernLLM and the memory sink, and document public API changes.
+
+        Pay special attention to renamed or removed record fields, since log pipelines depend on them.
+
+    - path: 'packages/extensions/vern-llm-logger/tests/**'
+      instructions: |
+        Review tests for:
+        - Meaningful assertions, with no live provider, only fakes and the memory sink.
+        - Scenarios that compare each case with and without the middleware.
+        - Fake clocks instead of real sleeps for anything time based, and wide margins on any real timing assertion.
 
     - path: 'packages/integrations/vern-llm-bedrock/**'
       instructions: |

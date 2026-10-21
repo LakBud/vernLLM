@@ -50,7 +50,7 @@ Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI,
 
 ## Repository layout
 
-This is a pnpm monorepo with five workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
+This is a pnpm monorepo with six workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
 
 | Path                                                                                 | Description                                                                                                       |
 | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
@@ -58,6 +58,7 @@ This is a pnpm monorepo with five workspaces, managed with [Nx](https://nx.dev) 
 | [`packages/integrations/vern-llm-redis`](./packages/integrations/vern-llm-redis)     | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`.  |
 | [`packages/integrations/vern-llm-otel`](./packages/integrations/vern-llm-otel)       | The `vern-llm-otel` npm package: OpenTelemetry traces and metrics for `vern-llm`.                                 |
 | [`packages/integrations/vern-llm-bedrock`](./packages/integrations/vern-llm-bedrock) | The `vern-llm-bedrock` npm package: the AWS Bedrock Converse adapter for `vern-llm`, built on the AWS SDK client. |
+| [`packages/extensions/vern-llm-logger`](./packages/extensions/vern-llm-logger)       | The `vern-llm-logger` package (in development): structured call logs and rolling latency percentiles.             |
 | [`apps/docs`](./apps/docs)                                                           | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                  |
 
 ## License
