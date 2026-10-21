@@ -55,6 +55,34 @@ describe('LLMError.countsTowardBreaker', () => {
   });
 });
 
+describe('budget_exceeded', () => {
+  it('is not retryable, since the budget stays spent until its window resets', () => {
+    const err = new LLMError('over budget', 'quota_exceeded', { code: 'budget_exceeded' });
+
+    expect(err.retryable).toBe(false);
+    expect(err.toSnapshot().retryable).toBe(false);
+  });
+
+  it('never counts toward the breaker', () => {
+    const err = new LLMError('over budget', 'quota_exceeded', { code: 'budget_exceeded' });
+
+    expect(err.countsTowardBreaker).toBe(false);
+  });
+
+  it('leaves a quota_exceeded error without that code retryable', () => {
+    expect(new LLMError('quota gone', 'quota_exceeded').retryable).toBe(true);
+  });
+});
+
+describe('policy_denied', () => {
+  it('is not retryable and never counts toward the breaker, like any invalid_params error', () => {
+    const err = new LLMError('denied', 'invalid_params', { code: 'policy_denied' });
+
+    expect(err.retryable).toBe(false);
+    expect(err.countsTowardBreaker).toBe(false);
+  });
+});
+
 describe('response_truncated', () => {
   it('is retryable even though its type is parse', () => {
     const err = new LLMError('cut off', 'parse', { code: 'response_truncated' });

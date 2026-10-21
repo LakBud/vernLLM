@@ -555,6 +555,12 @@ describe('fromOpenAICompatible, cache usage', () => {
     expect((await createWith(usage)).usage).toEqual(usage);
   });
 
+  it("passes OpenRouter's billed cost through", async () => {
+    const result = await createWith({ prompt_tokens: 100, cost: 0.0042 });
+
+    expect(result.usage).toMatchObject({ cost: 0.0042 });
+  });
+
   it("passes OpenRouter's cache_write_tokens through", async () => {
     const result = await createWith({
       prompt_tokens: 100,

@@ -150,6 +150,8 @@ export interface LLMClient {
             /** Writes by TTL label, e.g. `{ '5m': 1200, '1h': 800 }`. */
             cache_write_tokens_by_ttl?: Record<string, number>;
           };
+          /** What the provider billed for the call, in USD. OpenRouter reports it as `usage.cost`. */
+          cost?: number;
         };
       }>;
 

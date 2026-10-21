@@ -55,6 +55,27 @@ describe('VernLLM workflow integration', () => {
     );
   });
 
+  it('reports the cost the provider billed as costUsd, and leaves it out when none was sent', async () => {
+    const onUsage = vi.fn();
+    const { client } = createMockClient([
+      {
+        choices: [{ message: { content: 'billed' } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cost: 0.0042 },
+      },
+      {
+        choices: [{ message: { content: 'plain' } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      },
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', maxRetries: 0, onUsage });
+
+    await llm.call({ userContent: 'hello', jsonMode: false });
+    await llm.call({ userContent: 'hello', jsonMode: false });
+
+    expect(onUsage.mock.calls[0]![0]).toMatchObject({ costUsd: 0.0042 });
+    expect('costUsd' in onUsage.mock.calls[1]![0]).toBe(false);
+  });
+
   it('deadlineMs cuts a real retry loop short instead of letting it continue into a second attempt', async () => {
     const { client, create } = createMockClient([
       new FakeApiError('temporary failure', 500),

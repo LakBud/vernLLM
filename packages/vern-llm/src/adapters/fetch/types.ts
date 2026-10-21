@@ -80,6 +80,8 @@ export interface FetchAdapterConfig {
       cacheWriteTokens?: number;
       /** `cacheWriteTokens` by TTL label, e.g. `{ '5m': 1200 }`. */
       cacheWriteTokensByTtl?: Record<string, number>;
+      /** What the provider billed for the call, in USD, when its response says. */
+      costUsd?: number;
     };
     toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   };

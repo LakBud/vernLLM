@@ -140,6 +140,21 @@ other three, `invalid_context`, `unknown_target` and `no_eligible_targets`, carr
 `invalid_context` still earns its code, since a wrapper that forwards context from elsewhere may
 want to tell that fault apart from a bad request.
 
+The currently defined budget code is:
+
+| Code              | Error type       | Meaning                                                                                                                                                         |
+| ----------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `budget_exceeded` | `quota_exceeded` | A middleware budget rejected the call before any provider was contacted. Not retryable, and never counts toward the breaker. The budget resets with its window. |
+
+The currently defined policy code is:
+
+| Code            | Error type       | Meaning                                                                                |
+| --------------- | ---------------- | -------------------------------------------------------------------------------------- |
+| `policy_denied` | `invalid_params` | A middleware policy refused the call before any provider was contacted. Never retried. |
+
+The core throws neither code itself. They are reserved for extension packages, which throw them
+from a `wrap` before `next()`.
+
 The currently defined rate-limiting codes are:
 
 | Code                           | Error type     | Meaning                                                                                                                                       |
@@ -426,6 +441,7 @@ It is `false` when:
   `tool_choice_none_violated`, `unexpected_tool_calls`)
 - `code` is one of the local rate limit codes (`rate_limit_queue_full`,
   `rate_limit_queue_timeout`, `rate_limit_capacity_exceeded`, `retry_budget_exhausted`)
+- `code` is `budget_exceeded`, even though its type `quota_exceeded` is otherwise retryable
 
 <Callout type="info">
   `retryable` and `LLMError.countsTowardBreaker` answer different questions and can disagree.
@@ -456,6 +472,7 @@ since `type: 'fallback_exhausted'` by itself says nothing about whether retrying
 - `error.code` is `'retry_budget_exhausted'` because a configured `retryBudget` decided this
   target has already had too many retries recently; further retrying against it is refused until
   the trailing window's ratio drops. See [Retry Budget](/docs/core/retry-budget).
+- `error.code` is `'budget_exceeded'` because the budget stays spent until its window resets
 - `error.status` is in `nonRetryableStatus` (default `[400, 401, 402, 403, 404, 413, 422]`)
 
 Everything else, including timeouts, 5xx errors, network failures, and unknown errors, is retried up to

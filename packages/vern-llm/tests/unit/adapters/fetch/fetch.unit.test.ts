@@ -301,6 +301,30 @@ describe('fromFetch', () => {
     });
   });
 
+  it("maps the mapper's costUsd onto the wire usage as cost, and omits it when not given", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })),
+    );
+    const make = (extra: object) =>
+      fromFetch({
+        url: 'https://api.example.com',
+        mapRequest: () => ({}),
+        mapResponse: () => ({
+          content: 'x',
+          usage: { promptTokens: 3, completionTokens: 4, totalTokens: 7, ...extra },
+        }),
+      });
+    const request = { model: 'm', temperature: 0.2, max_tokens: 10, messages: [] };
+    const options = { signal: new AbortController().signal };
+
+    const billed = await make({ costUsd: 0.5 }).chat.completions.create(request, options);
+    const plain = await make({}).chat.completions.create(request, options);
+
+    expect(billed.usage).toMatchObject({ cost: 0.5 });
+    expect(plain.usage).not.toHaveProperty('cost');
+  });
+
   it('throws an error with .status and .headers set on a non-2xx response', async () => {
     const headers = { get: vi.fn((name: string) => (name === 'Retry-After' ? '30' : null)) };
     const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({

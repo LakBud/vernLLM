@@ -56,6 +56,23 @@ describe('toTokenUsage', () => {
     });
   });
 
+  it('carries the cost the provider billed through as costUsd', () => {
+    expect(toTokenUsage({ cost: 0.0042 }, meta).costUsd).toBe(0.0042);
+    expect(toTokenUsage({ cost: 0 }, meta).costUsd).toBe(0);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['negative', -1],
+    ['not a number', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['a string', '0.5'],
+  ])('leaves costUsd out when the cost is %s', (_label, cost) => {
+    const usage = toTokenUsage({ cost: cost as number }, meta);
+
+    expect('costUsd' in usage).toBe(false);
+  });
+
   it('copies the TTL split, so a later change to the wire object does not reach the usage', () => {
     const byTtl = { '5m': 20 };
     const usage = toTokenUsage(

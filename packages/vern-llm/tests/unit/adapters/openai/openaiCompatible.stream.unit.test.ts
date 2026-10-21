@@ -174,6 +174,33 @@ describe('fromOpenAICompatible().chat.completions.createStream', () => {
     );
   });
 
+  it('reports the billed cost in the usage chunk', async () => {
+    const create = vi.fn(async () =>
+      fakeOpenAIStream([
+        { choices: [{ delta: { content: 'hi' } }] },
+        {
+          choices: [{ delta: {} }],
+          usage: { prompt_tokens: 5, completion_tokens: 1, cost: 0.002 },
+        },
+      ]),
+    );
+    const adapted = fromOpenAICompatible({ chat: { completions: { create } } });
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'test-model', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'usage',
+        usage: expect.objectContaining({ cost: 0.002 }),
+      }),
+    );
+  });
+
   it('omits stream_options for providers configured without stream-usage support', async () => {
     let receivedParams: Record<string, unknown> | undefined;
     const create = vi.fn(async (params: Record<string, unknown>) => {
