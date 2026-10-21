@@ -109,13 +109,13 @@ describe('sampling', () => {
   });
 
   it('keeps an aborted call at rate 0', async () => {
+    const controller = new AbortController();
     const hangs = (_params: unknown, signal: AbortSignal) =>
       new Promise<never>((_resolve, reject) => {
         signal.addEventListener('abort', () => reject(new Error('aborted')));
+        controller.abort();
       });
     const { llm, sink } = setup([hangs], { sample: { success: 0 } });
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 10);
 
     await llm.call({ ...call, signal: controller.signal }).catch(() => {});
 
@@ -124,6 +124,7 @@ describe('sampling', () => {
   });
 
   it('keeps a successful call that changed the breaker at rate 0', async () => {
+    vi.useFakeTimers();
     const sink = memorySink();
     const llm = new VernLLM({
       client: createMockClient([new Error('down'), textResponse('ok')]).client,
@@ -137,7 +138,7 @@ describe('sampling', () => {
     });
 
     await llm.call(call).catch(() => {});
-    await sleep(40);
+    await vi.advanceTimersByTimeAsync(40);
     await llm.call(call);
 
     const records = sink.entries.map(({ entry }) => entry as CallLogRecord);

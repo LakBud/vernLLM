@@ -1,12 +1,19 @@
 import { pickUsage } from './inputs.utils.js';
 import { outputTokensPerSec, roundMs } from './recordMetrics.utils.js';
 
-import type { CallLogRecord } from '../../types/index.js';
+import type { CallLogRecord, JsonValue } from '../../types/index.js';
 import type { RecordInput } from './recordInput.types.js';
 
 /** Frozen copies in a frozen list, so nothing a sink holds can change what the next one reads. */
 function frozenCopies<T extends object>(items: readonly T[]): T[] {
   return Object.freeze(items.map((item) => Object.freeze({ ...item }))) as T[];
+}
+
+/** Frozen copies of each event list, so the recorder's live lists never reach a sink. */
+function frozenCustom(custom: RecordInput['custom']): NonNullable<CallLogRecord['custom']> {
+  const copy: NonNullable<CallLogRecord['custom']> = {};
+  for (const [name, values] of custom) copy[name] = Object.freeze([...values]) as JsonValue[];
+  return Object.freeze(copy);
 }
 
 /** The fields every record has, whatever happened. */
@@ -56,7 +63,7 @@ function addNotes(record: CallLogRecord, input: RecordInput): void {
   if (input.classified.error) record.error = Object.freeze({ ...input.classified.error });
   if (input.breaker.length > 0) record.breaker = frozenCopies(input.breaker);
   if (input.middleware.length > 0) record.middleware = frozenCopies(input.middleware);
-  if (input.custom.size > 0) record.custom = Object.freeze(Object.fromEntries(input.custom));
+  if (input.custom.size > 0) record.custom = frozenCustom(input.custom);
   if (input.context) record.context = Object.freeze(input.context);
   if (input.fields) record.fields = Object.freeze(input.fields);
 }
