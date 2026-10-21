@@ -22,6 +22,7 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
   optionalBoolean(opts.middlewareEvents, 'middlewareEvents');
   optionalFunction(opts.normalizeModel, 'normalizeModel');
   optionalFunction(opts.attributes, 'attributes');
+  optionalFunction(opts.endAttributes, 'endAttributes');
 
   // Validated either way, but not used without GenAI conventions: the content attributes are
   // `gen_ai.*` ones, and that mode promises to emit none.
@@ -58,6 +59,7 @@ export function normalizeOptions(options: OtelMiddlewareOptions | undefined): Re
     genAiConventions: opts.genAiConventions ?? true,
     normalizeModel: opts.normalizeModel,
     attributes: opts.attributes,
+    endAttributes: opts.endAttributes,
     middlewareEvents: opts.middlewareEvents ?? false,
     customEvents,
     exceptions,

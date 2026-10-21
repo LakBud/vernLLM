@@ -18,6 +18,7 @@ plain `Error` at construction, never during a call.
 | `genAiConventions` | `true`            | `false` keeps only `vernllm.*` telemetry, see [Semantic Conventions](/docs/integrations/otel/API-reference/semantic-conventions#avoid-double-counting). |
 | `captureContent`   | `false`           | `true` or an options object, see [Content Capture](/docs/integrations/otel/features/content-capture).                                                   |
 | `attributes`       | none              | Extra attributes for the call span, see [below](#attributes).                                                                                           |
+| `endAttributes`    | none              | Extra attributes read when the call span ends, see [below](#endattributes).                                                                             |
 | `recordExceptions` | `false`           | Adds `exception` events, see [below](#recordexceptions).                                                                                                |
 | `middlewareEvents` | `false`           | Emits VernLLM `middleware` events as `vernllm.middleware` span events on the call span.                                                                 |
 | `customEvents`     | `true`            | Emits each event a middleware reports through `ctx.emit` as a span event, see [below](#customevents).                                                   |
@@ -76,6 +77,47 @@ VernLLM has no conversation concept, and the conventions say not to invent an id
 `gen_ai.conversation.id` only exists when you provide it. The hook is sync and guarded: a throw is
 logged and adds nothing. Only strings, finite numbers, booleans, and arrays of one of those are
 kept, everything else is dropped rather than stringified.
+
+## `endAttributes`
+
+Like `attributes`, but read when the call span ends, so it can carry values that only exist by
+then, such as a cost. For a stream that is after `finalResult` settles:
+
+```ts title="otel-end-attributes.ts"
+otelMiddleware({
+  endAttributes: (ctx) => ({ 'vernllm.cost.estimated_usd': costOf(ctx) }),
+});
+```
+
+It runs on failed calls too, with the same rules as `attributes`: sync, guarded, and only strings,
+finite numbers, booleans, and arrays of one of those are kept. It is applied before this
+package's own end attributes, so it can never replace a `vernllm.*` or `gen_ai.*` one that the
+package sets.
+
+## `otelLogFields`
+
+Exported next to `otelMiddleware`. It returns the call span's `traceId` and `spanId`, or `{}` when
+the call has no valid span, so a log record can be joined to its trace:
+
+```ts title="otel-log-fields.ts"
+import { otelLogFields, otelMiddleware } from 'vern-llm-otel';
+
+const withTraceIds: VernLLMMiddleware = {
+  name: 'with-trace-ids',
+  wrap: async (_request, next, ctx) => {
+    console.log('call started', otelLogFields(ctx)); // { traceId, spanId }
+    return next();
+  },
+};
+
+new VernLLM({
+  client,
+  model,
+  middleware: [otelMiddleware(), withTraceIds],
+});
+```
+
+The ids travel in `ctx.state`, so the registration order does not matter.
 
 ## `recordExceptions`
 

@@ -1,4 +1,4 @@
-import { trace, type Tracer } from '@opentelemetry/api';
+import { isSpanContextValid, trace, type Tracer } from '@opentelemetry/api';
 import {
   createMiddlewareRef,
   createStateKey,
@@ -13,6 +13,7 @@ import { normalizeOptions } from './internal/options/normalizeOptions.utils.js';
 import { INSTRUMENTATION_NAME } from './internal/semconv.js';
 import { CallTracker } from './internal/tracker/callTracker.js';
 import { handleEvent } from './internal/tracker/handleEvent.utils.js';
+import { otelSpanIdsKey } from './logFields.js';
 
 import type { OtelMiddlewareOptions, TrackerDeps } from './types/index.js';
 
@@ -59,6 +60,20 @@ export function otelMiddleware(options?: OtelMiddlewareOptions): VernLLMMiddlewa
         guard('finish', () => tracker.finish({ kind: 'error', error }), undefined);
         return next();
       }
+
+      // For `otelLogFields`. Best effort: a log record without ids is better than no call.
+      guard(
+        'publishSpanIds',
+        () => {
+          const spanContext = tracker.spanContext();
+          if (!isSpanContextValid(spanContext)) return;
+          ctx.state.set(otelSpanIdsKey, {
+            traceId: spanContext.traceId,
+            spanId: spanContext.spanId,
+          });
+        },
+        undefined,
+      );
 
       let result: CallResult;
       try {
