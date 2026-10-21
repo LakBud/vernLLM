@@ -55,6 +55,22 @@ describe('withScriptCache', () => {
     }
   });
 
+  it('still returns the reply when the digest fails', async () => {
+    const { redis } = clientWithEvalsha();
+    redis.eval.mockResolvedValue('first');
+    const digest = vi
+      .spyOn(globalThis.crypto.subtle, 'digest')
+      .mockRejectedValue(new Error('digest unavailable'));
+
+    try {
+      await expect(withScriptCache(redis).eval(SCRIPT, 0)).resolves.toBe('first');
+      // Let the rejected digest settle: an unhandled rejection would fail the run.
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      digest.mockRestore();
+    }
+  });
+
   it('falls back to EVAL when Redis no longer has the script cached', async () => {
     const { redis, evalsha } = clientWithEvalsha();
     redis.eval.mockResolvedValue('full');

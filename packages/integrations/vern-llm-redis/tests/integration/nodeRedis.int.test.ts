@@ -5,7 +5,14 @@ import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fromNodeRedis, fromNodeRedisSubscriber } from '../../src/clients/nodeRedis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
 import { redisRetryBudget } from '../../src/retryBudget.js';
-import { connectNodeRedis, expectNearInstant, uniquePrefix, waitUntil } from '../helpers.js';
+import {
+  connect,
+  connectNodeRedis,
+  expectNearInstant,
+  uniquePrefix,
+  waitForSubscribers,
+  waitUntil,
+} from '../helpers.js';
 
 import type { RedisClientType } from 'redis';
 
@@ -67,9 +74,10 @@ describe('fromNodeRedis, real Redis', () => {
   });
 
   it('redisRateLimit enforces a requests-per-minute ceiling through the translated eval calls', async () => {
+    const keyPrefix = uniquePrefix('rl');
     const limiter = redisRateLimit(fromNodeRedis(client), {
       requestsPerMinute: 2,
-      keyPrefix: uniquePrefix('rl'),
+      keyPrefix,
     });
 
     const first = await limiter.acquire(1);
@@ -86,7 +94,7 @@ describe('fromNodeRedis, real Redis', () => {
         settled = true;
       });
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitUntil(async () => (await client.hLen(`${keyPrefix}:queue`)) > 0);
     expect(settled).toBe(false);
 
     controller.abort();
@@ -150,10 +158,12 @@ describe('fromNodeRedisSubscriber, real Redis', () => {
         onStateChange: (from, to) => events.push({ from, to }),
       });
 
-      // Give the SUBSCRIBE command time to actually register before the
-      // transition fires, matching the same reasoning as the ioredis
-      // pub/sub integration test.
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      const redis = connect();
+      try {
+        await waitForSubscribers(redis, `${keyPrefix}:events`);
+      } finally {
+        await redis.quit();
+      }
 
       breakerA.recordFailure('m');
       await waitUntil(() => events.length > 0);
