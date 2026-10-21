@@ -119,6 +119,16 @@ describe.concurrent('redisUsageStore, real Redis', () => {
     expect((await other.reserve([s], amount(60), 60_000)).ok).toBe(true);
   });
 
+  it('returns every expired reservation in one pass, not only the first 100', async ({ redis }) => {
+    const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
+    const s = scope('many', { limit: 120 });
+
+    for (let i = 0; i < 120; i++) await store.reserve([s], amount(1), 100);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect((await store.reserve([s], amount(120), 60_000)).ok).toBe(true);
+  });
+
   it('returns a reservation that was never settled once its ttl passes', async ({ redis }) => {
     const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
     const s = scope('lost', { limit: 100 });

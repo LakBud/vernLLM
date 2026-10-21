@@ -220,19 +220,25 @@ describe.skipIf(nodes.length === 0)('against a real Redis Cluster', () => {
       maxQueueMs: 8000,
       logger: 'silent' as const,
     };
-    const limiters = [0, 1, 2, 3].map(() => mkLimiter(fromIoredis(connect()), options));
+    const queueRedis = connect();
+    const limiters = [queueRedis, connect(), connect(), connect()].map((redis) =>
+      mkLimiter(fromIoredis(redis), options),
+    );
 
     const held = await limiters[0]!.acquire(10);
 
     const order: string[] = [];
     const releases: Array<() => void> = [];
-    const waiters = ['B', 'C', 'D'].map(async (name, i) => {
-      await sleep(i * 70);
-      const got = await limiters[i + 1]!.acquire(10);
-      order.push(name);
-      releases.push(() => got.release());
-    });
-    await sleep(400);
+    const waiters: Promise<void>[] = [];
+    for (const [i, name] of ['B', 'C', 'D'].entries()) {
+      waiters.push(
+        limiters[i + 1]!.acquire(10).then((got) => {
+          order.push(name);
+          releases.push(() => got.release());
+        }),
+      );
+      await waitUntil(async () => (await queueRedis.hlen(`${prefix}:queue`)) >= i + 2);
+    }
 
     const state = await limiters[0]!.readState();
     expect(state.concurrentInFlight).toBe(1);
@@ -312,10 +318,13 @@ describe.skipIf(nodes.length === 0)('against a real Redis Cluster', () => {
     });
 
     const held = await holder.acquire(1);
-    await sleep(400); // the subscription is live
+    await waitUntil(async () => {
+      const subscription = await waiterSub.pubsub('NUMSUB', `${prefix}:wake`);
+      return Number(subscription[1]) > 0;
+    });
     let acquiredAt = 0;
     const waiting = waiter.acquire(1).then(() => (acquiredAt = Date.now()));
-    await sleep(300);
+    await waitUntil(async () => (await publisher.hlen(`${prefix}:queue`)) > 0);
 
     const releasedAt = Date.now();
     held.release();

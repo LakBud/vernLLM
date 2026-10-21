@@ -15,7 +15,7 @@ local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 /** How long an expired hold is kept for a late settle. */
 const LATE_MS = 60 * 60 * 1000;
 
-/** Frees up to 100 expired holds, keeping each marked `x` for `LATE_MS`. Needs `prefix`, `now`, `expKey`. */
+/** Frees every expired hold, 100 at a time, keeping each marked `x` for `LATE_MS`. Needs `prefix`, `now`, `expKey`. */
 const SWEEP = `
 local function unhold(rkey)
   local held = redis.call('HMGET', rkey, 'u', 't', 'n')
@@ -31,16 +31,19 @@ local function unhold(rkey)
 end
 
 local function sweep()
-  local ids = redis.call('ZRANGEBYSCORE', expKey, '-inf', now, 'LIMIT', 0, 100)
-  for _, id in ipairs(ids) do
-    local rkey = prefix .. 'r:' .. id
-    unhold(rkey)
-    if redis.call('EXISTS', rkey) == 1 then
-      redis.call('HSET', rkey, 'x', 1)
-      redis.call('PEXPIRE', rkey, ${LATE_MS})
+  local ids
+  repeat
+    ids = redis.call('ZRANGEBYSCORE', expKey, '-inf', now, 'LIMIT', 0, 100)
+    for _, id in ipairs(ids) do
+      local rkey = prefix .. 'r:' .. id
+      unhold(rkey)
+      if redis.call('EXISTS', rkey) == 1 then
+        redis.call('HSET', rkey, 'x', 1)
+        redis.call('PEXPIRE', rkey, ${LATE_MS})
+      end
+      redis.call('ZREM', expKey, id)
     end
-    redis.call('ZREM', expKey, id)
-  end
+  until #ids < 100
 end
 `;
 
@@ -139,6 +142,7 @@ export function parseFour(reply: unknown): [number, number, number, number] {
 /** The reply of `RESERVE_SCRIPT`. */
 export type ReserveReply = { ok: true } | { ok: false; index: number; remaining: number };
 
+/** Reads a `RESERVE_SCRIPT` reply, else a throw. */
 export function parseReserve(reply: unknown): ReserveReply {
   if (Array.isArray(reply) && reply.length >= 1) {
     if (Number(reply[0]) === 1) return { ok: true };

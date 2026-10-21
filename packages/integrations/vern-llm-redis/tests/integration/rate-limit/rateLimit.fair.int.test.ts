@@ -3,11 +3,9 @@ import { describe, expect } from 'vitest';
 import { fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
 import { QUEUE_SCRIPT } from '../../../src/internal/rate-limit/scripts.js';
 import { it } from '../../fixtures.js';
-import { uniquePrefix, waitForRedisValue, waitUntil } from '../../helpers.js';
+import { spyOnScripts, uniquePrefix, waitForRedisValue, waitUntil } from '../../helpers.js';
 
 import type { RedisRateLimitOptions } from '../../../src/rateLimit.js';
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Each limiter here gets a connection of its own, like a separate process
@@ -84,6 +82,7 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
   });
 
   it('a newcomer cannot barge past a waiter that has not polled yet', async ({
+    redis,
     makeLimiter,
     newConnection,
   }) => {
@@ -100,12 +99,20 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
       winner.push('waiter');
       return got;
     });
-    await sleep(200); // the waiter is in line
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count >= 2,
+      { timeoutMs: 2000, intervalMs: 10 },
+    );
 
     held.release();
-    await sleep(50);
+    await waitForRedisValue(
+      () => redis.zcard(`${prefix}:concurrency`),
+      (count) => count === 0,
+      { timeoutMs: 2000, intervalMs: 10 },
+    );
 
-    const newcomer = make({ ...shared, maxQueueMs: 500 });
+    const newcomer = make({ ...shared, maxQueueMs: 5000 });
     const barged = newcomer.acquire(1).then(
       () => winner.push('newcomer'),
       () => winner.push('newcomer timed out'),
@@ -192,9 +199,15 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
       fairQueue: false,
     });
     const held = await blocker.acquire(1);
-    setTimeout(() => held.release(), 100);
+    const waiting = limiter.acquire(1);
+    await waitForRedisValue(
+      () => redis.hlen(queueKey),
+      (count) => count >= 2,
+      { timeoutMs: 2000, intervalMs: 10 },
+    );
+    held.release();
 
-    const got = await limiter.acquire(1);
+    const got = await waiting;
 
     // It waited out the ghost's 1000ms lease rather than being stuck behind it.
     expect(Date.now() - ghostCreatedAt).toBeGreaterThan(900);
@@ -240,12 +253,24 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
       maxQueueMs: 3000,
     };
     const held = await make(shared).acquire(1);
-    const waiting = make(shared).acquire(1);
-    await sleep(200);
+    const connection = newConnection();
+    const scripts = spyOnScripts(connection);
+    let concurrencyAttempts = 0;
+    scripts.mockImplementation(async (command, ...args) => {
+      const result = await scripts.real(command, ...args);
+      if (args.includes(`${prefix}:concurrency`)) concurrencyAttempts++;
+      return result;
+    });
+    const waiting = makeLimiter(shared, connection).acquire(1);
 
-    expect(await redis.exists(`${prefix}:queue`)).toBe(0);
-
-    held.release();
+    try {
+      // Observe completed capacity checks, not elapsed time, before checking the empty queue.
+      await waitUntil(() => concurrencyAttempts >= 2, { timeoutMs: 2000, intervalMs: 10 });
+      expect(await redis.exists(`${prefix}:queue`)).toBe(0);
+    } finally {
+      held.release();
+      scripts.restore();
+    }
     (await waiting).release();
   });
 
@@ -258,30 +283,45 @@ describe.concurrent('redisRateLimit fair queue across processes, real Redis', ()
     const prefix = uniquePrefix('rl');
     const shared = {
       keyPrefix: prefix,
+      maxConcurrent: 1,
       tokensPerMinute: 60_000, // refills 1000 per second
       pollIntervalMs: 40,
       maxQueueMs: 8000,
     };
-    await make(shared).acquire(60_000); // drains the bucket
+    const held = await make(shared).acquire(1);
+    // Spend the bucket before queueing requests; concurrency keeps them from taking tokens.
+    await make({ keyPrefix: prefix, tokensPerMinute: 60_000 }).acquire(59_999);
 
     const order: string[] = [];
     const big = make(shared)
       .acquire(300)
-      .then(() => order.push('big'));
+      .then((got) => {
+        order.push('big');
+        got.release();
+      });
     await waitForRedisValue(
       () => redis.hlen(`${prefix}:queue`),
-      (count) => count > 0,
+      (count) => count >= 2,
       {
-        timeoutMs: 1000,
+        timeoutMs: 2000,
         intervalMs: 10,
       },
     );
     const smalls = [1, 2, 3].map((n) =>
       make(shared)
         .acquire(10)
-        .then(() => order.push(`small${n}`)),
+        .then((got) => {
+          order.push(`small${n}`);
+          got.release();
+        }),
+    );
+    await waitForRedisValue(
+      () => redis.hlen(`${prefix}:queue`),
+      (count) => count >= 5,
+      { timeoutMs: 2000, intervalMs: 10 },
     );
 
+    held.release();
     await Promise.all([big, ...smalls]);
 
     expect(order[0]).toBe('big');

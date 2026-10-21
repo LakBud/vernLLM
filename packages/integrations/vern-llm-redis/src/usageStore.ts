@@ -28,13 +28,17 @@ export interface UsageScope {
 
 /** The `vern-llm-usage` `UsageStore` shape, declared here so this package never imports it. */
 export interface RedisUsageStore {
+  /** Holds the amount on every scope, or refuses with the first scope without room. */
   reserve(
     scopes: readonly UsageScope[],
     amount: UsageAmount,
     ttlMs: number,
   ): Promise<{ ok: true; id: string } | { ok: false; scope: UsageScope; remaining: number }>;
+  /** Frees a hold and adds the real spend. */
   commit(id: string, actual: UsageAmount): Promise<void>;
+  /** Frees a hold without recording spend. */
   release(id: string): Promise<void>;
+  /** Spent and reserved on a scope. */
   read(scope: UsageScope): Promise<{ spent: UsageAmount; reserved: UsageAmount }>;
 }
 
@@ -57,13 +61,25 @@ export function redisUsageStore(
   const redis = withScriptCache(client);
   const prefix = `{${resolveKeyPrefix(options.keyPrefix, 'vernllm:usage')}}:`;
   const expKey = `${prefix}exp`;
+  /** Key of a scope's hash. */
   const scopeKey = (scope: UsageScope) => `${prefix}s:${scope.key}`;
+  /** Key of one hold's hash. */
   const reservationKey = (id: string) => `${prefix}r:${id}`;
 
-  const run = (operation: string, call: () => Promise<unknown>) =>
-    call().catch((error: unknown) => {
+  /** Runs a script and parses its reply, so a bad reply is a Redis error too. */
+  const run = async <T>(
+    operation: string,
+    call: () => Promise<unknown>,
+    parse: (reply: unknown) => T,
+  ) => {
+    try {
+      return parse(await call());
+    } catch (error) {
       throw toRedisError(`usageStore.${operation}`, error);
-    });
+    }
+  };
+  /** Parser for scripts whose reply is not used. */
+  const ignore = () => undefined;
 
   return {
     async reserve(scopes, amount, ttlMs) {
@@ -79,8 +95,9 @@ export function redisUsageStore(
         args.push(scope.unit === 'usd' ? 'u' : 't', scope.limit, scope.resetsAtMs);
       }
 
-      const reply = parseReserve(
-        await run('reserve', () =>
+      const reply = await run(
+        'reserve',
+        () =>
           redis.eval(
             RESERVE_SCRIPT,
             2 + scopes.length,
@@ -89,37 +106,44 @@ export function redisUsageStore(
             ...scopes.map(scopeKey),
             ...args,
           ),
-        ),
+        parseReserve,
       );
       if (reply.ok) return { ok: true, id };
       return { ok: false, scope: scopes[reply.index - 1]!, remaining: reply.remaining };
     },
 
     async commit(id, actual) {
-      await run('commit', () =>
-        redis.eval(
-          SETTLE_SCRIPT,
-          2,
-          expKey,
-          reservationKey(id),
-          prefix,
-          id,
-          '1',
-          actual.nanoUsd,
-          actual.tokens,
-        ),
+      await run(
+        'commit',
+        () =>
+          redis.eval(
+            SETTLE_SCRIPT,
+            2,
+            expKey,
+            reservationKey(id),
+            prefix,
+            id,
+            '1',
+            actual.nanoUsd,
+            actual.tokens,
+          ),
+        ignore,
       );
     },
 
     async release(id) {
-      await run('release', () =>
-        redis.eval(SETTLE_SCRIPT, 2, expKey, reservationKey(id), prefix, id, '0', 0, 0),
+      await run(
+        'release',
+        () => redis.eval(SETTLE_SCRIPT, 2, expKey, reservationKey(id), prefix, id, '0', 0, 0),
+        ignore,
       );
     },
 
     async read(scope) {
-      const [su, st, ru, rt] = parseFour(
-        await run('read', () => redis.eval(READ_SCRIPT, 2, expKey, scopeKey(scope), prefix)),
+      const [su, st, ru, rt] = await run(
+        'read',
+        () => redis.eval(READ_SCRIPT, 2, expKey, scopeKey(scope), prefix),
+        parseFour,
       );
       return { spent: { nanoUsd: su, tokens: st }, reserved: { nanoUsd: ru, tokens: rt } };
     },

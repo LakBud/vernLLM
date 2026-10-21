@@ -9,11 +9,13 @@ import type { Redis } from 'ioredis';
 
 describe.concurrent('redisRateLimit, real Redis, single process', () => {
   it('allows calls up to the requests-per-minute ceiling, then makes a further call wait', async ({
+    redis,
     makeLimiter,
   }) => {
+    const keyPrefix = uniquePrefix('rl');
     const limiter = makeLimiter({
       requestsPerMinute: 2,
-      keyPrefix: uniquePrefix('rl'),
+      keyPrefix,
     });
 
     const first = await limiter.acquire(1);
@@ -30,9 +32,11 @@ describe.concurrent('redisRateLimit, real Redis, single process', () => {
         settled = true;
       });
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    // Still blocked well past when an available-capacity call would
-    // have resolved, proving the ceiling is actually being enforced.
+    await waitForRedisValue(
+      () => redis.hlen(`${keyPrefix}:queue`),
+      (count) => count > 0,
+      { timeoutMs: 2000, intervalMs: 10 },
+    );
     expect(settled).toBe(false);
 
     controller.abort();
@@ -128,7 +132,7 @@ describe.concurrent('redisRateLimit, real Redis, single process', () => {
 describe.concurrent('redisRateLimit, real Redis, AIMD shared across two processes', () => {
   it.for([true, false])(
     'maxQueueSize counts waiters across processes (fairQueue %s)',
-    async (fairQueue, { makeLimiter, newConnection }) => {
+    async (fairQueue, { redis, makeLimiter, newConnection }) => {
       const shared = {
         keyPrefix: uniquePrefix('rl'),
         maxConcurrent: 1,
@@ -143,7 +147,11 @@ describe.concurrent('redisRateLimit, real Redis, AIMD shared across two processe
 
       const controller = new AbortController();
       const waiting = processA.acquire(1, controller.signal).catch((e: unknown) => e);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await waitForRedisValue(
+        () => redis.hlen(`${shared.keyPrefix}:queue`),
+        (count) => count >= 2,
+        { timeoutMs: 2000, intervalMs: 10 },
+      );
 
       // processB has no waiter of its own, but the line is full.
       await expect(processB.acquire(1)).rejects.toMatchObject({ code: 'rate_limit_queue_full' });

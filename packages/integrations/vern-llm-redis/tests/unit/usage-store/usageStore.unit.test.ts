@@ -80,10 +80,15 @@ describe('redisUsageStore', () => {
     redis.eval.mockResolvedValue('nonsense');
     const store = redisUsageStore(redis);
 
-    await expect(store.read(scope)).rejects.toThrow('Unexpected usage store script reply');
-    await expect(store.reserve([scope], { nanoUsd: 1, tokens: 0 }, 1)).rejects.toThrow(
-      'Unexpected usage store script reply',
-    );
+    for (const call of [
+      () => store.read(scope),
+      () => store.reserve([scope], { nanoUsd: 1, tokens: 0 }, 1),
+    ]) {
+      const error = await call().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(LLMError);
+      expect(error).toMatchObject({ code: 'connection_failed' });
+      expect((error as LLMError).message).toContain('Unexpected usage store script reply');
+    }
   });
 
   it('rejects an empty key prefix', () => {
