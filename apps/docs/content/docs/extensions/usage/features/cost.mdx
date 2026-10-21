@@ -1,0 +1,84 @@
+---
+title: Cost and Wasted Spend
+description: How vern-llm-usage prices a call from your own table, handles cache and reasoning tokens, and counts spend on rejected attempts.
+---
+
+Every `usage` event is priced from your table, unless the provider reported the cost. Prices are
+dollars per 1M tokens, and the table carries the date you last checked it:
+
+```ts title="cost-prices.ts"
+usageMiddleware({
+  prices: {
+    'gpt-6-sol': { input: 1.25, output: 10, cacheRead: 0.125 },
+    'claude-sonnet-5-5': {
+      input: 3,
+      output: 15,
+      cacheRead: 0.3,
+      cacheWrite: { '5m': 3.75, '1h': 6 },
+    },
+    'backup/gpt-6-sol': { input: 1.5, output: 12 }, // the same model, priced differently on a target
+  },
+  pricesAsOf: '2026-10-01',
+  maxPriceAgeDays: 90,
+});
+```
+
+A key is a model id, or `<target>/<model>` for one target, and the more specific key wins. There is
+no prefix matching: `gpt-6` never silently prices `gpt-6-mini`. Use `normalizeModel` to drop a date
+suffix, or `priceFor(model, provider)` to look a price up per call instead of passing a table.
+
+## How a call is priced
+
+| Token kind       | Rate                                                                             |
+| ---------------- | -------------------------------------------------------------------------------- |
+| Uncached input   | `input`. It is the prompt minus cache reads and writes, never below zero         |
+| Cache reads      | `cacheRead`, or `input` when unset                                               |
+| Cache writes     | `cacheWrite` by TTL label such as `'5m'`, a flat rate for the rest, or `input`   |
+| Reasoning tokens | `reasoning`, or `output` when unset. They are part of the completion, not on top |
+| Other output     | `output`                                                                         |
+
+Money is held as integer nano dollars (1e-9 USD) and converted to USD only when it is reported, so
+sums never drift.
+
+## Provider reported cost
+
+Some services return what a call cost, such as OpenRouter's `usage.cost`. When the response carries
+it, `TokenUsage.costUsd` is set and that figure is used instead of your table, because it is what
+was billed. It needs no price for the model, and a cost of zero counts. A negative or non finite
+value is ignored and the table is used.
+
+Each charge records where its price came from, and a call takes the weakest source among its charges:
+
+| `costSource` | Meaning                                                            |
+| ------------ | ------------------------------------------------------------------ |
+| `'reported'` | Every charge used the cost the provider reported                   |
+| `'table'`    | At least one charge was priced from your table, none were unpriced |
+| `'unpriced'` | At least one charge had no price, so the cost is a lower bound     |
+
+`totals().bySource` counts charges by the same three sources, so a dashboard can show how much of
+the spend is reported, priced, or unknown.
+
+## Wasted spend
+
+A call can spend tokens on an answer it then throws away: a soft failure that was retried, or JSON
+that did not parse. The result is `wastedUsd`, the part of `estimatedCostUsd` spent on attempts whose
+response was rejected, so you can see what retries cost.
+
+## Saved spend
+
+A cache hit or a joined call makes no provider call, so it costs nothing. `estimatedSavedUsd` is
+what it spared: the request's input and the stored answer, priced as the primary target would have
+charged. It is an estimate from character counts, not a bill, and it is left out when the primary
+model has no price.
+
+## Unpriced models
+
+A model with no price is counted, not guessed. Its tokens still appear in totals, its money is left
+out, the call's `costSource` is `'unpriced'`, and one warning names the model. A cost with
+`costSource: 'unpriced'` is a lower bound. A cache hit has no usage, so it costs nothing and has no
+`costSource`.
+
+<Callout type="warn">
+  One warning is logged at construction when `pricesAsOf` is older than `maxPriceAgeDays` (default
+  90), so a stale table is noticed.
+</Callout>

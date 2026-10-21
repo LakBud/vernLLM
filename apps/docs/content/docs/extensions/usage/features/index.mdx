@@ -1,0 +1,35 @@
+---
+title: Features Overview
+description: Cost per call, wasted spend, budgets, totals, logger fields and events, and stores from vern-llm-usage
+---
+
+`vern-llm-usage` builds everything from the same `usage` events VernLLM already emits, so a cost, a
+total, and a budget always agree with each other.
+
+<Cards>
+  <Card title="Cost and Wasted Spend" href="/docs/extensions/usage/features/cost">
+    A price table, cache and reasoning rates, and spend on attempts that were rejected.
+  </Card>
+  <Card title="Budgets" href="/docs/extensions/usage/features/budgets">
+    Dollar and token limits per context value, checked before a call with a reservation.
+  </Card>
+  <Card title="Totals and Remaining" href="/docs/extensions/usage/features/totals">
+    What each tenant or feature spent, and what is left of each budget.
+  </Card>
+  <Card title="Logger and Events" href="/docs/extensions/usage/features/logging">
+    Cost on every log record, and warnings and rejections as events.
+  </Card>
+  <Card title="Stores" href="/docs/extensions/usage/features/stores">
+    Where budget spend lives, the memory default, and writing your own.
+  </Card>
+</Cards>
+
+## Which one answers what
+
+| Question                                           | Look at                                                        |
+| -------------------------------------------------- | -------------------------------------------------------------- |
+| What did this call cost, and how much was wasted?  | [Cost and Wasted Spend](/docs/extensions/usage/features/cost)  |
+| How do I stop a tenant from spending too much?     | [Budgets](/docs/extensions/usage/features/budgets)             |
+| How much has acme spent today, and what is left?   | [Totals and Remaining](/docs/extensions/usage/features/totals) |
+| How do I see cost in my logs and get warned early? | [Logger and Events](/docs/extensions/usage/features/logging)   |
+| Several processes share one budget. What now?      | [Stores](/docs/extensions/usage/features/stores)               |

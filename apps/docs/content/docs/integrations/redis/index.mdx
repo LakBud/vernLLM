@@ -7,7 +7,8 @@ description: Share circuit breaker, rate limit, retry budget, and cache state ac
 
 `vern-llm-redis` is the production version of the illustrative Redis adapters shown throughout
 [Customization](/docs/customization): a `CircuitBreakerAdapter`, `RateLimiterAdapter`,
-`RetryBudgetAdapter`, and `CacheAdapter`, each backed by Redis instead of process memory. Reach for it once VernLLM runs on
+`RetryBudgetAdapter`, and `CacheAdapter`, each backed by Redis instead of process memory, plus a
+store for [vern-llm-usage](/docs/extensions/usage) budgets. Reach for it once VernLLM runs on
 more than one instance and those instances need a shared view of failures, limits, retries, or cached
 responses.
 

@@ -1,0 +1,32 @@
+---
+title: API Reference Overview
+description: The public exports of vern-llm-usage, and where each option and result is documented
+---
+
+| Export                                          | Kind     | What it is                                                                                                                  |
+| ----------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `usageMiddleware`                               | Function | Takes `UsageMiddlewareOptions` and returns one middleware with `totals`, `remaining` and `costFor`.                         |
+| `usageMiddlewareRef`                            | Constant | The `MiddlewareRef` of that entry, so a second one in the same `VernLLM` is rejected.                                       |
+| `usageLogFields`                                | Function | Cost fields for `vern-llm-logger`'s `enrich`, see [Logger and Events](/docs/extensions/usage/features/logging).             |
+| `memoryUsageStore`                              | Function | The in process `UsageStore`, see [Stores](/docs/extensions/usage/features/stores).                                          |
+| `UsageMiddlewareOptions`                        | Type     | Every option, see [Configuration](/docs/extensions/usage/API-reference/configuration).                                      |
+| `UsageMiddleware`                               | Type     | The middleware plus its reads.                                                                                              |
+| `UsageTotals`, `BudgetStatus`, `UsageLogFields` | Type     | Shapes returned by `totals`, `remaining` and `usageLogFields`, see [Results](/docs/extensions/usage/API-reference/results). |
+| `TotalsOptions`, `AttributionFilter`            | Type     | The arguments of `totals` and `remaining`.                                                                                  |
+| `CostFor`                                       | Type     | The shape of `costFor`, for a router that takes any pricing function.                                                       |
+| `ModelPrice`, `ModelPrices`, `CostSource`       | Type     | The price table, and where a charge's price came from.                                                                      |
+| `UsageBudget`, `BudgetWindow`                   | Type     | One budget, and the `'hour' \| 'day' \| 'month'` window it resets on.                                                       |
+| `UsageStore`, `Scope`, `Amount`                 | Type     | The store contract, see [Stores](/docs/extensions/usage/features/stores).                                                   |
+| `MemoryUsageStoreOptions`, `LoggerOption`       | Type     | The options of `memoryUsageStore`, and the `logger` option of `usageMiddleware`.                                            |
+
+## Reads on the middleware
+
+| Method                      | Returns                                                                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `totals(filter?, options?)` | `UsageTotals` for the current window. Synchronous, per process.                                                                           |
+| `remaining(filter)`         | `Promise<BudgetStatus[]>`, one per budget that applies.                                                                                   |
+| `costFor(target, request)`  | The most the request could cost on `{ name, model }` in USD, or `undefined` for an unpriced model. For a router to weigh targets by cost. |
+
+`costFor` is the estimate a budget would hold for that target. It never throws. It is also exported
+as the `CostFor` type, `(target, request) => number | undefined`, so a router can take any function
+of that shape, `usage.costFor` included, without importing this package at runtime.

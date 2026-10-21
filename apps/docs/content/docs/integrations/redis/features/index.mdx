@@ -1,10 +1,10 @@
 ---
 title: Features Overview
-description: The four Redis backed adapters in vern-llm-redis for a shared circuit breaker, rate limiter, retry budget and cache across VernLLM processes.
+description: The Redis backed adapters in vern-llm-redis for a shared circuit breaker, rate limiter, retry budget, cache and usage store across VernLLM processes.
 ---
 
-`vern-llm-redis` ships four adapters, each implementing an interface VernLLM already exposes for
-customization. Wire in any of them, they're independent options on the `VernLLM`
+`vern-llm-redis` ships five adapters, each implementing an interface VernLLM or an extension already
+exposes. Wire in any of them, they're independent options on the `VernLLM`
 constructor and don't depend on each other.
 
 <Cards>
@@ -20,11 +20,14 @@ constructor and don't depend on each other.
   <Card title="Cache" href="/docs/integrations/redis/features/cache">
     redisCache: cached responses shared across processes with a configurable TTL.
   </Card>
+  <Card title="Usage Store" href="/docs/integrations/redis/features/usage-store">
+    redisUsageStore: vern-llm-usage budgets shared across processes, held all or none.
+  </Card>
 </Cards>
 
 ## On a Redis outage
 
-The four adapters don't share a failure contract, each page above covers its own in full, but
+The adapters don't share a failure contract, each page above covers its own in full, but
 here's the difference at a glance:
 
 | Adapter         | On a Redis outage                                                                                                                                                                                                                               |
@@ -32,4 +35,5 @@ here's the difference at a glance:
 | Circuit Breaker | Falls back to core's in-process breaker from the first Redis call that fails or stalls past `prepareTimeoutMs` until Redis answers again, so a circuit can still open from this process's own failures. Failed writes are logged and swallowed. |
 | Rate Limit      | No fail-open path anywhere in the stack. A rejected Redis call propagates and genuinely fails the LLM call.                                                                                                                                     |
 | Retry Budget    | Falls back to core's in-process budget over this process's attempts while Redis fails or has not replied for `windowMs`, so each process still caps its own retries.                                                                            |
+| Usage Store     | A rejected Redis call rejects the store operation, which `vern-llm-usage` handles by its `onStoreError` option: send the call unmetered, or reject it.                                                                                          |
 | Cache           | Fails open, but this comes from `vern-llm` core's `CacheOrchestrator`, universal to any `CacheAdapter`, not something `redisCache` implements itself.                                                                                           |

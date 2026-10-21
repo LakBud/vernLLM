@@ -1,0 +1,101 @@
+---
+title: Budgets
+description: Dollar and token limits per context value, checked before a call is sent with a reservation, and rejected with budget_exceeded.
+---
+
+A budget limits one `context` key over a calendar window. The key must also be listed in
+`attribute`, so a budget always matches something that is attributed:
+
+```ts title="budgets-config.ts"
+usageMiddleware({
+  prices,
+  pricesAsOf: '2026-10-01',
+  attribute: ['tenantId', 'feature'],
+  budgets: [
+    { key: 'tenantId', limitUsd: 50, per: 'day' },
+    { key: 'feature', equals: 'summarize', limitTokens: 2_000_000, per: 'hour' },
+  ],
+});
+```
+
+Without `equals` the limit applies to every value of the key separately, so each tenant above gets
+its own $50 a day. With `equals` it applies to that one value. A call without the key, or with no
+`context`, is not limited by that budget. Set exactly one of `limitUsd` and `limitTokens`.
+
+## Windows
+
+Windows are calendar `hour`, `day` or `month`, in UTC unless you set `timeZone`. Spend starts again
+from zero at the boundary. They follow the wall clock on purpose, since budgets are about the
+calendar.
+
+```ts title="time-zone.ts"
+usageMiddleware({
+  timeZone: 'America/New_York', // a day starts at New York midnight
+  budgets: [{ key: 'tenantId', limitUsd: 50, per: 'day' }],
+});
+```
+
+The zone applies to every budget and to `totals`. Daylight saving is followed, so a day can be 23 or
+25 hours long. An unknown zone throws at construction.
+
+## How a call is checked
+
+Before the call, an estimate is held against every budget it falls under. If any budget has no room,
+nothing is held anywhere and the call is rejected.
+
+<Steps>
+<Step>
+
+### Estimate
+
+The worst case: the input plus `max_tokens`, priced at the dearest allowed target.
+
+</Step>
+<Step>
+
+### Reserve
+
+The estimate is held against all budgets or none, in one atomic step.
+
+</Step>
+<Step>
+
+### Call
+
+Providers are contacted only now.
+
+</Step>
+<Step>
+
+### Settle
+
+The estimate is replaced by the real spend, or released when no usage was reported.
+
+</Step>
+</Steps>
+
+The estimate counts `max_tokens` once and skips targets with no price, so with none priced only
+tokens are held. Parallel calls cannot overshoot: 50 calls against a budget with room for one let
+exactly one through.
+
+A rejection is an `LLMError` with `type: 'quota_exceeded'` and `code: 'budget_exceeded'`. It is
+thrown before any provider is contacted, never counts toward the circuit breaker, and the default
+`fallbackOn` stops on it. A `usage.budget_exceeded` event says which budget was hit.
+
+<Callout type="warn">
+  Budgets are guards, not ledgers. Spend can pass a limit by at most one call's overrun, since a
+  longer answer than the estimate is only known at the end. Dollar budgets ignore unpriced calls,
+  and token budgets count them.
+</Callout>
+
+## When the store fails
+
+`onStoreError: 'allow'` (the default) sends the call unmetered and logs the failure, matching the
+core's rule that a failing cache is a miss. `'deny'` rejects it like an exceeded budget, with the
+store's error as the `cause`, for teams where overspend is worse than downtime.
+
+## Streams
+
+A stream keeps its reservation until `finalResult` settles, then replaces it with the real spend.
+A stream that is aborted reports no usage, so its spend is unknown: its hold is freed and the call
+is counted under `unknownSpendCalls` in the totals.

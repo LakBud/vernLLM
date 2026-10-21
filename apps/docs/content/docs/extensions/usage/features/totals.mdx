@@ -1,0 +1,57 @@
+---
+title: Totals and Remaining
+description: Read what each tenant or feature spent in the current window, and what is left of each budget.
+---
+
+Both reads belong to the middleware you built:
+
+```ts title="totals-usage.ts"
+const usage = usageMiddleware({ prices, pricesAsOf, attribute: ['tenantId'], budgets });
+
+usage.totals({ tenantId: 'acme' }, { window: 'day' });
+await usage.remaining({ tenantId: 'acme' });
+```
+
+## totals
+
+`totals(filter, { window, provider, model })` is synchronous and sums the matching series of the
+current window (`'hour'`, `'day'` or `'month'`, default `'day'`). The filter takes keys from
+`attribute`. See [Results](/docs/extensions/usage/API-reference/results) for every field.
+
+| Field                           | Meaning                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `estimatedCostUsd`, `wastedUsd` | Spend, and the part spent on rejected attempts                          |
+| `calls`                         | Calls that finished, cache hits and joins included, rejected ones not   |
+| `estimatedSavedUsd`             | Estimated spend that cache hits and joins spared                        |
+| `bySource`                      | Charges by source: reported, priced from the table, or unpriced         |
+| `tokens`                        | `input` includes cache reads and writes, `reasoning` is inside `output` |
+| `cacheHits`, `joins`            | Calls served without a provider call                                    |
+| `unknownSpendCalls`             | Aborted streams, whose partial usage is never reported                  |
+
+Totals are kept in process, even with a shared store: budgets are what must agree across
+processes. Each window kind keeps the current and previous window, and `maxSeries` (default 1,000)
+caps the series per window. Past it, new series count under `__other__` with one warning.
+
+## remaining
+
+`remaining(filter)` is asynchronous, because budgets live in the store. It returns one entry per
+budget that applies to the filter:
+
+```json title="remaining.json"
+[
+  {
+    "key": "tenantId",
+    "value": "acme",
+    "per": "day",
+    "unit": "usd",
+    "limit": 50,
+    "spent": 12.4,
+    "reserved": 0.02,
+    "remaining": 37.58,
+    "resetsAt": "2026-10-22T00:00:00.000Z"
+  }
+]
+```
+
+Amounts are dollars for dollar budgets and tokens for token budgets. A budget whose key the filter
+lacks does not appear.

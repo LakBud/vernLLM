@@ -1,0 +1,121 @@
+---
+title: Contributing
+description: Set up, test and open a pull request for vern-llm-usage, the usage extension in the VernLLM monorepo.
+icon: GitPullRequest
+---
+
+This page covers `packages/extensions/vern-llm-usage` specifically. For the coding standard and PR
+checklist that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace and build the core once:
+
+```bash
+pnpm install
+pnpm --filter vern-llm build
+```
+
+No external service is needed. The tests use fake clients, a spy store, and a fake `Date`, never a
+live provider.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
+explain non obvious decisions with a short comment, and keep `any` as a last resort. Six rules are
+specific to this package:
+
+- **Never change the call.** Every hook, user callback, and store call goes through `guard`. A
+  failure is logged as `[VernLLM] usage: <step> failed` and the call carries on. The only
+  deliberate change is a budget rejection.
+- **Money is integer nano dollars** until the public edge, so sums never drift.
+- **Settle once.** A reservation is committed when usage was reported and released when none was.
+- **Observe streams on the side.** Never replace `finalResult`, and write what the logger reads
+  before any `await`.
+- **Validate once** in `normalizeOptions`. Runtime code trusts the resolved config.
+- **Copy, don't import, across extensions.** The guard and the test fakes are copies, and the
+  logger is a dev dependency for one test suite only.
+
+## Layout
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="usageMiddleware.ts" />
+    <File name="logFields.ts" />
+    <File name="index.ts" />
+    <Folder name="types" />
+    <Folder name="stores" />
+    <Folder name="internal" defaultOpen>
+      <Folder name="budgets" />
+      <Folder name="middleware" />
+      <Folder name="options" />
+      <Folder name="pricing" />
+      <Folder name="recorder" />
+      <Folder name="totals" />
+      <File name="guard.utils.ts" />
+    </Folder>
+  </Folder>
+  <Folder name="tests">
+    <Folder name="unit" />
+    <Folder name="integration" />
+  </Folder>
+  <Folder name="scripts" />
+</Files>
+
+`usageMiddleware.ts` only wires parts together, the same way the logger's does. Each part lives in
+its own module under `internal/`: `middleware/callFinisher.utils.ts` ends a call, `budgets/gate.ts`
+holds and settles reservations, and `totals/` keeps the in process counters.
+
+## Scripts
+
+Run them with `pnpm run <script>` from inside `packages/extensions/vern-llm-usage`, or
+`pnpm nx run vern-llm-usage:<script>` from the repo root:
+
+| Script                                    | What it does                                                |
+| ----------------------------------------- | ----------------------------------------------------------- |
+| `build`, `dev`                            | Build with tsdown, or rebuild on change                     |
+| `lint`, `lint:fix`                        | Run oxlint                                                  |
+| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                          |
+| `test`, `test:unit`, `test:int`           | Run all tests, or one project                               |
+| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                 |
+| `smoke-test`                              | Pack both packages and import the build through ESM and CJS |
+
+`smoke-test` runs against the built package, so run `build` first.
+
+## Tests
+
+Integration tests live in `tests/integration/` and run a real `VernLLM` with a mock client and a
+spy store, one file per behavior. Unit tests live in `tests/unit/` and cover only what an
+integration test cannot make precise, such as window boundaries across daylight saving. Use a fake
+`Date` for every calendar assertion. The package holds 100% coverage, so a new branch needs a test.
+
+## Before opening a PR
+
+Every PR touching `packages/extensions/vern-llm-usage` runs through the same CI workflows described
+in [Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                 | Local command                                                               |
+| --------------------- | --------------------------------------------------------------------------- |
+| Lint                  | `pnpm nx run vern-llm-usage:lint`                                           |
+| Typecheck source      | `pnpm nx run vern-llm-usage:typecheck`                                      |
+| Typecheck tests       | `pnpm nx run vern-llm-usage:typecheck:test`                                 |
+| Unit tests + coverage | `pnpm nx run vern-llm-usage:test:unit:coverage`                             |
+| Integration tests     | `pnpm nx run vern-llm-usage:test:int:coverage`                              |
+| Build, smoke test     | `pnpm nx run vern-llm-usage:build && pnpm nx run vern-llm-usage:smoke-test` |
+| Changeset present     | `pnpm changeset status --since=origin/main`                                 |
+
+## Changesets
+
+Record your change with:
+
+```bash
+pnpm nx run vern-llm-usage:changeset
+```
+
+`vern-llm-usage` versions and releases independently of `vern-llm`, on its own changelog. See
+[Development](/docs/development#ci) for what drives the release itself.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

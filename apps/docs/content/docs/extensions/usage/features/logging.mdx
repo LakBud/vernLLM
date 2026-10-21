@@ -1,0 +1,60 @@
+---
+title: Logger and Events
+description: Put cost on every vern-llm-logger record with usageLogFields, and react to budget warnings and rejections.
+---
+
+The two packages never import each other. They meet through `ctx.state` and custom events, and the
+logger goes outermost so its record includes calls a budget rejected.
+
+```ts title="logging-setup.ts"
+import { loggerMiddleware } from 'vern-llm-logger';
+import { usageLogFields, usageMiddleware } from 'vern-llm-usage';
+
+const llm = new VernLLM({
+  client,
+  model: 'gpt-6-sol',
+  middleware: [
+    loggerMiddleware({ context: ['tenantId'], enrich: usageLogFields }),
+    usageMiddleware({ prices, pricesAsOf, attribute: ['tenantId'], budgets, warnAt: 0.8 }),
+  ],
+});
+```
+
+## Cost in the record
+
+`usageLogFields` lands in `record.fields`. For a stream it is set before the logger builds its
+record at `finalResult`:
+
+```json title="logging-record.json"
+{
+  "outcome": "ok",
+  "fields": { "estimatedCostUsd": 0.0031, "wastedUsd": 0, "costSource": "table" },
+  "custom": {
+    "usage.budget_warning": [
+      { "v": 1, "scope": "tenantId=acme per day", "unit": "usd", "limit": 50, "used": 0.81 }
+    ]
+  }
+}
+```
+
+A cache hit or join also carries `estimatedSavedUsd`, an estimate of the spend it spared.
+
+`usageLogFields(ctx)` works on any middleware's `ctx` once the usage middleware's `next()` has
+returned, and returns `{}` for a call that was not metered.
+
+## Events
+
+Both events are custom events with `v: 1`, kept by the logger's default `usage.*` allowlist.
+
+| Event                   | When                                                             | Data                                      |
+| ----------------------- | ---------------------------------------------------------------- | ----------------------------------------- |
+| `usage.budget_warning`  | Once per budget and window, when spend plus holds reach `warnAt` | `scope`, `unit`, `limit`, `used` (0 to 1) |
+| `usage.budget_exceeded` | A call was rejected, just before the error is thrown             | `scope`, `unit`, `limit`, `remaining`     |
+
+A rejected call is logged at `warn` as `rejected`, with no attempts, not as an error.
+
+<Callout type="info">
+  With an asynchronous store, a stream's warning can reach the logger after its record is written,
+  because the store read cannot finish in the same tick. Cost fields are never affected, and the in
+  memory store is synchronous.
+</Callout>

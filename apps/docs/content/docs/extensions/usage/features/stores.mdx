@@ -1,0 +1,90 @@
+---
+title: Stores
+description: Where budget spend and reservations live, the in memory default, and the four methods of a UsageStore.
+---
+
+A store keeps the spend and the holds for every budget scope. The default is `memoryUsageStore()`,
+which lives in one process. Spend is lost on restart and not shared, so use a shared store when
+several processes must agree on one budget.
+
+```ts title="stores-memory.ts"
+import { memoryUsageStore, usageMiddleware } from 'vern-llm-usage';
+
+usageMiddleware({
+  prices,
+  pricesAsOf,
+  attribute,
+  budgets,
+  store: memoryUsageStore({ maxScopes: 5_000 }),
+});
+```
+
+| Option      | Default | Meaning                                                                |
+| ----------- | ------- | ---------------------------------------------------------------------- |
+| `maxScopes` | `10000` | Most scope windows tracked at once. Past it new scopes are not limited |
+| `onWarning` | none    | Receives the one warning logged when `maxScopes` is hit                |
+
+Finished windows are dropped as new ones start, and a hold that is never settled expires after 10
+minutes. The store is synchronous, so a reservation is atomic without locks.
+
+## Sharing budgets across processes
+
+`redisUsageStore` from `vern-llm-redis/usageStore` keeps budgets in Redis, so a fleet shares one
+limit. See [Usage Store](/docs/integrations/redis/features/usage-store).
+
+## Writing a store
+
+```ts title="stores-contract.ts"
+interface UsageStore {
+  reserve(scopes, amount, ttlMs): { ok: true; id: string } | { ok: false; scope; remaining };
+  commit(id, actual): void;
+  release(id): void;
+  read(scope): { spent: Amount; reserved: Amount };
+}
+```
+
+Every method may return a promise. A `Scope` is one budget applied to one value in one window, and
+an `Amount` is what a call spends, as integers:
+
+<TypeTable
+  type={{
+    key: {
+      description: 'Identifies the budget, value and window, so a new window starts from zero.',
+      type: 'string',
+      required: true,
+    },
+    label: {
+      description: 'For messages, such as tenantId=acme per day.',
+      type: 'string',
+      required: true,
+    },
+    unit: {
+      description: 'Which part of an Amount this scope limits.',
+      type: "'usd' | 'tokens'",
+      required: true,
+    },
+    limit: {
+      description: 'Nano dollars for usd, tokens for tokens.',
+      type: 'number',
+      required: true,
+    },
+    resetsAtMs: {
+      description: 'When the window ends, as epoch milliseconds.',
+      type: 'number',
+      required: true,
+    },
+  }}
+/>
+
+An `Amount` is `{ nanoUsd, tokens }`: nano dollars (1e-9 USD) and whole tokens, integers only. A
+denied `reserve` returns the scope that had no room and what is left of it in that scope's unit.
+
+| Method    | Must                                                                             |
+| --------- | -------------------------------------------------------------------------------- |
+| `reserve` | Check every scope and hold on all or none, atomically, in the unit of each scope |
+| `commit`  | Replace the held amount with the real spend, and ignore an unknown or expired id |
+| `release` | Free a hold with no spend, used when a call reported no usage                    |
+| `read`    | Return spent and held for a scope, zeros when it was never used                  |
+
+`ttlMs` lets a store free a hold that is never settled, such as one from a crashed process. A store
+that throws is handled by `onStoreError`.

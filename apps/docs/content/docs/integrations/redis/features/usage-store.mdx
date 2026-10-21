@@ -1,0 +1,51 @@
+---
+title: Usage Store
+description: Use redisUsageStore from vern-llm-redis to share vern-llm-usage budgets across every process, so a fleet stays inside one limit.
+---
+
+`redisUsageStore` is a `UsageStore` for [vern-llm-usage](/docs/extensions/usage), backed by Redis, so
+every process using the same prefix counts against one budget.
+
+```ts title="redis-usage-store.ts"
+import Redis from 'ioredis';
+import { usageMiddleware } from 'vern-llm-usage';
+import { redisUsageStore } from 'vern-llm-redis/usageStore';
+import { fromIoredis } from 'vern-llm-redis/clients';
+
+const store = redisUsageStore(fromIoredis(new Redis()), { keyPrefix: 'myapp:usage' });
+
+usageMiddleware({
+  prices,
+  pricesAsOf,
+  attribute: ['tenantId'],
+  budgets: [{ key: 'tenantId', limitUsd: 50, per: 'day' }],
+  store,
+});
+```
+
+## Options
+
+| Option      | Default           | Notes                                                                         |
+| ----------- | ----------------- | ----------------------------------------------------------------------------- |
+| `keyPrefix` | `'vernllm:usage'` | A non-empty string. Stores with the same prefix share budgets; others do not. |
+
+## How it behaves
+
+- Each operation is one script, so `reserve` holds every scope or none even when many processes
+  reserve at once.
+- Time comes from Redis, so one process's clock cannot move an expiry.
+- A hold that is never settled, such as one from a crashed process, is returned by the next
+  operation after its `ttlMs`, with no timer.
+- A scope's keys expire a day after its window ends, so a call that settles just after a rollover
+  still finds its scope.
+- Every key sits under one `{prefix}` hash tag. A Redis Cluster keeps them in one slot, so a very
+  large fleet's budgets share a node.
+
+## On a Redis outage
+
+A Redis error rejects the operation as `LLMError('network')` with code `connection_failed`.
+`vern-llm-usage` handles it by `onStoreError`: `'allow'` (default) sends the call unmetered and logs
+it, `'deny'` rejects the call as `budget_exceeded`.
+
+`totals()` stays per process, since it reads in process counters. `remaining()` reads the shared
+spend.

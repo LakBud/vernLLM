@@ -1,0 +1,43 @@
+---
+title: Configuration
+description: Every option of usageMiddleware, its default, and what is checked when it is constructed
+---
+
+Everything is validated when `usageMiddleware()` is called. A bad option throws
+`usageMiddleware: <field> must be ...`, and an explicit `null` is reported rather than defaulted.
+
+| Option            | Type                              | Default   | Meaning                                                                                          |
+| ----------------- | --------------------------------- | --------- | ------------------------------------------------------------------------------------------------ |
+| `prices`          | `Record<string, ModelPrice>`      |           | Dollars per 1M tokens by model or `<target>/<model>`. Pass exactly one of `prices` or `priceFor` |
+| `priceFor`        | `(model, provider) => ModelPrice` |           | Looks a price up per call. Return `undefined` for an unknown model                               |
+| `pricesAsOf`      | `string`                          |           | `YYYY-MM-DD` you last checked the table. Required with `prices`, never in the future             |
+| `maxPriceAgeDays` | `number`                          | `90`      | Logs one warning when `pricesAsOf` is older                                                      |
+| `normalizeModel`  | `(model) => string`               |           | Maps a model id to its table key, for example to drop a date suffix                              |
+| `attribute`       | `string[]`                        | `[]`      | The `context` keys spend is attributed to                                                        |
+| `budgets`         | `UsageBudget[]`                   | `[]`      | See below                                                                                        |
+| `warnAt`          | `number`                          | off       | Emit `usage.budget_warning` at this share of a limit, between 0 and 1 exclusive                  |
+| `timeZone`        | `string`                          | `'UTC'`   | IANA zone budget windows and `totals` follow, such as `'America/New_York'`                       |
+| `maxSeries`       | `number`                          | `1000`    | Series `totals` keeps per window, then `__other__`                                               |
+| `onStoreError`    | `'allow' \| 'deny'`               | `'allow'` | What a failing store does to a call                                                              |
+| `store`           | `UsageStore`                      | memory    | Where budget spend lives                                                                         |
+| `logger`          | `Logger \| 'silent'`              | console   | This package's own diagnostics, prefixed `[VernLLM] usage:`                                      |
+
+## ModelPrice
+
+| Field        | Default  | Meaning                                                             |
+| ------------ | -------- | ------------------------------------------------------------------- |
+| `input`      |          | Uncached input, dollars per 1M tokens                               |
+| `output`     |          | Output                                                              |
+| `cacheRead`  | `input`  | Cache reads                                                         |
+| `cacheWrite` | `input`  | One rate, or a rate per TTL label such as `{ '5m': 3.75, '1h': 6 }` |
+| `reasoning`  | `output` | Reasoning tokens                                                    |
+
+## UsageBudget
+
+| Field         | Meaning                                                                                 |
+| ------------- | --------------------------------------------------------------------------------------- |
+| `key`         | A `context` key, also listed in `attribute`                                             |
+| `equals`      | Limit this one value only. Without it, every value has its own limit                    |
+| `limitUsd`    | Dollars, from 0.000000001 to 9,000,000. Set exactly one of `limitUsd` and `limitTokens` |
+| `limitTokens` | Prompt plus completion tokens, a positive integer                                       |
+| `per`         | `'hour'`, `'day'` or `'month'`, in `timeZone`                                           |
