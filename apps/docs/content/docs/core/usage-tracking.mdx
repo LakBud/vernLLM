@@ -24,6 +24,7 @@ interface TokenUsage {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   cacheWriteTokensByTtl?: Readonly<Record<string, number>>;
+  costUsd?: number;
   requestId: string;
   model: string;
   provider?: string;
@@ -233,3 +234,10 @@ const llm = new VernLLM({
 
 This prices every prompt token at one rate. With prompt caching on, split out the cache tokens as
 shown in [Cache tokens](#cache-tokens), since they are priced differently.
+
+<Callout type="info" title="Looking for cost and budgets?">
+  `onUsage` hands you tokens and leaves the pricing to you. To price every call from a table you
+  supply, split out spend on attempts that were then rejected, and stop calls once a budget is
+  spent, add the [usage extension](/docs/extensions/usage). It reads the same token counts, and
+  prefers the provider's own `costUsd` when there is one.
+</Callout>

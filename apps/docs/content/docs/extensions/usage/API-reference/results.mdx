@@ -1,0 +1,175 @@
+---
+title: Results
+description: Every field of what totals, remaining, usageLogFields, the budget events, and a rejected call return from vern-llm-usage.
+---
+
+The shapes below are what the middleware hands back. Money fields are USD as plain numbers, rounded
+from integer nano dollars only when they are reported.
+
+## UsageTotals
+
+Returned by `totals(filter?, options?)`, see [Totals and Remaining](/docs/extensions/usage/features/totals).
+`options` takes `window` (`'hour'`, `'day'` or `'month'`, default `'day'`), and `provider` and
+`model` to narrow to one target name or model.
+
+<TypeTable
+  type={{
+    estimatedCostUsd: {
+      description:
+        'Everything spent, wasted attempts included. Unpriced charges add nothing, so it is a lower bound.',
+      type: 'number',
+      required: true,
+    },
+    wastedUsd: {
+      description: 'The part spent on attempts whose response was then rejected.',
+      type: 'number',
+      required: true,
+    },
+    estimatedSavedUsd: {
+      description: 'An estimate of what cache hits and joins spared.',
+      type: 'number',
+      required: true,
+    },
+    calls: {
+      description:
+        'Calls that finished, cache hits and joins included. A call a budget rejected is not counted.',
+      type: 'number',
+      required: true,
+    },
+    bySource: {
+      description: 'Charges by where their price came from: the provider, your table, or nowhere.',
+      type: '{ reported: number; table: number; unpriced: number }',
+      required: true,
+    },
+    tokens: {
+      description:
+        'As the provider reported them. input includes cache reads and writes, and reasoning is inside output.',
+      type: '{ input; output; cacheRead; cacheWrite; reasoning }',
+      required: true,
+    },
+    cacheHits: {
+      description: 'Calls answered from the cache.',
+      type: 'number',
+      required: true,
+    },
+    joins: {
+      description: 'Calls that shared another call already in flight.',
+      type: 'number',
+      required: true,
+    },
+    unknownSpendCalls: {
+      description:
+        'Aborted streams, whose usage the provider never reports. They add no cost to the totals, and their hold counts against budgets.',
+      type: 'number',
+      required: true,
+    },
+  }}
+/>
+
+## BudgetStatus
+
+One entry per budget that applies, returned by `remaining(filter)`, see
+[Totals and Remaining](/docs/extensions/usage/features/totals#remaining). Amounts are dollars for a
+dollar budget and tokens for a token budget.
+
+<TypeTable
+  type={{
+    key: {
+      description: 'The context key the budget limits.',
+      type: 'string',
+      required: true,
+    },
+    value: {
+      description: 'The value of that key the figures are for.',
+      type: 'string | number | boolean',
+      required: true,
+    },
+    per: {
+      description: 'The window the budget resets on.',
+      type: "'hour' | 'day' | 'month'",
+      required: true,
+    },
+    unit: {
+      description: 'Whether the figures are dollars or tokens.',
+      type: "'usd' | 'tokens'",
+      required: true,
+    },
+    limit: { description: 'The budget.', type: 'number', required: true },
+    spent: { description: 'Spent in the current window.', type: 'number', required: true },
+    reserved: { description: 'Held for calls in flight.', type: 'number', required: true },
+    remaining: {
+      description: 'What is left once spend and holds are taken off the limit, never below zero.',
+      type: 'number',
+      required: true,
+    },
+    resetsAt: {
+      description: 'When the window ends and spend starts again from zero, ISO 8601 UTC.',
+      type: 'string',
+      required: true,
+    },
+  }}
+/>
+
+## UsageLogFields
+
+What `usageLogFields(ctx)` returns for `vern-llm-logger`'s `enrich`, see
+[Logger and Events](/docs/extensions/usage/features/logging). It is `{}` for a call that was not
+metered.
+
+<TypeTable
+  type={{
+    estimatedCostUsd: {
+      description: 'Everything the call spent, wasted attempts included.',
+      type: 'number',
+      required: true,
+    },
+    wastedUsd: {
+      description: 'The part spent on attempts whose response was then rejected.',
+      type: 'number',
+      required: true,
+    },
+    costSource: {
+      description:
+        "The weakest source among the call's charges. Absent when the call reported no usage, such as a cache hit.",
+      type: "'reported' | 'table' | 'unpriced'",
+    },
+    estimatedSavedUsd: {
+      description: 'Only on a cache hit or join. Absent when the primary target has no price.',
+      type: 'number',
+    },
+  }}
+/>
+
+## Events
+
+Custom events with `v: 1`, kept by the logger's default `usage.*` allowlist.
+
+<TypeTable
+  type={{
+    'usage.budget_warning': {
+      description: 'Once per budget and window, when spend plus holds reach warnAt.',
+      type: '{ v: 1; scope: string; unit: "usd" | "tokens"; limit: number; used: number }',
+    },
+    'usage.budget_exceeded': {
+      description: 'A call was rejected, just before the error is thrown.',
+      type: '{ v: 1; scope: string; unit: "usd" | "tokens"; limit: number; remaining: number }',
+    },
+  }}
+/>
+
+`scope` is the label of the budget, such as `tenantId=acme per day`. `used` is a share from 0 to 1.
+
+## Rejection
+
+A call over budget, or a failing store with `onStoreError: 'deny'`, throws an `LLMError` before any
+provider is contacted:
+
+| Field     | Value                                                           |
+| --------- | --------------------------------------------------------------- |
+| `type`    | `'quota_exceeded'`                                              |
+| `code`    | `'budget_exceeded'`                                             |
+| `message` | `Budget exceeded: <label>`, or `Usage budget store unavailable` |
+| `cause`   | The store's error, only for a failing store                     |
+
+It is not retryable, never counts toward the circuit breaker, and the default `fallbackOn` stops on
+it.

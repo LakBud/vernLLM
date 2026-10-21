@@ -1,0 +1,55 @@
+---
+title: Troubleshooting
+description: Symptoms and fixes for missing cost, unpriced calls, budgets that do not trigger, windows in the wrong zone, and warnings that do not appear
+---
+
+## Common symptoms
+
+<Accordions>
+  <Accordion title="costSource is 'unpriced', or one warning names a model">
+    No price matched the model. Check the key in `prices` against the model id the provider reports,
+    which can carry a date suffix: use `normalizeModel` to drop it. Matching is exact, with no
+    prefix matching, and a `<target>/<model>` key only matches that target.
+  </Accordion>
+  <Accordion title="A budget never rejects a call">
+    The call must carry the budget's `key` in `context` as a string, number or boolean, and the key
+    must be in `attribute`. A dollar budget ignores unpriced calls, so use `limitTokens` there. A
+    call with `equals` set matches only that value.
+  </Accordion>
+  <Accordion title="Calls are rejected too early">
+    The estimate is a worst case: the input, which includes tool definitions and the response
+    schema, plus `max_tokens`, priced at the dearest allowed target. A large `max_tokens` holds a
+    large amount until the call settles. Lower `max_tokens` or raise the limit.
+  </Accordion>
+  <Accordion title="Budgets differ between processes">
+    The default store is per process. Use a shared store for one budget across processes.
+  </Accordion>
+  <Accordion title="No cost in the log record">
+    The logger must use `enrich: usageLogFields`. Their order in `middleware` does not matter, since
+    the logger always sits outermost. A call that was not metered, such as one with no usage, has no
+    `costSource`.
+  </Accordion>
+  <Accordion title="Totals are empty after a restart, or differ between processes">
+    `totals()` reads in process counters, so it starts at zero when the process does and covers this
+    process only, even with a shared store. Budgets are what agree across processes: read
+    `remaining()` for the shared figure.
+  </Accordion>
+  <Accordion title="A budget resets at the wrong hour">
+    Windows follow `timeZone`, which defaults to `'UTC'`. Set an IANA zone such as
+    `'Europe/Oslo'` to start a day at that zone's midnight. Daylight saving is followed, so a day can
+    be 23 or 25 hours long.
+  </Accordion>
+  <Accordion title="costFor returns undefined">
+    The target's model has no price in the table, or `priceFor` returned `undefined` for it. The
+    target is matched by its `name` for a `<target>/<model>` key, and by `model` otherwise.
+  </Accordion>
+  <Accordion title="budget_exceeded or costUsd is not recognized">
+    This package needs a `vern-llm` release that includes the `budget_exceeded` error code and
+    `TokenUsage.costUsd`. An older core has neither, so a rejection looks like a plain
+    `quota_exceeded` and a provider reported cost is ignored. Upgrade `vern-llm`.
+  </Accordion>
+  <Accordion title="The warning is missing from a stream's record">
+    With an asynchronous store the read cannot finish before the logger writes its record. Use the
+    in memory store, or read `remaining` on a schedule.
+  </Accordion>
+</Accordions>

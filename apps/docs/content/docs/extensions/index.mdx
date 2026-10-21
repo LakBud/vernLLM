@@ -8,6 +8,14 @@ Extensions add a capability inside VernLLM itself: logging, usage and budgets, r
 Each is a separate package that depends only on `vern-llm`, so core stays small and you install
 only what you use.
 
+## What is an extension
+
+An extension is a [middleware](/docs/core/middleware) that `vern-llm` provides capabilities for.
+Core supplies what a middleware needs to work with others without knowing them: a place in the
+nesting, per call state, custom events, and typed error codes for the rejections they share. The
+contract is public, so a package from anyone else can follow it and be published through a
+registry, and the packages listed here are the ones this repo ships.
+
 ## Extensions and integrations
 
 |                        | Integrations                                                                             | Extensions                                                   |
@@ -24,17 +32,33 @@ See [Integrations](/docs/integrations) for the packages that reach outside your 
   <Card title="Logger" href="/docs/extensions/logger">
     One structured record per call, rolling latency percentiles, slow call and error detection.
   </Card>
+  <Card title="Usage" href="/docs/extensions/usage">
+    Estimated cost and wasted spend per call, token and dollar budgets that reject before a call.
+  </Card>
 </Cards>
 
 ## Planned extensions
 
 | Package           | Capability                                                |
 | ----------------- | --------------------------------------------------------- |
-| `vern-llm-usage`  | Cost from your own price table, token and dollar budgets  |
 | `vern-llm-router` | Order targets by rules, health, latency, or cost          |
 | `vern-llm-policy` | Remove forbidden targets, fail safe, audit every decision |
 
 None of these has shipped yet. This section grows as each one lands.
+
+## Shared rejection codes
+
+An extension that denies a call does it with a typed `LLMError`, so callers and fallback policies
+branch on one code whoever raised it. The core defines the codes and throws neither itself:
+
+| Code              | Type             | Raised by         | Meaning                                    |
+| ----------------- | ---------------- | ----------------- | ------------------------------------------ |
+| `budget_exceeded` | `quota_exceeded` | `vern-llm-usage`  | A budget has no room for the call          |
+| `policy_denied`   | `invalid_params` | `vern-llm-policy` | A policy removed every target or denied it |
+
+A rejection happens before any provider is contacted, so it never counts toward the circuit breaker,
+and the logger records it at `warn` as `rejected`. See
+[Error Handling](/docs/core/error-handling) for the full list.
 
 ## What every extension follows
 

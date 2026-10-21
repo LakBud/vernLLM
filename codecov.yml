@@ -29,6 +29,12 @@ flags:
   vern-llm-logger-integration:
     paths:
       - 'packages/extensions/vern-llm-logger/**'
+  vern-llm-usage-unit:
+    paths:
+      - 'packages/extensions/vern-llm-usage/**'
+  vern-llm-usage-integration:
+    paths:
+      - 'packages/extensions/vern-llm-usage/**'
 
 coverage:
   status:
@@ -58,6 +64,11 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/extensions/vern-llm-logger/**'
+      vern-llm-usage:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/extensions/vern-llm-usage/**'
     patch:
       default:
         target: 80%
@@ -79,6 +90,10 @@ coverage:
         target: 80%
         paths:
           - 'packages/extensions/vern-llm-logger/**'
+      vern-llm-usage:
+        target: 80%
+        paths:
+          - 'packages/extensions/vern-llm-usage/**'
 
 ignore:
   - '**/index.ts'

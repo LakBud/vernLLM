@@ -1,0 +1,5 @@
+{
+  "title": "Usage",
+  "icon": "Coins",
+  "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
+}

@@ -1,0 +1,124 @@
+---
+title: Usage Overview
+description: Estimated cost, wasted spend and budgets for every VernLLM call, from a price table you supply
+---
+
+`vern-llm-usage` is one middleware with two jobs. It is a meter: it prices the token counts VernLLM
+already reports and splits out spend on attempts whose response was then rejected. It is also a
+cut off switch: it checks budgets before a call is sent and rejects it, with no provider contacted,
+when it would go over.
+
+<Callout type="info">
+  Every cost is named `estimatedCostUsd`, because it is your prices times the provider's token
+  counts. The provider's invoice decides what you pay. Budgets are guards, not ledgers: set limits a
+  little under the real ceiling and compare the estimate with the invoice each month.
+</Callout>
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-usage # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-usage # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-usage # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-usage # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` is a peer dependency, so the package shares the copy your app already uses, and it has
+no other dependency. It needs a `vern-llm` release that includes the `budget_exceeded` error code
+and `TokenUsage.costUsd`. Prices come only from the table you pass, with the date you last checked
+it, so nothing here goes stale without telling you.
+
+<Cards>
+  <Card title="Features" href="/docs/extensions/usage/features">
+    Cost per call, budgets, totals, logger fields and events, and stores.
+  </Card>
+  <Card title="API Reference" href="/docs/extensions/usage/API-reference">
+    Every export and every option.
+  </Card>
+</Cards>
+
+## Basic usage
+
+```ts title="usage-basic-usage.ts"
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+import { usageMiddleware } from 'vern-llm-usage';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const usage = usageMiddleware({
+  prices: { 'gpt-6-sol': { input: 1.25, output: 10, cacheRead: 0.125 } }, // dollars per 1M tokens
+  pricesAsOf: '2026-10-01',
+  attribute: ['tenantId'],
+  budgets: [{ key: 'tenantId', limitUsd: 50, per: 'day' }],
+  warnAt: 0.8,
+});
+
+const llm = new VernLLM({ client: openai, model: 'gpt-6-sol', middleware: [usage] });
+
+await llm.call({
+  userContent: 'Summarize this',
+  jsonMode: false,
+  context: { tenantId: 'acme' },
+});
+
+usage.totals({ tenantId: 'acme' }); // what acme spent today
+await usage.remaining({ tenantId: 'acme' }); // what is left of acme's $50
+```
+
+Register it once per `VernLLM`: two entries in one `middleware` array throw at construction. One
+`usageMiddleware()` object can serve several `VernLLM` instances, and they then share its totals
+and budgets. It sits inside `vern-llm-logger` and outside any router, wherever it appears in the
+array.
+
+A call over budget throws an `LLMError` with `type: 'quota_exceeded'` and
+`code: 'budget_exceeded'`. It never counts toward the circuit breaker, and the default fallback
+policy does not try another target for it.
+
+```ts title="usage-rejection.ts"
+import { LLMError } from 'vern-llm';
+
+try {
+  await llm.call({ userContent: 'hi', jsonMode: false, context: { tenantId: 'acme' } });
+} catch (error) {
+  if (error instanceof LLMError && error.code === 'budget_exceeded') {
+    // tell the user to try again after the window resets
+  }
+}
+```
+
+## What one call adds
+
+Every metered call publishes its cost to `ctx.state`, adds it to the totals, and settles its
+reservation. With `usageLogFields` the cost lands on the logger's record:
+
+```json title="usage-fields.json"
+{ "estimatedCostUsd": 0.0031, "wastedUsd": 0, "costSource": "table" }
+```
+
+A cache hit or join costs nothing, and carries `estimatedSavedUsd` instead. See
+[Cost and Wasted Spend](/docs/extensions/usage/features/cost) for how each figure is decided.
