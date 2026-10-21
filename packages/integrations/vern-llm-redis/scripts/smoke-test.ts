@@ -51,7 +51,7 @@ try {
   // fail) to fetch vern-llm from the real registry, since this package
   // only exists in this monorepo's workspace, not published there.
   const vernLlmPackOutput = execFileSync('pnpm', ['pack', '--pack-destination', scratchDir], {
-    cwd: path.join(packageRoot, '..', 'vern-llm'),
+    cwd: path.join(packageRoot, '..', '..', 'vern-llm'),
     encoding: 'utf8',
   }).trim();
   const vernLlmTarballPath: string | undefined = vernLlmPackOutput.split('\n').pop()?.trim();

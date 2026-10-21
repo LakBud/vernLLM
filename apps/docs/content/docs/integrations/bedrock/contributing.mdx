@@ -4,7 +4,7 @@ description: Set up, test and open a pull request for vern-llm-bedrock, the AWS 
 icon: GitPullRequest
 ---
 
-This page covers `packages/vern-llm-bedrock` specifically. For the coding standard and PR checklist
+This page covers `packages/integrations/vern-llm-bedrock` specifically. For the coding standard and PR checklist
 that apply repo wide, see [Contributing](/docs/contributing).
 
 ## Setup
@@ -23,7 +23,7 @@ Bedrock, including its binary event stream. No test ever calls a live provider.
 
 Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
 explain non obvious decisions with a short comment, and keep `any` as a last resort. Bedrock quirks
-stay inside `packages/vern-llm-bedrock`. Type requests and responses against the AWS SDK's own
+stay inside `packages/integrations/vern-llm-bedrock`. Type requests and responses against the AWS SDK's own
 types, and narrow stream events one member at a time, since the SDK's union has a generated
 `$unknown` member. The Claude rules, such as the forced `tool_choice` model check and the reasoning
 budget, live in this package next to the adapter. `vern-llm/adapters` exports only the `from*`
@@ -32,11 +32,11 @@ way round. Check both when a Claude release changes what a model accepts.
 
 ## Scripts
 
-These are `packages/vern-llm-bedrock`'s own scripts, exactly as they appear in its `package.json`.
-Run them with `pnpm run <script>` from inside `packages/vern-llm-bedrock`, or `pnpm nx run
+These are `packages/integrations/vern-llm-bedrock`'s own scripts, exactly as they appear in its `package.json`.
+Run them with `pnpm run <script>` from inside `packages/integrations/vern-llm-bedrock`, or `pnpm nx run
 vern-llm-bedrock:<script>` from the repo root:
 
-```json title="packages/vern-llm-bedrock/package.json"
+```json title="packages/integrations/vern-llm-bedrock/package.json"
 "scripts": {
   "build": "tsdown",
   "dev": "tsdown --watch",
@@ -74,7 +74,7 @@ pnpm nx run vern-llm:build
 
 ## Before opening a PR
 
-Every PR touching `packages/vern-llm-bedrock` runs through the same CI workflows described in
+Every PR touching `packages/integrations/vern-llm-bedrock` runs through the same CI workflows described in
 [Development](/docs/development#ci). Run the equivalent commands locally first:
 
 | Check                          | Local command                                                                                                        |

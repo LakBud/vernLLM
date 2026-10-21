@@ -18,7 +18,7 @@ calls don't change, only what backs them:
 | Extension point                                               | What an integration can back it with         |
 | ------------------------------------------------------------- | -------------------------------------------- |
 | `CircuitBreakerAdapter`, `RateLimiterAdapter`, `CacheAdapter` | A shared store, so every process acts as one |
-| Middleware                                                    | Telemetry, tracing, or policy tooling        |
+| Middleware                                                    | Telemetry and tracing                        |
 | `LLMClient`                                                   | A provider SDK that needs its own adapter    |
 
 Because each one sits behind the same interface as the built in version, the guarantees stay the

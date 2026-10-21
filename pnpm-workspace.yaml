@@ -1,5 +1,7 @@
 packages:
   - packages/*
+  - packages/integrations/*
+  - packages/extensions/*
   - apps/*
 
 allowBuilds:

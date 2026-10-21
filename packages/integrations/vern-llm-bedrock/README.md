@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://vernllm.dev/docs/integrations/bedrock">Documentation</a> ·
-  <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm-bedrock">Package</a> ·
+  <a href="https://github.com/LakBud/vernLLM/tree/main/packages/integrations/vern-llm-bedrock">Package</a> ·
   <a href="https://www.npmjs.com/package/vern-llm-bedrock">npm</a>
 </p>
 

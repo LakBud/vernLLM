@@ -69,7 +69,7 @@ reviews:
         - Correct mocking of provider behavior.
         - Regression coverage for bug fixes.
 
-    - path: 'packages/vern-llm-redis/**'
+    - path: 'packages/integrations/vern-llm-redis/**'
       instructions: |
         This is vern-llm-redis: Redis backed CircuitBreakerAdapter,
         RateLimiterAdapter, and CacheAdapter implementations for vern-llm.
@@ -91,7 +91,7 @@ reviews:
         - Adapter option changes.
         - Breaking changes to exported types.
 
-    - path: 'packages/vern-llm-redis/tests/**'
+    - path: 'packages/integrations/vern-llm-redis/tests/**'
       instructions: |
         Review tests for:
         - Meaningful assertions instead of implementation-only checks.
@@ -99,7 +99,7 @@ reviews:
         - Integration tests use the shared helpers (waitUntil, expectNearInstant) instead of ad hoc sleeps.
         - Cross-process behavior (circuit breaker/rate limiter state propagation) uses two separate client connections, not one reused.
 
-    - path: 'packages/vern-llm-otel/**'
+    - path: 'packages/integrations/vern-llm-otel/**'
       instructions: |
         This is vern-llm-otel: OpenTelemetry traces and metrics for vern-llm, built only on its public middleware system.
 
@@ -114,14 +114,14 @@ reviews:
 
         Pay special attention to renamed or removed spans, attributes, metrics, or options, since dashboards depend on them.
 
-    - path: 'packages/vern-llm-otel/tests/**'
+    - path: 'packages/integrations/vern-llm-otel/tests/**'
       instructions: |
         Review tests for:
         - Meaningful assertions, with no live provider or collector, only fakes and in memory exporters and readers.
         - Scenarios that compare each case with and without the middleware, and span leaks checked with the open span tracker in the shared helpers.
         - Timing assertions with a wide margin, and any global provider or context manager removed afterwards.
 
-    - path: 'packages/vern-llm-bedrock/**'
+    - path: 'packages/integrations/vern-llm-bedrock/**'
       instructions: |
         This is vern-llm-bedrock: the AWS Bedrock Converse adapter for vern-llm, built on the AWS SDK's BedrockRuntimeClient.
 
@@ -136,7 +136,7 @@ reviews:
 
         Pay special attention to changed options, defaults, or error codes, since callers and fallback policies branch on them.
 
-    - path: 'packages/vern-llm-bedrock/tests/**'
+    - path: 'packages/integrations/vern-llm-bedrock/tests/**'
       instructions: |
         Review tests for:
         - Meaningful assertions, driving a real BedrockRuntimeClient with a stubbed send or the loopback server, never a live AWS endpoint.

@@ -4,7 +4,7 @@ description: Set up, test and open a pull request for vern-llm-otel, the OpenTel
 icon: GitPullRequest
 ---
 
-This page covers `packages/vern-llm-otel` specifically. For the coding standard and PR checklist
+This page covers `packages/integrations/vern-llm-otel` specifically. For the coding standard and PR checklist
 that apply repo wide, see [Contributing](/docs/contributing).
 
 ## Setup
@@ -28,11 +28,11 @@ anything that could leak content fails closed.
 
 ## Scripts
 
-These are `packages/vern-llm-otel`'s own scripts, exactly as they appear in its `package.json`.
-Run them with `pnpm run <script>` from inside `packages/vern-llm-otel`, or `pnpm nx run
+These are `packages/integrations/vern-llm-otel`'s own scripts, exactly as they appear in its `package.json`.
+Run them with `pnpm run <script>` from inside `packages/integrations/vern-llm-otel`, or `pnpm nx run
 vern-llm-otel:<script>` from the repo root:
 
-```json title="packages/vern-llm-otel/package.json"
+```json title="packages/integrations/vern-llm-otel/package.json"
 "scripts": {
   "build": "tsdown",
   "dev": "tsdown --watch",
@@ -68,7 +68,7 @@ Use fake timers for every timing assertion.
 
 ## Before opening a PR
 
-Every PR touching `packages/vern-llm-otel` runs through the same CI workflows described in
+Every PR touching `packages/integrations/vern-llm-otel` runs through the same CI workflows described in
 [Development](/docs/development#ci). Run the equivalent commands locally first:
 
 | Check                          | Local command                                                                                               |

@@ -1,17 +1,16 @@
 {
-  "name": "vern-llm-bedrock",
-  "version": "0.1.0",
-  "description": "AWS Bedrock Converse adapter for vern-llm, built on the AWS SDK's BedrockRuntimeClient",
+  "name": "vern-llm-otel",
+  "version": "0.2.0",
+  "description": "OpenTelemetry traces and metrics for vern-llm, following the GenAI semantic conventions",
   "keywords": [
     "vern-llm",
-    "bedrock",
-    "aws",
-    "converse",
-    "llm",
-    "ai",
-    "claude",
-    "adapter",
-    "typescript"
+    "opentelemetry",
+    "otel",
+    "tracing",
+    "metrics",
+    "observability",
+    "genai",
+    "llm"
   ],
   "type": "module",
   "main": "./dist/index.cjs",
@@ -57,15 +56,17 @@
     "size": "size-limit"
   },
   "peerDependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
+    "@opentelemetry/api": "^1.9.1",
     "vern-llm": "workspace:^"
   },
   "devDependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.11.0",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@size-limit/esbuild": "13.1.1",
     "@size-limit/file": "13.1.1",
-    "@smithy/eventstream-serde-node": "^4.5.2",
-    "@smithy/node-http-handler": "^4.12.1",
-    "@smithy/util-utf8": "^4.5.2",
     "@types/node": "^26.4.1",
     "@vitest/coverage-v8": "^4.1.11",
     "publint": "^0.3.24",
@@ -74,6 +75,7 @@
     "typescript": "^5.9.3",
     "unplugin-unused": "^0.6.0",
     "vern-llm": "workspace:^",
+    "vern-llm-bedrock": "workspace:^",
     "vitest": "^4.1.11"
   },
   "license": "MIT",
@@ -81,7 +83,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LakBud/vernLLM.git",
-    "directory": "packages/vern-llm-bedrock"
+    "directory": "packages/integrations/vern-llm-otel"
   },
   "publishConfig": {
     "access": "public",
@@ -90,11 +92,19 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "5 KB"
+      "limit": "8.7 KB",
+      "ignore": [
+        "vern-llm",
+        "@opentelemetry/api"
+      ]
     },
     {
       "path": "dist/index.cjs",
-      "limit": "5 KB"
+      "limit": "8.8 KB",
+      "ignore": [
+        "vern-llm",
+        "@opentelemetry/api"
+      ]
     }
   ]
 }

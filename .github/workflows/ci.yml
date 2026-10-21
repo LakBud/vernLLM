@@ -170,29 +170,29 @@ jobs:
           fail_ci_if_error: true
 
       - name: Upload vern-llm-redis coverage to Codecov
-        if: hashFiles('packages/vern-llm-redis/coverage/lcov.info') != ''
+        if: hashFiles('packages/integrations/vern-llm-redis/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./packages/vern-llm-redis/coverage/lcov.info
+          files: ./packages/integrations/vern-llm-redis/coverage/lcov.info
           flags: vern-llm-redis-unit
           fail_ci_if_error: true
 
       - name: Upload vern-llm-otel coverage to Codecov
-        if: hashFiles('packages/vern-llm-otel/coverage/lcov.info') != ''
+        if: hashFiles('packages/integrations/vern-llm-otel/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./packages/vern-llm-otel/coverage/lcov.info
+          files: ./packages/integrations/vern-llm-otel/coverage/lcov.info
           flags: vern-llm-otel-unit
           fail_ci_if_error: true
 
       - name: Upload vern-llm-bedrock coverage to Codecov
-        if: hashFiles('packages/vern-llm-bedrock/coverage/lcov.info') != ''
+        if: hashFiles('packages/integrations/vern-llm-bedrock/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./packages/vern-llm-bedrock/coverage/lcov.info
+          files: ./packages/integrations/vern-llm-bedrock/coverage/lcov.info
           flags: vern-llm-bedrock-unit
           fail_ci_if_error: true
 
@@ -265,29 +265,29 @@ jobs:
           fail_ci_if_error: true
 
       - name: Upload vern-llm-redis coverage to Codecov
-        if: hashFiles('packages/vern-llm-redis/coverage/lcov.info') != ''
+        if: hashFiles('packages/integrations/vern-llm-redis/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./packages/vern-llm-redis/coverage/lcov.info
+          files: ./packages/integrations/vern-llm-redis/coverage/lcov.info
           flags: vern-llm-redis-integration
           fail_ci_if_error: true
 
       - name: Upload vern-llm-otel coverage to Codecov
-        if: hashFiles('packages/vern-llm-otel/coverage/lcov.info') != ''
+        if: hashFiles('packages/integrations/vern-llm-otel/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./packages/vern-llm-otel/coverage/lcov.info
+          files: ./packages/integrations/vern-llm-otel/coverage/lcov.info
           flags: vern-llm-otel-integration
           fail_ci_if_error: true
 
       - name: Upload vern-llm-bedrock coverage to Codecov
-        if: hashFiles('packages/vern-llm-bedrock/coverage/lcov.info') != ''
+        if: hashFiles('packages/integrations/vern-llm-bedrock/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./packages/vern-llm-bedrock/coverage/lcov.info
+          files: ./packages/integrations/vern-llm-bedrock/coverage/lcov.info
           flags: vern-llm-bedrock-integration
           fail_ci_if_error: true
 

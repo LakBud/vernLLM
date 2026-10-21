@@ -1,0 +1,30 @@
+---
+title: What are Extensions
+description: Optional packages that add a capability inside VernLLM, with no third party dependency
+icon: CircleQuestionMark
+---
+
+Extensions add a capability inside VernLLM itself: logging, usage and budgets, routing, and policy.
+Each is a separate package that depends only on `vern-llm`, so core stays small and you install
+only what you use.
+
+## Extensions and integrations
+
+|                        | Integrations                                                                             | Extensions                                                   |
+| ---------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Purpose                | Connect VernLLM to something outside your process (Redis, OpenTelemetry, a provider SDK) | Add a capability inside it (logging, usage, routing, policy) |
+| Third party dependency | Yes, as a peer or dependency                                                             | None                                                         |
+| Folder                 | `packages/integrations/`                                                                 | `packages/extensions/`                                       |
+
+See [Integrations](/docs/integrations) for the packages that reach outside your process.
+
+## Planned extensions
+
+| Package           | Capability                                                                         |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `vern-llm-logger` | One structured record per call, rolling percentiles, slow call and error detection |
+| `vern-llm-usage`  | Cost from your own price table, token and dollar budgets                           |
+| `vern-llm-router` | Order targets by rules, health, latency, or cost                                   |
+| `vern-llm-policy` | Remove forbidden targets, fail safe, audit every decision                          |
+
+None of these has shipped yet. This section grows as each one lands.

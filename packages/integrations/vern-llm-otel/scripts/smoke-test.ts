@@ -48,7 +48,7 @@ function pack(cwd: string): string {
 
 try {
   const otelTarball = pack(packageRoot);
-  const vernLLMTarball = pack(path.join(packageRoot, '..', 'vern-llm'));
+  const vernLLMTarball = pack(path.join(packageRoot, '..', '..', 'vern-llm'));
 
   const consumerDir = path.join(scratchDir, 'consumer');
   mkdirSync(consumerDir, { recursive: true });

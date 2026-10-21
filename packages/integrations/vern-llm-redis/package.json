@@ -151,7 +151,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LakBud/vernLLM.git",
-    "directory": "packages/vern-llm-redis"
+    "directory": "packages/integrations/vern-llm-redis"
   },
   "publishConfig": {
     "access": "public",

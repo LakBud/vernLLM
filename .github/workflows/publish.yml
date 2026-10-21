@@ -90,7 +90,7 @@ jobs:
             const fs = require("fs");
             const path = require("path");
             const name = process.env.NAME;
-            for (const root of ["packages", "apps"]) {
+            for (const root of ["packages", "packages/integrations", "packages/extensions", "apps"]) {
               if (!fs.existsSync(root)) continue;
               for (const entry of fs.readdirSync(root)) {
                 const pkgPath = path.join(root, entry, "package.json");
@@ -105,7 +105,7 @@ jobs:
           ')"
 
           if [ -z "$DIR" ]; then
-            echo "ERROR: no workspace package named '$NAME' was found under packages/ or apps/"
+            echo "ERROR: no workspace package named '$NAME' was found under packages/, packages/integrations/, packages/extensions/ or apps/"
             exit 1
           fi
 
@@ -236,7 +236,7 @@ jobs:
             const fs = require("fs");
             const path = require("path");
             const name = process.env.NAME;
-            for (const root of ["packages", "apps"]) {
+            for (const root of ["packages", "packages/integrations", "packages/extensions", "apps"]) {
               if (!fs.existsSync(root)) continue;
               for (const entry of fs.readdirSync(root)) {
                 const pkgPath = path.join(root, entry, "package.json");
@@ -251,7 +251,7 @@ jobs:
           ')"
 
           if [ -z "$DIR" ]; then
-            echo "ERROR: no workspace package named '$NAME' was found under packages/ or apps/"
+            echo "ERROR: no workspace package named '$NAME' was found under packages/, packages/integrations/, packages/extensions/ or apps/"
             exit 1
           fi
 

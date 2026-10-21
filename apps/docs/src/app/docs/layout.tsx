@@ -1,5 +1,5 @@
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
-import { Blocks } from 'lucide-react';
+import { Blocks, Puzzle } from 'lucide-react';
 import Image from 'next/image';
 
 import { baseOptions, xLink } from '@/lib/layout.shared';
@@ -24,6 +24,12 @@ export default function Layout({ children }: LayoutProps<'/docs'>) {
             description: 'Take your LLM calls further',
             icon: <Blocks className="size-4 text-fd-primary" />,
             url: '/docs/integrations',
+          },
+          {
+            title: 'Extensions',
+            description: 'Add capabilities inside VernLLM',
+            icon: <Puzzle className="size-4 text-fd-primary" />,
+            url: '/docs/extensions',
           },
         ],
       }}

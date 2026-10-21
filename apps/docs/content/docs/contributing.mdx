@@ -94,14 +94,16 @@ heading, and CI runs it on every docs change.
 
 ## Tests
 
-Add or update tests alongside any change to `packages/vern-llm`:
+Add or update tests alongside any change to a package (`packages/vern-llm`, `packages/integrations/*`, or `packages/extensions/*`):
 
 - `tests/unit/` for isolated behavior
 - `tests/integration/` for cross-cutting workflows
 
 No live provider API is called anywhere in the suite; most tests run against fakes and mocks, and the real SDK suites talk over real HTTP to a local loopback server standing in for the provider. See [Development](/docs/development) for the full test layout.
 
-New or changed lines in `packages/vern-llm` need at least 80% test coverage; CI enforces this through Codecov's patch check. Overall project coverage is also tracked and shouldn't regress by more than a small margin. Run `pnpm run test:coverage` locally to see where you stand before opening a PR.
+New or changed lines in any package need at least 80% test coverage; CI enforces this through Codecov's patch check. Overall project coverage is also tracked and shouldn't regress by more than a small margin. Run `pnpm run test:coverage` locally to see where you stand before opening a PR.
+
+Not sure where a new package belongs? An **integration** connects VernLLM to something outside your process (Redis, OpenTelemetry, a provider SDK) and lives in `packages/integrations/`. An **extension** adds a capability inside it with no third party dependency (logging, usage, routing, policy) and lives in `packages/extensions/`.
 
 Before a change is merged, expect a personal canary test on a simple real app, like a small chat CLI, to confirm the change behaves as intended outside the test suite.
 

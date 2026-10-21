@@ -4,7 +4,7 @@ description: Set up the workspace, run the tests and open a pull request for ver
 icon: GitPullRequest
 ---
 
-This page covers `packages/vern-llm-redis` specifically. For the coding standard and PR checklist
+This page covers `packages/integrations/vern-llm-redis` specifically. For the coding standard and PR checklist
 that apply repo wide, see [Contributing](/docs/contributing).
 
 ## Setup
@@ -23,16 +23,16 @@ loopback HTTP server standing in for a provider.
 
 Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
 explain non obvious decisions with a short comment, and keep `any` as a last resort. Redis specific
-commands (`eval`, pub or sub) stay inside `packages/vern-llm-redis`, nothing in `vern-llm` itself
+commands (`eval`, pub or sub) stay inside `packages/integrations/vern-llm-redis`, nothing in `vern-llm` itself
 should know Redis exists.
 
 ## Scripts
 
-These are `packages/vern-llm-redis`'s own scripts, exactly as they appear in its `package.json`.
-Run them with `pnpm run <script>` from inside `packages/vern-llm-redis`, or `pnpm nx run
+These are `packages/integrations/vern-llm-redis`'s own scripts, exactly as they appear in its `package.json`.
+Run them with `pnpm run <script>` from inside `packages/integrations/vern-llm-redis`, or `pnpm nx run
 vern-llm-redis:<script>` from the repo root:
 
-```json title="packages/vern-llm-redis/package.json"
+```json title="packages/integrations/vern-llm-redis/package.json"
 "scripts": {
   "build": "tsdown",
   "dev": "tsdown --watch",
@@ -85,7 +85,7 @@ this in its integration job.
 
 ## Before opening a PR
 
-Every PR touching `packages/vern-llm-redis` runs through the same CI workflows described in
+Every PR touching `packages/integrations/vern-llm-redis` runs through the same CI workflows described in
 [Development](/docs/development#ci). Run the equivalent commands locally first:
 
 | Check                          | Local command                                                                                                  |

@@ -5,9 +5,8 @@ on:
     branches: [main]
     paths:
       - 'packages/vern-llm/**'
-      - 'packages/vern-llm-redis/**'
-      - 'packages/vern-llm-otel/**'
-      - 'packages/vern-llm-bedrock/**'
+      - 'packages/integrations/**'
+      - 'packages/extensions/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

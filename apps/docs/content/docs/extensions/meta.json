@@ -1,0 +1,6 @@
+{
+  "title": "Extensions",
+  "icon": "Puzzle",
+  "root": true,
+  "pages": ["---Introduction---", "index"]
+}

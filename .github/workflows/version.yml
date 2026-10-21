@@ -113,7 +113,7 @@ jobs:
             const fs = require("fs");
             const path = require("path");
             const name = process.env.NAME;
-            for (const root of ["packages", "apps"]) {
+            for (const root of ["packages", "packages/integrations", "packages/extensions", "apps"]) {
               if (!fs.existsSync(root)) continue;
               for (const entry of fs.readdirSync(root)) {
                 const pkgPath = path.join(root, entry, "package.json");
