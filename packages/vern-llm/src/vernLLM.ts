@@ -481,6 +481,11 @@ export class VernLLM {
       });
     };
 
+    let cacheOutcome: 'hit' | 'join' | undefined;
+    const onOutcome = (outcome: 'hit' | 'join') => {
+      cacheOutcome = outcome;
+    };
+
     // A stream hands the holder's release to `finalResult`, since a joiner may
     // still attach after this returns.
     let releaseOnSettle = false;
@@ -497,6 +502,7 @@ export class VernLLM {
             ? await this.cacheOrchestrator.runCachedStream(
                 {
                   ...participantCacheParams,
+                  onOutcome,
                   openStream: (sharedSignal) =>
                     callShared(sharedSignal, chosen) as Promise<StreamCallResult<unknown>>,
                 },
@@ -504,10 +510,13 @@ export class VernLLM {
               )
             : await this.runCached({
                 ...participantCacheParams,
+                onOutcome,
                 fn: (sharedSignal) => callShared(sharedSignal, chosen),
               });
 
-          return { value, meta: metaHolder.current };
+          return cacheOutcome
+            ? { value, meta: metaHolder.current, cache: cacheOutcome }
+            : { value, meta: metaHolder.current };
         },
       );
 

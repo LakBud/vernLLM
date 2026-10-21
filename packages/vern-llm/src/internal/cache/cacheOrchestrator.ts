@@ -137,11 +137,15 @@ export class CacheOrchestrator {
   async runCached<T>(params: InternalCacheParams<T>): Promise<T> {
     const { resolvedParams, cached } = await this.resolveKeyAndReadCache(params);
 
-    if (cached.hit) return cached.value as T;
+    if (cached.hit) {
+      params.onOutcome?.('hit');
+      return cached.value as T;
+    }
 
     const existing = this.joinable<T>(resolvedParams.cacheKey);
 
     if (existing) {
+      params.onOutcome?.('join');
       return this.joinInFlight(resolvedParams, existing.promise, existing.shared);
     }
 
@@ -259,6 +263,7 @@ export class CacheOrchestrator {
     const { resolvedParams, cached } = await this.resolveKeyAndReadCache(params);
 
     if (cached.hit) {
+      params.onOutcome?.('hit');
       const value = cached.value as T;
 
       return { chunks: buildReplayChunks(value, hasTools), finalResult: Promise.resolve(value) };
@@ -267,6 +272,7 @@ export class CacheOrchestrator {
     const existing = this.joinable<T>(resolvedParams.cacheKey);
 
     if (existing) {
+      params.onOutcome?.('join');
       const finalResult = this.joinInFlight(resolvedParams, existing.promise, existing.shared);
 
       // Mirror the no-op catch in withReservedUsageForStream: buildReplayChunksFromPromise

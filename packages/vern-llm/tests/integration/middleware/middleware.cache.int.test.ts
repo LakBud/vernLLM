@@ -10,6 +10,78 @@ import { VernLLM } from '../../../src/vernLLM.js';
 import { createMockClient, createMockStreamingClient, textResponse } from '../../helpers.js';
 import { CALL, wrapCounter } from './middleware.int.helpers.js';
 
+describe('CallResult.cache', () => {
+  const observe = () => {
+    const seen: Array<'hit' | 'join' | undefined> = [];
+    const middleware: VernLLMMiddleware = {
+      name: 'observe-cache',
+      wrap: async (_request, next) => {
+        const result = await next();
+        seen.push(result.cache);
+        return result;
+      },
+    };
+    return { seen, middleware };
+  };
+
+  it('is unset on a miss and `hit` on a stored value', async () => {
+    const { client } = createMockClient([textResponse('a')]);
+    const { seen, middleware } = observe();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+    const params = { cacheKey: 'k', ttl: 1000, call: CALL };
+
+    await llm.cachedCall(params);
+    await llm.cachedCall(params);
+
+    expect(seen).toEqual([undefined, 'hit']);
+  });
+
+  it('is `join` for a caller that shares an in flight call', async () => {
+    let resolveCall!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      resolveCall = resolve;
+    });
+    const { client } = createMockClient([() => pending as Promise<never>]);
+    const { seen, middleware } = observe();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+    const params = { cacheKey: 'k', ttl: 1000, call: CALL };
+
+    const both = Promise.all([llm.cachedCall(params), llm.cachedCall(params)]);
+    resolveCall(textResponse('a'));
+    await both;
+
+    expect(seen.sort()).toEqual(['join', undefined]);
+  });
+
+  it('is `join` for a streamed caller, which returns before the shared call answers', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'x' }]]);
+    const { seen, middleware } = observe();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+    const params = { cacheKey: 'k', ttl: 1000, call: { ...CALL, stream: true as const } };
+
+    const [first, second] = await Promise.all([llm.cachedCall(params), llm.cachedCall(params)]);
+    await Promise.all([first.finalResult, second.finalResult]);
+
+    expect(seen.sort()).toEqual(['join', undefined]);
+  });
+
+  it('is `hit` for a streamed stored value', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: 'x' }]]);
+    const { seen, middleware } = observe();
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+    const params = { cacheKey: 'k', ttl: 1000, call: { ...CALL, stream: true as const } };
+
+    await (
+      await llm.cachedCall(params)
+    ).finalResult;
+    await (
+      await llm.cachedCall(params)
+    ).finalResult;
+
+    expect(seen).toEqual([undefined, 'hit']);
+  });
+});
+
 describe('middleware with cachedCall', () => {
   it('a real miss then hit: transform runs on the miss only, and wrap runs once per cachedCall()', async () => {
     const { client, calls } = createMockClient([textResponse('computed')]);
