@@ -15,4 +15,12 @@ export type { RedisRetryBudgetAdapter, RedisRetryBudgetOptions } from './retryBu
 export { redisCache } from './cache.js';
 export type { RedisCacheOptions } from './cache.js';
 
+export { redisUsageStore } from './usageStore.js';
+export type {
+  RedisUsageStore,
+  RedisUsageStoreOptions,
+  UsageAmount,
+  UsageScope,
+} from './usageStore.js';
+
 export type { RedisClient, RedisSubscriber } from './types.js';

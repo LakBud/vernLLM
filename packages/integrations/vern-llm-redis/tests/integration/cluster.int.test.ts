@@ -6,6 +6,7 @@ import { redisCircuitBreaker } from '../../src/circuitBreaker.js';
 import { fromIoredis, fromIoredisSubscriber } from '../../src/clients/ioredis.js';
 import { redisRateLimit } from '../../src/rateLimit.js';
 import { redisRetryBudget } from '../../src/retryBudget.js';
+import { redisUsageStore } from '../../src/usageStore.js';
 import { claimTrial, sleep } from '../breakerHelpers.js';
 import { uniquePrefix, waitForCluster, waitUntil } from '../helpers.js';
 
@@ -70,6 +71,28 @@ describe.skipIf(nodes.length === 0)('against a real Redis Cluster', () => {
     for (let i = 0; i < 20; i++) await cache.set(`k${i}`, { n: i }, 30);
     for (let i = 0; i < 20; i++)
       expect(await cache.get(`k${i}`)).toEqual({ hit: true, value: { n: i } });
+  });
+
+  it('the usage store holds several scopes at once, all in one slot', async () => {
+    const store = redisUsageStore(fromIoredis(connect()), { keyPrefix: uniquePrefix('us') });
+    const scopes = ['a', 'b', 'c'].map((key) => ({
+      key,
+      label: key,
+      unit: 'usd' as const,
+      limit: 100,
+      resetsAtMs: Date.now() + 60_000,
+    }));
+
+    const held = await store.reserve(scopes, { nanoUsd: 60, tokens: 0 }, 30_000);
+    expect(held.ok).toBe(true);
+    expect(await store.reserve(scopes, { nanoUsd: 60, tokens: 0 }, 30_000)).toMatchObject({
+      ok: false,
+      remaining: 40,
+    });
+    if (held.ok) await store.commit(held.id, { nanoUsd: 50, tokens: 0 });
+    for (const scope of scopes) {
+      expect((await store.read(scope)).spent.nanoUsd).toBe(50);
+    }
   });
 
   it('the circuit breaker trips, half opens, and closes, shared by two processes', async () => {

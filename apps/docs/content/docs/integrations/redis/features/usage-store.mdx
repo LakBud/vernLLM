@@ -36,8 +36,12 @@ usageMiddleware({
 - Time comes from Redis, so one process's clock cannot move an expiry.
 - A hold that is never settled, such as one from a crashed process, is returned by the next
   operation after its `ttlMs`, with no timer.
+- A call that outlives its hold stops holding room but still records its spend when it settles, for an
+  hour after the hold expired, as `memoryUsageStore` does.
 - A scope's keys expire a day after its window ends, so a call that settles just after a rollover
   still finds its scope.
+- Keys are `{prefix}:s:<scope>` for a scope's spend and holds, `{prefix}:r:<id>` for one hold, and
+  `{prefix}:exp` for hold expiry. Scope keys expire a day after the window ends.
 - Every key sits under one `{prefix}` hash tag. A Redis Cluster keeps them in one slot, so a very
   large fleet's budgets share a node.
 

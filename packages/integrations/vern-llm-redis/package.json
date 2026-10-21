@@ -74,6 +74,16 @@
         "default": "./dist/retryBudget.cjs"
       }
     },
+    "./usageStore": {
+      "import": {
+        "types": "./dist/usageStore.d.mts",
+        "default": "./dist/usageStore.mjs"
+      },
+      "require": {
+        "types": "./dist/usageStore.d.cts",
+        "default": "./dist/usageStore.cjs"
+      }
+    },
     "./clients": {
       "import": {
         "types": "./dist/clients/index.d.mts",
@@ -144,6 +154,7 @@
     "typescript": "^5.9.3",
     "unplugin-unused": "^0.6.0",
     "vern-llm": "workspace:^",
+    "vern-llm-usage": "workspace:^",
     "vitest": "^4.1.11"
   },
   "license": "MIT",
@@ -160,14 +171,14 @@
   "size-limit": [
     {
       "path": "dist/index.mjs",
-      "limit": "12.5 KB",
+      "limit": "13.5 KB",
       "ignore": [
         "vern-llm"
       ]
     },
     {
       "path": "dist/index.cjs",
-      "limit": "12.75 KB",
+      "limit": "14 KB",
       "ignore": [
         "vern-llm"
       ]
@@ -224,6 +235,20 @@
     {
       "path": "dist/retryBudget.cjs",
       "limit": "2.5 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/usageStore.mjs",
+      "limit": "3 KB",
+      "ignore": [
+        "vern-llm"
+      ]
+    },
+    {
+      "path": "dist/usageStore.cjs",
+      "limit": "3 KB",
       "ignore": [
         "vern-llm"
       ]

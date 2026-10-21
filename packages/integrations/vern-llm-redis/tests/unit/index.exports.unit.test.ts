@@ -27,6 +27,7 @@ describe('package entrypoint exports', () => {
       'redisCircuitBreaker',
       'redisRateLimit',
       'redisRetryBudget',
+      'redisUsageStore',
     ]);
   });
 

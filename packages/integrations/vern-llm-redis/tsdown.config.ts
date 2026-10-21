@@ -7,6 +7,7 @@ export default defineConfig({
     'src/rateLimit.ts',
     'src/cache.ts',
     'src/retryBudget.ts',
+    'src/usageStore.ts',
     'src/clients/index.ts',
     'src/clients/ioredis.ts',
     'src/clients/nodeRedis.ts',

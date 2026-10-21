@@ -114,6 +114,8 @@ try {
     assert.equal(typeof rl.redisRateLimit, 'function', 'ESM: rateLimit subpath missing its export');
     const rb = await import('vern-llm-redis/retryBudget');
     assert.equal(typeof rb.redisRetryBudget, 'function', 'ESM: retryBudget subpath missing its export');
+    const us = await import('vern-llm-redis/usageStore');
+    assert.equal(typeof us.redisUsageStore, 'function', 'ESM: usageStore subpath missing its export');
     const cache = await import('vern-llm-redis/cache');
     assert.equal(typeof cache.redisCache, 'function', 'ESM: cache subpath missing its export');
     const clients = await import('vern-llm-redis/clients');
@@ -165,6 +167,8 @@ try {
     assert.equal(typeof rl.redisRateLimit, 'function', 'CJS: rateLimit subpath missing its export');
     const rb = require('vern-llm-redis/retryBudget');
     assert.equal(typeof rb.redisRetryBudget, 'function', 'CJS: retryBudget subpath missing its export');
+    const us = require('vern-llm-redis/usageStore');
+    assert.equal(typeof us.redisUsageStore, 'function', 'CJS: usageStore subpath missing its export');
     const cache = require('vern-llm-redis/cache');
     assert.equal(typeof cache.redisCache, 'function', 'CJS: cache subpath missing its export');
     const clients = require('vern-llm-redis/clients');
