@@ -8,11 +8,7 @@ export function isThenable(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-/**
- * Runs `next` after `value`, in the same tick when `value` is not a promise. Used where a store may
- * answer synchronously: awaiting a plain value still yields, and a stream's record must not be
- * written between the cost being known and its warning being emitted.
- */
+/** Runs `next` after `value`, in the same tick when it is not a promise. */
 export function andThen(value: MaybePromise<void>, next: () => MaybePromise<void>) {
   return isThenable(value) ? value.then(next) : next();
 }

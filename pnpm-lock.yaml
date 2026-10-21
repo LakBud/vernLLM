@@ -240,7 +240,7 @@ importers:
         specifier: ^0.3.24
         version: 0.3.24
       tsdown:
-        specifier: ^0.23.0
+        specifier: ^0.23.1
         version: 0.23.1(publint@0.3.24)(typescript@5.9.3)(unplugin-unused@0.6.0(esbuild@0.28.2)(rolldown@1.2.14)(vite@8.1.5(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.1)))
       typescript:
         specifier: ^5.9.3

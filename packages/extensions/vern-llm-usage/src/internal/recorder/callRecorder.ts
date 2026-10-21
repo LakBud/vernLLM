@@ -30,6 +30,19 @@ export interface ChargeDetail {
   reported?: boolean;
 }
 
+/** The charges of one call that one provider and model produced, in integer nano dollars. */
+export interface ChargePart {
+  /** Absent for a charge that said who produced it. */
+  provider?: string | undefined;
+  model?: string | undefined;
+  nanoUsd: number;
+  wastedNanoUsd: number;
+  tokens: TokenKinds;
+  tableCharges: number;
+  reportedCharges: number;
+  unpricedCharges: number;
+}
+
 /** What a finished call adds to the totals, in integer nano dollars. */
 export interface CallSnapshot {
   nanoUsd: number;
@@ -38,10 +51,27 @@ export interface CallSnapshot {
   tableCharges: number;
   reportedCharges: number;
   unpricedCharges: number;
-  /** Who produced the last charge. Absent for a call that was never charged. */
+  /** Who produced the last charge, who answered. Absent for a call that was never charged. */
   provider?: string;
   model?: string;
+  /**
+   * The same charges split by who produced them, so a fallback's spend and the primary's wasted
+   * attempt land on their own targets.
+   */
+  parts: ChargePart[];
 }
+
+interface PartTally extends Omit<ChargePart, 'tableCharges'> {
+  charges: number;
+}
+
+const emptyKinds = (): TokenKinds => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  reasoning: 0,
+});
 
 /**
  * The charges for one logical call. Money stays in integer nano dollars until `commit`. A call can
@@ -55,15 +85,15 @@ export class CallRecorder {
   private anyUnpriced = false;
   private unpricedCharges = 0;
   private reportedCharges = 0;
-  private readonly kinds: TokenKinds = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    reasoning: 0,
-  };
+  private readonly kinds: TokenKinds = emptyKinds();
   private last: { provider?: string; model: string } | undefined;
+  private readonly parts = new Map<string, PartTally>();
   private ended = false;
+
+  /** Whether `commit` has settled the call, after which nothing more is recorded. */
+  get done(): boolean {
+    return this.ended;
+  }
 
   /**
    * `nanoUsd` is `undefined` when usage was reported for a model with no price: the tokens still
@@ -79,21 +109,51 @@ export class CallRecorder {
 
     this.charges++;
     this.tokens += tokens;
-    if (detail?.reported) this.reportedCharges++;
+    const part = this.partFor(detail);
+    part.charges++;
+    if (detail?.reported) {
+      this.reportedCharges++;
+      part.reportedCharges++;
+    }
     if (detail) {
       this.last = { provider: detail.provider, model: detail.model };
       for (const kind of Object.keys(this.kinds) as (keyof TokenKinds)[]) {
         this.kinds[kind] += detail.kinds[kind];
+        part.tokens[kind] += detail.kinds[kind];
       }
     }
     if (nanoUsd === undefined) {
       this.anyUnpriced = true;
       this.unpricedCharges++;
+      part.unpricedCharges++;
       return;
     }
 
     this.total += nanoUsd;
-    if (wasted) this.wasted += nanoUsd;
+    part.nanoUsd += nanoUsd;
+    if (wasted) {
+      this.wasted += nanoUsd;
+      part.wastedNanoUsd += nanoUsd;
+    }
+  }
+
+  private partFor(detail: ChargeDetail | undefined): PartTally {
+    const key = JSON.stringify([detail?.provider ?? null, detail?.model ?? null]);
+    let part = this.parts.get(key);
+    if (!part) {
+      part = {
+        provider: detail?.provider,
+        model: detail?.model,
+        nanoUsd: 0,
+        wastedNanoUsd: 0,
+        tokens: emptyKinds(),
+        charges: 0,
+        reportedCharges: 0,
+        unpricedCharges: 0,
+      };
+      this.parts.set(key, part);
+    }
+    return part;
   }
 
   /** What the call adds to the totals. Valid before and after `commit`. */
@@ -107,6 +167,11 @@ export class CallRecorder {
       unpricedCharges: this.unpricedCharges,
       provider: this.last?.provider,
       model: this.last?.model,
+      parts: [...this.parts.values()].map(({ charges, ...part }) => ({
+        ...part,
+        tokens: { ...part.tokens },
+        tableCharges: charges - part.unpricedCharges - part.reportedCharges,
+      })),
     };
   }
 

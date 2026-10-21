@@ -5,8 +5,8 @@ import type { PriceTable } from './priceTable.js';
 import type { PreDispatchContext, WireCallRequest } from 'vern-llm';
 
 /**
- * What a cache hit or join spared, in nano dollars: the request's input and the answer, priced as
- * the primary target would have charged. `undefined` when the primary has no price.
+ * What a hit or join spared: its input and the answer at the primary's price. `undefined` when
+ * unpriced.
  */
 export type SavedSpend = (
   request: Readonly<WireCallRequest>,

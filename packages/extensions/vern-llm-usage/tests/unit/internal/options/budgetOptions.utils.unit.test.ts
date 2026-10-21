@@ -40,6 +40,26 @@ describe('budget options', () => {
     expect(() => normalizeBudgets([budget], attribute)).toThrow(message);
   });
 
+  it('rejects two budgets that would count the same spend twice', () => {
+    expect(() => normalizeBudgets([ok, { ...ok, limitUsd: 9 }], attribute)).toThrow(
+      'budgets[1] repeats budgets[0]',
+    );
+  });
+
+  it('allows budgets that differ in equals, unit or window', () => {
+    expect(
+      normalizeBudgets(
+        [
+          ok,
+          { ...ok, equals: 'acme' },
+          { key: 'tenantId', limitTokens: 5, per: 'day' },
+          { ...ok, per: 'hour' },
+        ],
+        attribute,
+      ),
+    ).toHaveLength(4);
+  });
+
   it('rejects budgets that are not an array, and treats absence as none', () => {
     expect(normalizeBudgets(undefined, attribute)).toEqual([]);
     expect(() => normalizeBudgets({}, attribute)).toThrow('budgets must be an array');

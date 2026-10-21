@@ -60,7 +60,9 @@ export function usageMiddleware(options: UsageMiddlewareOptions): UsageMiddlewar
   const config = normalizeOptions(options);
   const guard = createGuard(config.logger);
   const table = new PriceTable(config);
-  const store = config.store ?? memoryUsageStore({ onWarning: guard.warn });
+  const store =
+    config.store ??
+    memoryUsageStore({ onWarning: guard.warn, failClosed: config.onStoreError === 'deny' });
   const gate = new BudgetGate(config, store, table, guard);
   const warnings = new BudgetWarnings(config.warnAt, store, guard);
   const registry = new TotalsRegistry(config.maxSeries, config.timeZone, (message) =>

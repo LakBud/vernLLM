@@ -25,19 +25,17 @@ export function positiveNumber(value: unknown, name: string, fallback: number): 
   return resolved;
 }
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}(?:T.*)?$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-/**
- * `pricesAsOf` as epoch milliseconds: an ISO date that is not in the future. A bare date counts as
- * UTC midnight, so "today" is never the future.
- */
+/** `pricesAsOf` as epoch ms: a real `YYYY-MM-DD` that is not in the future, as UTC midnight. */
 export function parsePricesAsOf(value: unknown): number {
   if (typeof value !== 'string' || !DATE_PATTERN.test(value)) {
     throw new Error('usageMiddleware: pricesAsOf must be an ISO date such as 2026-10-01');
   }
 
   const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) {
+  // `Date.parse` rolls 2026-02-31 into March, so compare it back.
+  if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== value) {
     throw new Error('usageMiddleware: pricesAsOf must be an ISO date such as 2026-10-01');
   }
   if (ms > Date.now()) {

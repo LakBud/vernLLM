@@ -79,7 +79,64 @@ describe('CallRecorder', () => {
       unpricedCharges: 1,
       provider: 'backup',
       model: 'b',
+      parts: [
+        {
+          provider: 'primary',
+          model: 'a',
+          nanoUsd: 3_000_000,
+          wastedNanoUsd: 3_000_000,
+          tokens: kinds(10),
+          tableCharges: 1,
+          reportedCharges: 0,
+          unpricedCharges: 0,
+        },
+        {
+          provider: 'backup',
+          model: 'b',
+          nanoUsd: 0,
+          wastedNanoUsd: 0,
+          tokens: kinds(20),
+          tableCharges: 0,
+          reportedCharges: 0,
+          unpricedCharges: 1,
+        },
+        {
+          nanoUsd: 1_000_000,
+          wastedNanoUsd: 0,
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+          tableCharges: 1,
+          reportedCharges: 0,
+          unpricedCharges: 0,
+        },
+      ],
     });
+  });
+
+  it('merges the charges of one provider and model into one part', () => {
+    const recorder = new CallRecorder();
+    const kinds = { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+
+    recorder.charge(1_000_000, true, 5, { provider: 'p', model: 'm', kinds });
+    recorder.charge(2_000_000, false, 5, { provider: 'p', model: 'm', kinds });
+
+    expect(recorder.snapshot().parts).toEqual([
+      expect.objectContaining({
+        provider: 'p',
+        model: 'm',
+        nanoUsd: 3_000_000,
+        wastedNanoUsd: 1_000_000,
+        tableCharges: 2,
+        tokens: { input: 8, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+      }),
+    ]);
+  });
+
+  it('knows when it is done', () => {
+    const recorder = new CallRecorder();
+
+    expect(recorder.done).toBe(false);
+    recorder.commit();
+    expect(recorder.done).toBe(true);
   });
 
   it('has no provider or model for a call that was never charged', () => {

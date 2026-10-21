@@ -22,16 +22,19 @@ live provider.
 ## Coding standard
 
 Follow the same reliability and typing standard as `vern-llm`: handle unusual inputs on purpose,
-explain non obvious decisions with a short comment, and keep `any` as a last resort. Six rules are
+explain non obvious decisions with a short comment, and keep `any` as a last resort. Seven rules are
 specific to this package:
 
 - **Never change the call.** Every hook, user callback, and store call goes through `guard`. A
-  failure is logged as `[VernLLM] usage: <step> failed` and the call carries on. The only
+  failure is logged as `[VernLLM] usage: <step> failed` and the call carries on. A returned
+  promise is handed back untouched, so a caller's own rejection is never swallowed. The only
   deliberate change is a budget rejection.
 - **Money is integer nano dollars** until the public edge, so sums never drift.
 - **Settle once.** A reservation is committed when usage was reported and released when none was.
 - **Observe streams on the side.** Never replace `finalResult`, and write what the logger reads
   before any `await`.
+- **Static entry.** The middleware has no `enabled` function, because one would make `onEvent`
+  asynchronous. It sits at `position: -50`, inside the logger and outside routers.
 - **Validate once** in `normalizeOptions`. Runtime code trusts the resolved config.
 - **Copy, don't import, across extensions.** The guard and the test fakes are copies, and the
   logger is a dev dependency for one test suite only.

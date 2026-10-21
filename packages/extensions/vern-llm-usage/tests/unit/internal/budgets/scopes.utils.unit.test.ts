@@ -36,7 +36,7 @@ describe('scopesFor', () => {
   });
 
   it('keeps scopes apart by budget, value and window', () => {
-    const other = { ...tenant, limit: 9 };
+    const other: ResolvedBudget = { ...tenant, unit: 'tokens', limit: 9 };
     const keys = new Set(
       [
         scopesFor([tenant, other], { tenantId: 'a' }, now).map((s) => s.key),
@@ -46,6 +46,30 @@ describe('scopesFor', () => {
     );
 
     expect(keys.size).toBe(4);
+  });
+
+  it('keeps a scope when budgets are reordered or a limit changes', () => {
+    const tokens: ResolvedBudget = { ...tenant, unit: 'tokens', limit: 9 };
+    const before = scopesFor([tenant, tokens], { tenantId: 'a' }, now).map((s) => s.key);
+    const after = scopesFor(
+      [
+        { ...tokens, limit: 99 },
+        { ...tenant, limit: 50 },
+      ],
+      { tenantId: 'a' },
+      now,
+    )
+      .map((s) => s.key)
+      .reverse();
+
+    expect(after).toEqual(before);
+  });
+
+  it('keeps a budget for every value apart from one for a single value', () => {
+    const acme: ResolvedBudget = { ...tenant, equals: 'acme' };
+    const [all, one] = scopesFor([tenant, acme], { tenantId: 'acme' }, now);
+
+    expect(all!.key).not.toBe(one!.key);
   });
 
   it('cannot confuse two values that only look alike when joined', () => {

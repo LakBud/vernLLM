@@ -92,17 +92,46 @@ describe('memoryUsageStore', () => {
     expect(store.read(s)).toEqual({ spent: amount(0), reserved: amount(0) });
   });
 
-  it('drops the spend of a commit that arrives after its reservation expired', () => {
+  it('still records the spend of a commit that arrives after its hold expired', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const store = memoryUsageStore();
-    const s = scope('a', 100);
+    const s = scope('a', 100, 'tokens', Date.now() + 10_000_000);
     const { id } = store.reserve([s], amount(60), 1000) as { ok: true; id: string };
 
     vi.setSystemTime(Date.now() + 1500);
-    expect(store.reserve([s], amount(90), 1000)).toMatchObject({ ok: true });
+    expect(store.reserve([s], amount(30), 1000)).toMatchObject({ ok: true });
+    // The expired hold stopped holding room, but what the call really spent still counts.
+    expect(store.read(s)).toEqual({ spent: amount(0), reserved: amount(30) });
+    store.commit(id, amount(60));
+
+    expect(store.read(s).spent).toEqual(amount(60));
+    // Settled once: a repeated commit adds nothing.
+    store.commit(id, amount(60));
+    expect(store.read(s).spent).toEqual(amount(60));
+  });
+
+  it('forgets an expired hold after a while, so its late spend has nowhere to go', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const store = memoryUsageStore();
+    const s = scope('a', 100, 'tokens', Date.now() + 100_000_000);
+    const { id } = store.reserve([s], amount(60), 1000) as { ok: true; id: string };
+
+    vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+    store.read(s);
     store.commit(id, amount(60));
 
     expect(store.read(s).spent).toEqual(amount(0));
+  });
+
+  it('frees expired holds when read, not only when reserved', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const store = memoryUsageStore();
+    const s = scope('a', 100, 'tokens', Date.now() + 10_000_000);
+    store.reserve([s], amount(60), 1000);
+
+    vi.setSystemTime(Date.now() + 1500);
+
+    expect(store.read(s).reserved).toEqual(amount(0));
   });
 
   it('returns zeros for a scope never used, and copies rather than live state', () => {
@@ -172,6 +201,18 @@ describe('memoryUsageStore', () => {
     expect(() => store.release(first.id)).not.toThrow();
     expect(() => store.commit(second.id, amount(3))).not.toThrow();
     expect(store.read(gone)).toEqual({ spent: amount(0), reserved: amount(0) });
+  });
+
+  it('throws past maxScopes when failClosed, holding nothing', () => {
+    const store = memoryUsageStore({ maxScopes: 1, failClosed: true });
+    const a = scope('a', 100);
+    store.reserve([a], amount(1), 1000);
+
+    expect(() => store.reserve([a, scope('b', 100), scope('c', 100)], amount(1), 1000)).toThrow(
+      'maxScopes',
+    );
+    expect(store.read(a).reserved).toEqual(amount(1));
+    expect(store.reserve([a], amount(1), 1000)).toMatchObject({ ok: true });
   });
 
   it('fails open past maxScopes, with one warning', () => {

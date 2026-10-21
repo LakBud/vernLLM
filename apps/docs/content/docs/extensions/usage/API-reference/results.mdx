@@ -58,7 +58,8 @@ Returned by `totals(filter?, options?)`, see [Totals and Remaining](/docs/extens
       required: true,
     },
     unknownSpendCalls: {
-      description: 'Aborted streams, whose partial usage the provider never reports.',
+      description:
+        'Aborted streams, whose usage the provider never reports. They add no cost to the totals, and their hold counts against budgets.',
       type: 'number',
       required: true,
     },

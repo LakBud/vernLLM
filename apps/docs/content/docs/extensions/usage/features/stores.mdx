@@ -19,13 +19,18 @@ usageMiddleware({
 });
 ```
 
-| Option      | Default | Meaning                                                                |
-| ----------- | ------- | ---------------------------------------------------------------------- |
-| `maxScopes` | `10000` | Most scope windows tracked at once. Past it new scopes are not limited |
-| `onWarning` | none    | Receives the one warning logged when `maxScopes` is hit                |
+| Option       | Default | Meaning                                                                |
+| ------------ | ------- | ---------------------------------------------------------------------- |
+| `maxScopes`  | `10000` | Most scope windows tracked at once. Past it new scopes are not limited |
+| `onWarning`  | none    | Receives the one warning logged when `maxScopes` is hit                |
+| `failClosed` | `false` | Throws at `maxScopes` instead of leaving new scopes unlimited          |
 
-Finished windows are dropped as new ones start, and a hold that is never settled expires after 10
-minutes. The store is synchronous, so a reservation is atomic without locks.
+`usageMiddleware` turns `failClosed` on for its own default store when `onStoreError` is `'deny'`.
+
+Finished windows are dropped as new ones start, and a hold that is never settled stops holding room
+after 10 minutes. A call that outlives its hold still has its spend recorded when it settles, for
+up to an hour after the hold expired. The store is synchronous, so a reservation is atomic without
+locks.
 
 ## Sharing budgets across processes
 
@@ -82,7 +87,7 @@ denied `reserve` returns the scope that had no room and what is left of it in th
 | Method    | Must                                                                             |
 | --------- | -------------------------------------------------------------------------------- |
 | `reserve` | Check every scope and hold on all or none, atomically, in the unit of each scope |
-| `commit`  | Replace the held amount with the real spend, and ignore an unknown or expired id |
+| `commit`  | Replace the held amount with the real spend, and ignore an unknown id            |
 | `release` | Free a hold with no spend, used when a call reported no usage                    |
 | `read`    | Return spent and held for a scope, zeros when it was never used                  |
 

@@ -16,14 +16,8 @@ function count(value: number | undefined): number {
 }
 
 /**
- * The cost of one usage report in integer nano dollars.
- *
- * `promptTokens` already includes cache reads and writes, and `reasoningTokens` is a subset of
- * `completionTokens`, so neither is added on top:
- *
- * - uncached input is the prompt minus reads and writes, never below zero
- * - writes with a TTL rate are priced by it, and the rest at the flat write rate
- * - reasoning is priced at its own rate, the remaining completion at the output rate
+ * The cost of one usage report in integer nano dollars. Cache and reasoning tokens are priced at
+ * their own rates, not added on top.
  */
 export function chargeNanoUsd(tokens: TokenCounts, price: ResolvedPrice): number {
   const prompt = count(tokens.promptTokens);
@@ -38,7 +32,7 @@ export function chargeNanoUsd(tokens: TokenCounts, price: ResolvedPrice): number
     writeCost += n * (price.cacheWriteByTtl.get(ttl) ?? price.cacheWrite);
   }
 
-  // A total larger than the TTL split is written without a TTL, so it takes the flat rate.
+  // A total above the TTL split takes the flat rate.
   const totalWrites = Math.max(count(tokens.cacheWriteTokens), writes);
   writeCost += (totalWrites - writes) * price.cacheWrite;
 
@@ -90,10 +84,7 @@ export function toPublicAmount(unit: 'usd' | 'tokens', amount: number): number {
   return unit === 'usd' ? nanoToUsd(amount) : amount;
 }
 
-/**
- * The cost a provider reported, in integer nano dollars, or `undefined` when there is none or it is
- * not a usable amount. Zero is usable: a free model reports no cost.
- */
+/** The cost a provider reported in nano dollars, or `undefined` when unusable. Zero is usable. */
 export function reportedNanoUsd(costUsd: number | undefined): number | undefined {
   if (typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0) return undefined;
 

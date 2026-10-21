@@ -5,13 +5,10 @@ import type { Amount, Scope, UsageStore } from '../../types/index.js';
 import type { Guard } from '../guard.utils.js';
 import type { PreDispatchContext } from 'vern-llm';
 
-/** Most scopes remembered as warned. Past it, ones from finished windows are forgotten first. */
+/** Most scopes remembered as warned. */
 const DEFAULT_MAX_REMEMBERED = 10_000;
 
-/**
- * Emits `usage.budget_warning` once per scope and window, when spend plus holds reach `warnAt` of
- * the limit. A scope's key includes its window, so the next window warns again.
- */
+/** Emits `usage.budget_warning` once per scope and window when spend plus holds reach `warnAt`. */
 export class BudgetWarnings {
   /** Scope key to the end of its window. */
   private readonly warned = new Map<string, number>();
@@ -23,7 +20,7 @@ export class BudgetWarnings {
     private readonly maxRemembered = DEFAULT_MAX_REMEMBERED,
   ) {}
 
-  /** Checks each scope in turn. Returns a promise only when the store's `read` did. */
+  /** Checks each scope in turn. */
   check(scopes: readonly Scope[], ctx: PreDispatchContext): MaybePromise<void> {
     const { warnAt } = this;
     if (warnAt === undefined) return;
@@ -65,6 +62,8 @@ export class BudgetWarnings {
       const unit = scope.unit === 'usd' ? 'nanoUsd' : 'tokens';
       const used = (spent[unit] + reserved[unit]) / scope.limit;
       if (used < warnAt) return;
+      // Another call may have warned while the read was in flight.
+      if (this.warned.has(scope.key)) return;
 
       this.remember(scope);
       ctx.emit('usage.budget_warning', {
@@ -85,7 +84,7 @@ export class BudgetWarnings {
       for (const [key, resetsAtMs] of this.warned) {
         if (resetsAtMs <= now) this.warned.delete(key);
       }
-      // All still live: stop remembering the oldest rather than grow without bound.
+      // All still live: forget the oldest rather than grow without bound.
       if (this.warned.size >= this.maxRemembered) {
         this.warned.delete(this.warned.keys().next().value!);
       }

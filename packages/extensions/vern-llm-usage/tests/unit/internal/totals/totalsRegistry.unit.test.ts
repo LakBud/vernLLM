@@ -9,16 +9,29 @@ const noTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 
 const at = (iso: string) => Date.parse(iso);
 
 function outcome(overrides: Partial<CallOutcome> = {}, nanoUsd = 1_000_000): CallOutcome {
+  const tokens = { ...noTokens, input: 10, output: 5 };
   return {
     snapshot: {
       nanoUsd,
       wastedNanoUsd: 0,
-      tokens: { ...noTokens, input: 10, output: 5 },
+      tokens,
       tableCharges: 1,
       reportedCharges: 0,
       unpricedCharges: 0,
       provider: 'primary',
       model: 'm',
+      parts: [
+        {
+          provider: 'primary',
+          model: 'm',
+          nanoUsd,
+          wastedNanoUsd: 0,
+          tokens,
+          tableCharges: 1,
+          reportedCharges: 0,
+          unpricedCharges: 0,
+        },
+      ],
     },
     fallbackProvider: 'primary',
     fallbackModel: 'm',
@@ -58,7 +71,13 @@ describe('TotalsRegistry', () => {
   it('counts hits, joins and unknown spend, and the model of a call never charged', () => {
     const r = registry();
     const now = at('2026-10-20T12:00:00Z');
-    const none = { ...outcome().snapshot, provider: undefined, model: undefined, tableCharges: 0 };
+    const none = {
+      ...outcome().snapshot,
+      provider: undefined,
+      model: undefined,
+      tableCharges: 0,
+      parts: [],
+    };
 
     r.add(outcome({ snapshot: none, cache: 'hit', fallbackModel: 'x' }), now);
     r.add(outcome({ snapshot: none, cache: 'join', fallbackModel: 'x' }), now);
@@ -77,6 +96,77 @@ describe('TotalsRegistry', () => {
     r.add(outcome({ cache: 'hit' }, 0), now);
 
     expect(r.read({}, {}, now)).toMatchObject({ estimatedSavedUsd: 1, cacheHits: 2, joins: 1 });
+  });
+
+  it('splits a call over the targets that produced its charges, and counts it once', () => {
+    const r = registry();
+    const now = at('2026-10-20T12:00:00Z');
+    const part = (provider: string, model: string, nanoUsd: number, wastedNanoUsd: number) => ({
+      provider,
+      model,
+      nanoUsd,
+      wastedNanoUsd,
+      tokens: { ...noTokens, input: 10 },
+      tableCharges: 1,
+      reportedCharges: 0,
+      unpricedCharges: 0,
+    });
+    const primary = part('primary', 'a', 3_000_000, 3_000_000);
+    const backup = part('backup', 'b', 2_000_000, 0);
+
+    r.add(
+      outcome({
+        snapshot: {
+          ...outcome().snapshot,
+          nanoUsd: 5_000_000,
+          wastedNanoUsd: 3_000_000,
+          tableCharges: 2,
+          provider: 'backup',
+          model: 'b',
+          parts: [primary, backup],
+        },
+      }),
+      now,
+    );
+
+    expect(r.read({}, { provider: 'primary' }, now)).toMatchObject({
+      estimatedCostUsd: 0.003,
+      wastedUsd: 0.003,
+      calls: 0,
+    });
+    expect(r.read({}, { provider: 'backup', model: 'b' }, now)).toMatchObject({
+      estimatedCostUsd: 0.002,
+      wastedUsd: 0,
+      calls: 1,
+    });
+    expect(r.read({}, {}, now)).toMatchObject({ estimatedCostUsd: 0.005, calls: 1 });
+  });
+
+  it('puts a charge that names no target on the primary', () => {
+    const r = registry();
+    const now = at('2026-10-20T12:00:00Z');
+    const base = outcome();
+    const [named] = base.snapshot.parts;
+
+    r.add(
+      {
+        ...base,
+        fallbackProvider: 'primary',
+        fallbackModel: 'm',
+        snapshot: {
+          ...base.snapshot,
+          provider: undefined,
+          model: undefined,
+          parts: [{ ...named!, provider: undefined, model: undefined }],
+        },
+      },
+      now,
+    );
+
+    expect(r.read({}, { provider: 'primary', model: 'm' }, now)).toMatchObject({
+      estimatedCostUsd: 0.001,
+      calls: 1,
+    });
   });
 
   it('counts a day by the clock of its time zone', () => {

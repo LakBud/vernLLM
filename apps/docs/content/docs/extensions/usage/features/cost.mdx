@@ -38,7 +38,7 @@ suffix, or `priceFor(model, provider)` to look a price up per call instead of pa
 | Other output     | `output`                                                                         |
 
 Money is held as integer nano dollars (1e-9 USD) and converted to USD only when it is reported, so
-sums never drift.
+sums never drift. Rates are rounded to $0.001 per 1M tokens.
 
 ## Provider reported cost
 

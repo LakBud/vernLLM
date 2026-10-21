@@ -13,15 +13,15 @@ import type { PriceTable } from '../pricing/priceTable.js';
 export interface Reservation {
   id: string;
   scopes: readonly Scope[];
+  /** What was held, so an aborted stream can count it as spend. */
+  held: Amount;
 }
 
 /** Frees a reservation that is never settled, such as one held by a process that died. */
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 
 /**
- * The cut off switch: holds an estimate against the call's budgets before it is sent, and settles
- * it with what the call really spent. A failure of the store or of the gate itself is logged and
- * never changes a call, except that `onStoreError: 'deny'` turns a failing store into a rejection.
+ * Holds an estimate against a call's budgets before it is sent, and settles it with the real spend.
  */
 export class BudgetGate {
   constructor(
@@ -31,48 +31,35 @@ export class BudgetGate {
     private readonly guard: Guard,
   ) {}
 
-  /** Whether any budget is configured. Without one the gate is never entered. */
+  /** Whether any budget is configured. */
   get active(): boolean {
     return this.config.budgets.length > 0;
   }
 
-  /**
-   * Holds the call's estimate against every budget it falls under. Returns the reservation, or
-   * `undefined` when nothing was held: no budget applies, or the store failed and the call is
-   * allowed through. Throws `budget_exceeded`, before any provider is contacted, when a budget
-   * has no room or the store failed and `onStoreError` is `'deny'`.
-   */
+  /** Holds the estimate against every budget the call falls under, or throws `budget_exceeded`. */
   async reserve(
     request: Readonly<WireCallRequest>,
     ctx: PreDispatchContext,
   ): Promise<Reservation | undefined> {
-    const scopes = this.guard<Scope[]>(
-      'scopes',
-      () => scopesFor(this.config.budgets, ctx.context, Date.now(), this.config.timeZone),
-      [],
-    );
-    if (scopes.length === 0) return undefined;
-
-    const estimate = this.guard<Amount>(
-      'estimate',
-      () => holdEstimate(request, ctx, this.table, this.guard),
-      {
-        nanoUsd: 0,
-        tokens: 0,
-      },
-    );
+    // A gate failure follows `onStoreError`, like a failing store.
+    let scopes: Scope[];
+    let estimate: Amount;
+    try {
+      scopes = scopesFor(this.config.budgets, ctx.context, Date.now(), this.config.timeZone);
+      if (scopes.length === 0) return undefined;
+      estimate = holdEstimate(request, ctx, this.table, this.guard);
+    } catch (error) {
+      this.guard.report('reserve', error);
+      if (this.config.onStoreError === 'deny') throw this.unavailable(error);
+      return undefined;
+    }
 
     let outcome: Awaited<ReturnType<UsageStore['reserve']>>;
     try {
       outcome = await this.store.reserve(scopes, estimate, RESERVATION_TTL_MS);
     } catch (error) {
       this.guard.report('reserve', error);
-      if (this.config.onStoreError === 'deny') {
-        throw new LLMError('Usage budget store unavailable', 'quota_exceeded', {
-          code: 'budget_exceeded',
-          cause: error,
-        });
-      }
+      if (this.config.onStoreError === 'deny') throw this.unavailable(error);
       return undefined;
     }
 
@@ -89,21 +76,22 @@ export class BudgetGate {
         code: 'budget_exceeded',
       });
     }
-    return { id: outcome.id, scopes };
+    return { id: outcome.id, scopes, held: estimate };
   }
 
-  /**
-   * Replaces the held estimate with the real spend. Never throws, and returns a promise only when
-   * the store did.
-   */
+  private unavailable(cause: unknown): LLMError {
+    return new LLMError('Usage budget store unavailable', 'quota_exceeded', {
+      code: 'budget_exceeded',
+      cause,
+    });
+  }
+
+  /** Replaces the held estimate with the real spend. Never throws. */
   settle(reservation: Reservation, actual: Amount): MaybePromise<void> {
     return this.safely('commit', () => this.store.commit(reservation.id, actual));
   }
 
-  /**
-   * Frees the held estimate when the call spent nothing it knows of. Never throws, and returns a
-   * promise only when the store did.
-   */
+  /** Frees the held estimate. Never throws. */
   release(reservation: Reservation): MaybePromise<void> {
     return this.safely('release', () => this.store.release(reservation.id));
   }

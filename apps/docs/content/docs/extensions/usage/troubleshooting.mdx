@@ -17,9 +17,9 @@ description: Symptoms and fixes for missing cost, unpriced calls, budgets that d
     call with `equals` set matches only that value.
   </Accordion>
   <Accordion title="Calls are rejected too early">
-    The estimate is a worst case: input plus `max_tokens`, priced at the dearest allowed target. A
-    large `max_tokens` holds a large amount until the call settles. Lower `max_tokens` or raise the
-    limit.
+    The estimate is a worst case: the input, which includes tool definitions and the response
+    schema, plus `max_tokens`, priced at the dearest allowed target. A large `max_tokens` holds a
+    large amount until the call settles. Lower `max_tokens` or raise the limit.
   </Accordion>
   <Accordion title="Budgets differ between processes">
     The default store is per process. Use a shared store for one budget across processes.

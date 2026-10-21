@@ -3,6 +3,7 @@ import { andThen, type MaybePromise } from '../maybePromise.utils.js';
 import { nanoToUsd } from '../pricing/charge.utils.js';
 import { attributionOf } from '../totals/attribution.utils.js';
 
+import type { Amount } from '../../types/index.js';
 import type { BudgetGate, Reservation } from '../budgets/gate.js';
 import type { BudgetWarnings } from '../budgets/warnings.js';
 import type { Guard } from '../guard.utils.js';
@@ -22,9 +23,8 @@ export interface Call {
 
 export interface CallFinisher {
   /**
-   * Ends the call once: publishes its cost for the logger, adds it to the totals, replaces the
-   * estimate with the real spend, and warns. Nothing past the first two steps runs before the
-   * logger could read `ctx.state`, which is why those come first and are synchronous. Never throws.
+   * Ends the call once: publishes its cost, adds it to the totals, settles the hold and warns.
+   * Never throws.
    */
   finish(
     call: Call,
@@ -32,10 +32,7 @@ export interface CallFinisher {
     unknownSpend: boolean,
     answer?: unknown,
   ): MaybePromise<void>;
-  /**
-   * Ends a stream's call when `finalResult` settles. Observed on the side and never replaced, so
-   * the caller sees the same promise.
-   */
+  /** Ends a stream's call when `finalResult` settles, observed on the side. */
   observeStream(
     call: Call,
     cache: 'hit' | 'join' | undefined,
@@ -52,19 +49,28 @@ export interface CallFinisherDeps {
   attribute: readonly string[];
 }
 
+/** The larger of two amounts, per field. */
+function atLeast(actual: Amount, floor: Amount): Amount {
+  return {
+    nanoUsd: Math.max(actual.nanoUsd, floor.nanoUsd),
+    tokens: Math.max(actual.tokens, floor.tokens),
+  };
+}
+
 export function createCallFinisher(deps: CallFinisherDeps): CallFinisher {
   const { guard, gate, warnings, registry, savedSpend, attribute } = deps;
 
   const finish: CallFinisher['finish'] = (call, cache, unknownSpend, answer) => {
     const { recorder, request, ctx, reservation } = call;
+    if (recorder.done) return;
 
     guard(
       'commit',
       () => {
-        const fields = recorder.commit();
-        if (!fields) return;
+        // Not done yet, so this settles it.
+        const fields = recorder.commit()!;
 
-        // A hit or join made no provider call: estimate what it spared, at the primary's price.
+        // A hit or join made no provider call: estimate what it spared.
         const savedNanoUsd = cache ? savedSpend(request, answer, ctx) : undefined;
         ctx.state.set(usageStateKey, {
           ...fields,
@@ -88,14 +94,13 @@ export function createCallFinisher(deps: CallFinisherDeps): CallFinisher {
 
     if (!reservation) return;
 
-    // A call that reported no usage spent nothing known, so its whole hold is freed. All of this
-    // stays synchronous when the store is, so a stream's warning is emitted before the logger's
-    // `finalResult` observer builds its record.
+    // No usage frees the hold, but an aborted stream keeps it as spend. Synchronous with a
+    // synchronous store, so a stream's warning lands before the logger's record.
     const { tableCharges, reportedCharges, unpricedCharges } = recorder.snapshot();
+    const reported = tableCharges + reportedCharges + unpricedCharges > 0;
+    const spent = unknownSpend ? atLeast(recorder.amount(), reservation.held) : recorder.amount();
     const settled =
-      tableCharges + reportedCharges + unpricedCharges === 0
-        ? gate.release(reservation)
-        : gate.settle(reservation, recorder.amount());
+      reported || unknownSpend ? gate.settle(reservation, spent) : gate.release(reservation);
     return andThen(settled, () => warnings.check(reservation.scopes, ctx));
   };
 

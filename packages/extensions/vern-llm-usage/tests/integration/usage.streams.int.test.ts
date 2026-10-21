@@ -105,8 +105,8 @@ describe('streams', () => {
     expect(spy.open()).toBe(0);
   });
 
-  it('counts an aborted stream as unknown spend, and frees its reservation', async () => {
-    const { llm, usage, spy } = setup((signal) => ({
+  it('counts an aborted stream as unknown spend, and keeps its hold as the spend', async () => {
+    const { llm, usage, spy, scope } = setup((signal) => ({
       async *[Symbol.asyncIterator]() {
         yield { type: 'text-delta', delta: 'hel' } as WireStreamChunk;
         await new Promise<void>((_resolve, reject) =>
@@ -127,7 +127,11 @@ describe('streams', () => {
     await finished;
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // The provider bills what was generated but never reports it, so the hold is committed as the
+    // spend rather than released: aborting a stream must not be a way around a budget.
     expect(spy.open()).toBe(0);
+    expect(spy.log()).toEqual(['reserve', 'commit']);
+    expect((await spy.store.read(scope())).spent.tokens).toBeGreaterThanOrEqual(50);
     expect(usage.totals({ tenantId: 'acme' })).toMatchObject({ calls: 1, unknownSpendCalls: 1 });
   });
 });

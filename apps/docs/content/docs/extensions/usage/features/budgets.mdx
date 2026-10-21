@@ -22,6 +22,11 @@ Without `equals` the limit applies to every value of the key separately, so each
 its own $50 a day. With `equals` it applies to that one value. A call without the key, or with no
 `context`, is not limited by that budget. Set exactly one of `limitUsd` and `limitTokens`.
 
+A budget is identified by its `key`, `equals`, unit and window, not by its place in the array or its
+limit, so reordering the budgets or changing a limit keeps the spend a shared store already holds.
+Two budgets with the same key, `equals`, unit and `per` count the same spend twice, so they throw at
+construction.
+
 ## Windows
 
 Windows are calendar `hour`, `day` or `month`, in UTC unless you set `timeZone`. Spend starts again
@@ -36,7 +41,7 @@ usageMiddleware({
 ```
 
 The zone applies to every budget and to `totals`. Daylight saving is followed, so a day can be 23 or
-25 hours long. An unknown zone throws at construction.
+25 hours long. A repeated hour is two windows. An unknown zone throws at construction.
 
 ## How a call is checked
 
@@ -48,7 +53,8 @@ nothing is held anywhere and the call is rejected.
 
 ### Estimate
 
-The worst case: the input plus `max_tokens`, priced at the dearest allowed target.
+The worst case: the input plus `max_tokens`, priced at the dearest allowed target. The input counts
+the messages, the tool definitions and the response schema.
 
 </Step>
 <Step>
@@ -75,27 +81,40 @@ The estimate is replaced by the real spend, or released when no usage was report
 </Steps>
 
 The estimate counts `max_tokens` once and skips targets with no price, so with none priced only
-tokens are held. Parallel calls cannot overshoot: 50 calls against a budget with room for one let
-exactly one through.
+tokens are held. Parallel calls are held against the budget before they run: 50 calls against a
+budget with room for one let exactly one through.
+
+A budget is checked before the cache, so a call that would have been a cache hit is rejected too
+once the budget is spent, and while it runs it holds its worst case like any other call. A hit
+itself spends nothing: its hold is freed.
+
+The error message names the budget with the context value, such as `tenantId=acme per day`, so
+show your users your own message instead of it.
 
 A rejection is an `LLMError` with `type: 'quota_exceeded'` and `code: 'budget_exceeded'`. It is
 thrown before any provider is contacted, never counts toward the circuit breaker, and the default
 `fallbackOn` stops on it. A `usage.budget_exceeded` event says which budget was hit.
 
 <Callout type="warn">
-  Budgets are guards, not ledgers. Spend can pass a limit by at most one call's overrun, since a
-  longer answer than the estimate is only known at the end. Dollar budgets ignore unpriced calls,
-  and token budgets count them.
+  Budgets are guards, not ledgers. Every call in flight can spend more than its estimate, since a
+  longer answer or a larger input is only known at the end, so spend can pass a limit by the overrun
+  of the calls that were running. Dollar budgets ignore unpriced calls, and token budgets count
+  them.
 </Callout>
 
 ## When the store fails
 
 `onStoreError: 'allow'` (the default) sends the call unmetered and logs the failure, matching the
 core's rule that a failing cache is a miss. `'deny'` rejects it like an exceeded budget, with the
-store's error as the `cause`, for teams where overspend is worse than downtime.
+store's error as the `cause`, for teams where overspend is worse than downtime. The same goes for a
+failure of the budget check itself, and for the default in memory store reaching its `maxScopes`,
+which lets new scopes through when `onStoreError` is `'allow'` and rejects the call when it is
+`'deny'`.
 
 ## Streams
 
 A stream keeps its reservation until `finalResult` settles, then replaces it with the real spend.
-A stream that is aborted reports no usage, so its spend is unknown: its hold is freed and the call
-is counted under `unknownSpendCalls` in the totals.
+A stream that is aborted reports no usage, but the provider still bills what it generated. Its
+spend is unknown, so the hold stays as the spend: aborting a stream is not a way around a budget.
+The call is counted under `unknownSpendCalls` in the totals, which add nothing to the cost for it.
+A stream that fails some other way without reporting usage frees its hold.

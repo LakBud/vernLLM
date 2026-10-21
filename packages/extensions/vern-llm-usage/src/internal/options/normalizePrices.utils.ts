@@ -2,7 +2,7 @@ import { finiteNonNegative, isPlainObject } from './validate.utils.js';
 
 import type { ModelPrice, ResolvedPrice } from '../../types/index.js';
 
-/** $ per 1M tokens to integer nano dollars per token: $1 per 1M is 1000 nano dollars each. */
+/** $ per 1M tokens to nano dollars per token: $1 per 1M is 1000. */
 const NANO_PER_TOKEN_PER_DOLLAR_PER_MILLION = 1000;
 
 function toNano(dollarsPerMillion: number): number {
@@ -10,8 +10,8 @@ function toNano(dollarsPerMillion: number): number {
 }
 
 /**
- * Validates one price and converts it to nano dollars per token, once, so every charge afterwards
- * is integer maths. A rate finer than $0.001 per 1M tokens is rounded to the nearest step.
+ * Validates a price and converts it to integer nano dollars per token. Finer than $0.001 per 1M
+ * rounds.
  */
 export function toResolvedPrice(price: unknown, label: string): ResolvedPrice {
   if (!isPlainObject(price)) throw new Error(`usageMiddleware: ${label} must be an object`);

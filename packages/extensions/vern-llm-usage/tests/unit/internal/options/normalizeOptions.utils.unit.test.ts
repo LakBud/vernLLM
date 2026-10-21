@@ -79,6 +79,8 @@ describe('normalizeOptions', () => {
     it('a pricesAsOf that is not an ISO date, or is in the future', () => {
       rejects({ ...valid, pricesAsOf: 'last week' }, 'pricesAsOf must be an ISO date');
       rejects({ ...valid, pricesAsOf: '2026-13-45' }, 'pricesAsOf must be an ISO date');
+      rejects({ ...valid, pricesAsOf: '2026-02-31' }, 'pricesAsOf must be an ISO date');
+      rejects({ ...valid, pricesAsOf: '2026-10-01T12:00:00' }, 'pricesAsOf must be an ISO date');
       rejects({ ...valid, pricesAsOf: 20261001 }, 'pricesAsOf must be an ISO date');
       rejects({ ...valid, pricesAsOf: '2999-01-01' }, 'pricesAsOf must not be in the future');
     });

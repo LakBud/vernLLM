@@ -37,7 +37,7 @@ function toLimit(
       throw new Error(`usageMiddleware: ${label}.limitUsd must be a positive number`);
     }
 
-    // Integer nano dollars stay exact up to about $9,000,000.
+    // Exact in integer nano dollars up to about $9,000,000.
     const limit = Math.round(limitUsd * NANO_PER_USD);
     if (limit < 1 || !Number.isSafeInteger(limit)) {
       throw new Error(`usageMiddleware: ${label}.limitUsd must be between 0.000000001 and 9000000`);
@@ -58,6 +58,8 @@ export function normalizeBudgets(
 ): readonly ResolvedBudget[] {
   if (budgets === undefined) return [];
   if (!Array.isArray(budgets)) throw new Error('usageMiddleware: budgets must be an array');
+
+  const seen = new Map<string, number>();
 
   return (budgets as unknown[]).map((budget, index) => {
     const label = `budgets[${index}]`;
@@ -82,7 +84,19 @@ export function normalizeBudgets(
       throw new Error(`usageMiddleware: ${label}.equals must be a string, number or boolean`);
     }
 
-    return { key, equals, per: per as BudgetWindow, ...toLimit(budget, label) };
+    const resolved = { key, equals, per: per as BudgetWindow, ...toLimit(budget, label) };
+
+    // Two such budgets would count the same spend twice.
+    const identity = JSON.stringify([key, equals ?? null, resolved.unit, resolved.per]);
+    const earlier = seen.get(identity);
+    if (earlier !== undefined) {
+      throw new Error(
+        `usageMiddleware: ${label} repeats budgets[${earlier}]: same key, equals, limit unit and per`,
+      );
+    }
+    seen.set(identity, index);
+
+    return resolved;
   });
 }
 

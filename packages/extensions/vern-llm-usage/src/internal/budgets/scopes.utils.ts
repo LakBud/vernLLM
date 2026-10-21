@@ -10,16 +10,10 @@ export function isScalar(value: unknown): value is Scalar {
 
 export interface BudgetMatch {
   budget: ResolvedBudget;
-  /** Position in the configured budgets, so two budgets on one key stay apart. */
-  index: number;
   value: Scalar;
 }
 
-/**
- * The budgets a `context` falls under: each whose key it carries as a string, number or boolean,
- * and whose `equals` matches strictly. A call without the key is not limited by that budget, and
- * an object or null value never matches.
- */
+/** The budgets a `context` falls under. A missing key, an object or null never matches. */
 export function matchBudgets(
   budgets: readonly ResolvedBudget[],
   context: Readonly<Record<string, unknown>> | undefined,
@@ -27,27 +21,20 @@ export function matchBudgets(
   if (!context) return [];
 
   const matches: BudgetMatch[] = [];
-  budgets.forEach((budget, index) => {
+  for (const budget of budgets) {
     const value = context[budget.key];
-    if (!isScalar(value)) return;
-    if (budget.equals !== undefined && value !== budget.equals) return;
-    matches.push({ budget, index, value });
-  });
+    if (!isScalar(value)) continue;
+    if (budget.equals !== undefined && value !== budget.equals) continue;
+    matches.push({ budget, value });
+  }
   return matches;
 }
 
-/**
- * The scope for one match. The key joins the budget's position, the value and the window, so a new
- * window counts from zero. Built with `JSON.stringify` so no value can collide with another.
- */
-export function scopeOf(
-  { budget, index, value }: BudgetMatch,
-  nowMs: number,
-  timeZone?: string,
-): Scope {
+/** The scope for one match, keyed by budget, value and window. */
+export function scopeOf({ budget, value }: BudgetMatch, nowMs: number, timeZone?: string): Scope {
   const window = windowFor(budget.per, nowMs, timeZone);
   return {
-    key: JSON.stringify([index, budget.key, value, window.id]),
+    key: JSON.stringify([budget.key, budget.equals ?? null, budget.unit, value, window.id]),
     label: `${budget.key}=${String(value)} per ${budget.per}`,
     unit: budget.unit,
     limit: budget.limit,

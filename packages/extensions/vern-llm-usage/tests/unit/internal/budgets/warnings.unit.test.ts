@@ -175,3 +175,29 @@ describe('BudgetWarnings', () => {
     vi.useRealTimers();
   });
 });
+
+describe('BudgetWarnings, with concurrent checks on an asynchronous store', () => {
+  it('warns once for a scope even when several reads are in flight together', async () => {
+    const inner = memoryUsageStore();
+    const slow: UsageStore = {
+      reserve: (scopes, amount, ttlMs) => inner.reserve(scopes, amount, ttlMs),
+      commit: (id, actual) => inner.commit(id, actual),
+      release: (id) => inner.release(id),
+      read: async (s) => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return inner.read(s);
+      },
+    };
+    const { warnings, emit, ctx } = setup(slow);
+    const s = scope('a');
+    await spend(slow, s, 80);
+
+    await Promise.all([
+      warnings.check([s], ctx),
+      warnings.check([s], ctx),
+      warnings.check([s], ctx),
+    ]);
+
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+});

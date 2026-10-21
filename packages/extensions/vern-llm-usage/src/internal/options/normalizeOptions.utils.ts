@@ -20,7 +20,7 @@ import type { ResolvedConfig, UsageMiddlewareOptions } from '../../types/index.j
 export const DEFAULT_MAX_PRICE_AGE_DAYS = 90;
 
 export function normalizeOptions(options: UsageMiddlewareOptions): ResolvedConfig {
-  // Checked as `unknown`, so the guard does not narrow `options` to a bag of unknown fields.
+  // Checked as `unknown` so the guard does not narrow `options`.
   if (!isPlainObject(options as unknown)) {
     throw new Error('usageMiddleware: options must be an object');
   }

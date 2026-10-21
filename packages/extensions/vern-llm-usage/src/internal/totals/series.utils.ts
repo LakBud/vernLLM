@@ -1,5 +1,5 @@
 import type { UsageTotals } from '../../types/index.js';
-import type { CallSnapshot } from '../recorder/callRecorder.js';
+import type { CallSnapshot, ChargePart } from '../recorder/callRecorder.js';
 
 export const OTHER = '__other__';
 
@@ -61,19 +61,22 @@ export const emptySeries = (provider: string, model: string, attribution: Attrib
   unknownSpendCalls: 0,
 });
 
-/** Adds one finished call to a series. */
-export function addToSeries(series: Series, outcome: CallOutcome): void {
-  const { snapshot } = outcome;
-  series.nanoUsd += snapshot.nanoUsd;
-  series.wastedNanoUsd += snapshot.wastedNanoUsd;
+/** Adds the charges one provider and model produced for a call to that target's series. */
+export function addPartToSeries(series: Series, part: ChargePart): void {
+  series.nanoUsd += part.nanoUsd;
+  series.wastedNanoUsd += part.wastedNanoUsd;
+  series.tableCharges += part.tableCharges;
+  series.reportedCharges += part.reportedCharges;
+  series.unpricedCharges += part.unpricedCharges;
+  for (const k of Object.keys(series.tokens) as (keyof Series['tokens'])[]) {
+    series.tokens[k] += part.tokens[k];
+  }
+}
+
+/** Counts one finished call on the series of the target that answered it. */
+export function addCallToSeries(series: Series, outcome: CallOutcome): void {
   series.savedNanoUsd += outcome.savedNanoUsd ?? 0;
   series.calls++;
-  series.tableCharges += snapshot.tableCharges;
-  series.reportedCharges += snapshot.reportedCharges;
-  series.unpricedCharges += snapshot.unpricedCharges;
-  for (const k of Object.keys(series.tokens) as (keyof Series['tokens'])[]) {
-    series.tokens[k] += snapshot.tokens[k];
-  }
   if (outcome.cache === 'hit') series.cacheHits++;
   if (outcome.cache === 'join') series.joins++;
   if (outcome.unknownSpend) series.unknownSpendCalls++;

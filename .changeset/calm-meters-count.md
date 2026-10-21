@@ -20,7 +20,7 @@ usage.totals({ tenantId: 'acme' });
 await usage.remaining({ tenantId: 'acme' });
 ```
 
-It prices every call from a dated table you supply, including cache and reasoning tokens, or uses the cost the provider reports when its response carries one, and reports spend on attempts whose response was rejected as wasted. A call that would go over a dollar or token budget is rejected before any provider is contacted, as `quota_exceeded` with code `budget_exceeded`, using a worst case reservation that is settled with the real spend, so parallel calls cannot overshoot. Streams are metered when `finalResult` settles.
+It prices every call from a dated table you supply, including cache and reasoning tokens, or uses the cost the provider reports when its response carries one, and reports spend on attempts whose response was rejected as wasted. A call that would go over a dollar or token budget is rejected before any provider is contacted, as `quota_exceeded` with code `budget_exceeded`, using a worst case reservation that is settled with the real spend, so parallel calls are held against the budget before they run. An aborted stream keeps its hold as its spend, since the provider bills what it generated. Streams are metered when `finalResult` settles.
 
 Cache hits and joins report `estimatedSavedUsd`, an estimate of the spend they spared.
 

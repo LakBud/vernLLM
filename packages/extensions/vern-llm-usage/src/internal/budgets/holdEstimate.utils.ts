@@ -7,10 +7,8 @@ import type { PriceTable } from '../pricing/priceTable.js';
 import type { PreDispatchContext, WireCallRequest } from 'vern-llm';
 
 /**
- * The most the call could spend, which is what a budget holds before it is sent.
- * `defaultEstimateTokens` already includes `max_tokens`, so the input is what is left of it. Money
- * is priced at the dearest allowed target, from `ctx.targets`, and a target with no price is
- * skipped: with none priced only tokens are held.
+ * The most the call could spend, priced at the dearest allowed target. Unpriced targets are
+ * skipped.
  */
 export function holdEstimate(
   request: Readonly<WireCallRequest>,

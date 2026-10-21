@@ -1,7 +1,7 @@
 import type { BudgetWindow } from '../../types/index.js';
 
 export interface WindowInfo {
-  /** e.g. `day:2026-10-20`. A new window has a new id, so its spend starts from zero. */
+  /** e.g. `day:2026-10-20`. A new window has a new id. */
   id: string;
   /** The next boundary, as epoch milliseconds. */
   resetsAtMs: number;
@@ -60,10 +60,7 @@ function offsetMs(ms: number, timeZone: string): number {
   return wallClockMs(ms, timeZone) - Math.floor(ms / 1000) * 1000;
 }
 
-/**
- * The instant a wall clock reads `wallMs` in `timeZone`. A time that falls in a skipped hour
- * resolves to just after the gap, and a repeated one to its first occurrence.
- */
+/** The instant a wall clock reads `wallMs` in `timeZone`. A skipped hour resolves after the gap. */
 function instantOf(wallMs: number, timeZone: string): number {
   const first = wallMs - offsetMs(wallMs, timeZone);
   const second = wallMs - offsetMs(first, timeZone);
@@ -72,11 +69,7 @@ function instantOf(wallMs: number, timeZone: string): number {
 
 const pad = (value: number, width = 2) => String(value).padStart(width, '0');
 
-/**
- * The calendar window `nowMs` falls in, in `timeZone` (UTC by default). UTC is the same on every
- * server; another zone follows its own calendar, daylight saving included. Wall clock on purpose,
- * since budgets follow the calendar.
- */
+/** The calendar window `nowMs` falls in, in `timeZone` (UTC by default). */
 export function windowFor(
   per: BudgetWindow,
   nowMs: number,
@@ -93,7 +86,7 @@ export function windowFor(
 
   switch (per) {
     case 'hour': {
-      // A repeated hour in autumn is two windows, told apart by the offset.
+      // A repeated autumn hour is two windows, told apart by the offset.
       const offset = offsetMs(nowMs, timeZone) / 60_000;
       const msIntoHour = (wall.getTime() % 3_600_000) + (nowMs % 1000);
       return {
@@ -122,7 +115,7 @@ function utcWindowFor(per: BudgetWindow, nowMs: number): WindowInfo {
   const day = date.getUTCDate();
   const hour = date.getUTCHours();
 
-  // `Date.UTC` carries an overflowing field into the next unit, so hour 24 is the next day.
+  // `Date.UTC` carries overflow into the next unit.
   switch (per) {
     case 'hour':
       return { id: `hour:${iso.slice(0, 13)}`, resetsAtMs: Date.UTC(year, month, day, hour + 1) };

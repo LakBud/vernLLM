@@ -1,5 +1,12 @@
 import { windowFor } from '../budgets/windows.utils.js';
-import { addToSeries, emptySeries, OTHER, type CallOutcome, type Series } from './series.utils.js';
+import {
+  addCallToSeries,
+  addPartToSeries,
+  emptySeries,
+  OTHER,
+  type CallOutcome,
+  type Series,
+} from './series.utils.js';
 import { sumSeries } from './sumSeries.utils.js';
 
 import type {
@@ -14,7 +21,9 @@ export type { CallOutcome } from './series.utils.js';
 const WINDOWS: readonly BudgetWindow[] = ['hour', 'day', 'month'];
 
 /**
- * In process counters by window, provider, model and attribution values. Per process on purpose,
+ * In process counters by window, provider, model and attribution values: a call's spend is split
+ * by the target that produced each charge, and the call is counted on the one that answered. Per
+ * process on purpose,
  * even with a shared store: budgets are what must agree across processes, reporting need not.
  *
  * Each window kind keeps its current and previous window, so memory is bounded by `maxSeries`
@@ -39,7 +48,19 @@ export class TotalsRegistry {
     const model = snapshot.model ?? outcome.fallbackModel;
 
     for (const kind of WINDOWS) {
-      addToSeries(this.seriesFor(kind, nowMs, provider, model, outcome.attribution), outcome);
+      // Each charge goes to the target that produced it, so a fallback does not take the primary's
+      // wasted attempt. The call itself is counted once, on the target that answered.
+      for (const part of snapshot.parts) {
+        const target = this.seriesFor(
+          kind,
+          nowMs,
+          part.provider ?? outcome.fallbackProvider,
+          part.model ?? outcome.fallbackModel,
+          outcome.attribution,
+        );
+        addPartToSeries(target, part);
+      }
+      addCallToSeries(this.seriesFor(kind, nowMs, provider, model, outcome.attribution), outcome);
     }
   }
 
