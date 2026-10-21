@@ -23,7 +23,7 @@ import {
 } from '../helpers.js';
 
 import type { MetricData } from '@opentelemetry/sdk-metrics';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 
 // One data table and one runner. Every row runs twice, with and without the middleware, and
 // the caller must not be able to tell the difference. Only then are spans and metrics checked.

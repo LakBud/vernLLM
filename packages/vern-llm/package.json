@@ -78,7 +78,7 @@
     "openai": "^7.4.0",
     "publint": "^0.3.24",
     "size-limit": "^13.1.1",
-    "tsdown": "^0.23.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "unplugin-unused": "^0.6.0",
     "vitest": "^4.1.11",

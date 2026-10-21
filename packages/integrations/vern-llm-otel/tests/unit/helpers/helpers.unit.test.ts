@@ -1,5 +1,5 @@
 import { context, trace } from '@opentelemetry/api';
-import { AlwaysOffSampler } from '@opentelemetry/sdk-trace-base';
+import { AlwaysOffSampler } from '@opentelemetry/sdk-trace';
 import { LLMError } from 'vern-llm';
 import { afterEach, describe, expect, it } from 'vitest';
 

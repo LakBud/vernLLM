@@ -1,4 +1,4 @@
-import { AlwaysOffSampler } from '@opentelemetry/sdk-trace-base';
+import { AlwaysOffSampler } from '@opentelemetry/sdk-trace';
 import {
   createMiddlewareRef,
   requireRef,

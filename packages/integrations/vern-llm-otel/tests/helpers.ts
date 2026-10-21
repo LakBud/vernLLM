@@ -7,13 +7,13 @@ import {
   type MetricData,
 } from '@opentelemetry/sdk-metrics';
 import {
-  BasicTracerProvider,
+  TracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
   type ReadableSpan,
   type Sampler,
   type SpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+} from '@opentelemetry/sdk-trace';
 
 import type { LLMClient, LLMError, WireStreamChunk } from 'vern-llm';
 
@@ -89,8 +89,8 @@ class OpenSpanTracker implements SpanProcessor {
 }
 
 export interface TraceHarness {
-  tracer: ReturnType<BasicTracerProvider['getTracer']>;
-  provider: BasicTracerProvider;
+  tracer: ReturnType<TracerProvider['getTracer']>;
+  provider: TracerProvider;
   /** Ended spans in end order. */
   spans(): ReadableSpan[];
   /** Names of spans that were started and never ended. */
@@ -101,8 +101,8 @@ export interface TraceHarness {
 export function createTraceHarness(options: { sampler?: Sampler } = {}): TraceHarness {
   const exporter = new InMemorySpanExporter();
   const tracker = new OpenSpanTracker();
-  const provider = new BasicTracerProvider({
-    spanProcessors: [tracker, new SimpleSpanProcessor(exporter)],
+  const provider = new TracerProvider({
+    spanProcessors: [tracker, new SimpleSpanProcessor({ exporter })],
     ...(options.sampler ? { sampler: options.sampler } : {}),
   });
 

@@ -15,7 +15,7 @@ import {
 
 import type { OtelMiddlewareOptions } from '../../src/types/index.js';
 import type { Tracer } from '@opentelemetry/api';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 
 const BASE = { model: 'gpt-4o', maxRetries: 0, baseDelayMs: 1, logger: 'silent' as const };
 const call = { userContent: 'hi', jsonMode: false as const };
