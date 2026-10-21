@@ -64,6 +64,10 @@
     "smoke-test": {
       "dependsOn": ["build"],
       "cache": false
+    },
+    "bench:check": {
+      "dependsOn": ["build"],
+      "cache": false
     }
   },
   "analytics": false

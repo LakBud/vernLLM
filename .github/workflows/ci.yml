@@ -124,8 +124,10 @@ jobs:
 
       - uses: nrwl/nx-set-shas@v5
 
-      - name: Build, bundle-size check, and smoke test affected projects
-        run: pnpm exec nx affected -t build size smoke-test --verbose
+      # bench:check only exists on vern-llm-logger: it fails when the logger's per call overhead
+      # grows past the baseline in tests/bench/baseline.json.
+      - name: Build, bundle-size check, smoke test, and overhead check affected projects
+        run: pnpm exec nx affected -t build size smoke-test bench:check --verbose
 
   test-unit:
     runs-on: ubuntu-latest
@@ -194,6 +196,15 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/integrations/vern-llm-bedrock/coverage/lcov.info
           flags: vern-llm-bedrock-unit
+          fail_ci_if_error: true
+
+      - name: Upload vern-llm-logger coverage to Codecov
+        if: hashFiles('packages/extensions/vern-llm-logger/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/extensions/vern-llm-logger/coverage/lcov.info
+          flags: vern-llm-logger-unit
           fail_ci_if_error: true
 
   # No Nx cache here, deliberately: this job runs against a real Redis
@@ -291,6 +302,15 @@ jobs:
           flags: vern-llm-bedrock-integration
           fail_ci_if_error: true
 
+      - name: Upload vern-llm-logger coverage to Codecov
+        if: hashFiles('packages/extensions/vern-llm-logger/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/extensions/vern-llm-logger/coverage/lcov.info
+          flags: vern-llm-logger-integration
+          fail_ci_if_error: true
+
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -334,15 +354,15 @@ jobs:
       # targets have no ordering guarantee within the same project and
       # can run concurrently, racing on that file.
       - name: Lint affected docs
-        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose
+        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger --verbose
 
       - name: Typecheck affected docs
-        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose
+        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger --verbose
 
       # Fails on any internal /docs/... link whose page or #anchor doesn't
       # exist. The test target covers the checker itself.
       - name: Check affected docs links
-        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose
+        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger --verbose
 
       - name: Build affected docs
-        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock --verbose
+        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger --verbose
