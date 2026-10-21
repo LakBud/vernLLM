@@ -1,8 +1,8 @@
 import {
-  BasicTracerProvider,
+  TracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+} from '@opentelemetry/sdk-trace';
 import { VernLLM } from 'vern-llm';
 import { otelLogFields, otelMiddleware } from 'vern-llm-otel';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,7 +13,7 @@ import { createMockClient, createMockStreamingClient, sleep, textResponse } from
 const call = { userContent: 'hi', jsonMode: false as const };
 
 const exporter = new InMemorySpanExporter();
-const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+const provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
 const tracer = provider.getTracer('test');
 
 afterEach(() => {
