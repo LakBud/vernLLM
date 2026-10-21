@@ -38,6 +38,7 @@ export function toWireResponse(mapped: ReturnType<FetchAdapterConfig['mapRespons
           prompt_tokens: usage.promptTokens,
           completion_tokens: usage.completionTokens,
           total_tokens: usage.totalTokens,
+          ...(usage.costUsd !== undefined ? { cost: usage.costUsd } : {}),
           ...(hasCacheCounts(usage)
             ? {
                 prompt_tokens_details: {

@@ -53,6 +53,10 @@ interface TokenUsage {
 - **`cacheReadTokens`**, **`cacheWriteTokens`** and **`cacheWriteTokensByTtl`** split
   `promptTokens`, and are subsets of it, never added on top. Each is `undefined` when the provider
   doesn't report it. See [Cache tokens](#cache-tokens).
+- **`costUsd`** is what the provider says the call cost, in USD, when its response carries it:
+  OpenRouter's `usage.cost` through the OpenAI compatible adapter, or the `costUsd` a `fromFetch`
+  `mapResponse` returns. It is `undefined` otherwise, and a negative or non finite value is
+  ignored. It is the provider's own figure, so prefer it over a price you compute from the tokens.
 
 <Callout type="info">
   `onUsage`/`onUsageFailure` are sugar over the `'usage'`/`'usage_failure'` events documented in

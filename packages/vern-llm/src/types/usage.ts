@@ -45,6 +45,12 @@ export interface TokenUsage {
   cacheWriteTokens?: number;
   /** `cacheWriteTokens` by the provider's TTL label. `undefined` when not split. */
   cacheWriteTokensByTtl?: Readonly<Record<string, number>>;
+  /**
+   * What the provider says this call cost, in USD, when its response carries it (OpenRouter's
+   * `usage.cost`, or a `fromFetch` mapper's `costUsd`). `undefined` when it doesn't. It is the
+   * provider's own figure, so it wins over any price you compute from the token counts.
+   */
+  costUsd?: number;
   requestId: string;
   model: string;
   /**

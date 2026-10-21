@@ -20,6 +20,8 @@ export interface OpenAIUsage {
     cache_write_tokens?: number;
   };
   prompt_cache_hit_tokens?: number;
+  /** What the provider billed for the call, in USD. Sent by OpenRouter. */
+  cost?: number;
 }
 
 /** One chunk of an OpenAI-shaped `chat.completions.create({ stream: true })` SSE stream. */

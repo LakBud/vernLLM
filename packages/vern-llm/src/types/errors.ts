@@ -34,6 +34,10 @@ export type LLMErrorCode =
   | 'no_eligible_targets'
   // Middleware (invalid_params)
   | 'middleware_threw'
+  // Policy (invalid_params)
+  | 'policy_denied'
+  // Budget (quota_exceeded)
+  | 'budget_exceeded'
   // Rate limiting (rate_limited)
   | 'rate_limit_queue_full'
   | 'rate_limit_queue_timeout'
@@ -92,6 +96,12 @@ export const LOCAL_RATE_LIMIT_CODES: ReadonlySet<LLMErrorCode> = new Set([
 ]);
 
 /**
+ * A middleware budget rejected the call before any provider was contacted. The budget stays spent
+ * until its window resets, so a resend can only be rejected again.
+ */
+export const NON_RETRYABLE_BUDGET_CODES: ReadonlySet<LLMErrorCode> = new Set(['budget_exceeded']);
+
+/**
  * A middleware `transform` or `enabled` timed out. Retrying reruns the same slow code, so unlike a
  * provider timeout it is not retryable.
  */
@@ -122,6 +132,7 @@ function computeRetryable(type: LLMErrorType, code: LLMErrorCode | undefined): b
   if (NON_RETRYABLE_TYPES.has(type)) return false;
   if (code && NON_RETRYABLE_TOOL_CONTRACT_CODES.has(code)) return false;
   if (code && LOCAL_RATE_LIMIT_CODES.has(code)) return false;
+  if (code && NON_RETRYABLE_BUDGET_CODES.has(code)) return false;
   if (code && NON_RETRYABLE_MIDDLEWARE_TIMEOUT_CODES.has(code)) return false;
   // Resending the same oversized body can only be rejected again.
   if (code === 'payload_too_large') return false;

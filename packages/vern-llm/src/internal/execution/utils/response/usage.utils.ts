@@ -18,6 +18,8 @@ export interface WireUsage {
     /** Writes by TTL label, e.g. `{ '5m': 1200, '1h': 800 }`. */
     cache_write_tokens_by_ttl?: Record<string, number>;
   };
+  /** What the provider billed for the call, in USD. OpenRouter reports it as `usage.cost`. */
+  cost?: number;
 }
 
 /** Call-level fields stamped onto every `TokenUsage`, not carried by the wire usage itself. */
@@ -26,6 +28,11 @@ export interface TokenUsageMeta {
   model: string;
   providerName: string;
   isFallback: boolean;
+}
+
+/** A reported cost is only trusted as a finite number of at least zero. */
+function isBilledCost(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 /**
@@ -49,6 +56,7 @@ export function toTokenUsage(wireUsage: WireUsage, meta: TokenUsageMeta): TokenU
     ...(details?.cache_write_tokens_by_ttl
       ? { cacheWriteTokensByTtl: { ...details.cache_write_tokens_by_ttl } }
       : {}),
+    ...(isBilledCost(wireUsage.cost) ? { costUsd: wireUsage.cost } : {}),
     requestId: meta.requestId,
     model: meta.model,
     provider: meta.providerName,
