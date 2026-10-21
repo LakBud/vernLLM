@@ -11,6 +11,8 @@ export interface InternalCacheParams<T> extends UsageHooks {
   ttl: number;
   fn: (sharedSignal: AbortSignal) => Promise<T>;
   signal?: AbortSignal;
+  /** Told once, before any value is returned, when this caller ran no call of its own. */
+  onOutcome?: (outcome: 'hit' | 'join') => void;
 }
 
 /**
@@ -24,4 +26,6 @@ export interface InternalCacheStreamParams<T> extends UsageHooks {
     sharedSignal: AbortSignal,
   ) => Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }>;
   signal?: AbortSignal;
+  /** Told once, before the stream is returned, when this caller ran no call of its own. */
+  onOutcome?: (outcome: 'hit' | 'join') => void;
 }

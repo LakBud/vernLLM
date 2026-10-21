@@ -624,11 +624,14 @@ default. `wrap` is never bounded this way: it spans the whole call, so `call()`'
 `wrap` fires exactly once per logical call, including through `cachedCall()`'s hit, miss, and join
 branches.
 
-- **Hit**: `next()` resolves immediately with `meta: undefined`. `transform` never runs.
+- **Hit**: `next()` resolves immediately with `meta: undefined` and `cache: 'hit'`. `transform`
+  never runs.
 - **Miss**: `wrap` fires once around the whole `cachedCall()`; the underlying `call()` it triggers
-  skips its own `wrap`.
+  skips its own `wrap`. `cache` is unset.
 - **Join** (a concurrent `cachedCall()` for the same `cacheKey` already in flight): still exactly
-  one `wrap` invocation, resolving once the shared in-flight call settles, `meta` included.
+  one `wrap` invocation, with `cache: 'join'`. A plain join resolves once the shared in-flight call
+  settles, `meta` included. A streamed join returns before the shared call has answered, so its
+  `meta` is `undefined`: read `cache` to tell it from a miss.
 
 `ctx.state` is shared between a cache miss's `wrap` and the `transform` it triggers, so a value set
 during `wrap`'s pre phase is visible to that same middleware's `transform`. `ctx.emit` works in

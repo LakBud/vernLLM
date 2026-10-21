@@ -254,12 +254,18 @@ export interface WireCallRequestPatch {
 }
 
 /**
- * The settled outcome of one logical call, from `wrap`'s `next()`. `meta` is `undefined` only on a
- * cache hit.
+ * The settled outcome of one logical call, from `wrap`'s `next()`. `meta` is `undefined` on a
+ * cache hit, and on a streamed `cachedCall` join, which returns before the shared call has answered.
  */
 export interface CallResult<T = unknown> {
   value: T;
   meta?: CallMeta;
+  /**
+   * Set only by `cachedCall()` when no call of its own ran: `'hit'` served a stored value,
+   * `'join'` shared another caller's in flight call. Unlike `meta` it is known when `next()`
+   * returns, for streams too.
+   */
+  cache?: 'hit' | 'join';
 }
 
 /**
