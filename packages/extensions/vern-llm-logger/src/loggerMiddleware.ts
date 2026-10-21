@@ -8,6 +8,8 @@ import {
 
 import { ErrorGrouper } from './internal/detectors/errorGrouper.js';
 import { createGuard } from './internal/guard.utils.js';
+import { toBreakerEntry } from './internal/middleware/breakerEntry.utils.js';
+import { createCallFinisher } from './internal/middleware/callFinisher.utils.js';
 import { normalizeOptions } from './internal/options/normalizeOptions.utils.js';
 import { createFinalize } from './internal/pipeline/finalize.js';
 import { applyEvent } from './internal/recorder/applyEvent.utils.js';
@@ -16,7 +18,7 @@ import { Scheduler } from './internal/scheduler.js';
 import { SeriesRegistry } from './internal/stats/seriesRegistry.js';
 import { createStatsApi } from './internal/stats/statsApi.utils.js';
 
-import type { BreakerEntry, LoggerMiddlewareOptions, StatsApi } from './types/index.js';
+import type { LoggerMiddlewareOptions, StatsApi } from './types/index.js';
 
 /** One module level ref, so registering two instances hits the core's duplicate ref check. */
 export const loggerMiddlewareRef = createMiddlewareRef('logger');
@@ -45,29 +47,7 @@ export function loggerMiddleware(options?: LoggerMiddlewareOptions): LoggerMiddl
   // Created per factory call, so it can never collide with another instance or a user key.
   const recorderKey = createStateKey<CallRecorder>('logger.recorder');
 
-  /** Writes the record when the stream settles. The stream itself is only observed. */
-  const observeStream = (
-    recorder: CallRecorder,
-    result: CallResult,
-    stream: { finalResult: PromiseLike<unknown> },
-  ): void => {
-    const settle = (outcome: Parameters<CallRecorder['finish']>[0]) => {
-      const record = guard('finish', () => recorder.finish(outcome), undefined);
-      if (record) finalize(record);
-    };
-
-    try {
-      void stream.finalResult.then(
-        (value) =>
-          settle({ kind: 'result', result: { value, meta: result.meta, cache: result.cache } }),
-        (error: unknown) => settle({ kind: 'error', error }),
-      );
-    } catch (error) {
-      guard.report('observeStream', error);
-      // Nothing will ever settle this call, so record it as it stands rather than lose it.
-      settle({ kind: 'result', result });
-    }
-  };
+  const { finish, observeStream } = createCallFinisher(guard, (record) => finalize(record));
 
   // No `enabled` on purpose: a function `enabled` makes the core deliver `onEvent`
   // asynchronously, and the record relies on `usage` landing before the call finishes.
@@ -99,8 +79,7 @@ export function loggerMiddleware(options?: LoggerMiddlewareOptions): LoggerMiddl
       try {
         result = await next();
       } catch (error) {
-        const record = guard('finish', () => recorder.finish({ kind: 'error', error }), undefined);
-        if (record) finalize(record);
+        finish(recorder, { kind: 'error', error });
         // The exact error `next` threw, so callers see what they would without this entry.
         throw error;
       }
@@ -111,8 +90,7 @@ export function loggerMiddleware(options?: LoggerMiddlewareOptions): LoggerMiddl
         return result;
       }
 
-      const record = guard('finish', () => recorder.finish({ kind: 'result', result }), undefined);
-      if (record) finalize(record);
+      finish(recorder, { kind: 'result', result });
       return result;
     },
 
@@ -140,18 +118,9 @@ export function loggerMiddleware(options?: LoggerMiddlewareOptions): LoggerMiddl
             return;
           }
 
-          // A breaker change outside any call has no record to join.
           if (event.kind === 'circuit_state') {
-            const entry: BreakerEntry = {
-              kind: 'breaker',
-              v: 1,
-              provider: event.provider,
-              model: event.model,
-              from: event.from,
-              to: event.to,
-              consecutiveFailures: event.consecutiveFailures,
-            };
-            finalize(entry, event.to === 'open' ? 'warn' : 'info');
+            const { entry, level } = toBreakerEntry(event);
+            finalize(entry, level);
           }
         },
         undefined,

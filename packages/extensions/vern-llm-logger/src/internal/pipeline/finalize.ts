@@ -1,5 +1,5 @@
 import { isSlow } from '../detectors/slowCall.utils.js';
-import { isTimed, type SeriesRegistry } from '../stats/seriesRegistry.js';
+import { isTimed } from '../stats/metrics.utils.js';
 import { shouldKeep } from './sample.utils.js';
 
 import type {
@@ -11,6 +11,7 @@ import type {
 } from '../../types/index.js';
 import type { ErrorGrouper } from '../detectors/errorGrouper.js';
 import type { Guard } from '../guard.utils.js';
+import type { SeriesRegistry } from '../stats/seriesRegistry.js';
 
 const LEVEL_RANK: Readonly<Record<LogLevel, number>> = { debug: 0, info: 1, warn: 2, error: 3 };
 

@@ -15,17 +15,20 @@ function isNoScript(error: unknown): boolean {
 export function withScriptCache(redis: RedisClient): RedisClient {
   if (!redis.evalsha) return redis;
 
-  /** SHA1 per script Redis has run. */
-  const loaded = new Map<string, string>();
+  /** SHA1 per script Redis has run, still hashing for the first call after it ran. */
+  const loaded = new Map<string, Promise<string>>();
 
   async function evalAndMark(
     script: string,
     numKeys: number,
     args: (string | number)[],
   ): Promise<unknown> {
-    // Hashed alongside the EVAL, so later calls never wait on the digest.
-    const [result, sha] = await Promise.all([redis.eval(script, numKeys, ...args), sha1(script)]);
-    loaded.set(script, sha);
+    // Hashed alongside the EVAL, but the reply never waits on the digest: replies must reach
+    // callers in the order Redis ran them, or a cold script's records land behind later reads.
+    const hashing = sha1(script);
+    hashing.catch(() => {});
+    const result = await redis.eval(script, numKeys, ...args);
+    loaded.set(script, hashing);
     return result;
   }
 
@@ -38,8 +41,9 @@ export function withScriptCache(redis: RedisClient): RedisClient {
     evalsha: (sha, numKeys, ...args) => redis.evalsha!(sha, numKeys, ...args),
 
     async eval(script, numKeys, ...args) {
-      const sha = loaded.get(script);
-      if (sha === undefined) return evalAndMark(script, numKeys, args);
+      const hashing = loaded.get(script);
+      if (hashing === undefined) return evalAndMark(script, numKeys, args);
+      const sha = await hashing;
 
       try {
         return await redis.evalsha!(sha, numKeys, ...args);

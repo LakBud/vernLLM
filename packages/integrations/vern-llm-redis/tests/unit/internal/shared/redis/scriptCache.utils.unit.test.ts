@@ -39,6 +39,22 @@ describe('withScriptCache', () => {
     expect(evalsha).toHaveBeenLastCalledWith(SHA, 1, 'k', 'z');
   });
 
+  it('returns the first reply without waiting on the digest, so replies keep Redis order', async () => {
+    const { redis } = clientWithEvalsha();
+    redis.eval.mockResolvedValue('first');
+    let release!: () => void;
+    const digest = vi
+      .spyOn(globalThis.crypto.subtle, 'digest')
+      .mockReturnValue(new Promise((resolve) => (release = () => resolve(new ArrayBuffer(20)))));
+
+    try {
+      await expect(withScriptCache(redis).eval(SCRIPT, 0)).resolves.toBe('first');
+    } finally {
+      release();
+      digest.mockRestore();
+    }
+  });
+
   it('falls back to EVAL when Redis no longer has the script cached', async () => {
     const { redis, evalsha } = clientWithEvalsha();
     redis.eval.mockResolvedValue('full');

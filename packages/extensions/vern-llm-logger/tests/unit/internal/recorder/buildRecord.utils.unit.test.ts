@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  buildRecord,
-  outputTokensPerSec,
-  roundMs,
-  type RecordInput,
-} from '../../../../src/internal/recorder/buildRecord.utils.js';
+import { buildRecord } from '../../../../src/internal/recorder/buildRecord.utils.js';
+
+import type { RecordInput } from '../../../../src/internal/recorder/recordInput.types.js';
 
 const base = (): RecordInput => ({
   requestId: 'req_1',
@@ -173,31 +170,5 @@ describe('buildRecord', () => {
 
     expect(buildRecord({ ...base(), usage, generationMs: 500 }).outputTokensPerSec).toBe(100);
     expect(buildRecord({ ...base(), usage })).not.toHaveProperty('outputTokensPerSec');
-  });
-});
-
-describe('outputTokensPerSec', () => {
-  it('divides tokens by seconds', () => {
-    expect(outputTokensPerSec(100, 2000)).toBe(50);
-  });
-
-  it.each([
-    [undefined, 100],
-    [10, undefined],
-    [0, 100],
-    [-5, 100],
-    [10, 0],
-    [10, -1],
-    [Number.NaN, 100],
-    [Number.POSITIVE_INFINITY, 100],
-  ])('is undefined for tokens %j over %j ms', (tokens, ms) => {
-    expect(outputTokensPerSec(tokens, ms)).toBeUndefined();
-  });
-});
-
-describe('roundMs', () => {
-  it('keeps microseconds and nothing finer', () => {
-    expect(roundMs(1.23456)).toBe(1.235);
-    expect(roundMs(0)).toBe(0);
   });
 });

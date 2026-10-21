@@ -1,50 +1,27 @@
-import {
-  type AttemptContext,
-  type CallMeta,
-  type PreDispatchContext,
-  type TokenUsage,
-} from 'vern-llm';
-
 import { elapsedMs, nowMs } from '../clock.utils.js';
 import { buildRecord } from './buildRecord.utils.js';
-import { pickContext, runEnrichers } from './inputs.utils.js';
 import {
-  classifyOutcome,
-  errorCodeOf,
-  isLocalRejection,
-  lastAttemptErrorOf,
-  type RecorderOutcome,
-} from './outcome.utils.js';
+  closeLastTarget,
+  closeTargetAsFailed,
+  enterTarget,
+  leaveTarget,
+  pathEntryOf,
+  type OpenAttempt,
+  type PathState,
+} from './callPath.utils.js';
+import { timingsOf } from './callTimings.utils.js';
+import { pickContext, runEnrichers } from './inputs.utils.js';
+import { classifyOutcome, isLocalRejection, type RecorderOutcome } from './outcome.utils.js';
 
 import type {
   BreakerChange,
   CallLogRecord,
   JsonValue,
   MiddlewareNote,
-  PathEntry,
   ResolvedConfig,
 } from '../../types/index.js';
 import type { Guard } from '../guard.utils.js';
-
-/** One target tried during the call. Mutable until the target is left or the call ends. */
-interface PathState {
-  provider: string;
-  model: string;
-  attempts: number;
-  startedAtMs: number;
-  closed: boolean;
-  outcome: PathEntry['outcome'];
-  elapsedMs: number;
-  errorCode: string | undefined;
-}
-
-/** The attempt whose outcome is not known yet. */
-interface OpenAttempt {
-  startedAtMs: number;
-  /** When `dispatch` resolved. Parsing and validation may still fail after it. */
-  respondedAtMs: number | undefined;
-  path: PathState;
-}
+import type { AttemptContext, CallMeta, PreDispatchContext, TokenUsage } from 'vern-llm';
 
 /**
  * All the state for one logical call. An attempt stays open after `dispatch` resolves, since
@@ -86,21 +63,7 @@ export class CallRecorder {
     this.current = undefined;
     this.attemptCount++;
 
-    let entry = this.path[this.path.length - 1];
-    if (!entry || entry.closed || entry.provider !== ctx.requestedProvider) {
-      entry = {
-        provider: ctx.requestedProvider,
-        model: ctx.requestedModel,
-        attempts: 0,
-        startedAtMs: nowMs(),
-        closed: false,
-        outcome: 'error',
-        elapsedMs: 0,
-        errorCode: undefined,
-      };
-      this.path.push(entry);
-    }
-    entry.attempts++;
+    const entry = enterTarget(this.path, ctx);
     this.current = { startedAtMs: nowMs(), respondedAtMs: undefined, path: entry };
   }
 
@@ -119,13 +82,7 @@ export class CallRecorder {
     // never reached a provider, so it is not an attempt and leaves no trace of one.
     if (isLocalRejection(error)) {
       this.attemptCount--;
-      attempt.path.attempts--;
-      if (attempt.path.attempts === 0) {
-        const index = this.path.indexOf(attempt.path);
-        // The entry was pushed by `openAttempt`, so it is always found.
-        /* v8 ignore next */
-        if (index !== -1) this.path.splice(index, 1);
-      }
+      leaveTarget(this.path, attempt);
     }
   }
 
@@ -141,18 +98,7 @@ export class CallRecorder {
   fellBack(elapsedMsOnTarget: number, error: unknown): void {
     if (this.ended) return;
     this.current = undefined;
-
-    const entry = this.path[this.path.length - 1];
-    if (!entry || entry.closed) return;
-
-    entry.closed = true;
-    entry.outcome = 'error';
-    entry.errorCode = errorCodeOf(error);
-    // The core's own figure, measured here only if it is missing.
-    entry.elapsedMs =
-      Number.isFinite(elapsedMsOnTarget) && elapsedMsOnTarget >= 0
-        ? elapsedMsOnTarget
-        : elapsedMs(entry.startedAtMs);
+    closeTargetAsFailed(this.path, elapsedMsOnTarget, error);
   }
 
   queued(waitedMs: number): void {
@@ -200,32 +146,15 @@ export class CallRecorder {
     // The attempt still open here answered, or failed for the reason the call failed.
     const open = this.current;
     this.current = undefined;
-    const respondedAtMs = open?.respondedAtMs;
 
-    // The token rate of a stream is the generation window after its first chunk, not the wait
-    // before it. That wait is `ttftMs`, measured from the call's start.
-    let attemptMs: number | undefined;
-    let generationMs: number | undefined;
-    if (open && outcome.kind === 'result') {
-      attemptMs = elapsedMs(open.startedAtMs, respondedAtMs ?? endedAtMs);
-      generationMs = this.streaming ? elapsedMs(respondedAtMs ?? endedAtMs, endedAtMs) : attemptMs;
-    }
-    const ttftMs =
-      this.streaming && respondedAtMs !== undefined
-        ? elapsedMs(this.startedAtMs, respondedAtMs)
-        : undefined;
-
-    const last = this.path[this.path.length - 1];
-    if (last && !last.closed) {
-      last.closed = true;
-      last.elapsedMs = elapsedMs(last.startedAtMs, endedAtMs);
-      if (outcome.kind === 'error') {
-        last.outcome = 'error';
-        last.errorCode = errorCodeOf(lastAttemptErrorOf(failure));
-      } else {
-        last.outcome = 'ok';
-      }
-    }
+    const timings = timingsOf({
+      open,
+      answered: outcome.kind === 'result',
+      streaming: this.streaming,
+      startedAtMs: this.startedAtMs,
+      endedAtMs,
+    });
+    closeLastTarget(this.path, endedAtMs, { failed: outcome.kind === 'error', error: failure });
 
     const meta: CallMeta | undefined = outcome.kind === 'result' ? outcome.result.meta : undefined;
     const classified = classifyOutcome(outcome);
@@ -244,13 +173,13 @@ export class CallRecorder {
       streaming: this.streaming,
       cache:
         classified.outcome === 'ok' && outcome.kind === 'result' ? outcome.result.cache : undefined,
-      ttftMs,
+      ttftMs: timings.ttftMs,
       shortCircuitedBy: this.shortCircuitedBy,
       durationMs: elapsedMs(this.startedAtMs, endedAtMs),
       queueWaitMs: this.queueWaitMs,
       retryDelayMs: this.retryDelayMs,
-      attemptMs,
-      generationMs,
+      attemptMs: timings.attemptMs,
+      generationMs: timings.generationMs,
       path: this.path.map((entry) => pathEntryOf(entry)),
       usage: this.usage,
       usageFailed: this.usageFailed,
@@ -261,16 +190,4 @@ export class CallRecorder {
       fields: runEnrichers(this.config.enrich, this.ctx, this.guard),
     });
   }
-}
-
-function pathEntryOf(entry: PathState): PathEntry {
-  const result: PathEntry = {
-    provider: entry.provider,
-    model: entry.model,
-    attempts: entry.attempts,
-    outcome: entry.outcome,
-    elapsedMs: Math.round(entry.elapsedMs * 1000) / 1000,
-  };
-  if (entry.errorCode !== undefined) result.errorCode = entry.errorCode;
-  return result;
 }
