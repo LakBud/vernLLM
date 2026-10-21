@@ -65,9 +65,12 @@ export function createFinalize(
       if (!guard('errorGroup', () => groups.offer(record), true)) return;
     }
 
-    // Tail sampling: only the plain successes that were not slow are ever dropped.
+    // Tail sampling: only plain successes are ever dropped. Aborted, slow, rejected,
+    // errored and breaker changing calls are always kept.
     if (
-      record.level === 'info' &&
+      record.outcome === 'ok' &&
+      record.reason === undefined &&
+      !record.breaker?.length &&
       !guard('sample', () => shouldKeep(record.requestId, config.sampleSuccess), true)
     ) {
       return;

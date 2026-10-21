@@ -16,13 +16,6 @@ const dirs: Record<string, string> = {
   'vern-llm-logger': 'packages/extensions',
 };
 
-// Package folders: core sits directly under packages/, integrations and extensions in their own folder.
-const dirs: Record<string, string> = {
-  'vern-llm-redis': 'packages/integrations',
-  'vern-llm-otel': 'packages/integrations',
-  'vern-llm-bedrock': 'packages/integrations',
-};
-
 for (const [pkg, docPath] of Object.entries(packages)) {
   const changelogPath = `${dirs[pkg] ?? 'packages'}/${pkg}/CHANGELOG.md`;
 

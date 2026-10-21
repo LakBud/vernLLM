@@ -108,6 +108,44 @@ describe('sampling', () => {
     expect(logger.stats.snapshot().series.find((s) => s.metric === 'durationMs')!.count).toBe(2);
   });
 
+  it('keeps an aborted call at rate 0', async () => {
+    const hangs = (_params: unknown, signal: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    const { llm, sink } = setup([hangs], { sample: { success: 0 } });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 10);
+
+    await llm.call({ ...call, signal: controller.signal }).catch(() => {});
+
+    expect(sink.entries).toHaveLength(1);
+    expect(sink.entries[0]).toMatchObject({ level: 'info', entry: { outcome: 'aborted' } });
+  });
+
+  it('keeps a successful call that changed the breaker at rate 0', async () => {
+    const sink = memorySink();
+    const llm = new VernLLM({
+      client: createMockClient([new Error('down'), textResponse('ok')]).client,
+      model: 'gpt-4o',
+      maxRetries: 0,
+      logger: 'silent',
+      circuitBreaker: { threshold: 1, cooldownMs: 20 },
+      middleware: [
+        loggerMiddleware({ sink, logger: 'silent', sample: { success: 0 }, errorGrouping: false }),
+      ],
+    });
+
+    await llm.call(call).catch(() => {});
+    await sleep(40);
+    await llm.call(call);
+
+    const records = sink.entries.map(({ entry }) => entry as CallLogRecord);
+    expect(records).toHaveLength(2);
+    expect(records[1]).toMatchObject({ outcome: 'ok' });
+    expect(records[1]!.breaker?.length).toBeGreaterThan(0);
+  });
+
   it('keeps about the requested share, and the same requests every time', async () => {
     const { llm, sink } = setup([textResponse('ok')], { sample: { success: 0.5 } });
 
