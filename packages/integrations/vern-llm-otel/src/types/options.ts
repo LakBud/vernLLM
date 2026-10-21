@@ -34,6 +34,13 @@ export interface OtelMiddlewareOptions {
   /** Extra attributes for the call span, for example a conversation id or tenant. Sync, guarded. */
   attributes?: (ctx: PreDispatchContext) => Attributes | undefined;
   /**
+   * Extra attributes for the call span, read when it ends (for a stream, after `finalResult`
+   * settles), so values only known by then, such as a cost, can go on it. Sync, guarded, and
+   * applied before this package's own end attributes, so it can never replace a `vernllm.*` or
+   * `gen_ai.*` one.
+   */
+  endAttributes?: (ctx: PreDispatchContext) => Attributes | undefined;
+  /**
    * Default false. `true` adds an `exception` event to every failed attempt span and to the call
    * span. It carries only the low cardinality error code (never the provider's message, which
    * can echo prompt text) and no stack unless `{ stack: true }` is given.

@@ -27,6 +27,7 @@ export interface ResolvedConfig {
   genAiConventions: boolean;
   normalizeModel: ((model: string) => string) | undefined;
   attributes: ((ctx: PreDispatchContext) => Attributes | undefined) | undefined;
+  endAttributes: ((ctx: PreDispatchContext) => Attributes | undefined) | undefined;
   middlewareEvents: boolean;
   /** `undefined` when custom span events are off. */
   customEvents: { data: boolean; maxLength: number } | undefined;

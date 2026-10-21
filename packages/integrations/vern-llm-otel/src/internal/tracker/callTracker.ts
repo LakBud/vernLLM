@@ -7,6 +7,7 @@ import {
   type Attributes,
   type Context,
   type Span,
+  type SpanContext,
 } from '@opentelemetry/api';
 import {
   isStreamResult,
@@ -91,6 +92,7 @@ export class CallTracker {
     private readonly span: Span,
     private readonly context: Context,
     private readonly captureContent: boolean,
+    private readonly ctx: PreDispatchContext,
   ) {}
 
   static start(
@@ -142,7 +144,12 @@ export class CallTracker {
       undefined,
     );
 
-    return new CallTracker(deps, span, callContext, captureContent);
+    return new CallTracker(deps, span, callContext, captureContent, ctx);
+  }
+
+  /** The call span's context, for the ids a log record carries. */
+  spanContext(): SpanContext {
+    return this.span.spanContext();
   }
 
   /** Runs `next` with the call span active, so anything it starts nests under the call. */
@@ -600,6 +607,20 @@ export class CallTracker {
 
       this.safely('endCallSpan', () => {
         if (span.isRecording()) {
+          // Written first, then our own start and end attributes over them, so a value from
+          // `endAttributes` can never replace a `vernllm.*` or `gen_ai.*` one.
+          const extra = guard(
+            'endAttributes',
+            () => deps.config.endAttributes?.(this.ctx),
+            undefined,
+          );
+          span.setAttributes(sanitizeAttributes(extra));
+          span.setAttributes(callStartAttributes(this.ctx));
+          // The two attributes set while the call ran are written again for the same reason.
+          if (deps.content) span.setAttribute(VERNLLM_ATTR.contentCaptured, this.captureContent);
+          if (this.streaming && deps.config.genAiConventions) {
+            span.setAttribute(ATTR.requestStream, true);
+          }
           span.setAttributes(
             callEndAttributes({
               meta: this.meta,

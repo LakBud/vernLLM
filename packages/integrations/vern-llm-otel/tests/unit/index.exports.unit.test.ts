@@ -14,7 +14,11 @@ import {
 describe('package entrypoint exports', () => {
   it('exports exactly the documented runtime surface', () => {
     // An exact list, so an internal helper can never become public by accident.
-    expect(Object.keys(entry).sort()).toEqual(['otelMiddleware', 'otelMiddlewareRef']);
+    expect(Object.keys(entry).sort()).toEqual([
+      'otelLogFields',
+      'otelMiddleware',
+      'otelMiddlewareRef',
+    ]);
   });
 
   it('exports the factory and the ref', () => {

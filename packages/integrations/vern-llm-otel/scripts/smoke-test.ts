@@ -176,7 +176,7 @@ try {
     console.log('${label}: one call span, one attempt span, and metrics ok');
   `;
 
-  const expectedExports = ['otelMiddleware', 'otelMiddlewareRef'];
+  const expectedExports = ['otelLogFields', 'otelMiddleware', 'otelMiddlewareRef'];
 
   const esmFile = path.join(consumerDir, 'esm-check.mjs');
   writeFileSync(
