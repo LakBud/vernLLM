@@ -1,4 +1,5 @@
 import { elapsedMs, nowMs } from '../clock.utils.js';
+import { attachTallies, type AttemptTally } from '../stats/attemptTally.utils.js';
 import { buildRecord } from './buildRecord.utils.js';
 import {
   closeLastTarget,
@@ -11,7 +12,13 @@ import {
 } from './callPath.utils.js';
 import { timingsOf } from './callTimings.utils.js';
 import { pickContext, runEnrichers } from './inputs.utils.js';
-import { classifyOutcome, isLocalRejection, type RecorderOutcome } from './outcome.utils.js';
+import {
+  classifyOutcome,
+  isLocalRejection,
+  isQualityFailure,
+  lastAttemptErrorOf,
+  type RecorderOutcome,
+} from './outcome.utils.js';
 
 import type {
   BreakerChange,
@@ -43,6 +50,7 @@ export class CallRecorder {
   private readonly breaker: BreakerChange[] = [];
   private readonly middleware: MiddlewareNote[] = [];
   private readonly custom = new Map<string, JsonValue[]>();
+  private readonly tallies = new Map<PathState, AttemptTally>();
 
   private constructor(
     private readonly ctx: PreDispatchContext,
@@ -83,13 +91,16 @@ export class CallRecorder {
     if (isLocalRejection(error)) {
       this.attemptCount--;
       leaveTarget(this.path, attempt);
+      return;
     }
+
+    this.settle(attempt, { error });
   }
 
-  /** A retry follows: the open attempt failed. */
-  retried(delayMs: number): void {
+  /** A retry follows: the open attempt failed with `error`. */
+  retried(delayMs: number, error: unknown): void {
     if (this.ended) return;
-    this.current = undefined;
+    this.settleOpen({ error });
     this.retries++;
     if (Number.isFinite(delayMs) && delayMs > 0) this.retryDelayMs += delayMs;
   }
@@ -97,7 +108,7 @@ export class CallRecorder {
   /** The call moves on to the next target: the open attempt and its target are finished. */
   fellBack(elapsedMsOnTarget: number, error: unknown): void {
     if (this.ended) return;
-    this.current = undefined;
+    this.settleOpen({ error });
     closeTargetAsFailed(this.path, elapsedMsOnTarget, error);
   }
 
@@ -146,6 +157,12 @@ export class CallRecorder {
     // The attempt still open here answered, or failed for the reason the call failed.
     const open = this.current;
     this.current = undefined;
+    if (open) {
+      this.settle(
+        open,
+        outcome.kind === 'error' ? { error: lastAttemptErrorOf(failure) } : undefined,
+      );
+    }
 
     const timings = timingsOf({
       open,
@@ -159,7 +176,7 @@ export class CallRecorder {
     const meta: CallMeta | undefined = outcome.kind === 'result' ? outcome.result.meta : undefined;
     const classified = classifyOutcome(outcome);
 
-    return buildRecord({
+    const record = buildRecord({
       requestId: this.ctx.requestId,
       endedAt: new Date(),
       classified,
@@ -189,5 +206,39 @@ export class CallRecorder {
       context: pickContext(this.ctx.context, this.config.context),
       fields: runEnrichers(this.config.enrich, this.ctx, this.guard),
     });
+
+    attachTallies(record, [...this.tallies.values()]);
+    return record;
+  }
+
+  /** Settles the open attempt, if any, and leaves none open. */
+  private settleOpen(failure: { error: unknown }): void {
+    const attempt = this.current;
+    this.current = undefined;
+    if (attempt) this.settle(attempt, failure);
+  }
+
+  /**
+   * Counts one finished attempt for the quality failure rate. A `failure` is the error that ended
+   * it, absent when it answered. It got a response when `dispatch` resolved, or when its error
+   * says the answer arrived and was unusable.
+   */
+  private settle(attempt: OpenAttempt, failure?: { error: unknown }): void {
+    const failedQuality = failure !== undefined && isQualityFailure(failure.error);
+    const responded = failure === undefined || failedQuality || attempt.respondedAtMs !== undefined;
+    if (!responded) return;
+
+    let tally = this.tallies.get(attempt.path);
+    if (!tally) {
+      tally = {
+        provider: attempt.path.provider,
+        model: attempt.path.model,
+        responded: 0,
+        qualityFailures: 0,
+      };
+      this.tallies.set(attempt.path, tally);
+    }
+    tally.responded++;
+    if (failedQuality) tally.qualityFailures++;
   }
 }

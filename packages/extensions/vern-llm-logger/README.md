@@ -27,6 +27,8 @@ const logger = loggerMiddleware({
 });
 
 logger.stats.quantile({ provider: 'primary' }, 0.99); // rolling p99 in ms
+logger.stats.quantile({ provider: 'primary' }, 0.5, 'outputTokens'); // typical answer length
+logger.stats.failureRate({ provider: 'primary' }, 'quality'); // share of answers rejected as unusable
 logger.dispose(); // on shutdown
 ```
 

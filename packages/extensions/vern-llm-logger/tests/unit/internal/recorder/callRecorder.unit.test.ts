@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGuard } from '../../../../src/internal/guard.utils.js';
 import { normalizeOptions } from '../../../../src/internal/options/normalizeOptions.utils.js';
 import { CallRecorder } from '../../../../src/internal/recorder/callRecorder.js';
+import { talliesOf } from '../../../../src/internal/stats/attemptTally.utils.js';
 
 import type { LoggerMiddlewareOptions } from '../../../../src/index.js';
 
@@ -70,7 +71,7 @@ describe('the attempt model', () => {
     const r = recorder();
     r.openAttempt(attemptCtx());
     r.responded();
-    r.retried(25);
+    r.retried(25, serverError());
     r.openAttempt(attemptCtx());
 
     const record = r.finish(ok)!;
@@ -84,7 +85,7 @@ describe('the attempt model', () => {
     const r = recorder();
     r.openAttempt(attemptCtx());
     r.attemptFailed(serverError());
-    r.retried(5);
+    r.retried(5, serverError());
     r.openAttempt(attemptCtx());
 
     expect(r.finish(ok)).toMatchObject({ attempts: 2, retries: 1 });
@@ -118,7 +119,7 @@ describe('the attempt model', () => {
     const r = recorder();
     r.openAttempt(attemptCtx());
     r.attemptFailed(serverError());
-    r.retried(1);
+    r.retried(1, serverError());
     r.openAttempt(attemptCtx());
     r.attemptFailed(new LLMError('no', 'invalid_params', { code: 'middleware_threw' as never }));
 
@@ -299,7 +300,7 @@ describe('finish', () => {
 
     expect(() => {
       r.openAttempt(attemptCtx());
-      r.retried(1);
+      r.retried(1, serverError());
       r.fellBack(1, serverError());
       r.queued(5);
       r.setUsage(
@@ -417,11 +418,11 @@ describe('recorder edges', () => {
   it('ignores a retry delay that is zero, negative or not a number', () => {
     const r = recorder();
     r.openAttempt(attemptCtx());
-    r.retried(0);
+    r.retried(0, serverError());
     r.openAttempt(attemptCtx());
-    r.retried(Number.NaN);
+    r.retried(Number.NaN, serverError());
     r.openAttempt(attemptCtx());
-    r.retried(-5);
+    r.retried(-5, serverError());
 
     expect(r.finish(ok)!.retryDelayMs).toBe(0);
   });
@@ -452,5 +453,94 @@ describe('recorder edges', () => {
 
     expect(record.attemptMs).toBe(30);
     expect(record).not.toHaveProperty('ttftMs');
+  });
+});
+
+describe('attempt tallies', () => {
+  const softFailure = () => new LLMError('x', 'api', { code: 'soft_failure_detected' as never });
+
+  it('counts a responded attempt that failed validation, then the answering one', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx());
+    r.responded();
+    r.retried(5, softFailure());
+    r.openAttempt(attemptCtx());
+    r.responded();
+
+    expect(talliesOf(r.finish(ok)!)).toEqual([
+      { provider: 'primary', model: 'gpt-4o', responded: 2, qualityFailures: 1 },
+    ]);
+  });
+
+  it('keeps an attempt that never got a response out of the denominator', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx());
+    r.attemptFailed(serverError());
+    r.retried(5, serverError());
+    r.openAttempt(attemptCtx());
+    r.responded();
+
+    expect(talliesOf(r.finish(ok)!)).toEqual([
+      { provider: 'primary', model: 'gpt-4o', responded: 1, qualityFailures: 0 },
+    ]);
+  });
+
+  it('counts a quality failure the adapter threw as a response, even if dispatch rejected', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx());
+    r.attemptFailed(softFailure());
+
+    expect(talliesOf(r.finish(failure(softFailure()))!)).toEqual([
+      { provider: 'primary', model: 'gpt-4o', responded: 1, qualityFailures: 1 },
+    ]);
+  });
+
+  it('tallies each target apart, a fallback included', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx('primary'));
+    r.responded();
+    r.fellBack(10, softFailure());
+    r.openAttempt(attemptCtx('backup', 'gpt-4o-mini'));
+    r.responded();
+
+    expect(talliesOf(r.finish(ok)!)).toEqual([
+      { provider: 'primary', model: 'gpt-4o', responded: 1, qualityFailures: 1 },
+      { provider: 'backup', model: 'gpt-4o-mini', responded: 1, qualityFailures: 0 },
+    ]);
+  });
+
+  it('counts the last attempt of an exhausted chain by its own error', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx());
+    r.responded();
+    const exhausted = Object.assign(new LLMError('x', 'fallback_exhausted'), {
+      attempts: [{ error: { type: 'api', code: 'soft_failure_detected' } }],
+    });
+
+    expect(talliesOf(r.finish(failure(exhausted))!)).toEqual([
+      { provider: 'primary', model: 'gpt-4o', responded: 1, qualityFailures: 1 },
+    ]);
+  });
+
+  it('counts nothing for an attempt that was rejected before anything was sent', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx());
+    r.attemptFailed(
+      new LLMError('no', 'invalid_params', { code: 'unsupported_capability' as never }),
+    );
+
+    expect(talliesOf(r.finish(failure(new LLMError('no', 'invalid_params')))!)).toBeUndefined();
+  });
+
+  it('counts nothing for a call that never reached a provider', () => {
+    expect(talliesOf(recorder().finish(ok)!)).toBeUndefined();
+  });
+
+  it('leaves the record itself unchanged', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx());
+    r.responded();
+
+    expect(Object.keys(r.finish(ok)!)).not.toContain('tallies');
   });
 });

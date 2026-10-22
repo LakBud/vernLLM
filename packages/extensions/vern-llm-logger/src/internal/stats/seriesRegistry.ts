@@ -1,7 +1,16 @@
 import { nowMs } from '../clock.utils.js';
 import { roundMs } from '../recorder/recordMetrics.utils.js';
+import { talliesOf } from './attemptTally.utils.js';
 import { dimensionsOf } from './dimensions.utils.js';
-import { keyOf, makeGroup, OTHER, recordInto, type Group } from './group.utils.js';
+import {
+  keyOf,
+  makeGroup,
+  OTHER,
+  qualityTotalsOf,
+  recordInto,
+  recordQuality,
+  type Group,
+} from './group.utils.js';
 import { isTimed } from './metrics.utils.js';
 import { RollingSketch } from './rollingSketch.js';
 import { Sketch } from './sketch.js';
@@ -41,6 +50,28 @@ export class SeriesRegistry {
     // The all calls group always sees the call, so a global figure exists without a filter.
     recordInto(this.everything, record, timed, now);
     if (dimensions) recordInto(this.groupFor(dimensions), record, timed, now);
+
+    this.observeAttempts(record, now);
+  }
+
+  /**
+   * The share of responded attempts rejected as unusable, over every group `filter` matches, or
+   * `undefined` below `minSamples` responded attempts.
+   */
+  failureRate(filter: StatsFilter, kind: 'quality'): number | undefined {
+    if (kind !== 'quality') return undefined;
+
+    const now = this.now();
+    let responded = 0;
+    let failures = 0;
+    for (const group of this.matching(filter)) {
+      const totals = qualityTotalsOf(group, now);
+      responded += totals.responded;
+      failures += totals.qualityFailures;
+    }
+
+    if (responded < this.config.minSamples) return undefined;
+    return failures / responded;
   }
 
   quantile(filter: StatsFilter, q: number, metric: MetricName = 'durationMs'): number | undefined {
@@ -89,8 +120,30 @@ export class SeriesRegistry {
   reset(): void {
     this.everything.series.forEach((series) => series.clear());
     this.everything.counts.clear();
+    this.everything.quality.clear();
     this.groups.clear();
     this.memo = undefined;
+  }
+
+  /**
+   * Counts each target's attempts under that target, not the one that answered, so a call a
+   * fallback rescued still counts its failures against the target that produced them.
+   */
+  private observeAttempts(record: Readonly<CallLogRecord>, now: number): void {
+    const tallies = talliesOf(record);
+    if (!tallies) return;
+
+    // The call's own dimensions, so each extractor still runs once per call. Only the target
+    // changes: the user dimensions, such as a route, are the same for every attempt of the call.
+    const base = this.dimensionsMemo(record);
+
+    for (const tally of tallies) {
+      recordQuality(this.everything, tally, now);
+      if (base) {
+        const dimensions = { ...base, provider: tally.provider, model: tally.model };
+        recordQuality(this.groupFor(dimensions), tally, now);
+      }
+    }
   }
 
   /** The groups `filter` matches. The empty filter is the all calls group alone. */
