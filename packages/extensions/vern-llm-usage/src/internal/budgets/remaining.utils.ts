@@ -29,9 +29,11 @@ export function createRemaining(
         per: match.budget.per,
         unit: scope.unit,
         limit: toPublicAmount(scope.unit, scope.limit),
+        mode: scope.mode,
         spent: toPublicAmount(scope.unit, spent[unit]),
         reserved: toPublicAmount(scope.unit, reserved[unit]),
         remaining: toPublicAmount(scope.unit, Math.max(0, scope.limit - held)),
+        overBy: toPublicAmount(scope.unit, Math.max(0, held - scope.limit)),
         resetsAt: new Date(scope.resetsAtMs).toISOString(),
       });
     }

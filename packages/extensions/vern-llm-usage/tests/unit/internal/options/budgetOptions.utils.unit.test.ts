@@ -18,8 +18,22 @@ describe('budget options', () => {
     expect(
       normalizeBudgets([ok, { ...ok, limitUsd: undefined, limitTokens: 500 }], attribute),
     ).toEqual([
-      { key: 'tenantId', equals: undefined, per: 'day', unit: 'usd', limit: 5_000_000_000 },
-      { key: 'tenantId', equals: undefined, per: 'day', unit: 'tokens', limit: 500 },
+      {
+        key: 'tenantId',
+        equals: undefined,
+        per: 'day',
+        mode: 'hard',
+        unit: 'usd',
+        limit: 5_000_000_000,
+      },
+      {
+        key: 'tenantId',
+        equals: undefined,
+        per: 'day',
+        mode: 'hard',
+        unit: 'tokens',
+        limit: 500,
+      },
     ]);
   });
 
@@ -29,6 +43,7 @@ describe('budget options', () => {
     [{ ...ok, key: 'team' }, 'must be listed in attribute'],
     [{ ...ok, key: '' }, 'key must be a non-empty string'],
     [{ ...ok, per: 'week' }, "per must be 'hour', 'day' or 'month'"],
+    [{ ...ok, mode: 'loose' }, "mode must be 'hard' or 'soft'"],
     [{ ...ok, equals: {} }, 'equals must be a string, number or boolean'],
     [{ ...ok, limitUsd: 0 }, 'limitUsd must be a positive number'],
     [{ ...ok, limitUsd: Number.NaN }, 'limitUsd must be a positive number'],
@@ -42,6 +57,17 @@ describe('budget options', () => {
 
   it('rejects two budgets that would count the same spend twice', () => {
     expect(() => normalizeBudgets([ok, { ...ok, limitUsd: 9 }], attribute)).toThrow(
+      'budgets[1] repeats budgets[0]',
+    );
+  });
+
+  it('allows a soft and a hard budget on the same key, unit and window, but not two of a mode', () => {
+    const soft = { ...ok, limitUsd: 4, mode: 'soft' };
+    expect(normalizeBudgets([soft, ok], attribute).map((b) => b.mode)).toEqual(['soft', 'hard']);
+    expect(() => normalizeBudgets([soft, { ...soft, limitUsd: 3 }], attribute)).toThrow(
+      'budgets[1] repeats budgets[0]',
+    );
+    expect(() => normalizeBudgets([ok, { ...ok, mode: 'hard' }], attribute)).toThrow(
       'budgets[1] repeats budgets[0]',
     );
   });
@@ -88,12 +114,16 @@ describe('budget options', () => {
     );
   });
 
-  it('accepts warnAt strictly between 0 and 1, and nothing else', () => {
-    expect(normalizeWarnAt(undefined)).toBeUndefined();
-    expect(normalizeWarnAt(0.8)).toBe(0.8);
-    for (const bad of [0, 1, -0.1, 1.5, Number.NaN, '0.8']) {
-      expect(() => normalizeWarnAt(bad)).toThrow('warnAt must be a number between 0 and 1');
+  it('accepts warnAt strictly between 0 and 1, as a number or a list, and nothing else', () => {
+    expect(normalizeWarnAt(undefined)).toEqual([]);
+    expect(normalizeWarnAt(0.8)).toEqual([0.8]);
+    for (const bad of [0, 1, -0.1, 1.5, Number.NaN, '0.8', [], [0.5, 1], [0.5, '0.9']]) {
+      expect(() => normalizeWarnAt(bad)).toThrow('warnAt must be a number');
     }
+  });
+
+  it('sorts and deduplicates a warnAt list', () => {
+    expect(normalizeWarnAt([0.9, 0.7, 0.9])).toEqual([0.7, 0.9]);
   });
 
   it('defaults maxSeries to 1000 and wants a positive integer', () => {

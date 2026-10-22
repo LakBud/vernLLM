@@ -32,6 +32,7 @@ const scope = (
   label: key,
   unit,
   limit,
+  mode: 'hard',
   resetsAtMs,
 });
 const amount = (tokens: number, nanoUsd = 0) => ({ tokens, nanoUsd });

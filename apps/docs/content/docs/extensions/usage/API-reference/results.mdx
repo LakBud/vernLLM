@@ -95,10 +95,20 @@ dollar budget and tokens for a token budget.
       required: true,
     },
     limit: { description: 'The budget.', type: 'number', required: true },
+    mode: {
+      description: "Whether the budget rejects calls (`'hard'`) or only alerts (`'soft'`).",
+      type: "'hard' | 'soft'",
+      required: true,
+    },
     spent: { description: 'Spent in the current window.', type: 'number', required: true },
     reserved: { description: 'Held for calls in flight.', type: 'number', required: true },
     remaining: {
       description: 'What is left once spend and holds are taken off the limit, never below zero.',
+      type: 'number',
+      required: true,
+    },
+    overBy: {
+      description: 'How far spend and holds are past the limit, zero while within it.',
       type: 'number',
       required: true,
     },
@@ -147,17 +157,19 @@ Custom events with `v: 1`, kept by the logger's default `usage.*` allowlist.
 <TypeTable
   type={{
     'usage.budget_warning': {
-      description: 'Once per budget and window, when spend plus holds reach warnAt.',
-      type: '{ v: 1; scope: string; unit: "usd" | "tokens"; limit: number; used: number }',
+      description:
+        'Once per threshold, budget and window, when spend plus holds reach a warnAt value.',
+      type: '{ v: 1; scope: string; unit: "usd" | "tokens"; limit: number; threshold: number; mode: "hard" | "soft"; used: number }',
     },
     'usage.budget_exceeded': {
-      description: 'A call was rejected, just before the error is thrown.',
-      type: '{ v: 1; scope: string; unit: "usd" | "tokens"; limit: number; remaining: number }',
+      description:
+        'A hard budget rejected a call, just before the error is thrown, or a soft budget reached its limit.',
+      type: '{ v: 1; scope: string; unit: "usd" | "tokens"; limit: number; remaining: number; mode: "hard" | "soft"; blocked: boolean }',
     },
   }}
 />
 
-`scope` is the label of the budget, such as `tenantId=acme per day`. `used` is a share from 0 to 1.
+`scope` is the label of the budget, such as `tenantId=acme per day`. `used` is a share from 0 to 1, and `threshold` is the `warnAt` value that was crossed. `blocked` is `true` when the call was rejected and `false` for a soft budget, whose call completes.
 
 ## Rejection
 

@@ -62,6 +62,24 @@ describe.concurrent('redisUsageStore, real Redis', () => {
     await expect(store.read(s)).resolves.toMatchObject({ reserved: amount(400) });
   });
 
+  it('never refuses a scope given the unreachable limit a soft budget uses, and keeps its spend', async ({
+    redis,
+  }) => {
+    const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
+    const soft = scope('soft', { limit: Number.MAX_SAFE_INTEGER });
+
+    for (let i = 0; i < 3; i++) {
+      const held = await store.reserve([soft], amount(1_000_000_000_000), 60_000);
+      expect(held.ok).toBe(true);
+      if (held.ok) await store.commit(held.id, amount(1_000_000_000_000));
+    }
+
+    await expect(store.read(soft)).resolves.toEqual({
+      spent: amount(3_000_000_000_000),
+      reserved: amount(0),
+    });
+  });
+
   it('limits tokens and dollars independently', async ({ redis }) => {
     const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
     const tokens = scope('t', { unit: 'tokens', limit: 50 });

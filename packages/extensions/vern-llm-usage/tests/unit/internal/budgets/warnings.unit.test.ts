@@ -12,14 +12,19 @@ const scope = (key: string, resetsAtMs = Date.now() + 60_000): Scope => ({
   label: key,
   unit: 'tokens',
   limit: 100,
+  mode: 'hard',
   resetsAtMs,
 });
 
-function setup(store: UsageStore = memoryUsageStore(), maxRemembered?: number) {
+function setup(
+  store: UsageStore = memoryUsageStore(),
+  maxRemembered?: number,
+  thresholds: readonly number[] = [0.5],
+) {
   const { logger, errors } = captureLogger();
   const emit = vi.fn();
   const ctx = { emit } as unknown as PreDispatchContext;
-  const warnings = new BudgetWarnings(0.5, store, createGuard(logger), maxRemembered);
+  const warnings = new BudgetWarnings(thresholds, store, createGuard(logger), maxRemembered);
   return { warnings, emit, ctx, errors, store };
 }
 
@@ -61,6 +66,8 @@ describe('BudgetWarnings', () => {
       scope: 'a',
       unit: 'tokens',
       limit: 100,
+      threshold: 0.5,
+      mode: 'hard',
       used: 0.6,
     });
   });
@@ -84,6 +91,8 @@ describe('BudgetWarnings', () => {
       scope: 'usd',
       unit: 'usd',
       limit: 2,
+      threshold: 0.5,
+      mode: 'hard',
       used: 0.75,
     });
   });
@@ -140,7 +149,7 @@ describe('BudgetWarnings', () => {
     const store = memoryUsageStore();
     const read = vi.spyOn(store, 'read');
     const emit = vi.fn();
-    const warnings = new BudgetWarnings(undefined, store, createGuard('silent'));
+    const warnings = new BudgetWarnings([], store, createGuard('silent'));
 
     await warnings.check([scope('a')], { emit } as unknown as PreDispatchContext);
 

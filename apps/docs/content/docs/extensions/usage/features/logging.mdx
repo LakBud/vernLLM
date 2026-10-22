@@ -31,7 +31,15 @@ record at `finalResult`:
   "fields": { "estimatedCostUsd": 0.0031, "wastedUsd": 0, "costSource": "table" },
   "custom": {
     "usage.budget_warning": [
-      { "v": 1, "scope": "tenantId=acme per day", "unit": "usd", "limit": 50, "used": 0.81 }
+      {
+        "v": 1,
+        "scope": "tenantId=acme per day",
+        "unit": "usd",
+        "limit": 50,
+        "threshold": 0.8,
+        "mode": "hard",
+        "used": 0.81
+      }
     ]
   }
 }
@@ -46,10 +54,10 @@ returned, and returns `{}` for a call that was not metered.
 
 Both events are custom events with `v: 1`, kept by the logger's default `usage.*` allowlist.
 
-| Event                   | When                                                             | Data                                      |
-| ----------------------- | ---------------------------------------------------------------- | ----------------------------------------- |
-| `usage.budget_warning`  | Once per budget and window, when spend plus holds reach `warnAt` | `scope`, `unit`, `limit`, `used` (0 to 1) |
-| `usage.budget_exceeded` | A call was rejected, just before the error is thrown             | `scope`, `unit`, `limit`, `remaining`     |
+| Event                   | When                                                                  | Data                                                           |
+| ----------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `usage.budget_warning`  | Once per threshold, budget and window, when spend plus holds reach it | `scope`, `unit`, `limit`, `threshold`, `mode`, `used` (0 to 1) |
+| `usage.budget_exceeded` | A hard budget rejected a call, or a soft budget reached its limit     | `scope`, `unit`, `limit`, `remaining`, `mode`, `blocked`       |
 
 A rejected call is logged at `warn` as `rejected`, with no attempts, not as an error.
 

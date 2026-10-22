@@ -1,4 +1,4 @@
-import type { BudgetWindow } from './budgets.js';
+import type { BudgetMode, BudgetWindow } from './budgets.js';
 import type { LoggerOption } from './options.js';
 import type { ModelPrice } from './prices.js';
 import type { UsageStore } from './store.js';
@@ -22,6 +22,7 @@ export interface ResolvedBudget {
   /** Nano dollars for `'usd'`, tokens for `'tokens'`. */
   limit: number;
   per: BudgetWindow;
+  mode: BudgetMode;
 }
 
 /** Options after validation, with every default filled in. */
@@ -35,7 +36,7 @@ export interface ResolvedConfig {
   maxPriceAgeDays: number;
   attribute: readonly string[];
   budgets: readonly ResolvedBudget[];
-  warnAt: number | undefined;
+  warnAt: readonly number[];
   maxSeries: number;
   timeZone: string;
   onStoreError: 'allow' | 'deny';

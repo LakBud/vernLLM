@@ -9,6 +9,7 @@ export type {
   Amount,
   AttributionFilter,
   BudgetStatus,
+  BudgetMode,
   BudgetWindow,
   CostFor,
   CostSource,

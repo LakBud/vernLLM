@@ -17,7 +17,17 @@ export interface UsageBudget {
   /** Prompt plus completion tokens. */
   limitTokens?: number;
   per: BudgetWindow;
+  /**
+   * `'hard'` (the default) rejects a call that would go over the limit. `'soft'` never rejects: its
+   * spend is tracked the same way and `usage.budget_exceeded` is emitted once per window when the
+   * limit is first reached, with `blocked: false`. A soft and a hard budget can share a key, unit
+   * and window, for an alert before a block.
+   */
+  mode?: BudgetMode;
 }
+
+/** Whether a budget rejects calls (`'hard'`) or only reports (`'soft'`). */
+export type BudgetMode = 'hard' | 'soft';
 
 /** What a call spends, as integers: nano dollars (1e-9 USD) and whole tokens. */
 export interface Amount {
@@ -35,6 +45,7 @@ export interface Scope {
   unit: 'usd' | 'tokens';
   /** Nano dollars for `'usd'`, tokens for `'tokens'`. */
   limit: number;
+  mode: BudgetMode;
   /** When the window ends, as epoch milliseconds. */
   resetsAtMs: number;
 }

@@ -8,27 +8,45 @@ import type { PreDispatchContext } from 'vern-llm';
 /** Most scopes remembered as warned. */
 const DEFAULT_MAX_REMEMBERED = 10_000;
 
-/** Emits `usage.budget_warning` once per scope and window when spend plus holds reach `warnAt`. */
-export class BudgetWarnings {
-  /** Scope key to the end of its window. */
-  private readonly warned = new Map<string, number>();
+/** The highest threshold emitted for a scope, and the end of its window. */
+interface Warned {
+  threshold: number;
+  resetsAtMs: number;
+}
 
+/**
+ * Emits `usage.budget_warning` once per threshold, scope and window when spend plus holds reach it.
+ * A call that jumps past several thresholds emits only the highest one. A soft budget adds
+ * threshold 1, which emits `usage.budget_exceeded` with `blocked: false` instead.
+ */
+export class BudgetWarnings {
+  private readonly warned = new Map<string, Warned>();
+  /** A soft budget also reports crossing its limit, as threshold 1. */
+  private readonly softThresholds: readonly number[];
+
+  /** @param thresholds Sorted ascending, as `normalizeWarnAt` returns them. Empty turns warnings off for hard budgets. */
   constructor(
-    private readonly warnAt: number | undefined,
+    private readonly thresholds: readonly number[],
     private readonly store: UsageStore,
     private readonly guard: Guard,
     private readonly maxRemembered = DEFAULT_MAX_REMEMBERED,
-  ) {}
+  ) {
+    this.softThresholds = [...thresholds, 1];
+  }
+
+  private thresholdsFor(scope: Scope): readonly number[] {
+    return scope.mode === 'soft' ? this.softThresholds : this.thresholds;
+  }
 
   /** Checks each scope in turn. */
   check(scopes: readonly Scope[], ctx: PreDispatchContext): MaybePromise<void> {
-    const { warnAt } = this;
-    if (warnAt === undefined) return;
-
     const step = (from: number): MaybePromise<void> => {
       for (let i = from; i < scopes.length; i++) {
         const scope = scopes[i]!;
-        if (this.warned.has(scope.key)) continue;
+        // Past the top threshold there is nothing left to say, so no more reads.
+        const levels = this.thresholdsFor(scope);
+        if (levels.length === 0) continue;
+        if ((this.warned.get(scope.key)?.threshold ?? 0) >= levels[levels.length - 1]!) continue;
 
         let read: ReturnType<UsageStore['read']>;
         try {
@@ -41,12 +59,12 @@ export class BudgetWarnings {
         if (isThenable(read)) {
           return Promise.resolve(read)
             .then(
-              (held) => this.evaluate(scope, held, ctx, warnAt),
+              (held) => this.evaluate(scope, held, ctx),
               (error: unknown) => this.guard.report('warning', error),
             )
             .then(() => step(i + 1));
         }
-        this.evaluate(scope, read, ctx, warnAt);
+        this.evaluate(scope, read, ctx);
       }
     };
     return step(0);
@@ -56,21 +74,38 @@ export class BudgetWarnings {
     scope: Scope,
     { spent, reserved }: { spent: Amount; reserved: Amount },
     ctx: PreDispatchContext,
-    warnAt: number,
   ): void {
     try {
       const unit = scope.unit === 'usd' ? 'nanoUsd' : 'tokens';
       const used = (spent[unit] + reserved[unit]) / scope.limit;
-      if (used < warnAt) return;
+      const threshold = this.highestCrossed(this.thresholdsFor(scope), used);
       // Another call may have warned while the read was in flight.
-      if (this.warned.has(scope.key)) return;
+      if (threshold === undefined || threshold <= (this.warned.get(scope.key)?.threshold ?? 0)) {
+        return;
+      }
 
-      this.remember(scope);
+      this.remember(scope, threshold);
+      const limit = toPublicAmount(scope.unit, scope.limit);
+      if (threshold === 1) {
+        // Only a soft budget has threshold 1. The call that crossed it has completed.
+        ctx.emit('usage.budget_exceeded', {
+          v: 1,
+          scope: scope.label,
+          unit: scope.unit,
+          limit,
+          remaining: 0,
+          mode: scope.mode,
+          blocked: false,
+        });
+        return;
+      }
       ctx.emit('usage.budget_warning', {
         v: 1,
         scope: scope.label,
         unit: scope.unit,
-        limit: toPublicAmount(scope.unit, scope.limit),
+        limit,
+        threshold,
+        mode: scope.mode,
         used: Math.round(used * 10_000) / 10_000,
       });
     } catch (error) {
@@ -78,10 +113,17 @@ export class BudgetWarnings {
     }
   }
 
-  private remember(scope: Scope): void {
-    if (this.warned.size >= this.maxRemembered) {
+  private highestCrossed(levels: readonly number[], used: number): number | undefined {
+    for (let i = levels.length - 1; i >= 0; i--) {
+      if (used >= levels[i]!) return levels[i];
+    }
+    return undefined;
+  }
+
+  private remember(scope: Scope, threshold: number): void {
+    if (!this.warned.has(scope.key) && this.warned.size >= this.maxRemembered) {
       const now = Date.now();
-      for (const [key, resetsAtMs] of this.warned) {
+      for (const [key, { resetsAtMs }] of this.warned) {
         if (resetsAtMs <= now) this.warned.delete(key);
       }
       // All still live: forget the oldest rather than grow without bound.
@@ -89,6 +131,6 @@ export class BudgetWarnings {
         this.warned.delete(this.warned.keys().next().value!);
       }
     }
-    this.warned.set(scope.key, scope.resetsAtMs);
+    this.warned.set(scope.key, { threshold, resetsAtMs: scope.resetsAtMs });
   }
 }

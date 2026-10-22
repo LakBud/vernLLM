@@ -18,7 +18,14 @@ function setup(onStoreError: 'allow' | 'deny') {
   const gate = new BudgetGate(
     {
       budgets: [
-        { key: 'tenantId', equals: undefined, unit: 'tokens', limit: 1_000, per: 'day' as const },
+        {
+          key: 'tenantId',
+          equals: undefined,
+          unit: 'tokens',
+          limit: 1_000,
+          per: 'day' as const,
+          mode: 'hard' as const,
+        },
       ],
       onStoreError,
       timeZone: 'UTC',
