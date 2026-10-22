@@ -122,7 +122,7 @@ describe('warnAt thresholds', () => {
 
   it('rejects an invalid list when the middleware is created', () => {
     for (const bad of [[], [0.5, 1], [0]]) {
-      expect(() => setup(bad, [1])).toThrow('warnAt must be a number');
+      expect(() => setup(bad, [1])).toThrow('warnAt must be one or more numbers');
     }
   });
 });

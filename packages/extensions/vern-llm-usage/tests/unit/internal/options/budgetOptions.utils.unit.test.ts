@@ -118,7 +118,7 @@ describe('budget options', () => {
     expect(normalizeWarnAt(undefined)).toEqual([]);
     expect(normalizeWarnAt(0.8)).toEqual([0.8]);
     for (const bad of [0, 1, -0.1, 1.5, Number.NaN, '0.8', [], [0.5, 1], [0.5, '0.9']]) {
-      expect(() => normalizeWarnAt(bad)).toThrow('warnAt must be a number');
+      expect(() => normalizeWarnAt(bad)).toThrow('warnAt must be one or more numbers');
     }
   });
 

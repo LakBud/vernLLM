@@ -146,7 +146,7 @@ export function normalizeWarnAt(value: unknown): readonly number[] {
     list.some((v) => typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v >= 1)
   ) {
     throw new Error(
-      'usageMiddleware: warnAt must be a number, or a non-empty array of numbers, between 0 and 1, exclusive',
+      'usageMiddleware: warnAt must be one or more numbers between 0 and 1, exclusive',
     );
   }
   return [...new Set(list as number[])].sort((a, b) => a - b);

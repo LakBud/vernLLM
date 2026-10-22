@@ -15,6 +15,7 @@ const scope = (key: string, overrides: Partial<UsageScope> = {}): UsageScope => 
   label: `${key} per day`,
   unit: 'usd',
   limit: 1_000,
+  mode: 'hard',
   resetsAtMs: Date.now() + HOUR,
   ...overrides,
 });
@@ -66,7 +67,7 @@ describe.concurrent('redisUsageStore, real Redis', () => {
     redis,
   }) => {
     const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
-    const soft = scope('soft', { limit: Number.MAX_SAFE_INTEGER });
+    const soft = scope('soft', { limit: Number.MAX_SAFE_INTEGER, mode: 'soft' });
 
     for (let i = 0; i < 3; i++) {
       const held = await store.reserve([soft], amount(1_000_000_000_000), 60_000);
