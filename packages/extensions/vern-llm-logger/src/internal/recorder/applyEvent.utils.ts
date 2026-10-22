@@ -12,7 +12,7 @@ export function applyEvent(
       recorder.queued(event.waitedMs);
       return;
     case 'retry':
-      recorder.retried(event.delayMs);
+      recorder.retried(event.delayMs, event.error);
       return;
     case 'fallback':
       recorder.fellBack(event.elapsedMs, event.error);

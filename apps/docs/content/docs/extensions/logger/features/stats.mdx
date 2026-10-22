@@ -17,6 +17,7 @@ Each metric is its own series, kept per set of dimension values:
 | `ttftMs`             | Call start to first content chunk, streams only                |
 | `queueWaitMs`        | Time spent waiting on a rate limit                             |
 | `outputTokensPerSec` | Completion tokens over the generation window                   |
+| `outputTokens`       | Completion tokens of each successful call                      |
 
 The built in dimensions are `provider`, `model`, and `streaming`. A series with no filter is the
 all calls series, so a global figure always exists.
@@ -33,7 +34,7 @@ all calls series, so a global figure always exists.
 `logger.stats` reads the rolling window. It is meant for dashboards and health endpoints, not the
 hot path of a call:
 
-<Tabs items={['quantile', 'snapshot', 'reset']}>
+<Tabs items={['quantile', 'failureRate', 'snapshot', 'reset']}>
   <Tab value="quantile">
 
 ```ts title="stats-quantile.ts"
@@ -44,6 +45,17 @@ logger.stats.quantile({}, 0.99); // every call
 
 A partial filter merges every matching series on read. The result is `undefined` until a series has
 `minSamples` calls (default 20), so a quiet provider never reports a number built from three calls.
+
+  </Tab>
+  <Tab value="failureRate">
+
+```ts title="stats-failure-rate.ts"
+logger.stats.failureRate({ provider: 'primary' }, 'quality'); // 0.31
+logger.stats.failureRate({ provider: 'primary', route: 'extract' }, 'quality');
+```
+
+The share of answers rejected as unusable, over the window. See
+[Quality failure rate](#quality-failure-rate).
 
   </Tab>
   <Tab value="snapshot">
@@ -80,6 +92,36 @@ latencies to colour.
 
   </Tab>
 </Tabs>
+
+## Quality failure rate
+
+A provider can be up, fast and cheap while a tenth of its answers are unusable. Latency and
+`errors` do not show that, so the logger also keeps a failure rate for answers:
+
+```
+quality failure rate = attempts rejected as unusable / attempts that got a response
+```
+
+An attempt is rejected as unusable when it fails with a `validation` or `parse` error (invalid
+structured output, a truncated reply, malformed tool arguments, a tool contract break), an
+`empty_response`, or a `soft_failure_detected`. Everything about reaching the provider is
+availability, and never counts: timeouts, network errors, 429s, 5xx, an open circuit, caller errors,
+budget and policy rejections, and aborts. The denominator is attempts that got a response, so an
+outage reads as neither good nor bad quality, and the rate is `undefined` until `minSamples` of
+them are in the window.
+
+It is counted per attempt, under the provider that attempt went to, not the one that finally
+answered. A call that returned invalid output on `primary` and was rescued by `backup` counts one
+failure for `primary` and one good attempt for `backup`, so a provider that fallbacks keep hiding
+still shows its rate. The filter takes any dimension, so a [route](#dimensions) that one provider
+keeps failing shows up on that route alone.
+
+<Callout type="info">
+  A `detectSoftFailure` that returns a custom code is an `api` error the logger cannot tell from a
+  provider fault, so only the default `soft_failure_detected` counts. By default the chain does not
+  fall back on `parse` or `validation` errors, so a call rescued by a fallback after one needs a
+  `fallbackOn` that allows it.
+</Callout>
 
 ## The rolling window
 

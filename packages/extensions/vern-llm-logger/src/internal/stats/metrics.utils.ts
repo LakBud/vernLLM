@@ -6,6 +6,7 @@ export const METRICS: readonly MetricName[] = [
   'attemptMs',
   'queueWaitMs',
   'outputTokensPerSec',
+  'outputTokens',
 ];
 
 /** A successful call that went to a provider: the only kind whose latency is a latency. */

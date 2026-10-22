@@ -78,6 +78,17 @@ export function lastAttemptErrorOf(error: unknown): unknown {
   return typeof type === 'string' ? { name: 'LLMError', type, code } : error;
 }
 
+/**
+ * Whether an attempt failed because its answer was unusable: the provider responded, but what
+ * came back was invalid, unparseable, truncated, empty, a soft failure or broke the tool
+ * contract. Everything about reaching the provider, the caller or a limit is something else.
+ */
+export function isQualityFailure(error: unknown): boolean {
+  if (!isLLMErrorLike(error)) return false;
+  if (error.type === 'validation' || error.type === 'parse') return true;
+  return error.code === 'soft_failure_detected' || error.code === 'empty_response';
+}
+
 // Codes the core and its adapters throw from inside the provider request before anything is
 // sent: a capability the model rejects, or an inner `dispatch` hook that never called `next`.
 const LOCAL_REJECTION_CODES: ReadonlySet<unknown> = new Set([

@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createGuard } from '../../../../src/internal/guard.utils.js';
 import { normalizeOptions } from '../../../../src/internal/options/normalizeOptions.utils.js';
+import {
+  attachTallies,
+  type AttemptTally,
+} from '../../../../src/internal/stats/attemptTally.utils.js';
 import { SeriesRegistry } from '../../../../src/internal/stats/seriesRegistry.js';
 
 import type { CallLogRecord, LoggerMiddlewareOptions } from '../../../../src/index.js';
@@ -300,5 +304,67 @@ describe('exemplars and fallbacks', () => {
 
     const dimension = registry.snapshot().series.find((s) => 'long' in s.dimensions)!.dimensions;
     expect(dimension.long).toHaveLength(128);
+  });
+});
+
+describe('failureRate quality', () => {
+  const tally = (provider: string, responded: number, qualityFailures: number): AttemptTally => ({
+    provider,
+    model: 'gpt-4o',
+    responded,
+    qualityFailures,
+  });
+  const observe = (
+    registry: SeriesRegistry,
+    tallies: AttemptTally[],
+    extra: Partial<CallLogRecord> = {},
+  ) => {
+    const record = call(extra);
+    attachTallies(record, tallies);
+    registry.observe(record);
+  };
+
+  it('counts each target under its own provider and sums across the groups a filter matches', () => {
+    const { registry } = setup();
+    observe(registry, [tally('a', 4, 1), tally('b', 2, 0)]);
+    observe(registry, [tally('a', 2, 1)]);
+
+    expect(registry.failureRate({ provider: 'a' }, 'quality')).toBeCloseTo(2 / 6);
+    expect(registry.failureRate({ provider: 'b' }, 'quality')).toBeUndefined();
+    expect(registry.failureRate({ model: 'gpt-4o' }, 'quality')).toBeCloseTo(2 / 8);
+    expect(registry.failureRate({}, 'quality')).toBeCloseTo(2 / 8);
+  });
+
+  it('forgets attempts once they leave the window', () => {
+    const { registry, clock } = setup();
+    observe(registry, [tally('a', 5, 5)]);
+    expect(registry.failureRate({ provider: 'a' }, 'quality')).toBe(1);
+
+    clock.now += 10 * 60 * 60 * 1000;
+
+    expect(registry.failureRate({ provider: 'a' }, 'quality')).toBeUndefined();
+    expect(registry.failureRate({}, 'quality')).toBeUndefined();
+  });
+
+  it('still counts the global rate for a call with no provider to key it by', () => {
+    const { registry } = setup();
+    observe(registry, [tally('a', 3, 3)], { provider: undefined, model: undefined, path: [] });
+
+    expect(registry.failureRate({}, 'quality')).toBe(1);
+    expect(registry.failureRate({ provider: 'a' }, 'quality')).toBeUndefined();
+  });
+
+  it('answers only for the quality kind', () => {
+    const { registry } = setup();
+    observe(registry, [tally('a', 5, 5)]);
+
+    expect(registry.failureRate({}, 'latency' as never)).toBeUndefined();
+  });
+
+  it('ignores a record with no tallies', () => {
+    const { registry } = setup();
+    fill(registry, 5);
+
+    expect(registry.failureRate({}, 'quality')).toBeUndefined();
   });
 });

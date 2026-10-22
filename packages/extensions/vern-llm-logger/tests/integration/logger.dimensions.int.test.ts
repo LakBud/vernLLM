@@ -89,3 +89,39 @@ describe('dimension extractors', () => {
     expect(runs).toBe(2);
   });
 });
+
+describe('quality failure rate by dimension', () => {
+  it('splits by a user dimension, so one route failing does not blame the others', async () => {
+    const good = textResponse('{"a":1}');
+    const bad = textResponse('not json');
+    const jsonCall = { userContent: 'hi', jsonMode: true as const };
+    const logger = loggerMiddleware({
+      sink: memorySink(),
+      logger: 'silent',
+      minSamples: 3,
+      dimensions: { route: fromEvent('router.decision', 'route') },
+    });
+    let index = 0;
+    const llm = new VernLLM({
+      // Calls alternate between the chat route, always valid, and the extract route, never.
+      client: createMockClient([good, bad, good, bad, good, bad, good, bad]).client,
+      model: 'gpt-4o',
+      maxRetries: 0,
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'pick',
+          wrap: (request, next, ctx) =>
+            emitter({ route: index++ % 2 === 0 ? 'chat' : 'extract' }).wrap!(request, next, ctx),
+        },
+        logger,
+      ],
+    });
+
+    for (let i = 0; i < 8; i++) await llm.call(jsonCall).catch(() => {});
+
+    expect(logger.stats.failureRate({ provider: 'primary', route: 'extract' }, 'quality')).toBe(1);
+    expect(logger.stats.failureRate({ provider: 'primary', route: 'chat' }, 'quality')).toBe(0);
+    expect(logger.stats.failureRate({ provider: 'primary' }, 'quality')).toBeCloseTo(0.5);
+  });
+});

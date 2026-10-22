@@ -39,7 +39,7 @@ describe('applyEvent', () => {
     expect(r.queued).toHaveBeenCalledWith(42);
   });
 
-  it('maps retry to a retry with its delay', () => {
+  it('maps retry to a retry with its delay and error', () => {
     const r = run({
       kind: 'retry',
       requestId: 'r',
@@ -51,7 +51,7 @@ describe('applyEvent', () => {
       retryAfterHonored: false,
       error,
     });
-    expect(r.retried).toHaveBeenCalledWith(150);
+    expect(r.retried).toHaveBeenCalledWith(150, error);
   });
 
   it('maps fallback to leaving a target, with the core elapsed time and error', () => {

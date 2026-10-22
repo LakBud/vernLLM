@@ -5,6 +5,7 @@ import {
   classifyOutcome,
   errorCodeOf,
   isLocalRejection,
+  isQualityFailure,
   lastAttemptErrorOf,
 } from '../../../../src/internal/recorder/outcome.utils.js';
 
@@ -155,5 +156,33 @@ describe('isLocalRejection', () => {
       isLocalRejection(new LLMError('x', 'api', { code: 'unsupported_capability' as never })),
     ).toBe(false);
     expect(isLocalRejection(new Error('x'))).toBe(false);
+  });
+});
+
+describe('isQualityFailure', () => {
+  it.each([
+    ['validation', new LLMError('x', 'validation')],
+    ['parse', new LLMError('x', 'parse')],
+    ['truncated', new LLMError('x', 'parse', { code: 'response_truncated' as never })],
+    ['tool contract', new LLMError('x', 'validation', { code: 'unknown_tool' as never })],
+    ['soft failure', new LLMError('x', 'api', { code: 'soft_failure_detected' as never })],
+    ['empty response', new LLMError('x', 'api', { code: 'empty_response' as never })],
+  ])('counts %s', (_name, error) => {
+    expect(isQualityFailure(error)).toBe(true);
+  });
+
+  it.each([
+    ['a timeout', new LLMError('x', 'timeout')],
+    ['a network error', new LLMError('x', 'network')],
+    ['a 429', new LLMError('x', 'rate_limited', { status: 429 })],
+    ['a 5xx', new LLMError('x', 'api', { status: 500, code: 'server_error' as never })],
+    ['caller input', new LLMError('x', 'invalid_params')],
+    ['a budget rejection', new LLMError('x', 'quota_exceeded')],
+    ['an abort', new LLMError('x', 'aborted')],
+    ['an open circuit', new LLMError('x', 'circuit_open')],
+    ['a plain error', new Error('x')],
+    ['nothing', undefined],
+  ])('does not count %s', (_name, error) => {
+    expect(isQualityFailure(error)).toBe(false);
   });
 });

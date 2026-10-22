@@ -6,6 +6,7 @@ export function createStatsApi(registry: SeriesRegistry): StatsApi {
   return {
     snapshot: () => registry.snapshot(),
     quantile: (filter, q, metric) => registry.quantile(filter, q, metric),
+    failureRate: (filter, kind) => registry.failureRate(filter, kind),
     reset: () => registry.reset(),
   };
 }
