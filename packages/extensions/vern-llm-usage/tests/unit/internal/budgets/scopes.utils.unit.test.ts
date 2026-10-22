@@ -11,6 +11,7 @@ const tenant: ResolvedBudget = {
   unit: 'usd',
   limit: 5,
   per: 'day',
+  mode: 'hard',
 };
 
 describe('scopesFor', () => {
@@ -46,6 +47,15 @@ describe('scopesFor', () => {
     );
 
     expect(keys.size).toBe(4);
+  });
+
+  it('keeps a hard scope key byte for byte, and suffixes a soft one so the two stay apart', () => {
+    const [hard] = scopesFor([tenant], { tenantId: 'a' }, now);
+    const [soft] = scopesFor([{ ...tenant, mode: 'soft' }], { tenantId: 'a' }, now);
+
+    expect(hard!.key).toBe('["tenantId",null,"usd","a","day:2026-10-20"]');
+    expect(soft!.key).toBe('["tenantId",null,"usd","a","day:2026-10-20","soft"]');
+    expect([hard!.mode, soft!.mode]).toEqual(['hard', 'soft']);
   });
 
   it('keeps a scope when budgets are reordered or a limit changes', () => {

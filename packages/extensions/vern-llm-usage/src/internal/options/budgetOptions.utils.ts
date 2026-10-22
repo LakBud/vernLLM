@@ -1,9 +1,10 @@
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from '../budgets/windows.utils.js';
 import { isPlainObject } from './validate.utils.js';
 
-import type { BudgetWindow, ResolvedBudget, UsageStore } from '../../types/index.js';
+import type { BudgetMode, BudgetWindow, ResolvedBudget, UsageStore } from '../../types/index.js';
 
 const WINDOWS: readonly BudgetWindow[] = ['hour', 'day', 'month'];
+const MODES: readonly BudgetMode[] = ['hard', 'soft'];
 const NANO_PER_USD = 1e9;
 
 /** `attribute`: the context keys spend is attributed to. Empty when absent. */
@@ -65,7 +66,7 @@ export function normalizeBudgets(
     const label = `budgets[${index}]`;
     if (!isPlainObject(budget)) throw new Error(`usageMiddleware: ${label} must be an object`);
 
-    const { key, equals, per } = budget;
+    const { key, equals, per, mode = 'hard' } = budget;
     if (typeof key !== 'string' || key === '') {
       throw new Error(`usageMiddleware: ${label}.key must be a non-empty string`);
     }
@@ -74,6 +75,9 @@ export function normalizeBudgets(
     }
     if (!WINDOWS.includes(per as BudgetWindow)) {
       throw new Error(`usageMiddleware: ${label}.per must be 'hour', 'day' or 'month'`);
+    }
+    if (!MODES.includes(mode as BudgetMode)) {
+      throw new Error(`usageMiddleware: ${label}.mode must be 'hard' or 'soft'`);
     }
     if (
       equals !== undefined &&
@@ -84,14 +88,26 @@ export function normalizeBudgets(
       throw new Error(`usageMiddleware: ${label}.equals must be a string, number or boolean`);
     }
 
-    const resolved = { key, equals, per: per as BudgetWindow, ...toLimit(budget, label) };
+    const resolved = {
+      key,
+      equals,
+      per: per as BudgetWindow,
+      mode: mode as BudgetMode,
+      ...toLimit(budget, label),
+    };
 
     // Two such budgets would count the same spend twice.
-    const identity = JSON.stringify([key, equals ?? null, resolved.unit, resolved.per]);
+    const identity = JSON.stringify([
+      key,
+      equals ?? null,
+      resolved.unit,
+      resolved.per,
+      resolved.mode,
+    ]);
     const earlier = seen.get(identity);
     if (earlier !== undefined) {
       throw new Error(
-        `usageMiddleware: ${label} repeats budgets[${earlier}]: same key, equals, limit unit and per`,
+        `usageMiddleware: ${label} repeats budgets[${earlier}]: same key, equals, limit unit, per and mode`,
       );
     }
     seen.set(identity, index);
@@ -118,13 +134,22 @@ export function normalizeStore(store: unknown): UsageStore | undefined {
   return store as unknown as UsageStore;
 }
 
-/** `warnAt`: a share of the limit, strictly between 0 and 1. Off when absent. */
-export function normalizeWarnAt(value: unknown): number | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value >= 1) {
-    throw new Error('usageMiddleware: warnAt must be a number between 0 and 1, exclusive');
+/**
+ * `warnAt`: a share of the limit, or a list of them, each strictly between 0 and 1. Sorted and
+ * deduplicated. Empty when absent, which turns warnings off.
+ */
+export function normalizeWarnAt(value: unknown): readonly number[] {
+  if (value === undefined) return [];
+  const list: unknown[] = Array.isArray(value) ? (value as unknown[]) : [value];
+  if (
+    list.length === 0 ||
+    list.some((v) => typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v >= 1)
+  ) {
+    throw new Error(
+      'usageMiddleware: warnAt must be one or more numbers between 0 and 1, exclusive',
+    );
   }
-  return value;
+  return [...new Set(list as number[])].sort((a, b) => a - b);
 }
 
 /** `maxSeries`: a whole number of at least 1. */

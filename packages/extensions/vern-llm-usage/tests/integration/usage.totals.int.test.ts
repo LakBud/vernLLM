@@ -167,9 +167,11 @@ describe('remaining', () => {
         per: 'day',
         unit: 'usd',
         limit: 0.01,
+        mode: 'hard',
         spent: 0.00052,
         reserved: 0,
         remaining: expect.closeTo(0.00948, 12),
+        overBy: 0,
         resetsAt: '2026-10-21T00:00:00.000Z',
       },
       {
@@ -178,9 +180,11 @@ describe('remaining', () => {
         per: 'hour',
         unit: 'tokens',
         limit: 1_000,
+        mode: 'hard',
         spent: 100,
         reserved: 0,
         remaining: 900,
+        overBy: 0,
         resetsAt: '2026-10-20T14:00:00.000Z',
       },
     ]);

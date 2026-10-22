@@ -23,6 +23,8 @@ export interface UsageScope {
   label: string;
   unit: 'usd' | 'tokens';
   limit: number;
+  /** Not used by the store: a soft scope arrives with an unreachable `limit`. */
+  mode: 'hard' | 'soft';
   resetsAtMs: number;
 }
 

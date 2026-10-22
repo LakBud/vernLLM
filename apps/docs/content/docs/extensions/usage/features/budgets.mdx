@@ -24,8 +24,8 @@ its own $50 a day. With `equals` it applies to that one value. A call without th
 
 A budget is identified by its `key`, `equals`, unit and window, not by its place in the array or its
 limit, so reordering the budgets or changing a limit keeps the spend a shared store already holds.
-Two budgets with the same key, `equals`, unit and `per` count the same spend twice, so they throw at
-construction.
+Two budgets with the same key, `equals`, unit, `per` and `mode` count the same spend twice, so they
+throw at construction. A soft and a hard budget can share them, see below.
 
 ## Windows
 
@@ -101,6 +101,55 @@ thrown before any provider is contacted, never counts toward the circuit breaker
   of the calls that were running. Dollar budgets ignore unpriced calls, and token budgets count
   them.
 </Callout>
+
+## Soft budgets
+
+A budget with `mode: 'soft'` alerts and never blocks, for visibility before enforcement. Pair it
+with a hard budget on the same key for an alert before the block:
+
+```ts title="soft-budget.ts"
+usageMiddleware({
+  prices,
+  pricesAsOf: '2026-10-01',
+  attribute: ['tenantId'],
+  budgets: [
+    { key: 'tenantId', limitUsd: 40, per: 'day', mode: 'soft' }, // alert at $40
+    { key: 'tenantId', limitUsd: 50, per: 'day' }, // block at $50 ('hard' is the default)
+  ],
+});
+```
+
+A soft budget tracks spend and holds exactly like a hard one and never rejects a call. The first
+time spend plus holds reach its limit in a window, `usage.budget_exceeded` is emitted once, with
+`mode: 'soft'` and `blocked: false`. The call that crosses the limit completes, and the event comes
+with it. A hard budget's rejection event carries `mode: 'hard'` and `blocked: true`.
+
+`remaining()` keeps reporting a soft budget, with `mode`, `remaining` never below 0, and `overBy`
+for how far past the limit it is. `warnAt` thresholds apply to soft budgets too, ahead of the alert.
+
+A soft budget keeps its own counter, so the soft and hard budgets above each count the same calls
+separately. Hard budgets are stored under the same keys as before, so existing spend carries on. A
+custom store needs no change: a soft budget is handed to the store with a limit it can never reach.
+
+## Alert thresholds
+
+`warnAt` emits `usage.budget_warning` before a budget is hit. Give one share of the limit, or a list
+for escalating alerts:
+
+```ts title="warn-at.ts"
+usageMiddleware({
+  prices,
+  pricesAsOf: '2026-10-01',
+  attribute: ['tenantId'],
+  budgets: [{ key: 'tenantId', limitUsd: 50, per: 'day' }],
+  warnAt: [0.7, 0.9], // a single number such as 0.8 works too
+});
+```
+
+Each value is strictly between 0 and 1. Every threshold is emitted once per budget and window, with
+a `threshold` field saying which one. When a single call jumps past several at once, from 60% to
+95% say, only the highest one is emitted and the lower ones count as done, so there is no burst of
+stale alerts. A budget that has emitted its top threshold is not read again that window.
 
 ## When the store fails
 

@@ -80,6 +80,7 @@ describe.skipIf(nodes.length === 0)('against a real Redis Cluster', () => {
       label: key,
       unit: 'usd' as const,
       limit: 100,
+      mode: 'hard' as const,
       resetsAtMs: Date.now() + 60_000,
     }));
 

@@ -34,10 +34,17 @@ export function matchBudgets(
 export function scopeOf({ budget, value }: BudgetMatch, nowMs: number, timeZone?: string): Scope {
   const window = windowFor(budget.per, nowMs, timeZone);
   return {
-    key: JSON.stringify([budget.key, budget.equals ?? null, budget.unit, value, window.id]),
+    // A hard scope's key never changes, so spend already stored under it carries on. A soft scope
+    // gets a suffix so a soft and a hard budget on the same key keep separate counters.
+    key: JSON.stringify(
+      budget.mode === 'soft'
+        ? [budget.key, budget.equals ?? null, budget.unit, value, window.id, 'soft']
+        : [budget.key, budget.equals ?? null, budget.unit, value, window.id],
+    ),
     label: `${budget.key}=${String(value)} per ${budget.per}`,
     unit: budget.unit,
     limit: budget.limit,
+    mode: budget.mode,
     resetsAtMs: window.resetsAtMs,
   };
 }

@@ -15,7 +15,7 @@ Everything is validated when `usageMiddleware()` is called. A bad option throws
 | `normalizeModel`  | `(model) => string`               |           | Maps a model id to its table key, for example to drop a date suffix                              |
 | `attribute`       | `string[]`                        | `[]`      | The `context` keys spend is attributed to                                                        |
 | `budgets`         | `UsageBudget[]`                   | `[]`      | See below                                                                                        |
-| `warnAt`          | `number`                          | off       | Emit `usage.budget_warning` at this share of a limit, between 0 and 1 exclusive                  |
+| `warnAt`          | `number \| number[]`              | off       | Emit `usage.budget_warning` at each of these shares of a limit, each between 0 and 1 exclusive   |
 | `timeZone`        | `string`                          | `'UTC'`   | IANA zone budget windows and `totals` follow, such as `'America/New_York'`                       |
 | `maxSeries`       | `number`                          | `1000`    | Series `totals` keeps per window, then `__other__`                                               |
 | `onStoreError`    | `'allow' \| 'deny'`               | `'allow'` | What a failing store does to a call                                                              |
@@ -34,10 +34,11 @@ Everything is validated when `usageMiddleware()` is called. A bad option throws
 
 ## UsageBudget
 
-| Field         | Meaning                                                                                 |
-| ------------- | --------------------------------------------------------------------------------------- |
-| `key`         | A `context` key, also listed in `attribute`                                             |
-| `equals`      | Limit this one value only. Without it, every value has its own limit                    |
-| `limitUsd`    | Dollars, from 0.000000001 to 9,000,000. Set exactly one of `limitUsd` and `limitTokens` |
-| `limitTokens` | Prompt plus completion tokens, a positive integer                                       |
-| `per`         | `'hour'`, `'day'` or `'month'`, in `timeZone`                                           |
+| Field         | Meaning                                                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `key`         | A `context` key, also listed in `attribute`                                                                                                |
+| `equals`      | Limit this one value only. Without it, every value has its own limit                                                                       |
+| `limitUsd`    | Dollars, from 0.000000001 to 9,000,000. Set exactly one of `limitUsd` and `limitTokens`                                                    |
+| `limitTokens` | Prompt plus completion tokens, a positive integer                                                                                          |
+| `per`         | `'hour'`, `'day'` or `'month'`, in `timeZone`                                                                                              |
+| `mode`        | `'hard'` (default) rejects calls over the limit. `'soft'` only alerts, see [Budgets](/docs/extensions/usage/features/budgets#soft-budgets) |

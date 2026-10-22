@@ -1,4 +1,4 @@
-import type { BudgetWindow } from './budgets.js';
+import type { BudgetMode, BudgetWindow } from './budgets.js';
 
 /** A context value to match: a key from `attribute` and the value it must have. */
 export type AttributionFilter = Readonly<Record<string, string | number | boolean>>;
@@ -45,10 +45,14 @@ export interface BudgetStatus {
   per: BudgetWindow;
   unit: 'usd' | 'tokens';
   limit: number;
+  mode: BudgetMode;
   spent: number;
   /** Held for calls in flight. */
   reserved: number;
+  /** What is left, never below 0. */
   remaining: number;
+  /** How far spend plus holds are past the limit. 0 while within it. */
+  overBy: number;
   /** When the window ends and spend starts again from zero, ISO 8601 UTC. */
   resetsAt: string;
 }

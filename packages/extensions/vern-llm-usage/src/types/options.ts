@@ -36,10 +36,11 @@ export interface UsageMiddlewareOptions {
   budgets?: readonly UsageBudget[];
 
   /**
-   * Emits `usage.budget_warning` once per budget and window when spend and holds reach this share
-   * of the limit. A number between 0 and 1, exclusive. Off when absent.
+   * Emits `usage.budget_warning` once per threshold, budget and window when spend and holds reach
+   * that share of the limit. A number, or a list such as `[0.7, 0.9]`, each between 0 and 1,
+   * exclusive. A call that jumps past several thresholds emits only the highest. Off when absent.
    */
-  warnAt?: number;
+  warnAt?: number | readonly number[];
 
   /**
    * The IANA time zone budget windows and `totals` follow, such as `'America/New_York'`. Hour, day

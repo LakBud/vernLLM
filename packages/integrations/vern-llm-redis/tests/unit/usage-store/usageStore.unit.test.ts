@@ -10,6 +10,7 @@ const scope: UsageScope = {
   label: 'k per day',
   unit: 'usd',
   limit: 100,
+  mode: 'hard',
   resetsAtMs: 1_000_000,
 };
 

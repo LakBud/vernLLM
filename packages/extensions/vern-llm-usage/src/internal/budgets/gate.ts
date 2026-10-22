@@ -17,6 +17,9 @@ export interface Reservation {
   held: Amount;
 }
 
+/** A limit the store can never reach, so it holds and records a soft scope without refusing it. */
+const UNREACHABLE_LIMIT = Number.MAX_SAFE_INTEGER;
+
 /** Frees a reservation that is never settled, such as one held by a process that died. */
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 
@@ -56,7 +59,11 @@ export class BudgetGate {
 
     let outcome: Awaited<ReturnType<UsageStore['reserve']>>;
     try {
-      outcome = await this.store.reserve(scopes, estimate, RESERVATION_TTL_MS);
+      // The store checks the limit it is given. A soft scope keeps its real limit for warnings.
+      const forStore = scopes.map((scope) =>
+        scope.mode === 'soft' ? { ...scope, limit: UNREACHABLE_LIMIT } : scope,
+      );
+      outcome = await this.store.reserve(forStore, estimate, RESERVATION_TTL_MS);
     } catch (error) {
       this.guard.report('reserve', error);
       if (this.config.onStoreError === 'deny') throw this.unavailable(error);
@@ -71,6 +78,8 @@ export class BudgetGate {
         unit: scope.unit,
         limit: toPublicAmount(scope.unit, scope.limit),
         remaining: toPublicAmount(scope.unit, outcome.remaining),
+        mode: 'hard',
+        blocked: true,
       });
       throw new LLMError(`Budget exceeded: ${outcome.scope.label}`, 'quota_exceeded', {
         code: 'budget_exceeded',

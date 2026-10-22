@@ -15,6 +15,7 @@ const scope = (key: string, overrides: Partial<UsageScope> = {}): UsageScope => 
   label: `${key} per day`,
   unit: 'usd',
   limit: 1_000,
+  mode: 'hard',
   resetsAtMs: Date.now() + HOUR,
   ...overrides,
 });
@@ -60,6 +61,24 @@ describe.concurrent('redisUsageStore, real Redis', () => {
     expect(refused).toEqual({ ok: false, scope: s, remaining: 100 });
     // The refused call held nothing.
     await expect(store.read(s)).resolves.toMatchObject({ reserved: amount(400) });
+  });
+
+  it('never refuses a scope given the unreachable limit a soft budget uses, and keeps its spend', async ({
+    redis,
+  }) => {
+    const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
+    const soft = scope('soft', { limit: Number.MAX_SAFE_INTEGER, mode: 'soft' });
+
+    for (let i = 0; i < 3; i++) {
+      const held = await store.reserve([soft], amount(1_000_000_000_000), 60_000);
+      expect(held.ok).toBe(true);
+      if (held.ok) await store.commit(held.id, amount(1_000_000_000_000));
+    }
+
+    await expect(store.read(soft)).resolves.toEqual({
+      spent: amount(3_000_000_000_000),
+      reserved: amount(0),
+    });
   });
 
   it('limits tokens and dollars independently', async ({ redis }) => {

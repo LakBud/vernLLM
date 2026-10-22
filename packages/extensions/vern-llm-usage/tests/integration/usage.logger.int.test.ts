@@ -72,7 +72,15 @@ describe('with the logger', () => {
 
     expect(records()[0]!.custom).toEqual({
       'usage.budget_warning': [
-        { v: 1, scope: 'tenantId=acme per day', unit: 'tokens', limit: 200, used: 0.5 },
+        {
+          v: 1,
+          scope: 'tenantId=acme per day',
+          unit: 'tokens',
+          limit: 200,
+          threshold: 0.5,
+          mode: 'hard',
+          used: 0.5,
+        },
       ],
     });
   });

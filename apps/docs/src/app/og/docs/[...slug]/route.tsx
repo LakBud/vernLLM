@@ -19,15 +19,11 @@ async function getLogoDataUrl() {
   return `data:image/png;base64,${buffer.toString('base64')}`;
 }
 
-async function loadGoogleFont(family: string, text: string, weight: number) {
-  const cssUrl = `https://fonts.googleapis.com/css2?family=${family}:wght@${weight}&text=${encodeURIComponent(text)}`;
-  const css = await (await fetch(cssUrl)).text();
-  const match = css.match(/src: url\(([^)]+)\) format\('(?:opentype|truetype)'\)/);
-  const fontUrl = match?.[1];
-  if (!fontUrl) throw new Error(`Could not resolve ${family} font source`);
-
-  const res = await fetch(fontUrl);
-  return res.arrayBuffer();
+// Fonts are bundled, not fetched, so a build never depends on the network. Latin subsets from
+// @fontsource, licensed under the SIL OFL (see assets/fonts).
+async function loadFont(file: string) {
+  const buffer = await readFile(join(process.cwd(), 'assets', 'fonts', file));
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
 export async function GET(_req: Request, { params }: RouteContext<'/og/docs/[...slug]'>) {
@@ -40,9 +36,9 @@ export async function GET(_req: Request, { params }: RouteContext<'/og/docs/[...
 
   const [logoSrc, interBold, interRegular, jbMono] = await Promise.all([
     getLogoDataUrl(),
-    loadGoogleFont('Inter', title, 700),
-    loadGoogleFont('Inter', page.data.description ?? '', 400),
-    loadGoogleFont('JetBrains+Mono', `${eyebrow}$ npm install vern-llm`, 400),
+    loadFont('inter-latin-700-normal.woff'),
+    loadFont('inter-latin-400-normal.woff'),
+    loadFont('jetbrains-mono-latin-400-normal.woff'),
   ]);
 
   return new ImageResponse(

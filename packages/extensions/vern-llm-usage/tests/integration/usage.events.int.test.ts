@@ -45,7 +45,15 @@ describe('events', () => {
     expect(events).toEqual([
       {
         name: 'usage.budget_exceeded',
-        data: { v: 1, scope: 'tenantId=acme per day', unit: 'tokens', limit: 120, remaining: 20 },
+        data: {
+          v: 1,
+          scope: 'tenantId=acme per day',
+          unit: 'tokens',
+          limit: 120,
+          remaining: 20,
+          mode: 'hard',
+          blocked: true,
+        },
       },
     ]);
   });
@@ -69,7 +77,15 @@ describe('events', () => {
     expect(events).toEqual([
       {
         name: 'usage.budget_warning',
-        data: { v: 1, scope: 'tenantId=acme per day', unit: 'tokens', limit: 200, used: 0.5 },
+        data: {
+          v: 1,
+          scope: 'tenantId=acme per day',
+          unit: 'tokens',
+          limit: 200,
+          threshold: 0.5,
+          mode: 'hard',
+          used: 0.5,
+        },
       },
     ]);
   });
