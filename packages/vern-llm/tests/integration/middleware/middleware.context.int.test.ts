@@ -8,7 +8,7 @@ import {
   FakeApiError,
   textResponse,
 } from '../../helpers.js';
-import { CALL, fallbackChain, USAGE, withUsage } from './middleware.int.helpers.js';
+import { CALL, fallbackChain, targetChain, USAGE, withUsage } from './middleware.int.helpers.js';
 
 const context = { tenantId: 't1', routing: { only: ['bedrock'], maxPrice: 10 } };
 
@@ -250,6 +250,256 @@ describe('middleware call context', () => {
     const usageEvents = events.filter((event) => event.kind === 'usage');
     expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]!.context).toEqual(context);
+  });
+});
+
+describe('middleware call facts', () => {
+  type Facts = {
+    streaming?: boolean;
+    callTargets?: readonly string[];
+    deadlineAt?: number;
+  };
+
+  const readFacts = (ctx: Facts): Facts => ({
+    streaming: ctx.streaming,
+    callTargets: ctx.callTargets,
+    deadlineAt: ctx.deadlineAt,
+  });
+
+  it('reads the same facts in every hook and both stages, across a real fallback chain', async () => {
+    const chain = fallbackChain([new FakeApiError('down', 500)], [textResponse('from fallback')]);
+    const seen: { where: string; facts: Facts }[] = [];
+    const record = (hook: string, ctx: Facts & { stage: string }) =>
+      seen.push({ where: `${hook}:${ctx.stage}`, facts: readFacts(ctx) });
+
+    const llm = new VernLLM({
+      ...chain.options,
+      middleware: [
+        {
+          name: 'reader',
+          enabled: (ctx) => (record('enabled', ctx), true),
+          wrap: async (_request, next, ctx) => (record('wrap', ctx), next()),
+          transform: (_request, ctx) => (record('transform', ctx), {}),
+          dispatch: async (_request, next, ctx) => (record('dispatch', ctx), void (await next())),
+          onEvent: (_event, ctx) => record('onEvent', ctx),
+        },
+      ],
+    });
+
+    const before = Date.now();
+    await llm.call({
+      ...CALL,
+      targets: ['primary', 'fallback'],
+      deadlineMs: 60_000,
+    });
+    const after = Date.now();
+
+    expect(seen.length).toBeGreaterThan(6);
+    for (const { facts } of seen) {
+      expect(facts.streaming).toBe(false);
+      expect(facts.callTargets).toEqual(['primary', 'fallback']);
+      expect(facts.deadlineAt).toBeGreaterThanOrEqual(before + 60_000);
+      expect(facts.deadlineAt).toBeLessThanOrEqual(after + 60_000);
+    }
+    expect(new Set(seen.map(({ facts }) => facts.deadlineAt)).size).toBe(1);
+  });
+
+  it('leaves callTargets and deadlineAt absent when the call gave neither', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    let keys: string[] = [];
+    let streaming: boolean | undefined;
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (
+            (keys = Object.keys(ctx)),
+            (streaming = ctx.streaming),
+            next()
+          ),
+        },
+      ],
+    });
+
+    await llm.call(CALL);
+
+    expect(streaming).toBe(false);
+    expect(keys).not.toContain('callTargets');
+    expect(keys).not.toContain('deadlineAt');
+  });
+
+  it('treats an unbounded or NaN deadline as none, like the deadline itself', async () => {
+    const { client } = createMockClient([textResponse('a'), textResponse('b')]);
+    const seen: (number | undefined)[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (seen.push(ctx.deadlineAt), next()),
+        },
+      ],
+    });
+
+    await llm.call({ ...CALL, deadlineMs: Infinity });
+    await llm.call({ ...CALL, deadlineMs: Number.NaN });
+
+    expect(seen).toEqual([undefined, undefined]);
+  });
+
+  it('reports a stream call as streaming, in wrap and in the attempt', async () => {
+    const { client } = createMockStreamingClient([
+      [
+        { type: 'text-delta', delta: 'hello' },
+        { type: 'usage', usage: USAGE },
+      ],
+    ]);
+    const seen: { where: string; streaming: boolean | undefined }[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (
+            seen.push({ where: `wrap:${ctx.stage}`, streaming: ctx.streaming }),
+            next()
+          ),
+          dispatch: async (_request, next, ctx) => (
+            seen.push({
+              where: `dispatch:${ctx.stage}`,
+              streaming: ctx.streaming,
+            }),
+            void (await next())
+          ),
+        },
+      ],
+    });
+
+    const { finalResult } = await llm.call({ ...CALL, stream: true });
+    await finalResult;
+
+    expect(seen).toEqual([
+      { where: 'wrap:pre-dispatch', streaming: true },
+      { where: 'dispatch:attempt', streaming: true },
+    ]);
+  });
+
+  it('keeps the caller order in callTargets even after another layer narrows the targets', async () => {
+    const chain = targetChain([textResponse('p')], [textResponse('b')], [textResponse('c')]);
+    let inner: readonly string[] | undefined;
+    let outer: readonly string[] | undefined;
+
+    const llm = new VernLLM({
+      ...chain.options,
+      middleware: [
+        {
+          name: 'outer',
+          wrap: async (_request, next, ctx) => (
+            (outer = ctx.callTargets),
+            next({ targets: ['c', 'b'] })
+          ),
+        },
+        {
+          name: 'inner',
+          wrap: async (_request, next, ctx) => ((inner = ctx.callTargets), next()),
+        },
+      ],
+    });
+
+    await llm.call({ ...CALL, targets: ['b', 'c'] });
+
+    expect(outer).toEqual(['b', 'c']);
+    expect(inner).toEqual(['b', 'c']);
+  });
+
+  it('is frozen, so a middleware cannot change the order the next one reads', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    let targets: readonly string[] | undefined;
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      name: 'primary',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => ((targets = ctx.callTargets), next()),
+        },
+      ],
+    });
+
+    await llm.call({ ...CALL, targets: ['primary'] });
+
+    expect(Object.isFrozen(targets)).toBe(true);
+  });
+
+  it('gives a cachedCall its own call facts, and the inner call the same ones', async () => {
+    const { client } = createMockClient([textResponse('a')]);
+    const seen: Facts[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      name: 'primary',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (seen.push(readFacts(ctx)), next()),
+          dispatch: async (_request, next, ctx) => (seen.push(readFacts(ctx)), void (await next())),
+        },
+      ],
+    });
+
+    await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 1000,
+      call: { ...CALL, targets: ['primary'], deadlineMs: 60_000 },
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toEqual(seen[0]);
+    expect(seen[0]).toMatchObject({
+      streaming: false,
+      callTargets: ['primary'],
+    });
+    expect(seen[0]!.deadlineAt).toBeGreaterThan(Date.now());
+  });
+
+  it('gives each of two concurrent calls its own facts', async () => {
+    const { client } = createMockClient([textResponse('a'), textResponse('b')]);
+    const seen: (number | undefined)[] = [];
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      logger: 'silent',
+      middleware: [
+        {
+          name: 'reader',
+          wrap: async (_request, next, ctx) => (seen.push(ctx.deadlineAt), next()),
+        },
+      ],
+    });
+
+    await Promise.all([
+      llm.call({ ...CALL, deadlineMs: 10_000 }),
+      llm.call({ ...CALL, deadlineMs: 500_000 }),
+    ]);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]! - seen[0]!).toBeGreaterThan(400_000);
   });
 });
 

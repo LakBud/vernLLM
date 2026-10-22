@@ -8,7 +8,7 @@ import { LLMError } from '../../../types/errors.js';
 import { createMiddlewareStateBag } from '../../../types/middleware.js';
 import { emitEvent } from '../../execution/utils/middleware/middleware.utils.js';
 import { CUSTOM_ADAPTER } from '../adapterInfo.utils.js';
-import { callScopeFor, noopEmit } from '../callScope.utils.js';
+import { callFactsFor, callScopeFor, noopEmit } from '../callScope.utils.js';
 import { middlewareContextNames } from '../middlewareLabels.utils.js';
 import { callHookSafely } from './../logger.utils.js';
 import { makeEventReporter, reportRejection } from './circuitBreaker.utils.js';
@@ -138,6 +138,7 @@ function wrapOnStateChange(
       own: {},
       emit: noopEmit,
       context: callScopeFor(callContext.state)?.context,
+      ...callFactsFor(callContext.state),
       ...middlewareContextNames(middleware),
     };
 

@@ -1,6 +1,6 @@
 import { LLMError } from '../../types/errors.js';
 import { FallbackExhaustedError } from '../../types/fallback.js';
-import { callScopeFor, noopEmit } from '../utils/callScope.utils.js';
+import { callFactsFor, callScopeFor, noopEmit } from '../utils/callScope.utils.js';
 import { createDeferred } from '../utils/deferred.utils.js';
 import { middlewareContextNames } from '../utils/middlewareLabels.utils.js';
 import { describeTargets, type ResolvedTarget } from './targetOrder.js';
@@ -239,6 +239,7 @@ function reportFallback(
     own: {},
     emit: noopEmit,
     context: callScopeFor(failure.middlewareState)?.context,
+    ...callFactsFor(failure.middlewareState),
     ...middlewareContextNames(dependencies.middleware),
   };
 

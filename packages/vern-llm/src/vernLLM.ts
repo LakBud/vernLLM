@@ -20,6 +20,7 @@ import { buildExecutors } from './internal/executorFactory.js';
 import { buildMiddlewarePipeline } from './internal/resolveMiddlewareOrder.js';
 import { buildCache } from './internal/utils/cache/cacheAdapter.utils.js';
 import {
+  createCallFacts,
   prepareCallContext,
   registerCallScope,
   validateStateEntries,
@@ -292,7 +293,10 @@ export class VernLLM {
 
     // One bag per logical call, shared by `wrap` and `transform` on every target.
     const middlewareState = cachedCallState ?? createMiddlewareStateBag(stateEntries);
-    registerCallScope(middlewareState, createCallScope(this.callScopeDependencies, callContext));
+    registerCallScope(
+      middlewareState,
+      createCallScope(this.callScopeDependencies, callContext, createCallFacts(params)),
+    );
 
     try {
       // `wrap` also spans the sole target breaker check, so a circuit open
@@ -429,7 +433,11 @@ export class VernLLM {
     const middlewareState = createMiddlewareStateBag(validateStateEntries(restCallParams.state));
     registerCallScope(
       middlewareState,
-      createCallScope(this.callScopeDependencies, prepareCallContext(restCallParams.context)),
+      createCallScope(
+        this.callScopeDependencies,
+        prepareCallContext(restCallParams.context),
+        createCallFacts(restCallParams),
+      ),
     );
     // Before the cache is touched or a meta holder claimed, like `context` above.
     const targets = this.resolveTargets(restCallParams.targets);

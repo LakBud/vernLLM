@@ -1,4 +1,5 @@
 import { LLMError } from '../../types/errors.js';
+import { MAX_TIMER_DELAY_MS } from '../execution/utils/deadline.utils.js';
 
 import type { CallContext, JsonValue } from '../../types/call.js';
 import type {
@@ -16,6 +17,9 @@ export interface CallScope {
   /** The call's validated, frozen `context`. `undefined` when none was given. */
   context: CallContext | undefined;
 
+  /** The call facts exposed on `ctx`. See `CallFacts`. */
+  facts?: CallFacts;
+
   /** Reports a `custom` event. Never throws. See `createCallScope`. */
   emitCustom: (
     name: string,
@@ -23,6 +27,37 @@ export interface CallScope {
     source: string,
     ctx: MiddlewareContext,
   ) => void;
+}
+
+/** Read only facts about how a call started, fixed for its whole life. */
+export interface CallFacts {
+  streaming?: boolean;
+  callTargets?: readonly string[];
+  deadlineAt?: number;
+}
+
+/**
+ * Builds a call's facts from its params. `deadlineAt` is set only when `deadlineMs` is a real
+ * deadline, matching `setupDeadline`: a missing, `NaN` or out of timer range value means none.
+ */
+export function createCallFacts(
+  params: { stream?: boolean; targets?: readonly string[]; deadlineMs?: number },
+  now: number = Date.now(),
+): CallFacts {
+  const { stream, targets, deadlineMs } = params;
+  const hasDeadline =
+    deadlineMs !== undefined && !Number.isNaN(deadlineMs) && deadlineMs <= MAX_TIMER_DELAY_MS;
+
+  return {
+    streaming: stream === true,
+    ...(targets === undefined ? {} : { callTargets: Object.freeze([...targets]) }),
+    ...(hasDeadline ? { deadlineAt: now + deadlineMs } : {}),
+  };
+}
+
+/** The facts to spread into a context, empty for a bag made outside a call. */
+export function callFactsFor(state: MiddlewareStateBag): CallFacts {
+  return scopes.get(state)?.facts ?? {};
 }
 
 /** One scope per logical call, keyed by that call's state bag. */

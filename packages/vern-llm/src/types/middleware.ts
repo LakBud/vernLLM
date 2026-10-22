@@ -144,6 +144,15 @@ export interface MiddlewareContextBase {
 
   /** The call's `context`, frozen. `undefined` when none was given. */
   context: CallContext | undefined;
+
+  /** Whether the call asked for a stream. */
+  streaming?: boolean;
+
+  /** The call's own `targets`, when it passed one. The order a caller chose by hand. */
+  callTargets?: readonly string[];
+
+  /** When the call's `deadlineMs` runs out, as epoch milliseconds. Absent without a deadline. */
+  deadlineAt?: number;
 }
 
 /**

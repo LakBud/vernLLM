@@ -62,6 +62,8 @@ Once `deadlineMs` elapses, VernLLM throws `LLMError('aborted', { code: 'deadline
 
 Pass `Infinity`, or omit `deadlineMs`, for no deadline.
 
+Middleware reads when the deadline runs out as `ctx.deadlineAt`, in epoch milliseconds, absent without a deadline. See [Call facts](/docs/core/middleware#call-facts).
+
 A deadline only bounds getting to a final result: choosing a target, retrying, and opening a stream. Once a stream has actually opened, `deadlineMs` no longer applies to it: `timeoutMs` only bounds opening the stream and receiving its first chunk, and every gap after that is bounded separately by `chunkIdleTimeoutMs`. Neither option, nor `deadlineMs`, imposes a total time limit on the rest of an already-opened stream. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout) for the full contract.
 
 ## Cached calls and cancellation
