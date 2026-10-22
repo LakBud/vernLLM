@@ -90,7 +90,7 @@ See [Tool Calling](/docs/core/tool-calling) for the complete workflow and [Error
 
 <Cards>
   <Card title="stream">
-    `boolean`, default `false`. Returns `{ chunks, finalResult }` when `true`. See [Streaming](/docs/core/streaming).
+    `boolean`, default `false`. Returns `{ chunks, finalResult }` when `true`. Middleware reads it as `ctx.streaming`. See [Streaming](/docs/core/streaming).
   </Card>
   <Card title="chunkIdleTimeoutMs">
     `number`, optional. Overrides the instance value for `stream: true`. Pass `0` or `Infinity` to
@@ -257,7 +257,7 @@ Provider-specific `jsonSchema` and `tools` compatibility is documented in [Combi
   <Card title="targets">
     `readonly string[]`, optional. Target names to try, in order. Defaults to every target as
     declared. An unknown name throws `invalid_params` with code `unknown_target`, and an empty or
-    repeating list throws `no_eligible_targets`. See
+    repeating list throws `no_eligible_targets`. Middleware reads it as `ctx.callTargets`. See
     [Choosing the order per call](/docs/core/provider-fallback#choosing-the-order-per-call).
   </Card>
   <Card title="meta">

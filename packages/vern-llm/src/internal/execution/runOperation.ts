@@ -1,4 +1,4 @@
-import { callScopeFor, noopEmit } from '../utils/callScope.utils.js';
+import { callFactsFor, callScopeFor, noopEmit } from '../utils/callScope.utils.js';
 import { logError } from '../utils/logger.utils.js';
 import { modelForTarget } from './logicalCall.js';
 import { describeTargets, narrowTargets, type ResolvedTarget } from './targetOrder.js';
@@ -101,6 +101,7 @@ export async function runOperation(
         own: {},
         emit: noopEmit,
         context: callScopeFor(state)?.context,
+        ...callFactsFor(state),
         registeredMiddlewareNames: names,
         transformMiddlewareNames: transformNames,
       };

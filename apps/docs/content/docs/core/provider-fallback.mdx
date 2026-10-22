@@ -287,6 +287,11 @@ wrap: (request, next, ctx) => {
 Each entry of `ctx.targets` is a `TargetInfo`: `name`, the declared `index` (0 is the primary),
 `model` and `adapter`. Filtering by provider goes through `adapter.provider`.
 
+When the call passed its own `targets`, a `wrap` also sees them as `ctx.callTargets`, a frozen
+copy that stays the same whatever an outer layer does. That is how a middleware tells an order the
+caller chose by hand from the default one, and leaves the first alone. It is absent otherwise. See
+[Call facts](/docs/core/middleware#call-facts).
+
 Layers compose from the outside in. The call's `targets` sets the starting order, and each `wrap`,
 outermost first, may reorder or drop what it was shown. A target an outer `wrap` removed can't be
 added back by an inner one: the name is ignored and logged. Only the first `next()` call's

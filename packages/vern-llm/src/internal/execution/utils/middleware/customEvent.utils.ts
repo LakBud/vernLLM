@@ -1,4 +1,4 @@
-import { isJson, type CallScope } from '../../../utils/callScope.utils.js';
+import { isJson, type CallFacts, type CallScope } from '../../../utils/callScope.utils.js';
 import { emitEvent } from './middleware.utils.js';
 
 import type { Logger } from '../../../../logger.js';
@@ -31,6 +31,7 @@ type DropReason = 'invalid' | 'reentrant' | 'limit';
 export function createCallScope(
   dependencies: CallScopeDependencies,
   context: CallContext | undefined,
+  facts: CallFacts = {},
 ): CallScope {
   const { reportEvent, middleware, middlewareTimeoutMs, logger } = dependencies;
 
@@ -40,6 +41,7 @@ export function createCallScope(
 
   return {
     context,
+    facts,
     emitCustom(name, data, source, ctx) {
       const drop = (reason: DropReason, message: string): void => {
         if (warned.has(reason)) return;
