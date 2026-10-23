@@ -135,6 +135,7 @@ export function memoryUsageStore(options: MemoryUsageStoreOptions = {}): UsageSt
       }
 
       const held: Scope[] = [];
+      const used: number[] = [];
       for (const scope of scopes) {
         let entry = entries.get(scope.key);
         if (!entry) {
@@ -146,6 +147,7 @@ export function memoryUsageStore(options: MemoryUsageStoreOptions = {}): UsageSt
                 `memoryUsageStore reached maxScopes (${maxScopes}), so new scopes are not limited`,
               );
             }
+            used.push(0);
             continue;
           }
           entry = { spent: zero(), reserved: zero(), resetsAtMs: scope.resetsAtMs };
@@ -155,11 +157,12 @@ export function memoryUsageStore(options: MemoryUsageStoreOptions = {}): UsageSt
         entry.reserved.nanoUsd += amount.nanoUsd;
         entry.reserved.tokens += amount.tokens;
         held.push(scope);
+        used.push(unitOf(entry.spent, scope.unit) + unitOf(entry.reserved, scope.unit));
       }
 
       const id = `res_${++nextId}`;
       reservations.set(id, { scopes: held, amount: copy(amount), expiresAtMs: nowMs + ttlMs });
-      return { ok: true, id };
+      return { ok: true, id, used };
     },
 
     commit(id, actual) {

@@ -1,9 +1,9 @@
-export { usageLogFields } from './logFields.js';
+export { usageBudgetKey, usageBudgetShare, usageLogFields } from './logFields.js';
 export { memoryUsageStore } from './stores/memoryUsageStore.js';
 export { usageMiddleware, usageMiddlewareRef } from './usageMiddleware.js';
 
 export type { UsageMiddleware } from './usageMiddleware.js';
-export type { UsageLogFields } from './logFields.js';
+export type { BudgetShare, BudgetShareOptions, UsageLogFields } from './logFields.js';
 export type { MemoryUsageStoreOptions } from './stores/memoryUsageStore.js';
 export type {
   Amount,

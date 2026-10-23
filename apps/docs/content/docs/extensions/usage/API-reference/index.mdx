@@ -8,6 +8,7 @@ description: The public exports of vern-llm-usage, and where each option and res
 | `usageMiddleware`                               | Function | Takes `UsageMiddlewareOptions` and returns one middleware with `totals`, `remaining` and `costFor`.                         |
 | `usageMiddlewareRef`                            | Constant | The `MiddlewareRef` of that entry, so a second one in the same `VernLLM` is rejected.                                       |
 | `usageLogFields`                                | Function | Cost fields for `vern-llm-logger`'s `enrich`, see [Logger and Events](/docs/extensions/usage/features/logging).             |
+| `usageBudgetShare`                              | Function | How full a call's budgets are, see [Logger and Events](/docs/extensions/usage/features/logging#how-full-a-budget-is).       |
 | `memoryUsageStore`                              | Function | The in process `UsageStore`, see [Stores](/docs/extensions/usage/features/stores).                                          |
 | `UsageMiddlewareOptions`                        | Type     | Every option, see [Configuration](/docs/extensions/usage/API-reference/configuration).                                      |
 | `UsageMiddleware`                               | Type     | The middleware plus its reads.                                                                                              |

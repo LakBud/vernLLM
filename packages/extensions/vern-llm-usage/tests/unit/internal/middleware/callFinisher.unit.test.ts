@@ -35,7 +35,7 @@ function setup() {
 }
 
 const held = { nanoUsd: 700, tokens: 50 };
-const reservation: Reservation = { id: 'res_1', scopes: [], held };
+const reservation: Reservation = { id: 'res_1', scopes: [], held, shares: [] };
 
 describe('createCallFinisher', () => {
   it('counts a call once, however often it is finished', () => {

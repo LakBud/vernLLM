@@ -42,6 +42,28 @@ afterEach(() => {
 });
 
 describe('memoryUsageStore', () => {
+  it('reports what each scope holds after a reservation, in its own unit', () => {
+    const store = memoryUsageStore();
+    const tokens = scope('t', 1000);
+    const usd = scope('d', 1_000_000_000, 'usd');
+
+    const first = store.reserve([tokens, usd], amount(40, 5_000), 1000) as { id: string };
+    store.commit(first.id, amount(10, 1_000));
+
+    expect(store.reserve([tokens, usd], amount(30, 2_000), 1000)).toMatchObject({
+      ok: true,
+      used: [40, 3_000],
+    });
+  });
+
+  it('reports 0 for a scope past maxScopes, which is not limited', () => {
+    const store = memoryUsageStore({ maxScopes: 1, onWarning: () => {} });
+
+    expect(store.reserve([scope('a', 100), scope('b', 100)], amount(10), 1000)).toMatchObject({
+      used: [10, 0],
+    });
+  });
+
   it('holds an amount, then replaces it with the real spend on commit', () => {
     const store = memoryUsageStore();
     const s = scope('a', 100);

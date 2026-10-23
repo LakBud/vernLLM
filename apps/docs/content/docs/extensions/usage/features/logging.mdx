@@ -50,6 +50,41 @@ A cache hit or join also carries `estimatedSavedUsd`, an estimate of the spend i
 `usageLogFields(ctx)` works on any middleware's `ctx` once the usage middleware's `next()` has
 returned, and returns `{}` for a call that was not metered.
 
+## How full a budget is
+
+`usageBudgetShare(ctx)` returns the highest share of any budget the call falls under, counting
+spend, holds in flight, and this call's own hold: `0.93` means 93% used. A soft budget can pass
+`1`. It is set before `next()` runs, so any middleware inside usage, or your own `wrap`, can read it:
+
+```ts title="logging-budget-share.ts"
+import { usageBudgetShare } from 'vern-llm-usage';
+
+const banner: VernLLMMiddleware = {
+  name: 'banner',
+  position: 0,
+  wrap: async (request, next, ctx) => {
+    const share = usageBudgetShare(ctx, { key: 'tenantId' });
+    if (share !== undefined && share >= 0.9) notifyTenant(Math.round(share * 100));
+    return next();
+  },
+};
+```
+
+| Option | Effect                                 |
+| ------ | -------------------------------------- |
+| `key`  | Only budgets on this context key       |
+| `mode` | Only `'hard'` or only `'soft'` budgets |
+
+The result is `undefined` when the call falls under no budget, or the store reported no figures: a
+custom store without `used`, or a store error under `onStoreError: 'allow'`. The figures come back
+with the reservation the call already makes, so there is no extra store round trip. The hold is
+priced at the most expensive target the call may use, so near a hard limit the share can read
+higher than the call you end up making. Acting well before the limit, or on a soft budget set
+below a hard one, avoids that.
+
+`usageLogFields` also carries `budgetShare`, the same highest share, so a record shows how close
+each call was.
+
 ## Events
 
 Both events are custom events with `v: 1`, kept by the logger's default `usage.*` allowlist.
