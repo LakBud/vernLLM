@@ -69,6 +69,7 @@ describe('docs SEO', () => {
       { slugs: ['integrations', 'otel', 'changelog'], title: 'Changelog' },
       { slugs: ['extensions', 'logger', 'changelog'], title: 'Changelog' },
       { slugs: ['extensions', 'usage', 'changelog'], title: 'Changelog' },
+      { slugs: ['extensions', 'router', 'changelog'], title: 'Changelog' },
       { slugs: ['core', 'retries'], title: 'Retries' },
     ]);
 
@@ -79,6 +80,7 @@ describe('docs SEO', () => {
       'integrations/otel/changelog': 'Changelog (OpenTelemetry)',
       'extensions/logger/changelog': 'Changelog (Logger)',
       'extensions/usage/changelog': 'Changelog (Usage)',
+      'extensions/router/changelog': 'Changelog (Router)',
       'core/retries': 'Retries',
     });
   });

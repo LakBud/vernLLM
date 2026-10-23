@@ -20,6 +20,7 @@ const integrationLabels: Record<string, string> = {
 const extensionLabels: Record<string, string> = {
   logger: 'Logger',
   usage: 'Usage',
+  router: 'Router',
 };
 
 function sectionLabel(slugs: string[]): string | undefined {
