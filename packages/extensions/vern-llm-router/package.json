@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-router",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Per call target ordering for vern-llm, by rules and live signals",
   "keywords": [
     "vern-llm",
