@@ -12,7 +12,7 @@ on:
           - canary
 
       tag:
-        description: 'Production release tag, e.g. vern-llm@1.2.3, vern-llm-redis@0.2.0, vern-llm-otel@0.1.0, vern-llm-bedrock@0.1.0, vern-llm-logger@0.1.0 or vern-llm-usage@0.1.0'
+        description: 'Production release tag, e.g. vern-llm@1.2.3, vern-llm-redis@0.2.0, vern-llm-otel@0.1.0, vern-llm-bedrock@0.1.0, vern-llm-logger@0.1.0, vern-llm-usage@0.1.0 or vern-llm-router@0.1.0'
         required: false
         type: string
 
@@ -155,11 +155,11 @@ jobs:
       # files into one combined docs page, so a vern-llm-redis release
       # needs this refresh (and redeploy) just as much as vern-llm's does.
       - name: Update docs changelog
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage'
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router'
         run: pnpm update-changelog
 
       - name: Commit changelog docs update
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage'
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router'
         run: |
           set -euo pipefail
 
@@ -180,16 +180,26 @@ jobs:
             "apps/docs/content/docs/integrations/bedrock/changelog.mdx"
             "apps/docs/content/docs/extensions/logger/changelog.mdx"
             "apps/docs/content/docs/extensions/usage/changelog.mdx"
+            "apps/docs/content/docs/extensions/router/changelog.mdx"
           )
 
+          # A package without a release yet has no generated page, so skip it.
+          copied=()
           for file in "${files[@]}"; do
+            [ -f "$file" ] || continue
             mkdir -p "$WORKTREE/$(dirname "$file")"
             cp "$file" "$WORKTREE/$file"
+            copied+=("$file")
           done
 
           cd "$WORKTREE"
 
-          git add "${files[@]}"
+          if [ "${#copied[@]}" -eq 0 ]; then
+            echo "No changelog pages to commit"
+            exit 0
+          fi
+
+          git add "${copied[@]}"
 
           if git diff --cached --quiet; then
             echo "No changelog changes to commit"
@@ -200,7 +210,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Deploy to Vercel
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage'
+        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router'
         run: |
           curl -X POST "${{ secrets.VERNLLM_RELEASE }}"
 

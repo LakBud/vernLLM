@@ -172,6 +172,27 @@ reviews:
         - Scenarios against a real VernLLM, with the spy store used to prove what was reserved, settled and released.
         - Fake Date for anything calendar based, and no real sleeps beyond a tick.
 
+    - path: 'packages/extensions/vern-llm-router/**'
+      instructions: |
+        This is vern-llm-router: it picks the target order for each vern-llm call, built only on the public middleware system.
+
+        Review TypeScript changes with focus on:
+        - The decision is pure and synchronous, with no I/O, timers or awaits before next(). Anything that can throw runs inside the guard, and a failure runs the call exactly as it would be without a router.
+        - The router only reorders or drops targets by name through next({ targets }). It never adds a target, never changes what a call returns or throws, and never leaves an empty list: when nothing would remain, the declared order is kept.
+        - A caller chosen order (ctx.callTargets) is pinned and left alone. Shadow mode (apply: false) computes and emits every decision and changes nothing.
+        - The router.decision event carries names and numbers only, and is emitted after next() settles, also when it throws. applied is false for shadow, pinned and cache hits or joins.
+        - Options are validated once in normalizeOptions and runtime code trusts the resolved config. Every map or set that grows with traffic has a size cap.
+        - It stays static with no enabled function, never imports another extension, and keeps vern-llm an unbundled peer dependency.
+
+        For new features, require unit tests and integration tests with a real VernLLM and fake clients, and document public API changes.
+
+    - path: 'packages/extensions/vern-llm-router/tests/**'
+      instructions: |
+        Review tests for:
+        - Meaningful assertions, with no live provider, only fakes.
+        - Scenarios against a real VernLLM that assert which targets were tried and the decision event.
+        - Fake clocks instead of real sleeps for anything time based.
+
     - path: 'packages/integrations/vern-llm-bedrock/**'
       instructions: |
         This is vern-llm-bedrock: the AWS Bedrock Converse adapter for vern-llm, built on the AWS SDK's BedrockRuntimeClient.
