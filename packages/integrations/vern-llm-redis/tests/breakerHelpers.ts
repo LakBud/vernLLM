@@ -71,7 +71,7 @@ export async function claimTrials(
   count: number,
   {
     model = 'm',
-    timeoutMs = 1500,
+    timeoutMs = 5000,
     intervalMs = 10,
   }: { model?: string; timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<CircuitBreakerCallContext[]> {

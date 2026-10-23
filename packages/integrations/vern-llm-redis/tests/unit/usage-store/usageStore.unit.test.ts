@@ -100,15 +100,23 @@ describe('redisUsageStore', () => {
 describe('script replies', () => {
   it('parses a grant and a refusal', () => {
     expect(parseReserve([1])).toEqual({ ok: true });
+    expect(parseReserve([1, 300, '30'])).toEqual({ ok: true, used: [300, 30] });
     expect(parseReserve([0, 1, 0])).toEqual({ ok: false, index: 1, remaining: 0 });
   });
 
-  it.each([[[]], [[0]], [[0, 0, 5]], [[0, 1, -1]], [[0, 1, 2, 3]], ['x'], [null]])(
-    'rejects %j as a reserve reply',
-    (reply) => {
-      expect(() => parseReserve(reply)).toThrow('Unexpected usage store script reply');
-    },
-  );
+  it.each([
+    [[]],
+    [[0]],
+    [[0, 0, 5]],
+    [[0, 1, -1]],
+    [[0, 1, 2, 3]],
+    [[1, -1]],
+    [[1, 1.5]],
+    ['x'],
+    [null],
+  ])('rejects %j as a reserve reply', (reply) => {
+    expect(() => parseReserve(reply)).toThrow('Unexpected usage store script reply');
+  });
 
   it('reads four whole numbers and nothing else', () => {
     expect(parseFour(['1', 2, '3', 4])).toEqual([1, 2, 3, 4]);

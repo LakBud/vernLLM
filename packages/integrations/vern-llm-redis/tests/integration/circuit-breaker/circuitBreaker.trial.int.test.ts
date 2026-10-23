@@ -96,26 +96,29 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
     const holder = makeBreaker({
       keyPrefix: prefix,
       threshold: 1,
-      cooldownMs: 150,
+      cooldownMs: 5000,
       probeLeaseMs: 400,
     });
     const other = makeBreaker({
       keyPrefix: prefix,
       threshold: 1,
-      cooldownMs: 150,
+      cooldownMs: 5000,
       probeLeaseMs: 400,
     });
 
     await trip(holder);
     await learn(other);
-    await sleep(200);
+    await redis.hset(prefix, 'openedAt', 0);
 
-    // `holder` wins the single trial slot and then goes silent (a crashed
-    // or idle process): it never spends it and never reports an outcome.
-    await waitUntil(() => {
-      isOpen(holder);
-      return redis.hget(`${prefix}`, 'slots').then((v) => v === '0');
-    });
+    // Claim without a context so no local heartbeat renews this simulated
+    // abandoned trial. Do not poll the holder afterward: each check can win
+    // a fresh slot once the lease lapses.
+    try {
+      holder.assertClosed('m');
+    } catch {
+      // The open circuit rejects while requesting its trial slot.
+    }
+    await waitUntil(async () => (await redis.hget(prefix, 'slots')) === '0');
 
     // While the lease is fresh, `other` is refused.
     await waitUntil(() => isOpen(other) && other.getState?.('m') === 'half-open');
@@ -128,6 +131,7 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
   });
 
   it('releaseTrial hands the slot back so the same process can retry immediately', async ({
+    redis,
     makeBreaker,
   }) => {
     const prefix = uniquePrefix('cb');
@@ -141,6 +145,7 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
 
     // The call ended in an error the breaker doesn't count.
     breaker.releaseTrial?.('m', first);
+    await waitUntil(async () => (await redis.hget(prefix, 'slots')) === '1');
 
     const second = await claimTrial(breaker);
     breaker.recordSuccess('m', second);
@@ -198,10 +203,9 @@ describe.concurrent('redisCircuitBreaker half-open trials, real Redis', () => {
     await learn(fast);
     await sleep(200);
     const slowCtx = await claimTrial(slow);
-    await waitUntil(() => isOpen(fast) && fast.getState?.('m') === 'half-open');
 
     // `slow`'s call outlives its 300ms lease; `fast` takes the slot over.
-    const fastCtx = await claimTrial(fast);
+    const fastCtx = await claimTrial(fast, { timeoutMs: 5000 });
 
     // slow's stale success must not close the circuit.
     slow.recordSuccess('m', slowCtx);

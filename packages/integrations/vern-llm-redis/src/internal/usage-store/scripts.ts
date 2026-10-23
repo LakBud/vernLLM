@@ -50,7 +50,8 @@ end
 /**
  * Holds an amount on every scope or none. KEYS: exp, hold, scopes... ARGV: prefix, ttlMs, graceMs,
  * nanoUsd, tokens, then per scope unit ('u'|'t'), limit, resetsAtMs.
- * Returns `{1}`, or `{0, scopeIndex, remaining}` for the first scope without room.
+ * Returns `{1, used1, used2, ...}`, each scope's spend plus holds after this hold, or
+ * `{0, scopeIndex, remaining}` for the first scope without room.
  */
 export const RESERVE_SCRIPT = `${SERVER_NOW}
 local expKey, rkey = KEYS[1], KEYS[2]
@@ -74,6 +75,7 @@ for i = 1, count do
 end
 
 redis.call('HSET', rkey, 'u', nanoUsd, 't', tokens, 'n', count)
+local reply = { 1 }
 for i = 1, count do
   local skey = KEYS[2 + i]
   local resetsAt = tonumber(ARGV[5 + (i - 1) * 3 + 3])
@@ -81,10 +83,13 @@ for i = 1, count do
   redis.call('HINCRBY', skey, 'rt', tokens)
   redis.call('PEXPIREAT', skey, resetsAt + grace)
   redis.call('HSET', rkey, 's' .. i, skey)
+  local unit = ARGV[5 + (i - 1) * 3 + 1]
+  local v = redis.call('HMGET', skey, unit == 'u' and 'su' or 'st', unit == 'u' and 'ru' or 'rt')
+  reply[i + 1] = (tonumber(v[1]) or 0) + (tonumber(v[2]) or 0)
 end
 redis.call('PEXPIRE', rkey, ttl + grace)
 redis.call('ZADD', expKey, now + ttl, string.sub(rkey, #prefix + 3))
-return { 1 }
+return reply
 `;
 
 /**
@@ -140,12 +145,19 @@ export function parseFour(reply: unknown): [number, number, number, number] {
 }
 
 /** The reply of `RESERVE_SCRIPT`. */
-export type ReserveReply = { ok: true } | { ok: false; index: number; remaining: number };
+export type ReserveReply =
+  | { ok: true; used?: number[] }
+  | { ok: false; index: number; remaining: number };
 
 /** Reads a `RESERVE_SCRIPT` reply, else a throw. */
 export function parseReserve(reply: unknown): ReserveReply {
   if (Array.isArray(reply) && reply.length >= 1) {
-    if (Number(reply[0]) === 1) return { ok: true };
+    if (Number(reply[0]) === 1) {
+      const used = reply.slice(1).map(Number);
+      if (used.length === 0) return { ok: true };
+      if (used.every((n) => Number.isSafeInteger(n) && n >= 0)) return { ok: true, used };
+      throw new Error(`Unexpected usage store script reply: ${JSON.stringify(reply)}`);
+    }
     const index = Number(reply[1]);
     const remaining = Number(reply[2]);
     if (

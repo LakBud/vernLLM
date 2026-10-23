@@ -33,6 +33,8 @@ usageMiddleware({
 
 - Each operation is one script, so `reserve` holds every scope or none even when many processes
   reserve at once.
+- A granted `reserve` also returns `used`, each scope's spend plus holds after the hold, which
+  `vern-llm-usage` turns into `usageBudgetShare` with no extra round trip.
 - Time comes from Redis, so one process's clock cannot move an expiry.
 - A hold that is never settled, such as one from a crashed process, is returned by the next
   operation after its `ttlMs`, with no timer.
