@@ -7,6 +7,7 @@ const packages: Record<string, string> = {
   'vern-llm-bedrock': 'apps/docs/content/docs/integrations/bedrock/changelog.mdx',
   'vern-llm-logger': 'apps/docs/content/docs/extensions/logger/changelog.mdx',
   'vern-llm-usage': 'apps/docs/content/docs/extensions/usage/changelog.mdx',
+  'vern-llm-router': 'apps/docs/content/docs/extensions/router/changelog.mdx',
 };
 
 // Package folders: core sits directly under packages/, integrations and extensions in their own folder.
@@ -16,6 +17,7 @@ const dirs: Record<string, string> = {
   'vern-llm-bedrock': 'packages/integrations',
   'vern-llm-logger': 'packages/extensions',
   'vern-llm-usage': 'packages/extensions',
+  'vern-llm-router': 'packages/extensions',
 };
 
 for (const [pkg, docPath] of Object.entries(packages)) {

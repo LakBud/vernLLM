@@ -35,6 +35,12 @@ flags:
   vern-llm-usage-integration:
     paths:
       - 'packages/extensions/vern-llm-usage/**'
+  vern-llm-router-unit:
+    paths:
+      - 'packages/extensions/vern-llm-router/**'
+  vern-llm-router-integration:
+    paths:
+      - 'packages/extensions/vern-llm-router/**'
 
 coverage:
   status:
@@ -69,6 +75,11 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/extensions/vern-llm-usage/**'
+      vern-llm-router:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/extensions/vern-llm-router/**'
     patch:
       default:
         target: 80%
@@ -94,6 +105,10 @@ coverage:
         target: 80%
         paths:
           - 'packages/extensions/vern-llm-usage/**'
+      vern-llm-router:
+        target: 80%
+        paths:
+          - 'packages/extensions/vern-llm-router/**'
 
 ignore:
   - '**/index.ts'
