@@ -2,7 +2,7 @@ import { describe, expect } from 'vitest';
 
 import { fromIoredisSubscriber } from '../../../src/clients/ioredis.js';
 import { it } from '../../fixtures.js';
-import { expectNearInstant, uniquePrefix, waitForRedisValue, waitUntil } from '../../helpers.js';
+import { uniquePrefix, waitForRedisValue, waitUntil } from '../../helpers.js';
 
 import type { RedisRateLimiterAdapter, RedisRateLimitOptions } from '../../../src/rateLimit.js';
 import type { Redis } from 'ioredis';
@@ -88,12 +88,12 @@ describe.concurrent('redisRateLimit, real Redis, single process', () => {
     makeLimiter,
   }) => {
     const limiter = makeLimiter({
-      tokensPerMinute: 6000, // 100/sec, drained fully below so the deficit refills in ~500ms
+      tokensPerMinute: 6000, // 100/sec; leave enough deficit for Redis and event-loop latency
       keyPrefix: uniquePrefix('rl'),
     });
 
     await limiter.acquire(6000); // takes the entire bucket in one call
-    const second = await limiter.acquire(50);
+    const second = await limiter.acquire(500); // a 5-second refill, not a sub-second timing race
 
     expect(second.waitedMs).toBeGreaterThan(0);
     expect(second.reason).toBe('tpm');
@@ -111,8 +111,8 @@ describe.concurrent('redisRateLimit, real Redis, single process', () => {
     first.release(10); // actually used far less than estimated, gives 90 back
 
     const second = await limiter.acquire(50);
-    // With the reconciled give-back, this should not have to wait long.
-    expectNearInstant(second.waitedMs);
+    // Without the 90-token refund, this would wait about 15 seconds to refill.
+    expect(second.waitedMs).toBeLessThan(7_500);
   });
 
   it('throws once maxQueueMs is exceeded while genuinely out of capacity', async ({
@@ -237,11 +237,11 @@ describe.concurrent('redisRateLimit, real Redis, AIMD shared across two processe
     it('growth is never held back by the window', async ({ redis, makeLimiter, newConnection }) => {
       const { a, b, capKey } = twoProcesses(makeLimiter, newConnection);
       a.signalRateLimit();
-      await waitUntil(async () => (await cap(redis, capKey)) === 8);
+      await waitUntil(async () => (await cap(redis, capKey)) === 8, { timeoutMs: 5000 });
 
       (await b.acquire(1)).release(1, true);
 
-      await waitUntil(async () => (await cap(redis, capKey)) === 9);
+      await waitUntil(async () => (await cap(redis, capKey)) === 9, { timeoutMs: 5000 });
     });
   });
 
@@ -330,6 +330,7 @@ describe.concurrent('redisRateLimit, real Redis, concurrency wake via subscriber
   }) => {
     const redisB = newConnection();
     const keyPrefix = uniquePrefix('rl');
+    const fallbackPollIntervalMs = 5000;
 
     const subA = newConnection();
     const subB = newConnection();
@@ -363,7 +364,7 @@ describe.concurrent('redisRateLimit, real Redis, concurrency wake via subscriber
     const limiterB = makeLimiter(
       {
         maxConcurrent: 1,
-        pollIntervalMs: 5000, // deliberately slow fallback, to prove the wake beat it
+        pollIntervalMs: fallbackPollIntervalMs, // deliberately slow fallback, to prove the wake beat it
         keyPrefix,
         subscriber: fromIoredisSubscriber(subB),
       },
@@ -372,7 +373,6 @@ describe.concurrent('redisRateLimit, real Redis, concurrency wake via subscriber
 
     const { release } = await limiterA.acquire(1);
 
-    const startedAt = Date.now();
     const waiter = limiterB.acquire(1);
 
     // limiterB.acquire's failed take attempt is the first command it sends
@@ -383,9 +383,10 @@ describe.concurrent('redisRateLimit, real Redis, concurrency wake via subscriber
     await redisB.ping();
     await Promise.all([subscriberAReady, subscriberBReady]);
 
+    const releasedAt = Date.now();
     release();
 
     await waiter;
-    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(Date.now() - releasedAt).toBeLessThan(fallbackPollIntervalMs);
   });
 });

@@ -41,6 +41,21 @@ describe.concurrent('redisUsageStore, real Redis', () => {
     });
   });
 
+  it('reports what each scope holds after the reservation, in its own unit', async ({ redis }) => {
+    const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
+    const dollars = scope('d');
+    const tokens = scope('t', { unit: 'tokens' });
+
+    const first = await store.reserve([dollars, tokens], amount(300, 30), 60_000);
+    expect(first).toMatchObject({ ok: true, used: [300, 30] });
+    if (first.ok) await store.commit(first.id, amount(100, 10));
+
+    // 100 spent, plus this hold of 50.
+    await expect(store.reserve([dollars, tokens], amount(50, 5), 60_000)).resolves.toMatchObject({
+      used: [150, 15],
+    });
+  });
+
   it('frees a hold on release without recording spend', async ({ redis }) => {
     const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
     const s = scope('a');
@@ -152,10 +167,12 @@ describe.concurrent('redisUsageStore, real Redis', () => {
     const store = redisUsageStore(redis, { keyPrefix: uniquePrefix('us') });
     const s = scope('lost', { limit: 100 });
 
-    await store.reserve([s], amount(80), 150);
+    await store.reserve([s], amount(80), 1000);
     expect((await store.reserve([s], amount(80), 60_000)).ok).toBe(false);
 
-    await waitUntil(async () => (await store.reserve([s], amount(80), 60_000)).ok);
+    await waitUntil(async () => (await store.reserve([s], amount(80), 60_000)).ok, {
+      timeoutMs: 3000,
+    });
   });
 
   it('still records the spend of a call that settles after its reservation expired', async ({

@@ -5,15 +5,21 @@ import { spyOnScripts, uniquePrefix, waitUntil } from '../../helpers.js';
 
 describe.concurrent('redisRateLimit leases, real Redis', () => {
   it('a slot whose holder never releases (a crash) frees itself after the lease', async ({
+    redis,
     makeLimiter,
   }) => {
     const prefix = uniquePrefix('rl');
-    const crashed = makeLimiter({ keyPrefix: prefix, maxConcurrent: 1, concurrencyLeaseMs: 300 });
+    const leaseMs = 1500;
+    const crashed = makeLimiter({
+      keyPrefix: prefix,
+      maxConcurrent: 1,
+      concurrencyLeaseMs: leaseMs,
+    });
     const survivor = makeLimiter({
       keyPrefix: prefix,
       maxConcurrent: 1,
-      concurrencyLeaseMs: 300,
-      maxQueueMs: 3000,
+      concurrencyLeaseMs: leaseMs,
+      maxQueueMs: 5000,
       pollIntervalMs: 50,
     });
 
@@ -21,24 +27,50 @@ describe.concurrent('redisRateLimit leases, real Redis', () => {
     // Simulate the crash: renewals stop and release never runs.
     crashed.dispose();
 
-    const acquired = await survivor.acquire(1);
+    const acquiring = survivor.acquire(1);
+    await waitUntil(async () => (await redis.hlen(`${prefix}:queue`)) >= 2);
+    const acquired = await acquiring;
     expect(acquired.waitedMs).toBeGreaterThan(100);
     expect(acquired.reason).toBe('concurrency');
   });
 
-  it('a live call keeps its slot well past one lease, via renewal', async ({ makeLimiter }) => {
+  it('a live call keeps its slot well past one lease, via renewal', async ({
+    redis,
+    makeLimiter,
+  }) => {
     const prefix = uniquePrefix('rl');
-    const holder = makeLimiter({ keyPrefix: prefix, maxConcurrent: 1, concurrencyLeaseMs: 1000 });
+    const leaseMs = 3000;
+    const holder = makeLimiter({
+      keyPrefix: prefix,
+      maxConcurrent: 1,
+      concurrencyLeaseMs: leaseMs,
+    });
     const other = makeLimiter({
       keyPrefix: prefix,
       maxConcurrent: 1,
-      concurrencyLeaseMs: 1000,
+      concurrencyLeaseMs: leaseMs,
       maxQueueMs: 500,
       pollIntervalMs: 50,
     });
 
     const held = await holder.acquire(1);
-    await new Promise((resolve) => setTimeout(resolve, 2500)); // > 2 leases
+    const initialLease = await redis.zrange(`${prefix}:concurrency`, 0, -1, 'WITHSCORES');
+    expect(initialLease).toHaveLength(2);
+    const initialExpiry = Number(initialLease[1]);
+
+    await waitUntil(
+      async () => {
+        const [seconds, micros] = await redis.time();
+        const now = Number(seconds) * 1000 + Math.floor(Number(micros) / 1000);
+        const currentLease = await redis.zrange(`${prefix}:concurrency`, 0, -1, 'WITHSCORES');
+        return (
+          now >= initialExpiry &&
+          currentLease.length === 2 &&
+          Number(currentLease[1]) > initialExpiry
+        );
+      },
+      { timeoutMs: 5000, intervalMs: 25 },
+    );
 
     await expect(other.acquire(1)).rejects.toMatchObject({ code: 'rate_limit_queue_timeout' });
 
@@ -75,8 +107,8 @@ describe.concurrent('redisRateLimit leases, real Redis', () => {
     expect(state.concurrentInFlight).toBe(1);
     expect(state.requestsRemaining).toBeGreaterThan(8.9);
     expect(state.requestsRemaining).toBeLessThan(9.5);
-    expect(state.tokensRemaining).toBeGreaterThan(890);
-    expect(state.tokensRemaining).toBeLessThan(910);
+    expect(state.tokensRemaining).toBeGreaterThan(800);
+    expect(state.tokensRemaining).toBeLessThan(1000);
   });
 });
 

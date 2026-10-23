@@ -35,7 +35,10 @@ export interface RedisUsageStore {
     scopes: readonly UsageScope[],
     amount: UsageAmount,
     ttlMs: number,
-  ): Promise<{ ok: true; id: string } | { ok: false; scope: UsageScope; remaining: number }>;
+  ): Promise<
+    | { ok: true; id: string; used?: readonly number[] }
+    | { ok: false; scope: UsageScope; remaining: number }
+  >;
   /** Frees a hold and adds the real spend. */
   commit(id: string, actual: UsageAmount): Promise<void>;
   /** Frees a hold without recording spend. */
@@ -110,7 +113,7 @@ export function redisUsageStore(
           ),
         parseReserve,
       );
-      if (reply.ok) return { ok: true, id };
+      if (reply.ok) return reply.used ? { ok: true, id, used: reply.used } : { ok: true, id };
       return { ok: false, scope: scopes[reply.index - 1]!, remaining: reply.remaining };
     },
 
