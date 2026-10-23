@@ -1,5 +1,53 @@
 # vern-llm-redis
 
+## 0.4.0
+
+### Minor Changes
+
+- a56208b: Add `redisRetryBudget`, a retry budget shared by every process using the same key, also exported from `vern-llm-redis/retryBudget`.
+
+  It takes core's `windowMs`, `minCalls` and `retryRatio`, plus `keyPrefix` (default `vernllm:rb`) and `logger`. Each attempt runs one script that counts it and returns the window's totals, so `assertAvailable` stays synchronous and never waits on Redis. The window is 10 sub buckets in one hash at `keyPrefix:window`, so it never shares a key with another adapter on the same prefix. It runs on the Redis clock, works on Redis Cluster, and expires after twice `windowMs` of no traffic. `readState()` reads the live window and powers `llm.readRetryBudgetState()`.
+
+  On a Redis outage the budget falls back to core's in-process `RetryBudget` over this process's own attempts, while a Redis call has failed or no reply has landed for `windowMs`, and switches back on the next reply. A failed record is logged. `readState` rejects with `LLMError('network')` and code `connection_failed`. Bad options throw `LLMError('invalid_params')`.
+
+  Requires the `vern-llm` release with `RetryBudgetAdapter`.
+
+- daa6494: `redisCircuitBreaker` keeps working while Redis is unreachable. The first Redis call that fails, or is still pending after `prepareTimeoutMs`, switches the process to core's in-process `CircuitBreaker`, built from the same options and starting closed, so a circuit can still open from this process's own failures. Its changes fire `onStateChange` and the `circuit_state` event. Calls keep going to Redis without claiming a trial slot, and the first one that answers switches back to the shared state. A circuit Redis last reported open or half-open stays rejected until a reply lands, so a stall never admits calls Redis had held back.
+
+  Before, a failed transition left the local copy as it was, so a closed circuit could never open during an outage.
+
+- a56208b: Every adapter validates `keyPrefix`: `redisCircuitBreaker`, `redisRateLimit`, `redisCache` and `redisRetryBudget` throw `LLMError('invalid_params')` at construction for anything but a non-empty string; `null` still means the default. An empty string used to be accepted.
+
+  Breaking: an empty `keyPrefix` that worked before now throws. See the Redis migration notes.
+
+- 149e69a: Adds `redisUsageStore`, a Redis backed store for `vern-llm-usage`, so budgets are shared by every process using the same prefix.
+
+  ```ts
+  import { usageMiddleware } from 'vern-llm-usage';
+  import { redisUsageStore } from 'vern-llm-redis/usageStore';
+  import { fromIoredis } from 'vern-llm-redis/clients';
+
+  usageMiddleware({
+    prices,
+    pricesAsOf,
+    attribute,
+    budgets,
+    store: redisUsageStore(fromIoredis(redis)),
+  });
+  ```
+
+  Each operation is one script, so a reservation holds every scope or none under concurrency, and a hold that is never settled is returned after its ttl, and a call that settles late still records its spend for an hour. Keys share a `{prefix}` hash tag, so a Cluster keeps them in one slot. Also available from `vern-llm-redis/usageStore`.
+
+  Nothing existing changes.
+
+### Patch Changes
+
+- 627b2a3: Fix a race on a cold script cache that could count a retry budget's attempts twice.
+
+  The first call of each Lua script waited for its SHA1 digest before returning, so on a cold cache a reply could reach the adapter after a later reply. A `redisRetryBudget` then added its in flight attempts on top of a `readState` that already included them, and `assertAvailable` could throw before `minCalls` was reached. Replies now return as soon as Redis answers, in the order Redis ran them, and the digest is only awaited by the next call. This applies to every Redis adapter, since they share the script cache.
+
+- Updated dependencies: vern-llm@3.1.0
+
 ## 0.3.0
 
 ### Minor Changes
