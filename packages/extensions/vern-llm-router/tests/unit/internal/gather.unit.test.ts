@@ -122,6 +122,21 @@ describe('gather', () => {
     expect(signals.get('b')?.predictedLatencyMs).toBeUndefined();
   });
 
+  it('predicts latency for a call with a deadline when no route matched', () => {
+    const { signals } = setup(
+      { routes: [] },
+      {
+        'a|false|attemptMs|0.95': 700,
+        'a|true|attemptMs|0.95': 400,
+        'a|true|outputTokensPerSec|0.05': 50,
+      },
+      { route: undefined, deadlineAt: 60_000 },
+    );
+    // No route means no typical answer, so max_tokens: 400 ms plus 1000 tokens at 50 per second.
+    expect(signals.get('a')?.latencyMs).toBe(700);
+    expect(signals.get('a')?.predictedLatencyMs).toBe(20_400);
+  });
+
   it('prices the request on each target', () => {
     const cost = vi.fn((target: { name: string }) => (target.name === 'a' ? 0.5 : undefined));
     const { signals } = setup({ ...rank({ cost: 1 }), cost });

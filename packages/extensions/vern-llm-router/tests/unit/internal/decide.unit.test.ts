@@ -24,6 +24,17 @@ describe('decide', () => {
     expect(decision.order).toEqual(['a']);
   });
 
+  it('excludes by json schema support', () => {
+    const decision = decide({
+      targets: ['a', 'b'],
+      route: undefined,
+      capabilities: new Map([['a', { jsonSchema: false }]]),
+      facts: { ...facts, jsonSchema: true },
+    });
+    expect(decision.order).toEqual(['b']);
+    expect(decision.excluded).toEqual([{ target: 'a', reason: 'capability' }]);
+  });
+
   it('excludes by image support', () => {
     const decision = decide({
       targets: ['a', 'b'],

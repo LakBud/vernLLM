@@ -24,6 +24,24 @@ const RANK_METRICS: readonly RankMetric[] = [
   'custom',
 ];
 
+type SourceName = keyof Sources;
+
+/** What each metric reads. Checked in this order, so the first missing source is the one named. */
+const METRIC_SOURCES: Partial<Record<RankMetric, SourceName[]>> = {
+  latency: ['stats'],
+  predictedLatency: ['stats'],
+  quality: ['stats', 'statsFailureRate'],
+  cost: ['cost'],
+  effectiveCost: ['cost', 'statsFailureRate'],
+};
+
+/** The option each source comes from, as a user would name it. */
+const SOURCE_OPTIONS: Record<SourceName, string> = {
+  stats: 'stats',
+  statsFailureRate: 'stats.failureRate',
+  cost: 'cost',
+};
+
 function resolveWeights(weights: unknown, route: RouteOptions): ReadonlyMap<string, number> {
   if (typeof weights !== 'object' || weights === null || Array.isArray(weights)) {
     invalid(`route "${route.name}": weights must be an object of names to numbers`);
@@ -78,16 +96,11 @@ function resolveRank(
     invalid(`route "${route.name}": explore must be a number from 0 up to 1`);
   }
 
-  for (const metric of ['latency', 'predictedLatency', 'quality'] as const) {
-    if (metrics.has(metric)) requireSource(route, `the ${metric} metric`, sources.stats, 'stats');
-  }
-  if (metrics.has('quality')) {
-    requireSource(route, 'the quality metric', sources.statsFailureRate, 'stats.failureRate');
-  }
-  if (metrics.has('cost')) requireSource(route, 'the cost metric', sources.cost, 'cost');
-  if (metrics.has('effectiveCost')) {
-    requireSource(route, 'the effectiveCost metric', sources.cost, 'cost');
-    requireSource(route, 'the effectiveCost metric', sources.statsFailureRate, 'stats.failureRate');
+  for (const [metric, needed] of Object.entries(METRIC_SOURCES) as [RankMetric, SourceName[]][]) {
+    if (!metrics.has(metric)) continue;
+    for (const source of needed) {
+      requireSource(route, `the ${metric} metric`, sources[source], SOURCE_OPTIONS[source]);
+    }
   }
   if (metrics.has('custom') && typeof object.custom !== 'function') {
     invalid(`route "${route.name}": weights.custom needs a custom function`);
@@ -116,24 +129,30 @@ export function resolveStrategy(route: RouteOptions, sources: Sources): Resolved
   const type = typeof option === 'string' ? option : option?.type;
   const object = typeof option === 'object' && option !== null ? option : {};
 
-  if (type === 'ordered') return { type: 'ordered' };
-  if (type === 'least-busy') {
-    const weights = (object as { weights?: unknown }).weights;
-    return { type, weights: weights === undefined ? undefined : resolveWeights(weights, route) };
-  }
-  if (type === 'weighted') {
-    const { weights, stickyBy } = object as { weights?: unknown; stickyBy?: unknown };
-    if (weights === undefined) invalid(`route "${route.name}": weighted needs weights`);
-    if (stickyBy !== undefined && (typeof stickyBy !== 'string' || stickyBy === '')) {
-      invalid(`route "${route.name}": stickyBy must be a non empty context key`);
+  switch (type) {
+    case 'ordered':
+      return { type: 'ordered' };
+    case 'least-busy': {
+      const weights = (object as { weights?: unknown }).weights;
+      return { type, weights: weights === undefined ? undefined : resolveWeights(weights, route) };
     }
-    return { type, weights: resolveWeights(weights, route), stickyBy };
+    case 'weighted': {
+      const { weights, stickyBy } = object as { weights?: unknown; stickyBy?: unknown };
+      if (weights === undefined) invalid(`route "${route.name}": weighted needs weights`);
+      if (stickyBy !== undefined && (typeof stickyBy !== 'string' || stickyBy === '')) {
+        invalid(`route "${route.name}": stickyBy must be a non empty context key`);
+      }
+      return { type, weights: resolveWeights(weights, route), stickyBy };
+    }
+    case 'rank':
+      return resolveRank(route, object, sources);
+    default:
+      // Own keys only, so a name like "toString" is an unknown strategy, not a shorthand.
+      if (typeof type === 'string' && Object.hasOwn(SHORTHANDS, type)) {
+        return resolveRank(route, { weights: SHORTHANDS[type] }, sources);
+      }
+      return invalid(`route "${route.name}": unknown strategy "${String(type)}"`);
   }
-  if (type === 'rank') return resolveRank(route, object, sources);
-  if (typeof type === 'string' && type in SHORTHANDS) {
-    return resolveRank(route, { weights: SHORTHANDS[type] }, sources);
-  }
-  return invalid(`route "${route.name}": unknown strategy "${String(type)}"`);
 }
 
 export function resolveLimits(route: RouteOptions, sources: Sources): ResolvedLimits {

@@ -32,6 +32,16 @@ describe('normalizeOptions', () => {
     ['a middle route without when', { routes: [{ name: 'a' }, { name: 'b' }] }, 'last route'],
     ['an unknown strategy', { routes: [{ name: 'a', strategy: 'fastest' }] }, 'unknown strategy'],
     [
+      'a rank without weights',
+      { routes: [{ name: 'a', strategy: { type: 'rank' } }] },
+      'needs a metric',
+    ],
+    [
+      'an inherited object key as strategy',
+      { routes: [{ name: 'a', strategy: 'toString' }] },
+      'unknown strategy',
+    ],
+    [
       'an object strategy of the wrong type',
       { routes: [{ name: 'a', strategy: { type: 'x' } }] },
       'unknown strategy',

@@ -37,6 +37,13 @@ const weighted = (weights: Record<string, number>, stickyBy?: string) => ({
 });
 
 describe('weighted', () => {
+  it('picks the last target when rounding leaves a draw past every weight', () => {
+    // A draw just under 1, less 0.3, rounds to exactly 0.7, which is not below the weight 0.7.
+    const route = weighted({ a: 0.3, b: 0.7 });
+    const result = run(route, { rng: () => 0.9999999999999999, targets: ['a', 'b'] });
+    expect(result.order).toEqual(['b', 'a']);
+  });
+
   it('picks by the draw, and the rest follow by weight with declared order as the tie break', () => {
     const route = weighted({ a: 1, b: 6, c: 3 });
     // cumulative: a [0,0.1) c? no: declared order a, b, c with 1, 6, 3 of 10.

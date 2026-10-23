@@ -12,7 +12,7 @@ export interface StrategyInput {
   /** A number in `[0, 1)` from the call's `stickyBy` value, standing in for a draw. */
   stickyUnit?: number;
   /** Whether a target may be picked to explore. Only `rank` explores. */
-  usable?: (name: string) => boolean;
+  usable: (name: string) => boolean;
 }
 
 export interface TierResult {
@@ -99,7 +99,7 @@ export function orderTier(input: StrategyInput): TierResult {
       strategy,
       signals: input.signals,
       rng: input.rng,
-      usable: input.usable ?? (() => true),
+      usable: input.usable,
     });
   }
   return { order: [...input.names] };

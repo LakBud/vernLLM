@@ -95,11 +95,9 @@ export function rank(input: RankInput): RankResult {
       const finite = values.filter(
         (value): value is number => value !== undefined && Number.isFinite(value),
       );
-      if (finite.length > 0) {
-        const fill = median(finite);
-        columns.push({ weight: 1, scores: values.map((value) => value ?? fill) });
-        rawMode = true;
-      }
+      const fill = median(finite);
+      columns.push({ weight: 1, scores: values.map((value) => value ?? fill) });
+      rawMode = true;
     }
   }
 

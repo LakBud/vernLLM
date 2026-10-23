@@ -100,6 +100,12 @@ describe('match', () => {
     expect(third.events[0]).toMatchObject({ route: 'short' });
   });
 
+  it('skips a size route when the input is above its maximum and below the next minimum', async () => {
+    const { llm, events } = setup({ routes });
+    await llm.call({ ...call, userContent: 'x'.repeat(300) });
+    expect(events[0]).toMatchObject({ route: 'rest' });
+  });
+
   it('matches on hasTools', async () => {
     const { llm, events } = setup({
       routes: [{ name: 't', when: { hasTools: true } }, { name: 'n' }],

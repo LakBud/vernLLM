@@ -51,7 +51,8 @@ export function demote(input: DemoteInput): { order: string[]; demoted: DemotedT
     for (const group of ['over', 'limited', 'open'] as const) {
       for (const target of inGroup(group)) {
         if (order.indexOf(target) < lastHealthy) {
-          const reason = group === 'over' ? (input.over?.get(target) ?? 'over_limit') : group;
+          // A target is in the over group only because `over` has it.
+          const reason = group === 'over' ? (input.over?.get(target) as OverReason) : group;
           demoted.push({ target, reason });
         }
       }

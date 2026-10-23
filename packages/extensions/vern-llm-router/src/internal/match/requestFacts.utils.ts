@@ -30,10 +30,7 @@ export function createRequestFacts(request: Readonly<WireCallRequest>): RequestF
     images: hasImage(request),
     maxTokens: request.max_tokens,
     get inputTokens(): number {
-      inputTokens ??= Math.max(
-        0,
-        defaultEstimateTokens(request as never) - (request.max_tokens ?? 0),
-      );
+      inputTokens ??= Math.max(0, defaultEstimateTokens(request as never) - request.max_tokens);
       return inputTokens;
     },
   };

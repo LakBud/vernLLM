@@ -35,7 +35,7 @@ export class StatsCache {
   }
 
   private static key(kind: string, filter: Readonly<Record<string, string>>, rest: string): string {
-    const parts = Object.entries(filter).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const parts = Object.entries(filter).sort(([a], [b]) => (a < b ? -1 : 1));
     return `${kind}|${JSON.stringify(parts)}|${rest}`;
   }
 

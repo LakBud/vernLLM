@@ -1,4 +1,4 @@
-import { ROUTER_DECISION_EVENT } from './routerMiddleware.js';
+import { ROUTER_DECISION_EVENT } from './events.js';
 
 /** The part of the logger's call record these read, so no import of the logger is needed. */
 interface DecisionRecord {

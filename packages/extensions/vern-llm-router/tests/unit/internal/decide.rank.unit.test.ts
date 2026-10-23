@@ -189,6 +189,31 @@ describe('rank', () => {
     expect(result.order).toEqual(['a', 'b']);
   });
 
+  it('fills a missing value with the median of the finite ones for a lone custom metric', () => {
+    const result = run(rank({ custom: 1 }), {
+      a: { customValue: -2 },
+      b: {},
+      c: { customValue: 4 },
+    });
+    expect(result.order).toEqual(['a', 'b', 'c']);
+  });
+
+  it('leaves a single target as it is', () => {
+    const result = run(rank({ latency: 1 }), { a: { latencyMs: 100 } });
+    expect(result.order).toEqual(['a']);
+    expect(result.scores).toBeUndefined();
+  });
+
+  it('treats a target with no signals as healthy, also when exploring', () => {
+    const result = run(
+      rank({ latency: 1 }, { explore: 0.5 }),
+      { a: { latencyMs: 100 } },
+      { targets: ['a', 'b'], rng: () => 0 },
+    );
+    expect(result.order).toEqual(['a', 'b']);
+    expect(result.explored).toBe(true);
+  });
+
   it('keeps declared order for a lone custom metric with no finite value', () => {
     const result = run(rank({ custom: 1 }), {
       a: { customValue: Number.NaN },
