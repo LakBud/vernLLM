@@ -61,10 +61,8 @@ function chooseRoute(
   if (forced !== undefined) {
     const route = config.routes.find((candidate) => candidate.name === forced);
     if (route) return route;
-    guard.warnOnce(
-      `forced:${forced}`,
-      `routerRouteKey names no route "${forced}"; matching instead`,
-    );
+    // One stable key, so route names that vary per call cannot grow the warned set.
+    guard.warnOnce('forced', `routerRouteKey names no route "${forced}"; matching instead`);
   }
   return config.routes.find((route) => routeMatches(route.when, ctx, request, facts));
 }
@@ -115,7 +113,7 @@ function computeDecision(
     guard,
     now,
   });
-  return decide({
+  const decision = decide({
     targets: names,
     route,
     capabilities: config.capabilities,
@@ -126,6 +124,13 @@ function computeDecision(
     now,
     deadlineAt: ctx.deadlineAt,
   });
+  if (route && decision.order.length === 0) {
+    guard.warnOnce(
+      `empty:${route.name}`,
+      `route "${route.name}" leaves no target for this call; the call will fail with no_eligible_targets`,
+    );
+  }
+  return decision;
 }
 
 function sameOrder(a: readonly string[], b: readonly string[]): boolean {

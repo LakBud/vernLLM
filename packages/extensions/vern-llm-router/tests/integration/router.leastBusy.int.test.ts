@@ -6,17 +6,24 @@ import { eventProbe, targetChain } from '../helpers.js';
 
 const call = { userContent: 'hi', jsonMode: false as const };
 
-/** Holds every call to `name` until `release()` is called. */
+/**
+ * Holds every call to `name` until `release()` is called. `entered` resolves once a call is
+ * actually held, so a test can wait for that instead of sleeping.
+ */
 function gateTarget(chain: ReturnType<typeof targetChain>, name: 'primary' | 'b' | 'c') {
   const client = chain[name].client.chat.completions;
   const original = client.create;
   let release: () => void = () => undefined;
+  let enter: () => void = () => undefined;
+  const entered = new Promise<void>((resolve) => (enter = resolve));
   let gate = new Promise<void>((resolve) => (release = resolve));
   client.create = (async (...args: Parameters<typeof original>) => {
+    enter();
     await gate;
     return original(...args);
   }) as typeof original;
   return {
+    entered,
     release: () => {
       release();
       gate = Promise.resolve();
@@ -37,8 +44,6 @@ function setup(router: RouterOptions) {
 const head = (event: Record<string, unknown> | undefined): string | undefined =>
   (event?.order as string[] | undefined)?.[0];
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 30));
-
 describe('leastBusy', () => {
   it('sends the next call to the target with fewer attempts in flight', async () => {
     const { llm, chain, events } = setup({
@@ -48,16 +53,15 @@ describe('leastBusy', () => {
     const hold = gateTarget(chain, 'primary');
 
     const first = llm.call(call);
-    await tick();
+    await hold.entered;
     // primary has one attempt in flight now; the sampled pair is primary and b.
-    const second = llm.call(call);
-    await tick();
+    await llm.call(call);
 
-    // The second call avoided the busy primary and has already been answered by b.
+    // The second call avoided the busy primary and was answered by b.
     expect(chain.tried()).toEqual(['b']);
     expect(events).toHaveLength(1);
     hold.release();
-    await Promise.all([first, second]);
+    await first;
 
     expect(chain.tried().sort()).toEqual(['b', 'primary']);
     expect(events.map((event) => head(event)).sort()).toEqual(['b', 'primary']);

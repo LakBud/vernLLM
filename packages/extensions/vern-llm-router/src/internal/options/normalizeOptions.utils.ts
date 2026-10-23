@@ -51,6 +51,33 @@ function resolveTiers(route: RouteOptions): ResolvedRoute['tiers'] {
   return tiers;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A function is trusted as is; a conditions object must have the shapes the matcher compares. */
+function checkWhen(route: RouteOptions): void {
+  const when: unknown = route.when;
+  if (when === undefined || typeof when === 'function') return;
+  const label = `route "${route.name}": when`;
+  if (!isPlainObject(when)) invalid(`${label} must be a function or a conditions object`);
+
+  for (const key of ['hasTools', 'jsonOutput']) {
+    if (when[key] !== undefined && typeof when[key] !== 'boolean') {
+      invalid(`${label}.${key} must be a boolean`);
+    }
+  }
+  for (const key of ['minInputTokens', 'maxInputTokens']) {
+    const value = when[key];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value))) {
+      invalid(`${label}.${key} must be a finite number`);
+    }
+  }
+  if (when.context !== undefined && !isPlainObject(when.context)) {
+    invalid(`${label}.context must be an object`);
+  }
+}
+
 function resolveRoute(route: RouteOptions, isLast: boolean, sources: Sources): ResolvedRoute {
   if (typeof route?.name !== 'string' || route.name === '') {
     invalid('every route needs a non empty name');
@@ -58,6 +85,7 @@ function resolveRoute(route: RouteOptions, isLast: boolean, sources: Sources): R
   if (route.when === undefined && !isLast) {
     invalid(`route "${route.name}": only the last route can omit "when"`);
   }
+  checkWhen(route);
   const strategy = resolveStrategy(route, sources);
   const limits = resolveLimits(route, sources);
   if (route.health !== undefined && typeof route.health !== 'boolean') {
@@ -70,6 +98,11 @@ function resolveRoute(route: RouteOptions, isLast: boolean, sources: Sources): R
   const tiers = resolveTiers(route);
   if (tiers?.some((tier) => tier.includes(ANY_TARGET) && tier.length > 1)) {
     invalid(`route "${route.name}": "${ANY_TARGET}" must stand alone in its tier`);
+  }
+  // Only detectable up front when every target is named: `*` could stand for others.
+  const named = tiers?.flat();
+  if (named && !named.includes(ANY_TARGET) && named.every((name) => exclude.includes(name))) {
+    invalid(`route "${route.name}": exclude removes every target the route lists`);
   }
 
   return {

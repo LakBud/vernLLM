@@ -51,7 +51,7 @@ const router = routerMiddleware({
 
 With `health`, a target whose breaker is open goes last, then one that is rate limited (a local limit used up, or a provider 429 still cooling down for its `Retry-After`, 5 seconds without one). A half open target keeps its place so its trial runs, and if every target is unhealthy the order stays as it is. After a breaker closes, a target ramps back over `slowStartMs` (default 30 seconds, `0` turns it off) and may give way to the next healthy one meanwhile. A route with `health: false` skips the open and limited step.
 
-A route that leaves no target at all, through `exclude` or `targets`, fails the call with `no_eligible_targets`, since that is a configuration error. The capability filter never does: when no target is known to fit, all stay.
+A route that leaves no target at all, through `exclude` or `targets`, fails the call with `no_eligible_targets` and logs a warning once, since that is a configuration error. When a route lists its targets and `exclude` removes all of them, construction throws instead. The capability filter never does: when no target is known to fit, all stay.
 
 Each call emits a `router.decision` event after it settles: the route, the order, what was excluded and why, and `applied`. Set `apply: false` to run in shadow mode, where decisions are computed and emitted and every call keeps its declared order.
 

@@ -183,14 +183,23 @@ jobs:
             "apps/docs/content/docs/extensions/router/changelog.mdx"
           )
 
+          # A package without a release yet has no generated page, so skip it.
+          copied=()
           for file in "${files[@]}"; do
+            [ -f "$file" ] || continue
             mkdir -p "$WORKTREE/$(dirname "$file")"
             cp "$file" "$WORKTREE/$file"
+            copied+=("$file")
           done
 
           cd "$WORKTREE"
 
-          git add "${files[@]}"
+          if [ "${#copied[@]}" -eq 0 ]; then
+            echo "No changelog pages to commit"
+            exit 0
+          fi
+
+          git add "${copied[@]}"
 
           if git diff --cached --quiet; then
             echo "No changelog changes to commit"

@@ -2,7 +2,7 @@ import { VernLLM } from 'vern-llm';
 import { describe, expect, it } from 'vitest';
 
 import { routerMiddleware } from '../../src/index.js';
-import { eventProbe, targetChain, textResponse } from '../helpers.js';
+import { captureLogger, eventProbe, targetChain, textResponse } from '../helpers.js';
 
 const call = { userContent: 'hi', jsonMode: false as const };
 
@@ -169,14 +169,21 @@ describe('exclude', () => {
   });
 
   it('passes an empty list when a route leaves nothing, so the core says no_eligible_targets', async () => {
+    const log = captureLogger();
     const { llm, chain, events } = setup({
+      logger: log.logger,
       routes: [{ name: 'r', exclude: ['primary', 'b', 'c'] }],
     });
 
     await expect(llm.call(call)).rejects.toMatchObject({ code: 'no_eligible_targets' });
+    await expect(llm.call(call)).rejects.toMatchObject({ code: 'no_eligible_targets' });
 
     expect(chain.tried()).toEqual([]);
     expect(events[0]).toMatchObject({ order: [] });
+    // Warned once for the route, not once per call.
+    expect(log.warnings().filter((message) => message.includes('leaves no target'))).toHaveLength(
+      1,
+    );
   });
 
   it('does not throw in shadow mode, where the declared order still runs', async () => {

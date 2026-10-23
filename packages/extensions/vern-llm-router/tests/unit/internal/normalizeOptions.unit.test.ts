@@ -42,6 +42,30 @@ describe('normalizeOptions', () => {
     ['a repeated target', { routes: [{ name: 'a', targets: ['x', ['x']] }] }, 'listed twice'],
     ['a shared * tier', { routes: [{ name: 'a', targets: [['x', '*']] }] }, 'stand alone'],
     ['a bad exclude', { routes: [{ name: 'a', exclude: [1] }] }, 'exclude must be'],
+    [
+      'an exclude covering every listed target',
+      { routes: [{ name: 'a', targets: ['x', ['y']], exclude: ['x', 'y'] }] },
+      'removes every target',
+    ],
+    ['a non object when', { routes: [{ name: 'a', when: 'x' }] }, 'conditions object'],
+    ['an array when', { routes: [{ name: 'a', when: [] }] }, 'conditions object'],
+    ['a non boolean hasTools', { routes: [{ name: 'a', when: { hasTools: 1 } }] }, 'hasTools must'],
+    [
+      'a non boolean jsonOutput',
+      { routes: [{ name: 'a', when: { jsonOutput: 'y' } }] },
+      'jsonOutput',
+    ],
+    [
+      'a non finite minInputTokens',
+      { routes: [{ name: 'a', when: { minInputTokens: Infinity } }] },
+      'minInputTokens must be a finite number',
+    ],
+    [
+      'a string maxInputTokens',
+      { routes: [{ name: 'a', when: { maxInputTokens: '5' } }] },
+      'maxInputTokens must be a finite number',
+    ],
+    ['a null context', { routes: [{ name: 'a', when: { context: null } }] }, 'context must be'],
     ['a bad window', { capabilities: { a: { contextWindow: 0 } } }, 'positive number'],
     [
       'weighted without weights',

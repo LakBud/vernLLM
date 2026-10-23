@@ -1,5 +1,5 @@
 import { VernLLM } from 'vern-llm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { routerMiddleware, type RouterOptions } from '../../src/index.js';
 import { captureLogger, eventProbe, targetChain } from '../helpers.js';
@@ -24,6 +24,13 @@ function setup(router: RouterOptions = {}, chain = targetChain()) {
   return { llm, chain, events: probe.events as Record<string, unknown>[] };
 }
 
+// Only Date is faked: the breaker reads its cooldown from it, and real timers keep working.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-23T00:00:00Z'));
+});
+afterEach(() => vi.useRealTimers());
+
 describe('health', () => {
   it('moves a target with an open breaker last, keeping the rest in order', async () => {
     const { llm, chain, events } = setup();
@@ -41,7 +48,7 @@ describe('health', () => {
   it('keeps a half open target in place so its trial runs', async () => {
     const { llm, chain, events } = setup();
     llm.openCircuit({ index: 0 });
-    await new Promise((resolve) => setTimeout(resolve, 70));
+    vi.setSystemTime(Date.now() + breaker.cooldownMs + 1);
     expect(llm.getCircuitStates()[0]?.state).toBe('half-open');
 
     await llm.call(call);

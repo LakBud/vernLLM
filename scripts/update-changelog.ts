@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 const packages: Record<string, string> = {
   'vern-llm': 'apps/docs/content/docs/changelog.mdx',
@@ -45,5 +46,7 @@ ${pkg} uses Changesets for versioning. The release history below is generated au
 ${changelog}
 `;
 
+  // A new package's docs folder may not exist in the checkout yet.
+  await mkdir(dirname(docPath), { recursive: true });
   await writeFile(docPath, output);
 }
