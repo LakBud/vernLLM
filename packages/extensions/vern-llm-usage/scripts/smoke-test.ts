@@ -118,6 +118,8 @@ try {
 
   const expectedExports = [
     'memoryUsageStore',
+    'usageBudgetKey',
+    'usageBudgetShare',
     'usageLogFields',
     'usageMiddleware',
     'usageMiddlewareRef',

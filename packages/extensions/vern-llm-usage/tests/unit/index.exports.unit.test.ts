@@ -7,6 +7,8 @@ describe('package entrypoint exports', () => {
     // An exact list, so an internal helper can never become public by accident.
     expect(Object.keys(entry).sort()).toEqual([
       'memoryUsageStore',
+      'usageBudgetKey',
+      'usageBudgetShare',
       'usageLogFields',
       'usageMiddleware',
       'usageMiddlewareRef',

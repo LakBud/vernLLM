@@ -20,6 +20,7 @@ import { createUsagePricer } from './internal/pricing/usagePricer.utils.js';
 import { applyEvent } from './internal/recorder/applyEvent.utils.js';
 import { CallRecorder } from './internal/recorder/callRecorder.js';
 import { TotalsRegistry } from './internal/totals/totalsRegistry.js';
+import { usageBudgetKey } from './logFields.js';
 import { memoryUsageStore } from './stores/memoryUsageStore.js';
 
 import type {
@@ -99,6 +100,10 @@ export function usageMiddleware(options: UsageMiddlewareOptions): UsageMiddlewar
       const reservation: Reservation | undefined = gate.active
         ? await gate.reserve(request, ctx)
         : undefined;
+      // Before `next()`, so anything inside usage can see how full the call's budgets are.
+      if (reservation && reservation.shares.length > 0) {
+        guard('shareBudgets', () => ctx.state.set(usageBudgetKey, reservation.shares), undefined);
+      }
       const call = { recorder, request, ctx, reservation };
 
       let result: CallResult;

@@ -1,7 +1,7 @@
 import { LLMError, type PreDispatchContext, type WireCallRequest } from 'vern-llm';
 import { describe, expect, it } from 'vitest';
 
-import { memoryUsageStore } from '../../../../src/index.js';
+import { memoryUsageStore, type UsageStore } from '../../../../src/index.js';
 import { BudgetGate } from '../../../../src/internal/budgets/gate.js';
 import { createGuard } from '../../../../src/internal/guard.utils.js';
 import { PriceTable } from '../../../../src/internal/pricing/priceTable.js';
@@ -13,7 +13,7 @@ const request: WireCallRequest = {
   messages: [{ role: 'user', content: 'hi' }],
 };
 
-function setup(onStoreError: 'allow' | 'deny') {
+function setup(onStoreError: 'allow' | 'deny', store: UsageStore = memoryUsageStore()) {
   const { logger, errors } = captureLogger();
   const gate = new BudgetGate(
     {
@@ -30,7 +30,7 @@ function setup(onStoreError: 'allow' | 'deny') {
       onStoreError,
       timeZone: 'UTC',
     },
-    memoryUsageStore(),
+    store,
     new PriceTable({ prices: undefined, priceFor: undefined, normalizeModel: undefined }),
     createGuard(logger),
   );
@@ -68,5 +68,23 @@ describe('BudgetGate', () => {
 
     expect(reservation?.held.tokens).toBeGreaterThan(0);
     expect(reservation?.scopes).toHaveLength(1);
+  });
+
+  it('ignores a used figure a custom store reports as something other than a number', async () => {
+    const healthy = memoryUsageStore();
+    const store: UsageStore = {
+      ...healthy,
+      reserve: async (scopes, amount, ttlMs) => {
+        const outcome = await healthy.reserve(scopes, amount, ttlMs);
+        // The type forbids this, but a JavaScript store can still return malformed data.
+        return outcome.ok ? { ...outcome, used: [undefined as unknown as number] } : outcome;
+      },
+    };
+    const { gate } = setup('allow', store);
+    const ctx = { context: { tenantId: 'acme' }, targets: [], emit: () => {} };
+
+    const reservation = await gate.reserve(request, ctx as unknown as PreDispatchContext);
+
+    expect(reservation?.shares).toEqual([]);
   });
 });

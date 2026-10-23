@@ -3,8 +3,9 @@ import { LLMError, type PreDispatchContext, type WireCallRequest } from 'vern-ll
 import { isThenable, type MaybePromise } from '../maybePromise.utils.js';
 import { toPublicAmount } from '../pricing/charge.utils.js';
 import { holdEstimate } from './holdEstimate.utils.js';
-import { scopesFor } from './scopes.utils.js';
+import { matchBudgets, scopeOf } from './scopes.utils.js';
 
+import type { BudgetShare } from '../../logFields.js';
 import type { Amount, ResolvedConfig, Scope, UsageStore } from '../../types/index.js';
 import type { Guard } from '../guard.utils.js';
 import type { PriceTable } from '../pricing/priceTable.js';
@@ -15,6 +16,8 @@ export interface Reservation {
   scopes: readonly Scope[];
   /** What was held, so an aborted stream can count it as spend. */
   held: Amount;
+  /** How full each budget was after this hold. Empty when the store reported no figures. */
+  shares: readonly BudgetShare[];
 }
 
 /** A limit the store can never reach, so it holds and records a soft scope without refusing it. */
@@ -46,9 +49,12 @@ export class BudgetGate {
   ): Promise<Reservation | undefined> {
     // A gate failure follows `onStoreError`, like a failing store.
     let scopes: Scope[];
+    let matches: ReturnType<typeof matchBudgets>;
     let estimate: Amount;
     try {
-      scopes = scopesFor(this.config.budgets, ctx.context, Date.now(), this.config.timeZone);
+      const nowMs = Date.now();
+      matches = matchBudgets(this.config.budgets, ctx.context);
+      scopes = matches.map((match) => scopeOf(match, nowMs, this.config.timeZone));
       if (scopes.length === 0) return undefined;
       estimate = holdEstimate(request, ctx, this.table, this.guard);
     } catch (error) {
@@ -85,7 +91,28 @@ export class BudgetGate {
         code: 'budget_exceeded',
       });
     }
-    return { id: outcome.id, scopes, held: estimate };
+    const shares = this.sharesOf(matches, scopes, outcome.used);
+    return { id: outcome.id, scopes, held: estimate, shares };
+  }
+
+  /** Each budget's share of its real limit, or nothing when the store did not report figures. */
+  private sharesOf(
+    matches: ReturnType<typeof matchBudgets>,
+    scopes: readonly Scope[],
+    used: readonly number[] | undefined,
+  ): BudgetShare[] {
+    if (!used || used.length !== scopes.length) return [];
+    const shares: BudgetShare[] = [];
+    for (const [index, scope] of scopes.entries()) {
+      const amount = used[index];
+      if (typeof amount !== 'number' || !Number.isFinite(amount) || scope.limit <= 0) continue;
+      shares.push({
+        key: (matches[index] as (typeof matches)[number]).budget.key,
+        mode: scope.mode,
+        share: amount / scope.limit,
+      });
+    }
+    return shares;
   }
 
   private unavailable(cause: unknown): LLMError {

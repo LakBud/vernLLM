@@ -41,7 +41,11 @@ limit. See [Usage Store](/docs/integrations/redis/features/usage-store).
 
 ```ts title="stores-contract.ts"
 interface UsageStore {
-  reserve(scopes, amount, ttlMs): { ok: true; id: string } | { ok: false; scope; remaining };
+  reserve(
+    scopes,
+    amount,
+    ttlMs,
+  ): { ok: true; id: string; used?: number[] } | { ok: false; scope; remaining };
   commit(id, actual): void;
   release(id): void;
   read(scope): { spent: Amount; reserved: Amount };
@@ -82,7 +86,10 @@ an `Amount` is what a call spends, as integers:
 />
 
 An `Amount` is `{ nanoUsd, tokens }`: nano dollars (1e-9 USD) and whole tokens, integers only. A
-denied `reserve` returns the scope that had no room and what is left of it in that scope's unit.
+denied `reserve` returns the scope that had no room and what is left of it in that scope's unit. A
+granted one may return `used`: each scope's spend plus holds after this hold, in the order of
+`scopes` and in each scope's unit. It is optional, and without it `usageBudgetShare` returns
+`undefined`.
 
 | Method    | Must                                                                             |
 | --------- | -------------------------------------------------------------------------------- |

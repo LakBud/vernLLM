@@ -72,8 +72,14 @@ export function createCallFinisher(deps: CallFinisherDeps): CallFinisher {
 
         // A hit or join made no provider call: estimate what it spared.
         const savedNanoUsd = cache ? savedSpend(request, answer, ctx) : undefined;
+        const budgetShare = reservation?.shares.reduce<number | undefined>(
+          (highest, entry) =>
+            highest === undefined ? entry.share : Math.max(highest, entry.share),
+          undefined,
+        );
         ctx.state.set(usageStateKey, {
           ...fields,
+          ...(budgetShare === undefined ? {} : { budgetShare }),
           ...(savedNanoUsd === undefined ? {} : { estimatedSavedUsd: nanoToUsd(savedNanoUsd) }),
         });
         registry.add(
