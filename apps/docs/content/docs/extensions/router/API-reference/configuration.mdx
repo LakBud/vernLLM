@@ -1,0 +1,101 @@
+---
+title: Configuration
+description: Every routerMiddleware option with its type and default, the route options, and what throws at construction.
+---
+
+Every option is optional. `routerMiddleware()` with no routes leaves every order as it is. A bad
+option throws a plain `Error` prefixed `routerMiddleware:` at construction, never during a call.
+
+## Router
+
+<TypeTable
+  type={{
+    routes: {
+      description: 'The first route that matches a call decides its order.',
+      type: 'RouteOptions[]',
+      default: '[]',
+    },
+    capabilities: {
+      description: 'What each target can serve, by target name.',
+      type: 'Record<string, { contextWindow?, tools?, jsonSchema?, images? }>',
+    },
+    apply: {
+      description: 'false is shadow mode: decisions are emitted and no call changes.',
+      type: 'boolean',
+      default: 'true',
+    },
+    health: {
+      description: 'Where breaker states and rate limits are read. A getter, such as () => llm.',
+      type: '() => HealthSource | undefined',
+    },
+    slowStartMs: {
+      description: 'Milliseconds a target ramps back after its breaker closes. 0 turns it off.',
+      type: 'number',
+      default: '30000',
+    },
+    stats: {
+      description: 'Rolling stats for latency, quality and limits. logger.stats fits.',
+      type: 'StatsSource',
+    },
+    cost: {
+      description: 'Prices a request on a target. usage.costFor fits.',
+      type: 'CostSource',
+    },
+    statsTtlMs: {
+      description: 'Milliseconds a stats read is reused. 0 reads every time.',
+      type: 'number',
+      default: '1000',
+    },
+    random: {
+      description: 'Replaces Math.random, for tests.',
+      type: '() => number',
+    },
+    logger: {
+      description: 'Where the router reports its own failures and warnings.',
+      type: 'Logger | "silent"',
+    },
+  }}
+/>
+
+## Route
+
+<TypeTable
+  type={{
+    name: { description: 'Unique. Shown in events and forced by routerRouteKey.', type: 'string' },
+    when: {
+      description: 'Conditions that must all hold, or a function. Only the last route may omit it.',
+      type: 'RouteConditions | RouteMatcher',
+    },
+    targets: {
+      description: "Names, nested lists for tiers, and '*' for the rest.",
+      type: '(string | string[])[]',
+    },
+    exclude: { description: 'Targets to drop.', type: 'string[]' },
+    strategy: {
+      description: 'How targets are ordered inside each tier.',
+      type: 'StrategyOption',
+      default: "'ordered'",
+    },
+    health: {
+      description: 'false keeps open and limited targets in place for this route.',
+      type: 'boolean',
+      default: 'true',
+    },
+    limits: {
+      description: 'Soft limits: a target over one moves back.',
+      type: '{ latencyMs?, costUsd?, qualityFailureRate? }',
+    },
+  }}
+/>
+
+## Construction errors
+
+| Mistake                                        | Result |
+| ---------------------------------------------- | ------ |
+| A route without a name, or two with one name   | Throws |
+| A `when`-less route that is not last           | Throws |
+| A `when` object with a wrong shape             | Throws |
+| `exclude` removing every target a route lists  | Throws |
+| A target listed twice, or `'*'` sharing a tier | Throws |
+| A strategy that needs `stats` or `cost` unset  | Throws |
+| A non positive `contextWindow`                 | Throws |

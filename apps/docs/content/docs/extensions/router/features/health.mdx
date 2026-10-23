@@ -1,0 +1,41 @@
+---
+title: Health
+description: How the router moves back targets with an open circuit breaker, a rate limit, or no time left, and eases a recovered target back in.
+---
+
+Health is read from `health: () => llm`, a getter because the middleware is built before its
+`VernLLM`. Without it no target is demoted for health.
+
+## Order of demotion
+
+A demoted target moves behind the others and is never dropped. From first to last:
+
+| Group      | Reason          | Meaning                                                      |
+| ---------- | --------------- | ------------------------------------------------------------ |
+| Healthy    |                 | Stays in the order the strategy chose                        |
+| Over limit | `over_limit`    | Over the route's `limits`                                    |
+| Deadline   | `over_deadline` | Cannot answer in the call's `deadlineMs`, by its p95 latency |
+| Limited    | `limited`       | A local limit used up, or a provider 429 still cooling down  |
+| Open       | `open`          | The circuit breaker is open                                  |
+
+A half open target keeps its place so its trial runs. If every target is unhealthy the order stays
+as it is. A route with `health: false` skips the open and limited step.
+
+## Rate limit cooldown
+
+A provider 429 starts a cooldown for the `Retry-After` it carried, 5 seconds without one and at
+most 60.
+
+## Slow start
+
+After a breaker closes, a target ramps back over `slowStartMs` (default 30 seconds, 0 turns it off),
+from 10 percent of traffic to full. While warming, a target may give way to the next healthy one
+(`warming`).
+
+## Soft limits
+
+```ts title="router-limits.ts"
+limits: { latencyMs: 3_000, costUsd: 0.05, qualityFailureRate: 0.1 }
+```
+
+A target over one moves behind those within. If all are over, the order stays.

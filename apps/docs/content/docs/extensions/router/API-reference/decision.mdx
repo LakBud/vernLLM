@@ -1,0 +1,50 @@
+---
+title: Decision
+description: The shape of a router decision, the router.decision event, and the input of router.preview.
+---
+
+## Decision
+
+```ts title="decision.ts"
+interface Decision {
+  route?: string;
+  strategy: 'ordered' | 'weighted' | 'least-busy' | 'rank' | 'pinned';
+  order: string[];
+  excluded: { target: string; reason: 'route' | 'capability' }[];
+  demoted: {
+    target: string;
+    reason: 'open' | 'limited' | 'over_limit' | 'over_deadline' | 'warming';
+  }[];
+  scores?: Record<string, number>;
+  explored: boolean;
+}
+```
+
+`scores` appears for `rank` only, rounded to two decimals, lower is better.
+
+## RouterDecisionEvent
+
+The event `router.decision` is a `Decision` plus `v: 1` and `applied`. See
+[Observability](/docs/extensions/router/features/observability).
+
+## PreviewInput
+
+<TypeTable
+  type={{
+    request: {
+      description: 'The request to route. Its model stands in for every target when pricing.',
+      type: 'WireCallRequest',
+    },
+    context: { description: 'The call context, for routes that match on it.', type: 'CallContext' },
+    streaming: { description: 'Whether the call would stream.', type: 'boolean', default: 'false' },
+    deadlineMs: { description: 'The call deadline, counted from now.', type: 'number' },
+    route: { description: 'Force a route by name.', type: 'string' },
+    targets: {
+      description: "The call's own targets: the answer is then pinned.",
+      type: 'string[]',
+    },
+  }}
+/>
+
+`preview()` throws when `health` is not set or returns nothing, or when `targets` names an unknown
+target.

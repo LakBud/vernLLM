@@ -1,0 +1,44 @@
+---
+title: API Reference Overview
+description: The public exports of vern-llm-router, and where each option and the decision are documented
+---
+
+| Export                  | Kind     | What it is                                                                                         |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `routerMiddleware`      | Function | Takes `RouterOptions` and returns one middleware with `preview()`. Register it once per `VernLLM`. |
+| `routerMiddlewareRef`   | Constant | The `MiddlewareRef` of that entry, so a second one in the same `VernLLM` is rejected               |
+| `routerRouteKey`        | Constant | The state key that forces a route by name for one call                                             |
+| `ROUTER_DECISION_EVENT` | Constant | `'router.decision'`                                                                                |
+| `routeDimension`        | Function | Logger dimension: the route of a call                                                              |
+| `driftDimension`        | Function | Logger dimension: whether the first choice answered                                                |
+| `RouterOptions`         | Type     | Every option, see [Configuration](/docs/extensions/router/API-reference/configuration)             |
+| `Decision`              | Type     | What a decision holds, see [Decision](/docs/extensions/router/API-reference/decision)              |
+
+```ts title="router-exports.ts"
+import {
+  routerMiddleware,
+  routerMiddlewareRef,
+  routerRouteKey,
+  ROUTER_DECISION_EVENT,
+  routeDimension,
+  driftDimension,
+} from 'vern-llm-router';
+import type {
+  RouterMiddleware,
+  RouterOptions,
+  RouteOptions,
+  StrategyOption,
+  Decision,
+  RouterDecisionEvent,
+  PreviewInput,
+} from 'vern-llm-router';
+```
+
+<Cards>
+  <Card title="Configuration" href="/docs/extensions/router/API-reference/configuration">
+    Every option with its type and default, and what throws at construction.
+  </Card>
+  <Card title="Decision" href="/docs/extensions/router/API-reference/decision">
+    The decision, the event, and the preview input.
+  </Card>
+</Cards>

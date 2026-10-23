@@ -1,0 +1,56 @@
+---
+title: Observability
+description: See what the router decided with the router.decision event, shadow mode, preview, and the route and drift logger dimensions.
+---
+
+## The decision event
+
+Every call emits a custom event `router.decision` after it settles, with `v: 1` and these fields:
+
+| Field      | Meaning                                                      |
+| ---------- | ------------------------------------------------------------ |
+| `route`    | The route that matched, if any                               |
+| `strategy` | `ordered`, `weighted`, `least-busy`, `rank`, or `pinned`     |
+| `order`    | Target names, first to try first                             |
+| `excluded` | Targets left out, with `route` or `capability` as the reason |
+| `demoted`  | Targets moved back, with the reason                          |
+| `scores`   | `rank` only, lower is better                                 |
+| `explored` | Whether the first target is an exploration pick              |
+| `applied`  | Whether the call ran with this order                         |
+
+It holds names and numbers only, so it is safe on spans and in logs. `applied` is `false` in shadow
+mode, for a pinned call, and for a cache hit or join.
+
+## Shadow mode
+
+`apply: false` computes and emits every decision and changes no call. Compare the events with what
+the declared order did, then switch it on.
+
+## Preview
+
+`router.preview({ request, context, streaming, deadlineMs, route, targets })` returns the
+`Decision` a call would get right now, from the same function and live signals, and calls nothing.
+It needs `health`. Set `random` for a repeatable answer.
+
+## Logger dimensions
+
+The logger keeps `router.*` events by default. Two ready made dimensions split its percentiles and
+quality rates:
+
+```ts title="router-dimensions.ts"
+import { loggerMiddleware } from 'vern-llm-logger';
+import { driftDimension, routeDimension } from 'vern-llm-router';
+
+const logger = loggerMiddleware({
+  dimensions: { route: routeDimension, drift: driftDimension },
+});
+```
+
+| Dimension        | Value                                                                     |
+| ---------------- | ------------------------------------------------------------------------- |
+| `routeDimension` | The route name of the call                                                |
+| `driftDimension` | `'yes'` when the target the router put first is not the one that answered |
+
+Applied, drift means the first choice failed and the chain fell back. In shadow mode it compares
+what the router would have picked with what the declared order answered, so a rollout is judged
+before it is switched on.

@@ -2,5 +2,5 @@
   "title": "Extensions",
   "icon": "Puzzle",
   "root": true,
-  "pages": ["---Introduction---", "index", "---Extensions---", "logger", "usage"]
+  "pages": ["---Introduction---", "index", "---Extensions---", "logger", "usage", "router"]
 }

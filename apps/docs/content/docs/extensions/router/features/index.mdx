@@ -1,0 +1,33 @@
+---
+title: Features Overview
+description: Routes, strategies, health awareness, and observability in vern-llm-router, all built on one pure decision function.
+---
+
+Every call goes through one synchronous function that filters targets, groups them in tiers, orders
+each tier with a strategy, and finally moves unhealthy targets back. The same function backs
+`router.preview()`, so a preview and a real call agree.
+
+<Cards>
+  <Card title="Routes" href="/docs/extensions/router/features/routes">
+    Match a call, choose its targets, drop some, and skip those that cannot serve the request.
+  </Card>
+  <Card title="Strategies" href="/docs/extensions/router/features/strategies">
+    Ordered, weighted, least busy, and rank by latency, cost, and quality.
+  </Card>
+  <Card title="Health" href="/docs/extensions/router/features/health">
+    Open breakers, rate limits, slow start, soft limits, and deadlines.
+  </Card>
+  <Card title="Observability" href="/docs/extensions/router/features/observability">
+    The decision event, shadow mode, preview, and logger dimensions.
+  </Card>
+</Cards>
+
+## The pipeline
+
+| Step     | What it does                                                                      |
+| -------- | --------------------------------------------------------------------------------- |
+| Match    | The first route whose `when` holds, or the one forced with `routerRouteKey`       |
+| Filter   | `targets` and `exclude`, then `capabilities` that the request does not fit        |
+| Tiers    | Targets are grouped, and each tier is tried before the next                       |
+| Strategy | Orders the targets inside each tier                                               |
+| Demote   | Moves back targets that are over a limit, cannot meet the deadline, or are unwell |

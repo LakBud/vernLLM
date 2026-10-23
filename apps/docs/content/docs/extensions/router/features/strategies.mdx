@@ -1,0 +1,59 @@
+---
+title: Strategies
+description: Order targets inside a tier with a fixed order, a weighted pick, least busy sampling, or a rank over latency, cost, and quality.
+---
+
+A route's `strategy` orders the targets inside each tier. The default is `ordered`.
+
+| Strategy                        | Puts first                                                                |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `ordered`                       | The first target as written                                               |
+| `{ type: 'weighted', weights }` | A weighted random pick, the rest by weight                                |
+| `'least-busy'`                  | The less loaded of two sampled targets, by attempts in flight over weight |
+| `rank`                          | The best scoring target, see below                                        |
+
+## Weighted
+
+```ts title="router-weighted.ts"
+strategy: { type: 'weighted', weights: { primary: 8, canary: 1 }, stickyBy: 'userId' }
+```
+
+A target missing from `weights` counts as 1, and 0 is picked first only when nothing else is left.
+With `stickyBy`, the context value is hashed instead of drawing at random, so a user keeps the same
+first target and the provider's prompt cache stays warm. A call without the key draws at random.
+
+## Least busy
+
+For several deployments of one model. Two targets are sampled, by `weights` when given, and the one
+with fewer attempts in flight, divided by its weight, goes first.
+
+## Rank
+
+```ts title="router-rank.ts"
+const router = routerMiddleware({
+  stats: logger.stats, // quantile() and failureRate()
+  cost: usage.costFor,
+  routes: [
+    { name: 'bulk', when: { context: { feature: 'tag' } }, strategy: 'cost' },
+    { name: 'default', strategy: 'balanced', limits: { latencyMs: 3_000 } },
+  ],
+});
+```
+
+`rank` scores each target on weighted metrics, each as how many times worse than the best, on a log
+scale, so units combine and an outlier only hurts itself.
+
+| Metric             | Meaning                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| `latency`          | The `q` quantile (default 0.95) of `attemptMs`                                       |
+| `predictedLatency` | Streamed time to first token plus typical answer length at the generation speed      |
+| `cost`             | What the request could cost on the target                                            |
+| `effectiveCost`    | The cost divided by the share of answers that are usable                             |
+| `quality`          | The share of responded attempts rejected as unusable, for the route, then the target |
+| `custom`           | Your own function                                                                    |
+
+A target within `tolerance` (default 0.2) of the best shares first place by closeness, and with
+chance `explore` (default 0.05) a random usable target goes first so every target keeps being
+measured. Targets with an unknown value score at the median of the known ones. `'latency'`, `'cost'`
+and `'balanced'` are shorthands. A strategy that needs `stats` or `cost` you did not pass fails at
+construction.

@@ -272,7 +272,8 @@ await llm.call({ userContent: '...', targets: ['bedrock', 'primary'] });
 
 Names are the ones in `name` (see [Declaring targets](#declaring-targets)), and a target left out
 is never tried. Core runs the list it is given and never chooses it: picking the order is the
-caller's or a middleware's job.
+caller's or a middleware's job. The [router extension](/docs/extensions/router) is that middleware,
+choosing the order from rules, health, latency and cost.
 
 A `wrap` sees the order it can use as `ctx.targets`, and reorders or drops targets through
 `next({ targets })`:

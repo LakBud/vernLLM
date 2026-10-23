@@ -1,0 +1,97 @@
+---
+title: Contributing
+description: Set up, test and open a pull request for vern-llm-router, the router extension in the VernLLM monorepo.
+icon: GitPullRequest
+---
+
+This page covers `packages/extensions/vern-llm-router` specifically. For the coding standard and PR
+checklist that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+No external service is needed. The tests use fake clients, and the integration test for the logger
+and usage uses their real packages.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`. Four rules are specific here:
+
+- **Never change the call.** Every step that decides, and every user callback, goes through `guard`.
+  A failure is logged as `[VernLLM] router: <step> failed` and the call keeps its declared order.
+- **Keep `decide` pure.** It is synchronous and reads only its input, with randomness and time
+  passed in, so the same input gives the same order.
+- **Validate once.** A bad option throws at construction in `normalizeOptions`.
+- **Copy, don't import, across packages.** Sources are shapes (`StatsSource`, `CostSource`), so the
+  router depends only on `vern-llm`. The logger and usage are dev dependencies for tests.
+
+## Layout
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="routerMiddleware.ts" />
+    <File name="dimensions.ts" />
+    <File name="stateKeys.ts" />
+    <File name="index.ts" />
+    <Folder name="types" />
+    <Folder name="internal" defaultOpen>
+      <Folder name="decide" />
+      <Folder name="match" />
+      <Folder name="middleware" />
+      <Folder name="options" />
+      <File name="targetState.ts" />
+      <File name="statsCache.ts" />
+      <File name="gather.utils.ts" />
+    </Folder>
+  </Folder>
+  <Folder name="tests">
+    <Folder name="unit" />
+    <Folder name="integration" />
+    <Folder name="bench" />
+  </Folder>
+  <Folder name="scripts" />
+</Files>
+
+## Scripts
+
+Run them with `pnpm run <script>` from inside `packages/extensions/vern-llm-router`, or
+`pnpm nx run vern-llm-router:<script>` from the repo root:
+
+| Script                                    | What it does                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `build`, `dev`                            | Build with tsdown, or rebuild on change                            |
+| `lint`, `lint:fix`                        | Run oxlint                                                         |
+| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                                 |
+| `test`, `test:unit`, `test:int`           | Run all tests, or one project                                      |
+| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                        |
+| `smoke-test`                              | Import the build through ESM and CJS                               |
+| `bench`, `bench:check`                    | Measure per call overhead, or fail when it grows past the baseline |
+| `bench:update`                            | Record a new baseline in `tests/bench/baseline.json`               |
+
+`bench:check` runs against the built package, so run `build` first.
+
+## Before opening a PR
+
+Every PR touching this package runs through the CI workflows described in
+[Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                      | Local command                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Lint                       | `pnpm nx run vern-llm-router:lint`                                                                                       |
+| Typecheck source and tests | `pnpm nx run vern-llm-router:typecheck && pnpm nx run vern-llm-router:typecheck:test`                                    |
+| Unit and integration tests | `pnpm nx run vern-llm-router:test:unit:coverage && pnpm nx run vern-llm-router:test:int:coverage`                        |
+| Build, smoke test, bench   | `pnpm nx run vern-llm-router:build && pnpm nx run vern-llm-router:smoke-test && pnpm nx run vern-llm-router:bench:check` |
+| Changeset present          | `pnpm changeset status --since=origin/main`                                                                              |
+
+Record a change with `pnpm nx run vern-llm-router:changeset`. The package versions and releases on
+its own changelog.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

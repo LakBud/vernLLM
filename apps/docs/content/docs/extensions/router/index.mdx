@@ -1,0 +1,102 @@
+---
+title: Router Overview
+description: Pick the target order for each VernLLM call from rules, health, latency, and cost, without changing what a call returns
+---
+
+`vern-llm-router` is one middleware that decides which of a call's targets are tried first. You
+write routes that match a call by its `context`, tools, JSON output, or size, and each route orders
+its targets with a strategy: in declared order, weighted, least busy, or ranked by measured latency,
+cost, and quality. A target with an open breaker or an exhausted rate limit moves to the back.
+
+<Callout type="info">
+  The router only reorders targets the call already has. It never adds one, never changes what a
+  call returns or throws, and if deciding fails the call runs exactly as it would without it.
+</Callout>
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-router # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-router # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-router # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-router # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` is a peer dependency and the package has no other dependency. It needs a `vern-llm`
+release that exposes `callTargets`, `streaming`, and `deadlineAt` on the middleware context.
+
+<Cards>
+  <Card title="Features" href="/docs/extensions/router/features">
+    Routes, strategies, health, and how to see what the router decided.
+  </Card>
+  <Card title="API Reference" href="/docs/extensions/router/API-reference">
+    Every option, and the shape of a decision.
+  </Card>
+</Cards>
+
+## Basic usage
+
+```ts title="router-basic-usage.ts"
+import { VernLLM } from 'vern-llm';
+import { routerMiddleware } from 'vern-llm-router';
+
+const router = routerMiddleware({
+  health: () => llm, // lazy, since llm is created after this middleware
+  routes: [
+    { name: 'bulk', when: { context: { tier: ['free', 'trial'] } }, targets: ['small'] },
+    { name: 'tools', when: { hasTools: true }, exclude: ['small'] },
+    { name: 'default', targets: [['main'], '*'] },
+  ],
+  capabilities: { small: { contextWindow: 32_000, tools: false } },
+});
+
+const llm = new VernLLM({
+  client,
+  model: 'main',
+  fallback: [{ client: smallClient, model: 'mini', name: 'small' }],
+  middleware: [router],
+});
+```
+
+The first route whose `when` matches decides the order. Register the middleware once per
+`VernLLM`: two entries in one `middleware` array throw at construction.
+
+## Try a rule before you ship it
+
+`router.preview()` returns the decision a call would get right now, without calling anything:
+
+```ts title="router-preview.ts"
+const decision = router.preview({
+  request: { model: 'main', messages: [{ role: 'user', content: 'hi' }] },
+  context: { tier: 'free' },
+});
+// { route: 'bulk', strategy: 'ordered', order: ['small'], excluded: [...], demoted: [], explored: false }
+```
+
+For a rollout, set `apply: false` first. Every decision is computed and emitted and no call
+changes, so you can compare against the declared order before switching it on, see
+[Observability](/docs/extensions/router/features/observability).

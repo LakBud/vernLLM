@@ -370,6 +370,9 @@ on each applicable middleware's own `onEvent`. See [Middleware](/docs/core/middl
 
 ## Checking and controlling state manually
 
+The [router extension](/docs/extensions/router/features/health) reads these states to move targets
+with an open breaker to the back of the order.
+
 ```ts title="circuit-breaker-state.ts"
 llm.getCircuitState(); // primary target: 'closed' | 'open' | 'half-open' | undefined
 

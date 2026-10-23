@@ -1,0 +1,46 @@
+---
+title: Troubleshooting
+description: Symptoms and fixes for a router that does not reorder, ignores health, picks the same target, or throws at construction
+---
+
+## Common symptoms
+
+<Accordions>
+  <Accordion title="Calls keep the declared order">
+    Check `apply`: `false` is shadow mode, where decisions are emitted and never used. Then check
+    the event: `applied: false` also appears for a call that passed its own `targets`, and for a
+    cache hit or join, which never used the order. If no route matches and none is a catch all, the
+    order is left as it is.
+  </Accordion>
+  <Accordion title="An open or rate limited target is not moved back">
+    Health needs `health: () => llm`. Without it no target is ever demoted for health. A route with
+    `health: false` also skips that step, and when every target is unhealthy the order stays as it
+    is.
+  </Accordion>
+  <Accordion title="rank always picks the same target">
+    That is the point of `rank` when one target is clearly best. Raise `explore` to sample others,
+    or `tolerance` to let close targets share first place. A target with no samples yet scores at
+    the median, and stats need the logger's `minSamples` before they report a number.
+  </Accordion>
+  <Accordion title="The decision event never appears">
+    The router emits `router.decision` after the call settles. The logger keeps `router.*` by
+    default. Another consumer must subscribe to that custom event name.
+  </Accordion>
+  <Accordion title="no_eligible_targets">
+    A route's `exclude` or `targets` left nothing for this call, which is a configuration error and
+    fails the call on purpose. The router logs one warning naming the route. When a route lists its
+    targets and `exclude` removes all of them, construction throws instead. The capability filter
+    never does this: when no target is known to fit, all stay.
+  </Accordion>
+  <Accordion title="preview throws">
+    `preview()` learns the targets from `health`, so set it. It also throws for a `targets` name
+    the instance does not have.
+  </Accordion>
+  <Accordion title="A warning mentions a route naming an unknown target">
+    The route lists a name that is not a target of the call. It is warned about once and ignored.
+    Check the spelling against the `name` of each target.
+  </Accordion>
+</Accordions>
+
+Anything the router cannot do is reported once per call as `[VernLLM] router: <step> failed`
+through its `logger` option, and the call carries on with the declared order.

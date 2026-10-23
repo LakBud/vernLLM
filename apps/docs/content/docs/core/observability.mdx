@@ -288,6 +288,9 @@ onEvent: (event) => {
 };
 ```
 
+The [router extension](/docs/extensions/router/features/observability#the-decision-event) emits
+`router.decision` for every call, with the route, the order and why.
+
 ## Narrowing by kind
 
 `event.kind` discriminates the union, so a handler that only cares about one kind can narrow with a

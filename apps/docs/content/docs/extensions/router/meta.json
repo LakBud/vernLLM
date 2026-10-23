@@ -1,0 +1,5 @@
+{
+  "title": "Router",
+  "icon": "Route",
+  "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
+}

@@ -1,0 +1,97 @@
+---
+title: Routes
+description: Match a VernLLM call by context, tools, JSON output, or size, then choose which targets it may use and in what tiers.
+---
+
+A route has a `name`, an optional `when`, and what it does to the targets. The first route whose
+`when` matches decides the order, and only the last route may omit `when`.
+
+## Matching
+
+```ts title="router-when.ts"
+routes: [
+  { name: 'vip', when: { context: { tier: ['gold', 'platinum'] } }, targets: ['main'] },
+  { name: 'big', when: { minInputTokens: 50_000 }, targets: ['long'] },
+  { name: 'json', when: { jsonOutput: true }, exclude: ['small'] },
+  { name: 'custom', when: (ctx, request) => request.model.startsWith('o') },
+  { name: 'default' },
+];
+```
+
+| Condition                          | Holds when                                                  |
+| ---------------------------------- | ----------------------------------------------------------- |
+| `context`                          | Every key equals the value, or one of a list of values      |
+| `hasTools`                         | The request does or does not carry tools                    |
+| `jsonOutput`                       | The request asks for `json_object` or a schema              |
+| `minInputTokens`, `maxInputTokens` | The estimated input tokens, minus `max_tokens`, is in range |
+
+A function `when` is synchronous. If it throws, the call fails open and keeps its declared order. A
+conditions object is checked at construction: a non boolean `hasTools`, a non finite token bound,
+or a `context` that is not an object throws.
+
+## Choosing targets
+
+`targets` takes names, nested lists for tiers, and `'*'` for every target not named:
+
+```ts title="router-targets.ts"
+{ name: 'default', targets: [['main'], ['backup-a', 'backup-b'], '*'] }
+```
+
+Consecutive bare names share one tier, so `['a', 'b', 'c']` is one tier that a strategy chooses
+between. `exclude` drops targets without listing the rest.
+
+A route that leaves no target for a call fails it with `no_eligible_targets` and logs one warning,
+since that is a configuration error. When a route names its targets and `exclude` removes every
+one, construction throws instead.
+
+## Capabilities
+
+```ts title="router-capabilities.ts"
+capabilities: { small: { contextWindow: 32_000, tools: false, jsonSchema: false, images: false } }
+```
+
+A target is skipped only when the request is known not to fit: an explicit `false`, or input plus
+`max_tokens` over a known window. The filter never empties the list, so when nothing is known to
+fit, all targets stay.
+
+## Pinned and forced
+
+A call that passes its own `targets` keeps that order, and the decision records `pinned`. To force a
+route for one call:
+
+```ts title="router-force.ts"
+import { stateEntry } from 'vern-llm';
+import { routerRouteKey } from 'vern-llm-router';
+
+await llm.call({ userContent: 'hi', state: [stateEntry(routerRouteKey, 'vip')] });
+```
+
+## Routing on budgets
+
+`vern-llm-usage` puts how full a call's budgets are in `ctx.state` before the router runs, so a
+route can downgrade as a tenant's budget runs out instead of only being blocked at the end:
+
+```ts title="router-budgets.ts"
+import { usageBudgetShare } from 'vern-llm-usage';
+
+routes: [
+  {
+    name: 'budget-tight',
+    when: (ctx) => (usageBudgetShare(ctx) ?? 0) >= 0.9,
+    targets: ['mini', 'flash'],
+    strategy: 'cost',
+  },
+  { name: 'default' },
+];
+```
+
+`usageBudgetShare(ctx)` is `0.93` for 93% used and `undefined` for a call under no budget, which the
+`?? 0` above treats as not tight. Pass `{ key: 'tenantId' }` or `{ mode: 'soft' }` to narrow it.
+
+Usage reserves before the router has chosen, so the hold is priced at the most expensive target the
+call may use. Right at a hard limit that worst case can refuse a call a cheap route would have fit.
+Two ways around it:
+
+- Downgrade well before the limit: `0.9` leaves room for many worst case holds
+- Pair a soft budget with a hard one above it, and downgrade on the soft one with
+  `usageBudgetShare(ctx, { mode: 'soft' }) >= 1`

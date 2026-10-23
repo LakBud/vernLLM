@@ -411,6 +411,8 @@ llm.getRateLimitState({ index: 1 }); // first fallback target's own buckets
 A custom `RateLimiterAdapter` (see [Sharing a limiter across
 processes](#sharing-a-limiter-across-processes) below) can omit `getState`, in which case
 `getRateLimitState()` also returns `undefined`, exactly like no limiter being configured at all.
+The [router extension](/docs/extensions/router/features/health) reads this state to move targets
+whose limit is used up, or that a provider 429 put on cooldown, behind healthy ones.
 
 `getRateLimitState()` is synchronous, so for a custom adapter it can only report what that adapter
 tracks locally. `await llm.readRateLimitState()` asks the limiter for its live levels instead, and

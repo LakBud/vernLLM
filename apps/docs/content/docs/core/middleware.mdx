@@ -283,6 +283,8 @@ A middleware reports something it decided, such as the target a router picked, w
 
 The event reaches the top level `onEvent` and every enabled middleware's `onEvent`, the emitter
 included. VernLLM defines no names of its own: whoever emits owns the meaning of `name` and `data`.
+The [router extension](/docs/extensions/router/features/observability#the-decision-event) reports
+its choices this way, as `router.decision`.
 `ctx.emit` is on every `ctx`, in every hook, and never throws.
 
 - `name` must be a non empty string and `data` plain JSON: plain objects, arrays, strings, finite
@@ -428,6 +430,8 @@ wrap: async (request, next, ctx) => {
 ```
 
 With `cachedCall`, each caller's `deadlineAt` comes from its own `deadlineMs`, like its `signal`.
+The [router extension](/docs/extensions/router) reads all three: it leaves a caller's own `targets`
+alone and moves back targets that cannot answer in the time left.
 
 ## Composition order
 
