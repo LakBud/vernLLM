@@ -67,14 +67,14 @@
     "@smithy/node-http-handler": "^4.12.1",
     "@smithy/util-utf8": "^4.5.2",
     "@types/node": "^26.4.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "publint": "^0.3.24",
     "size-limit": "13.1.1",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "unplugin-unused": "^0.6.0",
     "vern-llm": "workspace:^",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "license": "MIT",
   "packageManager": "pnpm@11.27.0",
