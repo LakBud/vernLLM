@@ -198,6 +198,18 @@ describe('rank', () => {
     expect(result.order).toEqual(['a', 'b', 'c']);
   });
 
+  it('fills a non finite custom score like a missing one, and keeps only declared targets', () => {
+    const result = run(rank({ custom: 1 }), {
+      a: { customValue: -2 },
+      b: { customValue: Number.NaN },
+      c: { customValue: 4 },
+      d: { customValue: Number.POSITIVE_INFINITY },
+    });
+    // b and d take the median of the finite values (1), so the order follows -2, 1, 1, 4.
+    expect(result.order).toEqual(['a', 'b', 'd', 'c']);
+    expect(Object.values(result.scores ?? {}).every(Number.isFinite)).toBe(true);
+  });
+
   it('leaves a single target as it is', () => {
     const result = run(rank({ latency: 1 }), { a: { latencyMs: 100 } });
     expect(result.order).toEqual(['a']);

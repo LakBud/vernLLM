@@ -22,6 +22,19 @@ function lacksCapability(capability: TargetCapabilities | undefined, facts: Requ
   return false;
 }
 
+/** The route's tiers against this call's targets: `*` expands, and names the call lacks drop. */
+function routeTiers(targets: readonly string[], route: ResolvedRoute): string[][] {
+  if (route.tiers === undefined) return [[...targets]];
+
+  const available = new Set(targets);
+  const named = new Set(route.tiers.flat());
+  const expand = (name: string): string[] => {
+    if (name === ANY_TARGET) return targets.filter((target) => !named.has(target));
+    return available.has(name) ? [name] : [];
+  };
+  return route.tiers.map((tier) => tier.flatMap(expand));
+}
+
 /**
  * Applies a route's tiers and `exclude`: the kept names of each tier, in route order, with `*`
  * standing for every target the route does not name. Empty tiers are dropped.
@@ -31,23 +44,9 @@ export function applyRoute(
   route: ResolvedRoute,
   excluded: ExcludedTarget[],
 ): string[][] {
-  const available = new Set(targets);
-  const named = new Set(route.tiers?.flat() ?? []);
-
-  const tiers: string[][] =
-    route.tiers === undefined
-      ? [[...targets]]
-      : route.tiers.map((tier) =>
-          tier.flatMap((name) =>
-            name === ANY_TARGET
-              ? targets.filter((target) => !named.has(target))
-              : available.has(name)
-                ? [name]
-                : [],
-          ),
-        );
-
-  const kept = tiers.map((tier) => tier.filter((name) => !route.exclude.has(name)));
+  const kept = routeTiers(targets, route).map((tier) =>
+    tier.filter((name) => !route.exclude.has(name)),
+  );
   const keptSet = new Set(kept.flat());
   // Whatever did not make it, whether excluded or never named, is out by the route's choice.
   for (const target of targets) {
