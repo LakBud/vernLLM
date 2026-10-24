@@ -147,7 +147,7 @@
     "@types/node": "^26.4.1",
     "@vitest/coverage-v8": "^4.1.11",
     "ioredis": "^5.11.1",
-    "publint": "^0.3.24",
+    "publint": "^0.3.25",
     "redis": "^4.7.1",
     "size-limit": "13.1.1",
     "tsdown": "^0.23.1",
@@ -158,7 +158,7 @@
     "vitest": "^4.1.11"
   },
   "license": "MIT",
-  "packageManager": "pnpm@11.27.0",
+  "packageManager": "pnpm@11.28.8",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LakBud/vernLLM.git",
