@@ -4,8 +4,6 @@
 
 A middleware that removes targets a call is not allowed to use, or denies the call when none are left. It runs before usage and the router, so a denied call spends nothing, and a removed target can never come back through retries or fallback.
 
-This is an early slice of the package: target rules, `when` patterns, denials, flags, labels, time bound exceptions, error handling, audit mode and a decision event. Benchmarks and a canary guide follow.
-
 ## Usage
 
 ```ts
