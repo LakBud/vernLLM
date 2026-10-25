@@ -1,0 +1,75 @@
+---
+title: Streaming
+description: How a streamed answer is held, checked and released, and what each choice costs
+---
+
+A streamed answer goes through the same steps as it arrives. A call with no `redact` check that
+found something and no `on: 'output'` check gets its stream back untouched.
+
+```ts title="guard-stream.ts"
+guardMiddleware({
+  version: '1',
+  checks,
+  stream: { release: 'checked', holdChars: 128, windowChars: 1000 },
+});
+```
+
+<TypeTable
+  type={{
+    release: {
+      description:
+        "'checked' sends text after every check covering it passed. 'immediate' sends first.",
+      type: "'checked' | 'immediate'",
+      default: "'checked'",
+    },
+    holdChars: {
+      description: 'Text held back so a value split over chunks is caught. At least 32.',
+      type: 'number',
+      default: '128',
+    },
+    windowChars: {
+      description: 'New text a slow check waits for before it runs again. Above holdChars.',
+      type: 'number',
+      default: '1000',
+    },
+  }}
+/>
+
+## The tradeoff
+
+<Tabs items={['checked', 'immediate']}>
+  <Tab value="checked">
+
+```text title="guard-stream-checked.txt"
+provider ▶ [hold] ▶ checks pass ▶ caller
+```
+
+Nothing leaves before it is checked. The first text waits for a slow check.
+
+  </Tab>
+  <Tab value="immediate">
+
+```text title="guard-stream-immediate.txt"
+provider ▶ caller        checks run beside it
+```
+
+Text goes out first. A block ends the stream but cannot take back what was sent.
+
+  </Tab>
+</Tabs>
+
+- With `'immediate'`, a redaction is counted as `late`
+- Text with no whitespace, such as Chinese, is released in `holdChars` steps instead of all at the end
+- A check that answers synchronously runs on every chunk. One that returns a promise runs once per
+  `windowChars` of new text, and text is not sent past what it has read
+- Tool call arguments are held until complete, then checked and restored
+
+## A block
+
+A block cancels the provider stream, `chunks` throws `content_blocked` and `finalResult` rejects with
+it. `finalResult` checks the whole answer too, so it holds for a caller that never reads `chunks`.
+Anything it catches that the stream let through is counted as `late`.
+
+<Callout type="info">
+  Use `'checked'` unless the first token must be fast and a late block is acceptable.
+</Callout>

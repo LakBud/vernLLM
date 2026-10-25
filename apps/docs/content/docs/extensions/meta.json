@@ -9,6 +9,7 @@
     "logger",
     "usage",
     "router",
-    "policy"
+    "policy",
+    "guard"
   ]
 }

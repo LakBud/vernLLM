@@ -1,0 +1,84 @@
+---
+title: Troubleshooting
+description: Symptoms and fixes for a guard that blocks too much, finds nothing, adds latency, or throws at construction
+---
+
+## First steps
+
+<Steps>
+<Step>
+
+### Read the result
+
+The `guard.result` event names the outcome, the checks that found something and any errors.
+
+</Step>
+<Step>
+
+### Reproduce it
+
+Call `evaluate()` with the same text and phase to see what each check finds.
+
+</Step>
+<Step>
+
+### Narrow it down
+
+Put the check in `audit` and measure it over real samples before enforcing it again.
+
+</Step>
+</Steps>
+
+## Common symptoms
+
+<Accordions>
+  <Accordion title="A check never does anything">
+    It is probably in `audit`: look under `audit` in the result. Then check `on`, since the default
+    is the request, and a check for the answer needs `on: 'output'`. Use `evaluate()` with the same
+    text to see what the check finds.
+  </Accordion>
+  <Accordion title="Calls are blocked that should not be">
+    The result names the check in `issues.checks`. The built in detectors are heuristics, so put the
+    check back in `audit` and measure it with `evaluate()` over real samples. `failed: true` means
+    the check could not answer and `onError` is `closed`.
+  </Accordion>
+  <Accordion title="A value was not redacted">
+    Check that the check has `action: 'redact'`, that `redactFor` returned true for the target, and
+    that the text came from a source in `on`. Text another middleware adds after the guard is
+    scanned only if the guard has the last transform place, and is counted as `late` otherwise.
+    Images are counted as `unscanned`.
+  </Accordion>
+  <Accordion title="A redact check blocks instead">
+    The detector returned a finding without `start` and `end`, so the value cannot be replaced. The
+    result reports it as `unredactable`. Return offsets from the detector.
+  </Accordion>
+  <Accordion title="The labels are unknown">
+    `guardLabels` returned `undefined`: the guard did not run for this call, or a labeling check
+    failed. The guard must be outside policy, which it is by default at position `-150`.
+  </Accordion>
+  <Accordion title="A stream starts late">
+    With `release: 'checked'` the first text waits for every check, and for a slow detector that is
+    its answer. Use a faster detector, or `'immediate'` where a block that cannot take back what was
+    sent is acceptable.
+  </Accordion>
+  <Accordion title="A parallel check blocked a plain answer that was billed">
+    That is the cost of `parallel`: the provider was already running. Use a check without `parallel`
+    when the call must not be made.
+  </Accordion>
+  <Accordion title="A token appears in the answer">
+    The model changed it, so it stood for no value of this call. It is counted as `unrestored`. Keep
+    the same `key` across processes when tokens travel between them.
+  </Accordion>
+  <Accordion title="guardMiddleware throws at construction">
+    The message starts with `guardMiddleware:` and names the field. The common ones are a repeated
+    check `id`, a missing `version`, a `key` under 32 bytes, `holdChars` under 32, a `timeoutMs`
+    above 2147483647, and `parallel` on a check that is not a `block` on input.
+  </Accordion>
+  <Accordion title="update throws">
+    The new checks were refused and the old ones are still running. `version` must differ from the
+    current one, and everything is validated as a whole.
+  </Accordion>
+</Accordions>
+
+Anything the guard cannot decide is reported once as `[VernLLM] guard: <step> failed` through its
+`logger` option, and `onError` settles the call.

@@ -1,0 +1,25 @@
+---
+title: Spotlight
+description: Mark untrusted text, such as a web page in a tool result, so the model reads it as data
+---
+
+An opt in defence against prompt injection from untrusted text.
+
+```ts title="guard-spotlight.ts"
+guardMiddleware({ version: '1', checks, spotlight: { sources: ['tool'] } });
+```
+
+- Spaces and tabs in the listed sources (`'tool'` by default, or `'user'`, `'assistant'`) become a
+  marker, and one sentence is added to the system message saying marked text is data and never
+  instructions
+- The marker is random per instance and changes with `version`, so the system message is the same on
+  every call of a version and provider prompt caching keeps working
+- A marker the model echoes is turned back into a space in plain answers, streams and tool call
+  arguments
+- Redaction runs first, so a value with spaces in it is a token before the text is marked
+- `'user'` tells the model the user message is untrusted data. Use it only where that is true
+
+<Callout type="warn">
+  Spotlight changes what the model reads and lowers the risk, it does not remove it. Test it on your
+  own use case before turning it on.
+</Callout>

@@ -1,0 +1,82 @@
+---
+title: Rollout
+description: Try a check in audit, measure false positives with evaluate, then enforce, and swap checks live
+---
+
+## The path
+
+<Steps>
+<Step>
+
+### Audit
+
+Ship the check with `mode: 'audit'` on live traffic.
+
+</Step>
+<Step>
+
+### Measure
+
+Run `evaluate` over a labeled set and count false positives.
+
+</Step>
+<Step>
+
+### Enforce
+
+Remove `mode: 'audit'` once the reports match what you expect.
+
+</Step>
+<Step>
+
+### Swap
+
+Change checks live with `guard.update`, under a new `version`.
+
+</Step>
+</Steps>
+
+## Audit first
+
+`mode: 'audit'` on a check reports what it would have done and changes nothing. The result lists it
+under `audit`. A canary deployment works the same way: audit on a slice, then enforce.
+
+<Callout type="info">
+  An audit check still runs its detector, so it costs time but changes nothing.
+</Callout>
+
+## Measure with evaluate
+
+```ts title="guard-evaluate-ci.ts"
+for (const sample of labeledSamples) {
+  const result = await guard.evaluate({ text: sample.text, phase: sample.phase });
+  // compare result.outcome and result.labels with what you expect
+}
+```
+
+`evaluate` runs the real detectors, `parallel` ones included, on plain data. Run it over a labeled
+set in CI to count false positives before a check leaves audit. `context` feeds a check's `when`.
+
+## Update live
+
+```ts title="guard-update.ts"
+guard.update({ checks, version: '2026-11-01.1' });
+```
+
+- `version` must differ from the current one, so cached answers and the memo never carry across checks
+- `stream` options are merged into the current ones
+- Everything is compiled before the swap, so a bad update throws and the old checks stay
+- A call in flight finishes on the checks it started with
+- The memo starts empty. `key`, `mask` and `memo` stay as they were
+
+## Masking debug logs
+
+`guard.redactText` masks what `redact` and `block` checks find in a text, for the core's `redact`
+option:
+
+```ts title="guard-redact-text.ts"
+new VernLLM({ client, model, redact: guard.redactText, middleware: [guard] });
+```
+
+It is synchronous, so a check that returns a promise is skipped. When a check that fails closed
+breaks, the whole text is masked.

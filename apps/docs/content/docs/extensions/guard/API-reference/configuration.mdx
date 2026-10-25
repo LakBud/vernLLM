@@ -1,0 +1,91 @@
+---
+title: Configuration
+description: Every option of guardMiddleware, the stream options and the fields of a check, with their types and defaults
+---
+
+## GuardOptions
+
+<TypeTable
+  type={{
+    version: {
+      description: 'Names this set of checks. It is in every result and keys the memo.',
+      type: 'string',
+      required: true,
+    },
+    checks: {
+      description: 'The checks, see Checks.',
+      type: 'readonly Check[]',
+      required: true,
+    },
+    memo: {
+      description: 'Findings remembered per text. false turns it off.',
+      type: 'false | { max?: number }',
+      default: '{ max: 10_000 }',
+    },
+    key: {
+      description: 'Keys the tokens, at least 32 bytes.',
+      type: 'string | Uint8Array',
+      default: 'random per process',
+    },
+    mask: {
+      description: 'The text that replaces a masked value.',
+      type: '(label: string) => string',
+      default: '[EMAIL] style',
+    },
+    stream: {
+      description: 'How a streamed answer is checked and released.',
+      type: 'StreamOptions',
+    },
+    spotlight: {
+      description: 'Marks untrusted text, see Spotlight.',
+      type: "{ sources?: ('tool' | 'user' | 'assistant')[] }",
+      default: 'off',
+    },
+    onError: {
+      description: 'The default for checks that do not set their own.',
+      type: "'closed' | 'open'",
+      default: "'closed'",
+    },
+    logger: {
+      description: 'Where the guard reports its own failures.',
+      type: "Logger | 'silent'",
+      default: 'console logger',
+    },
+  }}
+/>
+
+## StreamOptions
+
+<TypeTable
+  type={{
+    release: { type: "'checked' | 'immediate'", default: "'checked'" },
+    holdChars: { description: 'At least 32.', type: 'number', default: '128' },
+    windowChars: { description: 'Above holdChars.', type: 'number', default: '1000' },
+  }}
+/>
+
+## Check
+
+<TypeTable
+  type={{
+    id: { description: 'Unique.', type: 'string', required: true },
+    detect: { type: 'Detector', required: true },
+    on: { type: 'CheckOn | CheckOn[]', default: "'input'" },
+    action: { type: "'label' | 'redact' | 'block'", default: "'label'" },
+    label: { type: 'string', default: 'the id' },
+    when: { type: '(ctx) => boolean', default: 'always' },
+    redactFor: { description: 'Redact only.', type: '(ctx) => boolean', default: 'every target' },
+    restore: { description: 'Redact only.', type: 'boolean', default: 'true' },
+    parallel: { description: 'Block on input only.', type: 'boolean', default: 'false' },
+    mode: { type: "'enforce' | 'audit'", default: "'enforce'" },
+    timeoutMs: { description: 'Up to 2147483647.', type: 'number', default: '2000' },
+    onError: { type: "'closed' | 'open'", default: "the instance's" },
+  }}
+/>
+
+## Construction errors
+
+<Callout type="warn">
+  A bad option throws a `TypeError` that starts with `guardMiddleware:` and names the field, when
+  the guard is built or when `update` is called. `update` keeps the old checks when it throws.
+</Callout>

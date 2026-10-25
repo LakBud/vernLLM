@@ -1,0 +1,65 @@
+---
+title: Result
+description: The guard.result event, the input and output of evaluate, and the content_blocked error a refused call throws
+---
+
+## guard.result
+
+One per call, emitted before the call goes on. Shape version `1`.
+
+<TypeTable
+  type={{
+    v: { type: '1' },
+    version: { description: 'The version of the checks that ran.', type: 'string' },
+    outcome: {
+      description: 'The strongest effect.',
+      type: "'passed' | 'labeled' | 'redacted' | 'blocked'",
+    },
+    labels: { description: 'What policy saw. Absent when unknown.', type: 'string[]' },
+    input: { description: 'A phase report for the request.', type: 'PhaseReport' },
+    output: {
+      description:
+        'A phase report for the answer, with restored and unrestored. Absent without one.',
+      type: 'PhaseReport',
+    },
+  }}
+/>
+
+A phase report for the request |
+| `output` | A phase report for the answer, with `restored` and `unrestored`. Absent without one |
+
+A phase report has `checks` (per check: `found`, `kinds`, `ms`, `memo`, `unredactable`), `audit`
+(checks in audit that found something, and what they would have done), `errors` (check id and the
+kind of error), `late` and `unscanned`.
+
+<Callout type="info">A result never holds content, and never offsets into it.</Callout>
+
+## evaluate
+
+`guard.evaluate(input)` returns a `GuardResult` and makes no call.
+
+<TypeTable
+  type={{
+    messages: {
+      description: 'A request, as the guard would see it on the way in. Not with text.',
+      type: 'Message[]',
+    },
+    text: {
+      description: "One piece of text. With phase 'input' it is a user message.",
+      type: 'string',
+    },
+    phase: { description: 'Which checks apply.', type: "'input' | 'output'", default: "'input'" },
+    context: { description: "What a check's when reads as ctx.context.", type: 'unknown' },
+  }}
+/>
+
+Pass either `messages` or `text`, never both. `messages` is for `'input'` only.
+
+## content_blocked
+
+A refusal is an `LLMError` of type `invalid_params` with the code `content_blocked`.
+
+<Callout type="warn">
+  `issues` holds the `version`, the `phase`, the `checks` and `labels`, and `failed: true` when a
+  check could not answer. It never holds the text.
+</Callout>

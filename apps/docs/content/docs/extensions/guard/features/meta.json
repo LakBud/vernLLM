@@ -1,0 +1,15 @@
+{
+  "title": "Features",
+  "icon": "Sparkles",
+  "pages": [
+    "index",
+    "checks",
+    "redaction",
+    "streaming",
+    "labels",
+    "rollout",
+    "spotlight",
+    "observability",
+    "caching"
+  ]
+}

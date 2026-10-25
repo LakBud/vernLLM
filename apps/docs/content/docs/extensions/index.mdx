@@ -4,7 +4,7 @@ description: Optional packages that add a capability inside VernLLM, with no thi
 icon: CircleQuestionMark
 ---
 
-Extensions add a capability inside VernLLM itself: logging, usage and budgets, routing, and policy.
+Extensions add a capability inside VernLLM itself: logging, usage and budgets, routing, policy, and content checks.
 Each is a separate package that depends only on `vern-llm`, so core stays small and you install
 only what you use.
 
@@ -18,11 +18,11 @@ registry, and the packages listed here are the ones this repo ships.
 
 ## Extensions and integrations
 
-|                        | Integrations                                                                             | Extensions                                                   |
-| ---------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Purpose                | Connect VernLLM to something outside your process (Redis, OpenTelemetry, a provider SDK) | Add a capability inside it (logging, usage, routing, policy) |
-| Third party dependency | Yes, as a peer or dependency                                                             | None                                                         |
-| Folder                 | `packages/integrations/`                                                                 | `packages/extensions/`                                       |
+|                        | Integrations                                                                             | Extensions                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Purpose                | Connect VernLLM to something outside your process (Redis, OpenTelemetry, a provider SDK) | Add a capability inside it (logging, usage, routing, policy, guard) |
+| Third party dependency | Yes, as a peer or dependency                                                             | None                                                                |
+| Folder                 | `packages/integrations/`                                                                 | `packages/extensions/`                                              |
 
 See [Integrations](/docs/integrations) for the packages that reach outside your process.
 
@@ -41,6 +41,9 @@ See [Integrations](/docs/integrations) for the packages that reach outside your 
   <Card title="Policy" href="/docs/extensions/policy">
     Remove forbidden targets, fail safe, audit every decision, and try rules in audit mode first.
   </Card>
+  <Card title="Guard" href="/docs/extensions/guard">
+    Label, redact or block what goes into a call and what comes out, streams included.
+  </Card>
 </Cards>
 
 ## Shared rejection codes
@@ -52,6 +55,7 @@ branch on one code whoever raised it. The core defines the codes and throws neit
 | ----------------- | ---------------- | ----------------- | ------------------------------------------ |
 | `budget_exceeded` | `quota_exceeded` | `vern-llm-usage`  | A budget has no room for the call          |
 | `policy_denied`   | `invalid_params` | `vern-llm-policy` | A policy removed every target or denied it |
+| `content_blocked` | `invalid_params` | `vern-llm-guard`  | A check refused the call or its answer     |
 
 A rejection happens before any provider is contacted, so it never counts toward the circuit breaker,
 and the logger records it at `warn` as `rejected`. See
@@ -70,19 +74,20 @@ reference implementation.
 | A fixed place in the nesting     | Order comes from a numeric `position`, so the order you list them in never matters                                                  |
 | Namespaced, versioned events     | Custom events are named `<package>.<event>` and carry `v: 1` in their data                                                          |
 | Own diagnostics through `logger` | A `logger` option for the package's own warnings, prefixed `[VernLLM] <package>:`                                                   |
-| Never changes a call by accident | Only control extensions (usage, policy, router) change an outcome, and only by a documented means                                   |
+| Never changes a call by accident | Only control extensions (usage, policy, guard, router) change an outcome, and only by a documented means                            |
 
 Every call nests the same way, whichever order you build the extensions in:
 
 ```text title="extension-nesting.txt"
 logger   position 'outermost'   sees everything, including denials
- └ policy position -100         removes forbidden targets
-    └ usage position -50        budgets, priced at the most expensive allowed target
-       └ router position 0      orders whatever is left
-          └ attempts, retries, fallback
+ └ guard  position -150         labels, redacts or blocks content
+    └ policy position -100      removes forbidden targets
+       └ usage position -50     budgets, priced at the most expensive allowed target
+          └ router position 0   orders whatever is left
+             └ attempts, retries, fallback
 ```
 
 <Callout type="info">
-  The logger is outermost, so its record includes calls that policy or a budget rejected. A
+  The logger is outermost, so its record includes calls that a guard, policy or a budget rejected. A
   rejection is logged at `warn` as `rejected`, not as an error.
 </Callout>

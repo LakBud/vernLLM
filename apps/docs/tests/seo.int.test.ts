@@ -44,6 +44,15 @@ describe('docs SEO', () => {
     expect(outOfRange).toEqual([]);
   });
 
+  it('keeps frontmatter values valid YAML', async () => {
+    const pages = await loadPages();
+    const unsafe = pages
+      .filter(({ title, description }) => [title, description].some((v) => /: | #/.test(v)))
+      .map(({ file }) => file);
+
+    expect(unsafe).toEqual([]);
+  });
+
   it('uses a unique description on every page', async () => {
     const pages = await loadPages();
     const seen = new Set<string>();
@@ -71,6 +80,7 @@ describe('docs SEO', () => {
       { slugs: ['extensions', 'usage', 'changelog'], title: 'Changelog' },
       { slugs: ['extensions', 'router', 'changelog'], title: 'Changelog' },
       { slugs: ['extensions', 'policy', 'changelog'], title: 'Changelog' },
+      { slugs: ['extensions', 'guard', 'changelog'], title: 'Changelog' },
       { slugs: ['core', 'retries'], title: 'Retries' },
     ]);
 
@@ -83,6 +93,7 @@ describe('docs SEO', () => {
       'extensions/usage/changelog': 'Changelog (Usage)',
       'extensions/router/changelog': 'Changelog (Router)',
       'extensions/policy/changelog': 'Changelog (Policy)',
+      'extensions/guard/changelog': 'Changelog (Guard)',
       'core/retries': 'Retries',
     });
   });

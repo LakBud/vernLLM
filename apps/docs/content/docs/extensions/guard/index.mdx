@@ -1,0 +1,215 @@
+---
+title: Guard Overview
+description: Checks on what goes into a VernLLM call and what comes out. Label it for policy, redact values before the provider sees them, or block it
+---
+
+`vern-llm-guard` is one middleware that looks at the text of a call, on the way in and on the way
+out. A check finds values with a detector, and then labels the call, replaces the values with
+tokens, or refuses the call.
+
+<Callout type="info">
+  The built in detectors are heuristics. They miss things and they flag things that are fine. Run a
+  new check in `mode: 'audit'` first and measure it with `evaluate()` before it can block a call.
+</Callout>
+
+## What it does and does not do
+
+| Guard does                                                     | Guard does not                                          |
+| -------------------------------------------------------------- | ------------------------------------------------------- |
+| Check the request, the answer and a stream, in one place       | Guarantee that nothing sensitive reaches a provider     |
+| Label a call so policy can pick targets by what the call holds | Choose a target, or remove one: that is policy          |
+| Redact values with keyed tokens and restore them in the answer | Keep a vault of values: nothing is stored               |
+| Fail closed when a detector breaks                             | Scan images, or text another process added after it ran |
+| Report counts, kinds and timings, never content or offsets     | Detect prompt injection reliably                        |
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-guard # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-guard # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-guard # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-guard # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` is a peer dependency and the package has no other dependency.
+
+<Cards>
+  <Card title="Features" href="/docs/extensions/guard/features">
+    Checks, redaction, streams, labels for policy, a safe rollout and how results are reported.
+  </Card>
+  <Card title="API Reference" href="/docs/extensions/guard/API-reference">
+    Every option, and the shape of a result.
+  </Card>
+</Cards>
+
+## Basic usage
+
+```ts title="guard-basic-usage.ts"
+import { VernLLM } from 'vern-llm';
+import { guardMiddleware, keywords, patterns } from 'vern-llm-guard';
+
+const guard = guardMiddleware({
+  version: '2026-10-25.1',
+  checks: [
+    { id: 'pii', detect: patterns(['email', 'phone', 'card', 'iban']) },
+    { id: 'secrets', detect: patterns(['secrets']), action: 'block' },
+    { id: 'banned', detect: keywords(['project-x']), action: 'block', mode: 'audit' },
+  ],
+});
+
+const llm = new VernLLM({ client, model, middleware: [guard] });
+```
+
+A call that holds an API key fails with `content_blocked` before a provider is contacted. A call
+with an email is labeled `pii`, which policy can use. `project-x` is only reported, since that check
+is in audit.
+
+## Handle a blocked call
+
+A block is an `LLMError` with the code `content_blocked`. It is never retried and never falls back.
+
+```ts title="guard-handle-block.ts"
+import { LLMError } from 'vern-llm';
+
+try {
+  await llm.call({ userContent, jsonMode: false });
+} catch (error) {
+  if (error instanceof LLMError && error.code === 'content_blocked') {
+    // error.issues names the checks, never the text they found
+    return refuse();
+  }
+  throw error;
+}
+```
+
+## Life of a call
+
+```text title="guard-flow.txt"
+request ─▶ guard (input checks) ─▶ policy ─▶ usage ─▶ router ─▶ provider
+             label · redact · block                                │
+answer  ◀─ guard (output checks, tokens restored) ◀────────────────┘
+```
+
+<Steps>
+<Step>
+
+### Check the input
+
+Every check that points at the request runs over its text: system, user, assistant and tool
+messages, and tool call arguments. Detectors that answer with an array finish synchronously, so a
+cheap block stops the call before any slower detector starts.
+
+</Step>
+<Step>
+
+### Act on what was found
+
+`label` adds the label for policy. `redact` swaps each value for a token in a copy of the request.
+`block` refuses the call with `content_blocked`, before a budget is reserved or a provider is
+contacted.
+
+</Step>
+<Step>
+
+### Check the answer
+
+Checks pointed at `output` run on the answer: plain text, JSON, tool call arguments, or a stream as
+it arrives. Values the caller sent are never flagged on the way back.
+
+</Step>
+<Step>
+
+### Restore and report
+
+Tokens become the caller's values again, and one `guard.result` event records what happened, with
+counts and kinds but never content.
+
+</Step>
+</Steps>
+
+## What each action does
+
+<Tabs items={['label', 'redact', 'block']}>
+  <Tab value="label">
+
+```ts title="guard-action-label.ts"
+{ id: 'pii', detect: patterns(['email', 'phone']) } // action: 'label' is the default
+```
+
+The call goes on unchanged. Policy sees the label `pii` and can pick targets by it.
+
+  </Tab>
+  <Tab value="redact">
+
+```ts title="guard-action-redact.ts"
+{ id: 'pii', detect: patterns(['email']), action: 'redact' }
+```
+
+```text title="guard-redact-flow.txt"
+caller sends     Write to jane@acme.com
+provider sees    Write to x3f9a1c@redacted.invalid
+caller receives  Mail sent to jane@acme.com
+```
+
+  </Tab>
+  <Tab value="block">
+
+```ts title="guard-action-block.ts"
+{ id: 'secrets', detect: patterns(['secrets']), action: 'block' }
+```
+
+The call fails with `content_blocked`. No budget is reserved and no provider is contacted.
+
+  </Tab>
+</Tabs>
+
+## Where it sits
+
+```text title="guard-position.txt"
+logger            sees every call, including the blocked ones
+guard             checks and changes the text      (position -150)
+policy            removes targets by label         (position -100)
+usage, router     see only what policy left
+core              retries and falls back over that list only
+```
+
+<Callout type="info">
+  A blocked call reserves no budget and opens no connection, and the logger records it as `rejected`
+  at `warn`, not as an error.
+</Callout>
+
+## Try a check before you ship it
+
+`guard.evaluate()` runs the real detectors on plain data and returns the result a call would have
+emitted, with no provider and no network:
+
+```ts title="guard-evaluate.ts"
+const result = await guard.evaluate({ text: 'Mail jane@acme.com' });
+// result.outcome is 'labeled', result.labels is ['pii']
+```
+
+For a rollout on live traffic, see [Rollout](/docs/extensions/guard/features/rollout).

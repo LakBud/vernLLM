@@ -1,0 +1,111 @@
+---
+title: Checks
+description: A check is a detector, what it is pointed at, and what to do with a finding
+---
+
+## A check
+
+<TypeTable
+  type={{
+    id: {
+      description: 'Unique and stable. It is in results, errors and logs.',
+      type: 'string',
+      required: true,
+    },
+    detect: { description: 'A detector, see below.', type: 'Detector', required: true },
+    on: {
+      description:
+        "What is scanned: 'input' (every role), any of 'user', 'tool', 'system', 'assistant', or 'output' for the answer.",
+      type: 'CheckOn | CheckOn[]',
+      default: "'input'",
+    },
+    action: {
+      description:
+        "'label' adds the label for policy, 'redact' replaces the value, 'block' refuses the call with content_blocked.",
+      type: "'label' | 'redact' | 'block'",
+      default: "'label'",
+    },
+    label: {
+      description: 'What policy sees when the check finds something.',
+      type: 'string',
+      default: 'the id',
+    },
+    when: { description: 'Whether the check applies to this call.', type: '(ctx) => boolean' },
+    mode: {
+      description: "'audit' reports the would be effect and changes nothing.",
+      type: "'enforce' | 'audit'",
+      default: "'enforce'",
+    },
+    timeoutMs: {
+      description: "Never past the call's deadline.",
+      type: 'number',
+      default: '2000',
+    },
+    onError: {
+      description: 'What a failing detector means.',
+      type: "'closed' | 'open'",
+      default: "the instance's",
+    },
+  }}
+/>
+
+`redactFor`, `restore` and `parallel` are covered under [Redaction](/docs/extensions/guard/features/redaction)
+and below.
+
+## Detectors
+
+<Tabs items={['patterns', 'keywords', 'your own']}>
+  <Tab value="patterns">
+
+```ts title="guard-patterns.ts"
+patterns(['email', 'phone', 'card', 'iban', 'ip', 'secrets']); // validated: Luhn, mod 97
+patterns({ ticket: /TCK-\d{6}/g }); // your own expressions, one label each
+```
+
+  </Tab>
+  <Tab value="keywords">
+
+```ts title="guard-keywords.ts"
+keywords(['project-x', 'codename'], { caseSensitive: false }); // whole words only
+```
+
+  </Tab>
+  <Tab value="your own">
+
+```ts title="guard-detector.ts"
+type Detector = (
+  segments: readonly Segment[],
+  signal: AbortSignal,
+) => Finding[] | Promise<Finding[]>;
+```
+
+  </Tab>
+</Tabs>
+
+- Pure: findings depend only on the segments. That is what makes the memo exact
+- Batched: a detector gets every segment that needs scanning in one call
+- Returning an array keeps the scan synchronous. A promise is awaited and raced against `timeoutMs`
+- A threshold is one `.filter` inside your detector
+
+<Callout type="warn">
+  The built in detectors are heuristics. Run a new check in `mode: 'audit'` first.
+</Callout>
+
+## When a detector fails
+
+A detector that throws, times out or returns something invalid follows `onError`. With `closed`, a
+blocking check blocks the call and a labeling check makes the labels unknown. With `open`, the
+check is skipped. Results carry the check id and the kind of error, never its message.
+
+## Parallel checks
+
+```ts title="guard-parallel.ts"
+{ id: 'jailbreak', detect: classifier, action: 'block', parallel: true }
+```
+
+- Starts with the call instead of before it, so a slow classifier adds no latency to calls that pass
+- The answer is held until the check finishes. A streamed answer's first chunk waits for it
+- On a block, a stream is cancelled and the call fails with `content_blocked`. A plain answer was
+  already generated and billed: that is the cost of the latency win
+- It runs after policy decided, so it can only block, and only on input. Anything else is a
+  construction error

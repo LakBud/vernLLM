@@ -1,0 +1,23 @@
+---
+title: Observability
+description: The guard.result event, the fields for a log record, and what is never reported
+---
+
+Every call emits one `guard.result` before it goes on. It holds the outcome (`passed`, `labeled`,
+`redacted` or `blocked`), an `output` report when the answer was checked, the labels, and per check
+counts, kinds and milliseconds. Never content, never offsets into it. See
+[Result](/docs/extensions/guard/API-reference/result).
+
+The logger keeps `guard.*` events by default. For a stream, the event comes when `finalResult`
+settles.
+
+`guardLogFields(ctx)` gives `guard_outcome`, `guard_labels` and `guard_ms` for a log record:
+
+```ts title="guard-logger.ts"
+import { loggerMiddleware } from 'vern-llm-logger';
+import { guardLogFields } from 'vern-llm-guard';
+
+const logger = loggerMiddleware({ sink, enrich: guardLogFields });
+```
+
+A call the guard blocks is logged with the outcome `rejected`, as a policy denial is.

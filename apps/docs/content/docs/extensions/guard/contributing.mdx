@@ -1,0 +1,119 @@
+---
+title: Contributing
+description: Set up, test and open a pull request for vern-llm-guard, the content checks extension in the VernLLM monorepo.
+icon: GitPullRequest
+---
+
+This page covers `packages/extensions/vern-llm-guard` specifically. For the coding standard and PR
+checklist that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+No external service is needed. The tests use fake clients, and the integration test for the
+extensions uses the real logger, usage and policy packages.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`. Four rules are specific here:
+
+<Callout type="info">Each rule below has a test that fails when it breaks.</Callout>
+
+- **Detectors are pure.** Findings depend only on the segments, which is what makes the memo and
+  `evaluate` exact. Keep state out of them.
+- **Fail closed, and say so.** A detector that throws is handled by `onError` and listed in the
+  result, and a user callback never breaks a call.
+- **No content in output.** Results, errors and events carry check ids, labels, counts and the kind
+  of an error, never text, offsets or an error message.
+- **Stay synchronous when you can.** When every detector answers with an array the scan is
+  synchronous, so a cheap block saves a model call.
+
+Options are validated once under `internal/options`, so a bad option throws when the guard is built.
+Every branch is covered: the package keeps 100% coverage, and dead branches are removed, not ignored.
+
+## Layout
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="guardMiddleware.ts" />
+    <File name="events.ts" />
+    <File name="labels.ts" />
+    <File name="index.ts" />
+    <Folder name="detectors" />
+    <Folder name="types" />
+    <Folder name="internal" defaultOpen>
+      <Folder name="evaluate" />
+      <Folder name="middleware" />
+      <Folder name="options" />
+      <Folder name="output" />
+      <Folder name="patterns" />
+      <Folder name="scan" />
+      <Folder name="segments" />
+      <Folder name="spotlight" />
+      <Folder name="tokens" />
+    </Folder>
+  </Folder>
+  <Folder name="tests">
+    <Folder name="unit" />
+    <Folder name="integration" />
+    <Folder name="bench" />
+  </Folder>
+  <Folder name="scripts" />
+</Files>
+
+`guardMiddleware.ts` only wires parts together, the same way the other extensions do. Under
+`internal/`:
+
+| Folder        | Holds                                                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `options/`    | Validates and compiles the checks                                                                                                                                              |
+| `scan/`       | `ScanRun` runs the detectors, with the call cache, the memo, `tally`, timeouts and span merging                                                                                |
+| `segments/`   | Cuts requests and answers into text and puts replacements back                                                                                                                 |
+| `tokens/`     | Makes and restores tokens                                                                                                                                                      |
+| `output/`     | The answer gate, and `StreamGate` with its `TextWindow`, tool call and JSON helpers                                                                                            |
+| `evaluate/`   | Backs `evaluate` and `redactText`, and maps a result to an outcome                                                                                                             |
+| `middleware/` | The per call work: `wrap.utils.ts` and `transform.utils.ts` are the hooks, `input.utils.ts` and `output.utils.ts` run the phases, and `live.ts` keeps the state `update` swaps |
+
+## Scripts
+
+Run them with `pnpm run <script>` from inside `packages/extensions/vern-llm-guard`, or
+`pnpm nx run vern-llm-guard:<script>` from the repo root:
+
+| Script                                    | What it does                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `build`, `dev`                            | Build with tsdown, or rebuild on change                            |
+| `lint`, `lint:fix`                        | Run oxlint                                                         |
+| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                                 |
+| `test`, `test:unit`, `test:int`           | Run all tests, or one project                                      |
+| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                        |
+| `smoke-test`                              | Import the build through ESM and CJS                               |
+| `bench`, `bench:check`                    | Measure per call overhead, or fail when it grows past the baseline |
+| `bench:update`                            | Record a new baseline in `tests/bench/baseline.json`               |
+
+`bench:check` runs against the built package, so run `build` first.
+
+## Before opening a PR
+
+Every PR touching this package runs through the CI workflows described in
+[Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                      | Local command                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Lint                       | `pnpm nx run vern-llm-guard:lint`                                                                                     |
+| Typecheck source and tests | `pnpm nx run vern-llm-guard:typecheck && pnpm nx run vern-llm-guard:typecheck:test`                                   |
+| Unit and integration tests | `pnpm nx run vern-llm-guard:test:unit:coverage && pnpm nx run vern-llm-guard:test:int:coverage`                       |
+| Build, smoke test, bench   | `pnpm nx run vern-llm-guard:build && pnpm nx run vern-llm-guard:smoke-test && pnpm nx run vern-llm-guard:bench:check` |
+| Changeset present          | `pnpm changeset status --since=origin/main`                                                                           |
+
+Record a change with `pnpm nx run vern-llm-guard:changeset`. The package versions and releases on
+its own changelog.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

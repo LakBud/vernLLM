@@ -1,0 +1,53 @@
+---
+title: API Reference Overview
+description: The public exports of vern-llm-guard, and where each option and the result are documented
+---
+
+| Export               | Kind     | What it is                                                                                           |
+| -------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `guardMiddleware`    | Function | Takes `GuardOptions` and returns one middleware with `evaluate()`, `update()` and `redactText()`     |
+| `guardMiddlewareRef` | Constant | The `MiddlewareRef` of that entry, so a second one in the same `VernLLM` is rejected                 |
+| `patterns`           | Function | A detector for `email`, `phone`, `card`, `iban`, `ip` and `secrets`, or your own regular expressions |
+| `keywords`           | Function | A detector for a list of whole words                                                                 |
+| `guardLabels`        | Function | Reads the labels of a call, for policy's `labels` option                                             |
+| `guardLogFields`     | Function | Gives `guard_outcome`, `guard_labels` and `guard_ms` for a log record                                |
+| `GUARD_RESULT_EVENT` | Constant | `'guard.result'`                                                                                     |
+| `GuardOptions`       | Type     | Every option, see [Configuration](/docs/extensions/guard/API-reference/configuration)                |
+| `GuardResult`        | Type     | What a result holds, see [Result](/docs/extensions/guard/API-reference/result)                       |
+
+```ts title="guard-exports.ts"
+import {
+  guardMiddleware,
+  guardMiddlewareRef,
+  patterns,
+  keywords,
+  guardLabels,
+  guardLogFields,
+  GUARD_RESULT_EVENT,
+} from 'vern-llm-guard';
+import type {
+  GuardMiddleware,
+  GuardOptions,
+  GuardUpdate,
+  GuardResult,
+  GuardOutcome,
+  Check,
+  CheckAction,
+  CheckOn,
+  Detector,
+  Finding,
+  Segment,
+  StreamOptions,
+  SpotlightOptions,
+  EvaluateInput,
+} from 'vern-llm-guard';
+```
+
+<Cards>
+  <Card title="Configuration" href="/docs/extensions/guard/API-reference/configuration">
+    Every option with its type and default, and what throws at construction.
+  </Card>
+  <Card title="Result" href="/docs/extensions/guard/API-reference/result">
+    The guard.result event and the input of evaluate.
+  </Card>
+</Cards>

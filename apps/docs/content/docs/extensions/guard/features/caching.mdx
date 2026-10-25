@@ -1,0 +1,13 @@
+---
+title: Caching
+description: How guard checks apply to a stored answer on a cache hit, and what the per instance memo holds and never holds
+---
+
+`wrap` runs on cache hits and joins, so input and output checks still apply to a stored answer.
+
+- A cache holds tokens, never the values a caller sent, and a hit cannot restore a value its caller
+  did not send
+- Findings are remembered per text in a per call cache and in a memo per instance
+  (`memo: { max }`, or `false`)
+- The memo holds offsets and kinds, never text. It is keyed by `version`, so changing the checks
+  starts a new one

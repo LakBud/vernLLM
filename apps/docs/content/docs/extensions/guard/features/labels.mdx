@@ -1,0 +1,30 @@
+---
+title: Labels for policy
+description: Let policy choose targets by the labels the guard found in a call, and what unknown labels mean
+---
+
+Every check that finds something adds its label to the call. `vern-llm-policy` reads the labels and
+removes targets by them:
+
+```ts title="guard-policy.ts"
+import { guardLabels, guardMiddleware } from 'vern-llm-guard';
+import { policyMiddleware } from 'vern-llm-policy';
+
+const policy = policyMiddleware({
+  labels: guardLabels,
+  targets: { 'openai-us': { zdr: false }, anthropic: { zdr: true } },
+  rules: [{ id: 'pii-zdr', forbid: { zdr: false }, when: { labels: 'pii' } }],
+});
+```
+
+`guardLabels(ctx)` returns:
+
+- `['pii']` when a check found something
+- `[]` when the guard looked and found nothing
+- `undefined` when the guard did not run, or a labeling check failed. Policy reads that as unknown
+  and applies its label rules
+
+Redact or route: redaction keeps a call on every target, routing keeps the value but limits the
+targets. Use both when a value must reach one target raw and the others only as a token.
+
+A check in `audit` mode adds no label.

@@ -39,6 +39,9 @@ labels: (ctx) => ctx.state.get(guardFindings),
 
 `ctx.state.get` returns `undefined` when nothing was stored, which is exactly what "unknown" needs.
 
+`vern-llm-guard` does this for you: pass its `guardLabels` as the `labels` option. See
+[Labels for policy](/docs/extensions/guard/features/labels).
+
 ## Found nothing, or did not run
 
 | It returns                | Means                              | A rule on labels         |

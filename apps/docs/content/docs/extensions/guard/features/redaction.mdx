@@ -1,0 +1,81 @@
+---
+title: Redaction
+description: Swap values for keyed tokens before the provider sees them, and swap them back in the answer
+---
+
+```ts title="guard-redact.ts"
+const guard = guardMiddleware({
+  version: '1',
+  key: process.env.GUARD_KEY, // 32 bytes or more, optional
+  checks: [{ id: 'pii', detect: patterns(['email', 'card']), action: 'redact' }],
+});
+```
+
+- Tokens are keyed HMACs, so the same value always gets the same token and nothing is stored
+- An email becomes `x<hex>@redacted.invalid`, so it still passes an address check. Other values
+  become `[LABEL_hash]`
+- Set `key` to keep tokens stable across processes. Without it each process uses a random key
+- The caller's input is never changed. Only a copy goes to the provider
+- A finding without a position cannot be replaced, so a `redact` check blocks and reports it as
+  `unredactable`
+- Content added by another transform is scanned too. Give the guard the last transform place, or a
+  warning says what escapes
+- `mask(label)` sets the text for masked values. Default: `[EMAIL]`
+
+## Per target
+
+`redactFor(ctx)` runs per attempt, so a trusted primary can see the value while a fallback gets a
+token:
+
+```ts title="guard-redact-for.ts"
+{ id: 'pii', detect, action: 'redact', redactFor: (ctx) => ctx.requestedProvider !== 'self-hosted' }
+```
+
+## Restore or mask
+
+`restore: true` (default) puts the value back in the answer. `restore: false` masks it there too, so
+a value never reaches the caller.
+
+## The answer
+
+A check with `on: 'output'` runs on the plain answer, in four steps:
+
+<Steps>
+<Step>
+
+### Tokenize
+
+Values the caller sent become tokens again, so they are never flagged on the way back.
+
+</Step>
+<Step>
+
+### Check
+
+The output checks run on what the model wrote.
+
+</Step>
+<Step>
+
+### Act
+
+`block` refuses the call. `redact` masks the value.
+
+</Step>
+<Step>
+
+### Restore
+
+Tokens become the caller's values again, unless `restore` is `false`.
+
+</Step>
+</Steps>
+
+Tool call arguments are checked and restored too. Reasoning blocks are scanned, so a `block` check
+sees them, but they are never rewritten. In JSON mode every string the model wrote is read, and a
+mask that lands on a bare number is written as a string so the document stays valid.
+
+<Callout type="warn">
+  A token the model changed or invented stands for no value of this call. It is counted as
+  `unrestored` and left as it is.
+</Callout>
