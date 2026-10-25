@@ -511,6 +511,30 @@ describe('next.again() with cachedCall', () => {
     expect(refundUsage).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the main chain's meta when the wrap returns a result that merely carries a chain", async () => {
+    const { client } = createMockClient([textResponse('first'), textResponse('second')]);
+    const meta: { current?: CallMeta } = {};
+    const rebuild: VernLLMMiddleware = {
+      name: 'rebuild',
+      reruns: true,
+      wrap: async (_request, next) => {
+        const first = await next();
+        await next.again!();
+
+        return { ...first, meta: first.meta && { ...first.meta, chain: 1 } };
+      },
+    };
+
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [rebuild] });
+
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 1000, call: { ...CALL, meta } }),
+    ).resolves.toBe('first');
+
+    expect(meta.current).toMatchObject({ attempts: 1 });
+    expect(meta.current?.chain).toBeUndefined();
+  });
+
   it('relays a streamed rerun, caches it on finalResult, and keeps its meta and chain', async () => {
     const never = new Promise<void>(() => {});
     const { client, signals } = streamClient([{ text: 'slow', gate: never }, { text: 'fast' }]);

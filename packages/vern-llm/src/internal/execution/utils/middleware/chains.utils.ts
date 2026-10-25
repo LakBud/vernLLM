@@ -16,6 +16,12 @@ export interface Chain {
 
 type Run = (chain: Chain) => Promise<CallResult>;
 
+/** The chain a `keep` matched: its number, and the result it produced itself. */
+export interface KeptChain {
+  number: number;
+  result: CallResult;
+}
+
 interface Entry {
   number: number;
   controller: AbortController;
@@ -76,9 +82,9 @@ export class ChainSet {
 
   /**
    * Cancels every chain whose result isn't `kept`, pending ones included, and returns the kept
-   * chain's number. `kept` undefined cancels them all.
+   * chain's number and own result. `kept` undefined cancels them all.
    */
-  keep(kept: CallResult | undefined): number | undefined {
+  keep(kept: CallResult | undefined): KeptChain | undefined {
     // The result itself first, then any chain whose value it returned: a `wrap` may rebuild the
     // `CallResult` around a chain's value. Only one chain is kept, even when values are equal.
     const keptEntry =
@@ -93,7 +99,7 @@ export class ChainSet {
       if (entry !== keptEntry) entry.controller.abort();
     }
 
-    return keptEntry?.number;
+    return keptEntry?.result ? { number: keptEntry.number, result: keptEntry.result } : undefined;
   }
 
   private start(number: number, keepMeta: boolean, run: Run): Promise<CallResult> {

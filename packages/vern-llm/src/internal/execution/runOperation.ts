@@ -3,7 +3,7 @@ import { callFactsFor, callScopeFor, noopEmit } from '../utils/callScope.utils.j
 import { logError } from '../utils/logger.utils.js';
 import { modelForTarget } from './logicalCall.js';
 import { describeTargets, narrowTargets, type ResolvedTarget } from './targetOrder.js';
-import { ChainSet, type Chain } from './utils/middleware/chains.utils.js';
+import { ChainSet, type Chain, type KeptChain } from './utils/middleware/chains.utils.js';
 import {
   emitEvent,
   reclassifyMiddlewareThrow,
@@ -54,14 +54,15 @@ export interface RunOperationDependencies {
 }
 
 /**
- * Ends a `reruns` layer: cancels every chain but the one `result` came from, and returns its
- * number. The main chain wrote the caller's `meta` itself; a kept rerun's is written here.
+ * Ends a `reruns` layer: cancels every chain but the one `result` came from, and returns it. The
+ * main chain wrote the caller's `meta` itself; a kept rerun's own `meta` is written here, never the
+ * returned wrapper's.
  */
-function settleChains(chains: ChainSet, result: CallResult, chain: Chain): number | undefined {
+function settleChains(chains: ChainSet, result: CallResult, chain: Chain): KeptChain | undefined {
   const kept = chains.keep(result);
 
-  if (kept !== undefined && kept !== chain.number && chain.params.meta) {
-    chain.params.meta.current = result.meta;
+  if (kept !== undefined && kept.number !== chain.number && chain.params.meta) {
+    chain.params.meta.current = kept.result.meta;
   }
 
   return kept;

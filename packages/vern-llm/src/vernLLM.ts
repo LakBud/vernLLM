@@ -452,8 +452,9 @@ export class VernLLM {
     );
 
     const callerMeta = restCallParams.meta;
-    // Set once a rerun's answer is the result: its meta was written to the caller's already, and the
-    // shared call finishing later must not replace it.
+    // The meta of every rerun's answer. When the one the core kept is among them, it was written to
+    // the caller's already, and the shared call finishing later must not replace it.
+    const rerunMetas = new Set<CallMeta | undefined>();
     let metaFromRerun = false;
     const syncCallerMeta = () => {
       if (callerMeta && !metaFromRerun) callerMeta.current = metaHolder.current;
@@ -534,6 +535,8 @@ export class VernLLM {
                   fn: (signal) => callInner(markChain(signal, chain.number), chosen, freshMeta),
                 });
 
+            rerunMetas.add(freshMeta.current);
+
             return { value, meta: freshMeta.current };
           }
 
@@ -566,8 +569,8 @@ export class VernLLM {
         },
       );
 
-      // A kept rerun's meta was written to the caller's already, and carries its `chain`.
-      metaFromRerun = wrapped.meta?.chain !== undefined;
+      // Decided from what the core wrote to the caller's meta, not from the returned wrapper.
+      metaFromRerun = callerMeta?.current !== undefined && rerunMetas.has(callerMeta.current);
 
       if (restCallParams.stream) {
         const streamResult = wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;

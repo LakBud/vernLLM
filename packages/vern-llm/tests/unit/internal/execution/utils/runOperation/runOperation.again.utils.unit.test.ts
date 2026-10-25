@@ -343,4 +343,43 @@ describe('runOperation with reruns', () => {
     expect(outcome.value).toEqual({ from: 0 });
     expect(rejection).toMatchObject({ message: 'sync boom' });
   });
+
+  it("writes the kept rerun's own meta, not the meta of the result the wrap rebuilt around it", async () => {
+    const meta: { current?: CallMeta } = {};
+    const stale = { ...metaFor(0), attempts: 9 };
+
+    await execute(
+      [
+        reruns(async (_request, next) => {
+          await next();
+          const rerun = await next.again!();
+
+          return { value: rerun.value, meta: stale };
+        }),
+      ],
+      core().run,
+      { ...params, meta },
+    );
+
+    expect(meta.current).toEqual(metaFor(1));
+  });
+
+  it('leaves the caller meta alone when the kept chain is the main one, whatever meta the wrap returns', async () => {
+    const meta: { current?: CallMeta } = { current: metaFor(0) };
+
+    await execute(
+      [
+        reruns(async (_request, next) => {
+          const first = await next();
+          await next.again!();
+
+          return { value: first.value, meta: metaFor(1) };
+        }),
+      ],
+      core().run,
+      { ...params, meta },
+    );
+
+    expect(meta.current).toEqual(metaFor(0));
+  });
 });
