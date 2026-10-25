@@ -83,6 +83,16 @@ describe('policy_denied', () => {
   });
 });
 
+describe('content_blocked', () => {
+  it('is not retryable and never counts toward the breaker, like any invalid_params error', () => {
+    const err = new LLMError('blocked', 'invalid_params', { code: 'content_blocked' });
+
+    expect(err.retryable).toBe(false);
+    expect(err.toSnapshot().retryable).toBe(false);
+    expect(err.countsTowardBreaker).toBe(false);
+  });
+});
+
 describe('response_truncated', () => {
   it('is retryable even though its type is parse', () => {
     const err = new LLMError('cut off', 'parse', { code: 'response_truncated' });

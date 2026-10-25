@@ -67,6 +67,74 @@ describe('middleware failures', () => {
     expect(llm.getCircuitState()).toBe('closed');
   });
 
+  it('a transform refusing with content_blocked ends the call: no target is tried, no fallback, no breaker count', async () => {
+    const chain = fallbackChain([textResponse('unused')], [textResponse('unused')]);
+
+    const refuser: VernLLMMiddleware = {
+      name: 'refuser',
+      transform: () => {
+        throw new LLMError(
+          'Call blocked: content refused by middleware "refuser"',
+          'invalid_params',
+          {
+            code: 'content_blocked',
+          },
+        );
+      },
+    };
+
+    const llm = new VernLLM({
+      ...chain.options,
+      middleware: [refuser],
+      circuitBreaker: { threshold: 1, cooldownMs: 60_000 },
+    });
+
+    for (let call = 0; call < 3; call++) {
+      await expect(llm.call(CALL)).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'content_blocked',
+        retryable: false,
+      });
+    }
+
+    expect(chain.primary.create).not.toHaveBeenCalled();
+    expect(chain.fallback.create).not.toHaveBeenCalled();
+    expect(llm.getCircuitState()).toBe('closed');
+  });
+
+  it('a wrap refusing the answer it got fails the call with content_blocked, with no fallback and no breaker count', async () => {
+    const chain = fallbackChain([textResponse('the answer')], [textResponse('unused')]);
+
+    const refuser: VernLLMMiddleware = {
+      name: 'refuser',
+      wrap: async (_request, next) => {
+        await next();
+        throw new LLMError(
+          'Call blocked: content refused by middleware "refuser"',
+          'invalid_params',
+          {
+            code: 'content_blocked',
+          },
+        );
+      },
+    };
+
+    const llm = new VernLLM({
+      ...chain.options,
+      middleware: [refuser],
+      circuitBreaker: { threshold: 1, cooldownMs: 60_000 },
+    });
+
+    await expect(llm.call(CALL)).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'content_blocked',
+    });
+
+    expect(chain.primary.create).toHaveBeenCalledTimes(1);
+    expect(chain.fallback.create).not.toHaveBeenCalled();
+    expect(llm.getCircuitState()).toBe('closed');
+  });
+
   it('duplicate tool names added by two middleware stop the chain on the first target, naming the offender', async () => {
     const chain = fallbackChain([textResponse('unused')], [textResponse('unused')]);
     const addSharedTool = (name: string, priority: number): VernLLMMiddleware => ({

@@ -152,8 +152,16 @@ The currently defined policy code is:
 | --------------- | ---------------- | -------------------------------------------------------------------------------------- |
 | `policy_denied` | `invalid_params` | A middleware policy refused the call before any provider was contacted. Never retried. |
 
-The core throws neither code itself. They are reserved for extension packages, which throw them
-from a `wrap` before `next()`.
+The currently defined content code is:
+
+| Code              | Error type       | Meaning                                                                                                                                   |
+| ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `content_blocked` | `invalid_params` | A middleware refused the call, or the answer it got, because of its content. Never retried, no fallback, never counts toward the breaker. |
+
+The core throws none of these codes itself. They are reserved for middleware, which throws them
+from a `wrap` or a `transform`. `content_blocked` is also the one error a `wrap` can throw after
+`next()` resolved and have it reach the caller, see
+[Error handling](/docs/core/middleware#error-handling) in the middleware guide.
 
 The currently defined rate-limiting codes are:
 

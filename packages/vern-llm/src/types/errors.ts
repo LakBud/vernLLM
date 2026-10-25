@@ -36,6 +36,9 @@ export type LLMErrorCode =
   | 'middleware_threw'
   // Policy (invalid_params)
   | 'policy_denied'
+  // Content (invalid_params)
+  /** A middleware refused the call, or the answer it got, because of its content. Not retried, no fallback. */
+  | 'content_blocked'
   // Budget (quota_exceeded)
   | 'budget_exceeded'
   // Rate limiting (rate_limited)

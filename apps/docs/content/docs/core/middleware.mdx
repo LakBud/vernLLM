@@ -642,9 +642,30 @@ default. `wrap` is never bounded this way: it spans the whole call, so `call()`'
 2. An already constructed `LLMError`, or a recognized status or network signal, passes through
    with its own type and `retryable` intact.
 3. An error thrown by `wrap` strictly after `next()` already resolved successfully is caught,
-   logged like a failing `onUsage`, and the original result is returned instead.
+   logged like a failing `onUsage`, and the original result is returned instead. The one
+   exception is an `LLMError` with code `content_blocked`: a `wrap` that refuses a result it has
+   seen throws it on purpose, so it reaches the caller. It is not retried and has no fallback.
 4. A throwing, rejecting, or timed out `enabled` predicate is logged and treated as not applying.
 5. `dispatch` follows its own rules, see [`dispatch`](#dispatch).
+
+```ts title="refuse-a-result.ts"
+const refuseEmpty: VernLLMMiddleware = {
+  name: 'refuse-empty',
+  wrap: async (request, next) => {
+    const result = await next();
+    if (result.value === '') {
+      throw new LLMError(
+        'Call blocked: content refused by middleware "refuse-empty"',
+        'invalid_params',
+        {
+          code: 'content_blocked',
+        },
+      );
+    }
+    return result;
+  },
+};
+```
 
 ## Interaction with `cachedCall`
 
