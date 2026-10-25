@@ -154,7 +154,7 @@ If a join is answered by a target the joiner's rules removed, policy emits `poli
 
 ## Errors
 
-A pattern or `when` function that throws is handled by `onError`. Each failing rule is reported once through the logger with its message, and every distinct failure is listed in the decision. The event carries the kind of error only, since a message may hold call data.
+A pattern or `when` function that throws is handled by `onError`. Each failing rule is reported once through the logger with its error name, and every distinct failure is listed in `Decision.errors` with its full message. The logger and the event carry the kind of error only, since a message may hold call data.
 
 - `'closed'` (default): a `forbid` still applies, and an `allow` grants nothing. A `forbid` whose pattern throws on one target removes only that target
 - `'open'`: the rule is skipped. An `allow` that throws is dropped entirely, so no allow list stays in force
