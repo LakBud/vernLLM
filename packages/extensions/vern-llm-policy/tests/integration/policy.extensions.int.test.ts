@@ -2,7 +2,7 @@ import { VernLLM, type VernLLMMiddleware } from 'vern-llm';
 import { loggerMiddleware, memorySink } from 'vern-llm-logger';
 import { routerMiddleware } from 'vern-llm-router';
 import { usageBudgetShare, usageMiddleware } from 'vern-llm-usage';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { policyMiddleware, type PolicyOptions } from '../../src/index.js';
 import { captureLogger, eventProbe, targetChain } from '../helpers.js';
@@ -11,7 +11,17 @@ import { captureLogger, eventProbe, targetChain } from '../helpers.js';
 // none of them: they are dev dependencies of this test only.
 
 const call = { userContent: 'hi', jsonMode: false as const, context: { tenantId: 'acme' } };
-const today = new Date().toISOString().slice(0, 10);
+const now = new Date('2026-06-15T12:00:00Z');
+const today = now.toISOString().slice(0, 10);
+
+// One fixed day, so the per day budget and `pricesAsOf` agree however late the suite runs.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(now);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const prices = {
   'primary-model': { input: 10, output: 10 },

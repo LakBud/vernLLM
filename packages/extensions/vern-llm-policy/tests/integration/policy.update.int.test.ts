@@ -103,9 +103,21 @@ describe('update', () => {
       ['an attribute no target declares', { rules: [{ id: 'a', forbid: { regoin: 'eu' } }] }],
       ['a rule with no effect', { rules: [{ id: 'a' }] }],
       ['an unknown option', { rulez: [] }],
+      ['null', null],
+      ['undefined', undefined],
+      ['an array', []],
     ])('rejects %s', (_name, update) => {
       const { policy } = harness();
       expect(() => policy.update(update as never)).toThrow('policyMiddleware:');
+    });
+
+    it('keeps the old policy when the update is not an object', async () => {
+      const { llm, policy, probe } = harness({ rules: [{ id: 'no-b', forbid: { name: 'b' } }] });
+
+      expect(() => policy.update(null as never)).toThrow('options must be an object');
+      await llm.call(call);
+
+      expect(probe.seen).toEqual([['primary', 'c']]);
     });
 
     it('refuses to change the logger', () => {

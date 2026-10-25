@@ -1,7 +1,7 @@
 import { PatternError } from '../match/errors.js';
 import { compileMatcher } from '../match/match.utils.js';
 import { patternKeys } from '../match/patternKeys.utils.js';
-import { isPlainObject } from '../match/value.utils.js';
+import { containsFunction, isPlainObject } from '../match/value.utils.js';
 import { invalid } from './invalid.utils.js';
 
 import type { PolicyNeeds } from '../../types/resolvedConfig.js';
@@ -67,9 +67,10 @@ const CALL_CHECKS = new Map<string, (value: unknown, check: CallCheck) => void>(
   ],
   [
     'context',
-    (value, { path }) => {
+    (value, { path, needs }) => {
       if (!isPlainObject(value))
         invalid(`${path}.context must be a pattern over the call's context`);
+      if (containsFunction(value)) Object.assign(needs, FUNCTION_NEEDS);
     },
   ],
   [
@@ -77,6 +78,7 @@ const CALL_CHECKS = new Map<string, (value: unknown, check: CallCheck) => void>(
     (value, { path, needs }) => {
       if (!isPlainObject(value))
         invalid(`${path}.request must be a pattern over the request facts`);
+      if (containsFunction(value)) Object.assign(needs, FUNCTION_NEEDS);
       patternKeys(value).forEach((fact) => {
         if (!REQUEST_FACTS.has(fact)) {
           invalid(

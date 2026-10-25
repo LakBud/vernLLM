@@ -80,7 +80,7 @@ describe('labels in a real call', () => {
 
       expect(log.warnings()).toEqual([
         '[VernLLM] policy: the labels function returned undefined, so labels are unknown and rules using them fail closed',
-        '[VernLLM] policy: rule "pii-zdr" threw while deciding a call, so it fails closed: the labels are unknown',
+        '[VernLLM] policy: rule "pii-zdr" threw while deciding a call (LabelsUnknownError), so it fails closed',
       ]);
     });
 
@@ -120,7 +120,7 @@ describe('labels in a real call', () => {
         errors: [{ name: 'Error' }, { rule: 'pii-zdr', name: 'LabelsUnknownError' }],
       });
       expect(log.warnings()[0]).toBe(
-        '[VernLLM] policy: the labels function failed: guard crashed, so labels are unknown and rules using them fail closed',
+        '[VernLLM] policy: the labels function failed (Error), so labels are unknown and rules using them fail closed',
       );
     });
 

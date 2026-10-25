@@ -400,6 +400,14 @@ describe('compile', () => {
         functions: true,
       });
     });
+
+    it.each([
+      ['context', { context: { any: [() => true] } }],
+      ['request', { request: { not: () => true } }],
+    ])('needs everything for a function nested in %s', (_name, when) => {
+      const policy = compile({ rules: [{ id: 'a', forbid: 'all', when }] });
+      expect(policy.needs).toMatchObject({ inputTokens: true, images: true, functions: true });
+    });
   });
 });
 

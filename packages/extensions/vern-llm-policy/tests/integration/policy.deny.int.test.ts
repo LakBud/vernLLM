@@ -133,7 +133,7 @@ describe('a rule that throws', () => {
 
     expect(probe.seen).toEqual([['primary', 'c']]);
     expect(log.warnings()).toEqual([
-      `[VernLLM] policy: rule "broken" threw while deciding a call, so it fails closed: lookup failed`,
+      `[VernLLM] policy: rule "broken" threw while deciding a call (Error), so it fails closed`,
     ]);
   });
 

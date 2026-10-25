@@ -15,6 +15,17 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Whether a function sits anywhere in a pattern, through lists and nested objects. */
+export function containsFunction(pattern: unknown): boolean {
+  if (typeof pattern === 'function') return true;
+  const members = Array.isArray(pattern)
+    ? pattern
+    : isPlainObject(pattern)
+      ? Object.values(pattern)
+      : [];
+  return members.some(containsFunction);
+}
+
 /** Reads an own property only, so `toString` or `constructor` can never be a fact. */
 export function read(facts: unknown, key: string): unknown {
   if (typeof facts !== 'object' || facts === null) return undefined;

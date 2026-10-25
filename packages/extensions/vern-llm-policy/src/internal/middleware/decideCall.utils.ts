@@ -34,7 +34,7 @@ export function decideCall(
     if (policy.needs.readsLabels && labels.labels === undefined) {
       // Once only: a labeler that never ran is a setup mistake that repeats.
       const why =
-        labels.error === undefined ? 'returned undefined' : `failed: ${labels.error.message}`;
+        labels.error === undefined ? 'returned undefined' : `failed (${labels.error.name})`;
       guard.warnOnce(
         'labels',
         `the labels function ${why}, so labels are unknown and rules using them fail ${policy.onError}`,
@@ -65,11 +65,11 @@ export function decideCall(
 
 /** Warns once per rule, so a rule that throws on every call does not flood the log. */
 export function warnRuleErrors(live: Live, decision: Decision): void {
-  for (const { rule, message } of decision.errors) {
+  for (const { rule, name } of decision.errors) {
     if (rule === undefined) continue;
     live.guard.warnOnce(
       `rule:${rule}`,
-      `rule "${rule}" threw while deciding a call, so it fails ${live.policy.onError}: ${message}`,
+      `rule "${rule}" threw while deciding a call (${name}), so it fails ${live.policy.onError}`,
     );
   }
 }

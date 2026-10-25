@@ -28,6 +28,6 @@ export function createUpdate(
     if (typeof raw === 'object' && raw !== null && Object.hasOwn(raw, 'logger')) {
       invalid('update cannot change the logger');
     }
-    setLive(createLive(compile({ ...update }), logger));
+    setLive(createLive(compile(update), logger));
   };
 }
