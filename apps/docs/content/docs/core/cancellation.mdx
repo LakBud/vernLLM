@@ -66,6 +66,14 @@ Middleware reads when the deadline runs out as `ctx.deadlineAt`, in epoch millis
 
 A deadline only bounds getting to a final result: choosing a target, retrying, and opening a stream. Once a stream has actually opened, `deadlineMs` no longer applies to it: `timeoutMs` only bounds opening the stream and receiving its first chunk, and every gap after that is bounded separately by `chunkIdleTimeoutMs`. Neither option, nor `deadlineMs`, imposes a total time limit on the rest of an already-opened stream. See [Per-chunk idle timeout](/docs/core/streaming#per-chunk-idle-timeout) for the full contract.
 
+## Chains and cancellation
+
+A `wrap` with `reruns: true` can start more chains with
+[`next.again()`](/docs/core/middleware#running-a-chain-again). Each chain has its own signal, which
+also fires when the call's `signal` or `deadlineMs` does. When the `wrap` settles, every chain whose
+result it didn't return is cancelled, pending ones included, and a cancelled chain never counts
+toward the circuit breaker.
+
 ## Cached calls and cancellation
 
 `cachedCall()` also accepts a caller-provided `signal`.

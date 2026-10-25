@@ -4,6 +4,8 @@ import {
   applyMiddlewareTransforms,
   middlewareLabel,
   reclassifyMiddlewareThrow,
+  recordChainStart,
+  recordWrapLayers,
   resolveEnabled,
   runTransform,
   withOwn,
@@ -47,6 +49,48 @@ describe('withOwn', () => {
     withOwn(baseCtx(), entry, 'entry').own.seen = true;
 
     expect(withOwn(baseCtx(), entry, 'entry').own).toEqual({});
+  });
+
+  it('gives each chain of one call its own scratch object, and the main chain the one it always had', () => {
+    const state = baseCtx().state;
+    const entry: VernLLMMiddleware = { name: 'entry' };
+    const main = baseCtx({ state });
+    const rerun = baseCtx({ state, chain: 1 });
+
+    withOwn(main, entry, 'entry').own.seen = 'main';
+    withOwn(rerun, entry, 'entry').own.seen = 'rerun';
+
+    expect(withOwn(main, entry, 'entry').own).toEqual({ seen: 'main' });
+    expect(withOwn(rerun, entry, 'entry').own).toEqual({ seen: 'rerun' });
+    expect(withOwn(baseCtx({ state, chain: 2 }), entry, 'entry').own).toEqual({});
+  });
+
+  it('keys own by the chain an entry wrap ran in: outside a rerunning layer follows the parent chain', () => {
+    const state = baseCtx().state;
+    const outside: VernLLMMiddleware = { name: 'outside' };
+    const rerunning: VernLLMMiddleware = { name: 'rerunning' };
+    const inside: VernLLMMiddleware = { name: 'inside' };
+
+    recordWrapLayers(
+      state,
+      new Map([
+        [outside, 0],
+        [rerunning, 1],
+        [inside, 2],
+      ]),
+    );
+    recordChainStart(state, 1, { parent: 0, layer: 1 });
+    recordChainStart(state, 2, { parent: 1, layer: 2 });
+
+    const at = (chain: number) => baseCtx({ state, chain });
+
+    expect(withOwn(at(1), outside, 'outside').own).toBe(withOwn(at(0), outside, 'outside').own);
+    expect(withOwn(at(2), outside, 'outside').own).toBe(withOwn(at(0), outside, 'outside').own);
+    expect(withOwn(at(1), rerunning, 'rerunning').own).toBe(
+      withOwn(at(0), rerunning, 'rerunning').own,
+    );
+    expect(withOwn(at(1), inside, 'inside').own).not.toBe(withOwn(at(0), inside, 'inside').own);
+    expect(withOwn(at(1), inside, 'inside').own).toBe(withOwn(at(1), inside, 'inside').own);
   });
 
   it("binds emit to the middleware's label and hands the call's scope the context it was built from", () => {

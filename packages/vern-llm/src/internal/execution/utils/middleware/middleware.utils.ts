@@ -33,16 +33,82 @@ export {
 /** `middleware.name`, or its array position if unnamed. Used in log lines and the `'middleware'` event. */
 export { middlewareLabel };
 
-/** Each middleware's `ctx.own`, per logical call (keyed by that call's state bag). */
+/**
+ * Each middleware's `ctx.own`, per logical call (keyed by that call's state bag) and per chain
+ * (0 for the main chain).
+ */
 const ownStores = new WeakMap<
   MiddlewareStateBag,
-  Map<VernLLMMiddleware, Record<string, unknown>>
+  Map<VernLLMMiddleware, Map<number, Record<string, unknown>>>
 >();
 
+/** Where a chain began: the chain it was started from, and the `wrap` layer that started it. */
+interface ChainStart {
+  parent: number;
+  layer: number;
+}
+
+/** Per call: how each chain began, and each entry's position in the `wrap` nesting. */
+interface ChainTable {
+  starts: Map<number, ChainStart>;
+  layers: ReadonlyMap<VernLLMMiddleware, number>;
+}
+
+const chainTables = new WeakMap<MiddlewareStateBag, ChainTable>();
+
+function chainTableFor(state: MiddlewareStateBag): ChainTable {
+  let table = chainTables.get(state);
+
+  if (!table) {
+    table = { starts: new Map(), layers: new Map() };
+    chainTables.set(state, table);
+  }
+
+  return table;
+}
+
+/** Records each entry's position in the `wrap` nesting for this call. */
+export function recordWrapLayers(
+  state: MiddlewareStateBag,
+  layers: ReadonlyMap<VernLLMMiddleware, number>,
+): void {
+  chainTableFor(state).layers = layers;
+}
+
+/** Records that `chain` was started from `parent` by the `wrap` at `layer`. */
+export function recordChainStart(
+  state: MiddlewareStateBag,
+  chain: number,
+  start: ChainStart,
+): void {
+  chainTableFor(state).starts.set(chain, start);
+}
+
 /**
- * `ctx` with `own` set to this middleware's scratch object for the call, and `emit` bound to its
- * `label` so a custom event says who reported it. The same `own` object is returned for every
- * hook, so a value set in `wrap` is there in `transform`. Collected with the call's state bag.
+ * The chain whose `own` this entry uses: the chain its `wrap` ran in. An entry inside a rerunning
+ * `wrap` has one per chain; an entry outside it (or that `wrap` itself) keeps the one of the chain
+ * that `wrap` ran in, in every hook. An entry with no known layer counts as innermost.
+ */
+function ownerChain(state: MiddlewareStateBag, chain: number, entry: VernLLMMiddleware): number {
+  const table = chainTables.get(state);
+  const layer = table?.layers.get(entry) ?? Number.POSITIVE_INFINITY;
+  let current = chain;
+
+  while (current > 0) {
+    const start = table?.starts.get(current);
+
+    if (start === undefined || layer > start.layer) break;
+    current = start.parent;
+  }
+
+  return current;
+}
+
+/**
+ * `ctx` with `own` set to this middleware's scratch object for the call and chain, and `emit` bound
+ * to its `label` so a custom event says who reported it. The same `own` object is returned for every
+ * hook in a chain, so a value set in `wrap` is there in `transform`. Collected with the call's state
+ * bag.
  */
 export function withOwn<C extends MiddlewareContext>(
   ctx: C,
@@ -56,11 +122,19 @@ export function withOwn<C extends MiddlewareContext>(
     ownStores.set(ctx.state, store);
   }
 
-  let own = store.get(entry);
+  let byChain = store.get(entry);
+
+  if (!byChain) {
+    byChain = new Map();
+    store.set(entry, byChain);
+  }
+
+  const chain = ownerChain(ctx.state, ctx.chain ?? 0, entry);
+  let own = byChain.get(chain);
 
   if (!own) {
     own = {};
-    store.set(entry, own);
+    byChain.set(chain, own);
   }
 
   return {
@@ -390,19 +464,25 @@ export function emitEvent(
 
 /**
  * `event` with the call's `context` on it, and on its `usage` too, so `onUsage` and a cost
- * middleware see which tenant spent the tokens. Stamped here, the one place every event passes
- * through. An event with no call behind it, like a manual `openCircuit()`'s, carries none.
+ * middleware see which tenant spent the tokens, plus the `chain` it came from. Stamped here, the
+ * one place every event passes through. An event with no call behind it, like a manual
+ * `openCircuit()`'s, carries none.
  */
 function withCallContext(event: VernLLMEvent, ctx: MiddlewareContext): VernLLMEvent {
-  const { context } = ctx;
+  const { context, chain } = ctx;
 
-  if (context === undefined) return event;
+  if (context === undefined && chain === undefined) return event;
 
-  if (event.kind === 'usage' || event.kind === 'usage_failure') {
-    return { ...event, context, usage: { ...event.usage, context } };
+  const fields = {
+    ...(context === undefined ? {} : { context }),
+    ...(chain === undefined ? {} : { chain }),
+  };
+
+  if (context !== undefined && (event.kind === 'usage' || event.kind === 'usage_failure')) {
+    return { ...event, ...fields, usage: { ...event.usage, context } };
   }
 
-  return { ...event, context };
+  return { ...event, ...fields };
 }
 
 /** Calls `onEvent`, logging a sync throw or a rejection instead of propagating either. */

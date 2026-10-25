@@ -8,11 +8,16 @@ import {
   type MiddlewareRef,
   type MiddlewareStateEntry,
   type MiddlewareStateKey,
+  type CallResult,
+  type MiddlewareContextBase,
   type PreDispatchContext,
   type VernLLMMiddleware,
+  type WrapNext,
+  type WrapNextOptions,
 } from '../../../src/types/middleware.js';
 
 import type { AdapterInfo } from '../../../src/types/client.js';
+import type { VernLLMEvent } from '../../../src/types/events.js';
 import type { CallMeta, TargetInfo } from '../../../src/types/fallback.js';
 
 // `MiddlewareRef` and `MiddlewareStateKey<T>` are structurally identical
@@ -123,5 +128,36 @@ describe('target order types', () => {
 
   it('CallMeta carries the position in the order tried', () => {
     expectTypeOf<CallMeta['position']>().toEqualTypeOf<number>();
+  });
+});
+
+describe('rerun types', () => {
+  it('a wrap typed against the old next signature, and a plain function as next, still compile', () => {
+    const legacy: VernLLMMiddleware = {
+      name: 'legacy',
+      wrap: (_request, next: (options?: { targets?: readonly string[] }) => Promise<CallResult>) =>
+        next(),
+    };
+    const plain: WrapNext = async () => ({ value: 'ok' });
+
+    expect(legacy.name).toBe('legacy');
+    expect(plain.again).toBeUndefined();
+  });
+
+  it('again is optional, read only, and takes the same options as next()', () => {
+    expectTypeOf<WrapNext['again']>().toEqualTypeOf<
+      ((options?: WrapNextOptions) => Promise<CallResult>) | undefined
+    >();
+    expectTypeOf<WrapNextOptions>().toEqualTypeOf<{ targets?: readonly string[] }>();
+
+    // @ts-expect-error again is read only, so a wrap cannot replace it
+    ((next: WrapNext) => (next.again = undefined))(async () => ({ value: 1 }));
+  });
+
+  it('reruns and chain are optional, so a hand built entry or context keeps compiling', () => {
+    expectTypeOf<VernLLMMiddleware['reruns']>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<MiddlewareContextBase['chain']>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<CallMeta['chain']>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<VernLLMEvent['chain']>().toEqualTypeOf<number | undefined>();
   });
 });

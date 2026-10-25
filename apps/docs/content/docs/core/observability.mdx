@@ -85,6 +85,9 @@ Every event a call reports carries that call's [`context`](/docs/core/middleware
 it gave one. A `circuit_state` event with no call behind it, from a manual `openCircuit()`, carries
 none.
 
+A call that runs chains again with [`next.again()`](/docs/core/middleware#running-a-chain-again)
+also stamps each event with `chain`: 1 and up for a rerun, absent for the main chain.
+
 <Cards>
   <Card title="retry" href="#retry">
     Fires immediately before VernLLM waits out a retry's backoff delay.

@@ -3,12 +3,20 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createStateKey,
   stateEntry,
+  type CallMeta,
   type VernLLMEvent,
   type VernLLMMiddleware,
 } from '../../../src/types/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
-import { createMockClient, createMockStreamingClient, textResponse } from '../../helpers.js';
-import { CALL, wrapCounter } from './middleware.int.helpers.js';
+import {
+  createMockClient,
+  createMockStreamingClient,
+  FakeApiError,
+  textResponse,
+} from '../../helpers.js';
+import { CALL, heldResponse, streamClient, wrapCounter } from './middleware.int.helpers.js';
+
+import type { RefundUsage, ReserveUsage } from '../../../src/types/usage.js';
 
 describe('CallResult.cache', () => {
   const observe = () => {
@@ -296,5 +304,254 @@ describe('cachedCall seeded state', () => {
     await expect(llm.cachedCall(params([stateEntry(key, 'A')]))).resolves.toBe('computed');
 
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('next.again() with cachedCall', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const rerunCall = { ...CALL, context: { rerun: true } };
+
+  /** Starts the main chain, waits for it to reach the provider, then keeps a rerun's result. */
+  const rerunAfterMain: VernLLMMiddleware = {
+    name: 'rerun-after-main',
+    reruns: true,
+    wrap: async (_request, next, ctx) => {
+      if (!next.again || ctx.context?.rerun !== true) return next();
+
+      next().catch(() => {});
+      await sleep(10);
+
+      return next.again();
+    },
+  };
+
+  it('still caches and hits when the wrap only calls next()', async () => {
+    const { client, create } = createMockClient([textResponse('a')]);
+    const seen: Array<'hit' | 'join' | undefined> = [];
+    const middleware: VernLLMMiddleware = {
+      name: 'plain',
+      reruns: true,
+      wrap: async (_request, next) => {
+        const result = await next();
+        seen.push(result.cache);
+        return result;
+      },
+    };
+
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [middleware] });
+    const params = { cacheKey: 'k', ttl: 1000, call: CALL };
+
+    await llm.cachedCall(params);
+    await llm.cachedCall(params);
+
+    expect(seen).toEqual([undefined, 'hit']);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes a provider call for a rerun after a hit, and replaces the cached answer', async () => {
+    const { client, create } = createMockClient([textResponse('old'), textResponse('new')]);
+    const again: VernLLMMiddleware = {
+      name: 'again',
+      reruns: true,
+      wrap: async (_request, next, ctx) => {
+        const first = await next();
+
+        return ctx.context?.rerun === true && first.cache === 'hit' && next.again
+          ? next.again()
+          : first;
+      },
+    };
+
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [again] });
+    const key = { cacheKey: 'k', ttl: 1000 };
+
+    await expect(llm.cachedCall({ ...key, call: CALL })).resolves.toBe('old');
+    await expect(llm.cachedCall({ ...key, call: rerunCall })).resolves.toBe('new');
+    await expect(llm.cachedCall({ ...key, call: CALL })).resolves.toBe('new');
+
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives the caller a kept rerun on a miss, cancels the shared call, caches it, and drops cache from the result', async () => {
+    const held = heldResponse('slow');
+    const { client, create } = createMockClient([held.entry, textResponse('fast')]);
+    let seenCache: unknown = 'unset';
+    const observer: VernLLMMiddleware = {
+      name: 'observer',
+      priority: 0,
+      wrap: async (_request, next) => {
+        const result = await next();
+        seenCache = result.cache;
+        return result;
+      },
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [observer, { ...rerunAfterMain, priority: 1 }],
+    });
+    const meta: { current?: CallMeta } = {};
+    const key = { cacheKey: 'k', ttl: 1000 };
+
+    await expect(llm.cachedCall({ ...key, call: { ...rerunCall, meta } })).resolves.toBe('fast');
+
+    expect(seenCache).toBeUndefined();
+    expect(meta.current).toMatchObject({ chain: 1 });
+    await vi.waitFor(() => expect(held.aborted()).toBe(true));
+
+    await expect(llm.cachedCall({ ...key, call: CALL })).resolves.toBe('fast');
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the shared call running for a second caller who joined, who gets its answer', async () => {
+    const held = heldResponse('slow');
+    const { client } = createMockClient([held.entry, textResponse('fast')]);
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [rerunAfterMain] });
+    const key = { cacheKey: 'k', ttl: 1000 };
+
+    const first = llm.cachedCall({ ...key, call: rerunCall });
+    await sleep(5);
+    const joiner = llm.cachedCall({ ...key, call: CALL });
+
+    await expect(first).resolves.toBe('fast');
+    expect(held.aborted()).toBe(false);
+
+    held.release();
+
+    await expect(joiner).resolves.toBe('slow');
+  });
+
+  it('reserves a rerun as a full spend and refunds it when it is cancelled', async () => {
+    const held = heldResponse('slow');
+    const { client } = createMockClient([textResponse('first'), held.entry]);
+    const reserveUsage = vi.fn<ReserveUsage>(async () => {});
+    const refundUsage = vi.fn<RefundUsage>(async () => {});
+    const keepMain: VernLLMMiddleware = {
+      name: 'keep-main',
+      reruns: true,
+      wrap: async (_request, next) => {
+        const first = await next();
+
+        next.again!().catch(() => {});
+        await sleep(10);
+
+        return first;
+      },
+    };
+
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [keepMain] });
+
+    await llm.cachedCall({ cacheKey: 'k', ttl: 1000, call: CALL, reserveUsage, refundUsage });
+    await vi.waitFor(() => expect(refundUsage).toHaveBeenCalledTimes(1));
+
+    expect(reserveUsage.mock.calls.map(([arg]) => arg.coalesced)).toEqual([false, false]);
+    expect(refundUsage.mock.calls[0]![0]).toMatchObject({ coalesced: false });
+  });
+
+  /** Keeps the main chain and lets a rerun that fails go, so the rerun's reservation is refunded. */
+  const keepMainAfterFailedRerun: VernLLMMiddleware = {
+    name: 'keep-main-after-failed-rerun',
+    reruns: true,
+    wrap: async (_request, next) => {
+      const first = await next();
+      await next.again!().catch(() => {});
+
+      return first;
+    },
+  };
+
+  it('logs a failed refund of a rerun and still returns the main answer', async () => {
+    const { client } = createMockClient([textResponse('first'), new FakeApiError('down', 500)]);
+    const reserveUsage = vi.fn<ReserveUsage>(async () => {});
+    const refundUsage = vi.fn<RefundUsage>(async () => {
+      throw new Error('refund store down');
+    });
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      logger: 'silent',
+      middleware: [keepMainAfterFailedRerun],
+    });
+
+    await expect(
+      llm.cachedCall({ cacheKey: 'k', ttl: 1000, call: CALL, reserveUsage, refundUsage }),
+    ).resolves.toBe('first');
+
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a failed refund of a streamed rerun and still returns the main answer', async () => {
+    const { client } = createMockStreamingClient([
+      [{ type: 'text-delta', delta: 'first' }],
+      new FakeApiError('down', 500),
+    ]);
+    const reserveUsage = vi.fn<ReserveUsage>(async () => {});
+    const refundUsage = vi.fn<RefundUsage>(async () => {
+      throw new Error('refund store down');
+    });
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      maxRetries: 0,
+      logger: 'silent',
+      middleware: [keepMainAfterFailedRerun],
+    });
+
+    const { finalResult } = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 1000,
+      call: { ...CALL, stream: true },
+      reserveUsage,
+      refundUsage,
+    });
+
+    await expect(finalResult).resolves.toBe('first');
+    expect(refundUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('relays a streamed rerun, caches it on finalResult, and keeps its meta and chain', async () => {
+    const never = new Promise<void>(() => {});
+    const { client, signals } = streamClient([{ text: 'slow', gate: never }, { text: 'fast' }]);
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [rerunAfterMain] });
+    const meta: { current?: CallMeta } = {};
+    const key = { cacheKey: 'k', ttl: 1000 };
+
+    const { finalResult } = await llm.cachedCall({
+      ...key,
+      call: { ...rerunCall, stream: true, meta },
+    });
+
+    await expect(finalResult).resolves.toBe('fast');
+    await vi.waitFor(() => expect(signals[0]!.aborted).toBe(true));
+
+    expect(meta.current).toMatchObject({ chain: 1 });
+
+    const replay = await llm.cachedCall({ ...key, call: { ...CALL, stream: true } });
+
+    await expect(replay.finalResult).resolves.toBe('fast');
+    expect(signals).toHaveLength(2);
+  });
+
+  it('cancels a streamed rerun when the caller leaves chunks early', async () => {
+    const { client, signals } = streamClient([
+      { text: 'a', hold: true },
+      { text: 'b', hold: true },
+    ]);
+    const llm = new VernLLM({ client, model: 'test-model', middleware: [rerunAfterMain] });
+
+    const { chunks } = await llm.cachedCall({
+      cacheKey: 'k',
+      ttl: 1000,
+      call: { ...rerunCall, stream: true },
+    });
+
+    for await (const _chunk of chunks) break;
+
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(2);
+      expect(signals[1]!.aborted).toBe(true);
+    });
   });
 });

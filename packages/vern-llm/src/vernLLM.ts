@@ -25,6 +25,7 @@ import {
   registerCallScope,
   validateStateEntries,
 } from './internal/utils/callScope.utils.js';
+import { markChain } from './internal/utils/chain.utils.js';
 import {
   makeEventReporter,
   resolveExecutor,
@@ -45,6 +46,7 @@ import {
   type CachedToolCallParams,
   type CachedJsonModeDisabledCallParams,
   type CachedJsonModeEnabledCallParams,
+  type CallMeta,
   type CallParams,
   type CallWithToolsResult,
   type ConditionalToolCallParams,
@@ -307,10 +309,10 @@ export class VernLLM {
         requestId,
         middlewareState,
         targets,
-        (chosen) =>
+        (chosen, chain) =>
           runReservedLogicalCall(
             { ...this.logicalCallDependencies, targets: chosen },
-            effectiveParams,
+            chain.params,
             {
               requestId,
               middlewareState,
@@ -450,8 +452,11 @@ export class VernLLM {
     );
 
     const callerMeta = restCallParams.meta;
+    // Set once a rerun's answer is the result: its meta was written to the caller's already, and the
+    // shared call finishing later must not replace it.
+    let metaFromRerun = false;
     const syncCallerMeta = () => {
-      if (callerMeta) callerMeta.current = metaHolder.current;
+      if (callerMeta && !metaFromRerun) callerMeta.current = metaHolder.current;
     };
 
     // These end only this caller's wait. The shared request has its own signal
@@ -474,20 +479,25 @@ export class VernLLM {
     // Only the caller that runs the call gets to choose its targets: a coalesced follower's are
     // ignored, and `targets` is not part of the cache key. The inner call gets the order `wrap`
     // left, by name, so it resolves to the same targets.
-    const callShared = (sharedSignal: AbortSignal, chosen: readonly ResolvedTarget[]) => {
+    const callInner = (
+      signal: AbortSignal,
+      chosen: readonly ResolvedTarget[],
+      meta: { current?: CallMeta },
+    ) => {
       const { deadlineMs: _deadlineMs, ...sharedParams } = participantParams;
       const innerParams = {
         ...sharedParams,
         targets: chosen.map((target) => target.executor.providerName),
-        signal: sharedSignal,
-        meta: metaHolder,
+        signal,
+        meta,
       };
       this.cachedCallInnerParams.set(innerParams, middlewareState);
       return this.call(innerParams).finally(() => {
-        syncCallerMeta();
         this.cachedCallInnerParams.delete(innerParams);
       });
     };
+    const callShared = (sharedSignal: AbortSignal, chosen: readonly ResolvedTarget[]) =>
+      callInner(sharedSignal, chosen, metaHolder).finally(syncCallerMeta);
 
     let cacheOutcome: 'hit' | 'join' | undefined;
     const onOutcome = (outcome: 'hit' | 'join') => {
@@ -505,11 +515,39 @@ export class VernLLM {
         requestId,
         middlewareState,
         targets,
-        async (chosen) => {
+        async (chosen, chain) => {
+          if (chain.number > 0) {
+            // A rerun: a fresh call for this caller, never the cache path. Its own meta holder keeps
+            // the caller's meta and the shared call's untouched while it runs.
+            const freshMeta: { current?: CallMeta } = {};
+            const freshParams = { ...participantCacheParams, signal: chain.params.signal! };
+            const value = restCallParams.stream
+              ? await this.cacheOrchestrator.runFreshStream({
+                  ...freshParams,
+                  openStream: (signal) =>
+                    callInner(markChain(signal, chain.number), chosen, freshMeta) as Promise<
+                      StreamCallResult<unknown>
+                    >,
+                })
+              : await this.cacheOrchestrator.runFresh({
+                  ...freshParams,
+                  fn: (signal) => callInner(markChain(signal, chain.number), chosen, freshMeta),
+                });
+
+            return { value, meta: freshMeta.current };
+          }
+
+          // The main chain is the cache path as today. It waits with the chain's signal, so
+          // cancelling it ends this caller's wait and leaves the shared call to anyone else on it.
+          const waitParams = {
+            ...participantCacheParams,
+            signal: chain.params.signal ?? participantSignal,
+          };
+
           const value = restCallParams.stream
             ? await this.cacheOrchestrator.runCachedStream(
                 {
-                  ...participantCacheParams,
+                  ...waitParams,
                   onOutcome,
                   openStream: (sharedSignal) =>
                     callShared(sharedSignal, chosen) as Promise<StreamCallResult<unknown>>,
@@ -517,7 +555,7 @@ export class VernLLM {
                 Boolean(restCallParams.tools),
               )
             : await this.runCached({
-                ...participantCacheParams,
+                ...waitParams,
                 onOutcome,
                 fn: (sharedSignal) => callShared(sharedSignal, chosen),
               });
@@ -527,6 +565,9 @@ export class VernLLM {
             : { value, meta: metaHolder.current };
         },
       );
+
+      // A kept rerun's meta was written to the caller's already, and carries its `chain`.
+      metaFromRerun = wrapped.meta?.chain !== undefined;
 
       if (restCallParams.stream) {
         const streamResult = wrapped.value as StreamCallResult<T | CallWithToolsResult<T>>;

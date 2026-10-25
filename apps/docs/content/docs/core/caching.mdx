@@ -227,6 +227,11 @@ always wraps a `call()` invocation. If you need general-purpose caching or coale
 an LLM call, reach for a dedicated caching library (e.g. `async-cache-dedupe`) at the application
 level instead.
 
+A `wrap` with `reruns: true` can run a chain again with
+[`next.again()`](/docs/core/middleware#running-a-chain-again). The main chain stays the cache path
+described above. A rerun is a fresh call for that caller: it never reads the cache or joins a
+shared call, reserves as a full spend, and writes its answer over the cached one.
+
 ### Usage hooks
 
 Usage hooks are applied at the cache level. `reserveUsage`/`refundUsage` no longer type-check inside
