@@ -2,8 +2,6 @@
 
 <p align="center">Checks on what goes into a <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a> call: label it for policy, redact values before the provider sees them, or block it.</p>
 
-This is an early slice of the package. It checks the input and the answer of a call, plain or streamed, and redacts. A canary follows in a later release, so the options for them do not exist yet.
-
 ## Usage
 
 ```ts
