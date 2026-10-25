@@ -125,7 +125,7 @@ jobs:
 
       - uses: nrwl/nx-set-shas@v5
 
-      # bench:check exists on vern-llm-logger and vern-llm-router: it fails when a package's per call
+      # bench:check exists on vern-llm-logger, vern-llm-router and vern-llm-policy: it fails when a package's per call
       # overhead grows past the baseline in tests/bench/baseline.json.
       - name: Build, bundle-size check, smoke test, and overhead check affected projects
         run: pnpm exec nx affected -t build size smoke-test bench:check --verbose
@@ -224,6 +224,15 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/extensions/vern-llm-router/coverage/lcov.info
           flags: vern-llm-router-unit
+          fail_ci_if_error: true
+
+      - name: Upload vern-llm-policy coverage to Codecov
+        if: hashFiles('packages/extensions/vern-llm-policy/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/extensions/vern-llm-policy/coverage/lcov.info
+          flags: vern-llm-policy-unit
           fail_ci_if_error: true
 
   # No Nx cache here, deliberately: this job runs against a real Redis
@@ -361,6 +370,15 @@ jobs:
           flags: vern-llm-router-integration
           fail_ci_if_error: true
 
+      - name: Upload vern-llm-policy coverage to Codecov
+        if: hashFiles('packages/extensions/vern-llm-policy/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/extensions/vern-llm-policy/coverage/lcov.info
+          flags: vern-llm-policy-integration
+          fail_ci_if_error: true
+
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -404,15 +422,15 @@ jobs:
       # targets have no ordering guarantee within the same project and
       # can run concurrently, racing on that file.
       - name: Lint affected docs
-        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router --verbose
+        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy --verbose
 
       - name: Typecheck affected docs
-        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router --verbose
+        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy --verbose
 
       # Fails on any internal /docs/... link whose page or #anchor doesn't
       # exist. The test target covers the checker itself.
       - name: Check affected docs links
-        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router --verbose
+        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy --verbose
 
       # Next.js writes its incremental build cache to apps/docs/.next/cache,
       # which Nx does not track (the build target's outputs are dist). It is
@@ -430,4 +448,4 @@ jobs:
             next-${{ runner.os }}-
 
       - name: Build affected docs
-        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router --verbose
+        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy --verbose

@@ -9,6 +9,7 @@ const packages: Record<string, string> = {
   'vern-llm-logger': 'apps/docs/content/docs/extensions/logger/changelog.mdx',
   'vern-llm-usage': 'apps/docs/content/docs/extensions/usage/changelog.mdx',
   'vern-llm-router': 'apps/docs/content/docs/extensions/router/changelog.mdx',
+  'vern-llm-policy': 'apps/docs/content/docs/extensions/policy/changelog.mdx',
 };
 
 // Package folders: core sits directly under packages/, integrations and extensions in their own folder.
@@ -19,6 +20,7 @@ const dirs: Record<string, string> = {
   'vern-llm-logger': 'packages/extensions',
   'vern-llm-usage': 'packages/extensions',
   'vern-llm-router': 'packages/extensions',
+  'vern-llm-policy': 'packages/extensions',
 };
 
 for (const [pkg, docPath] of Object.entries(packages)) {

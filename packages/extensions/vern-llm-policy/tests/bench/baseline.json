@@ -1,0 +1,8 @@
+{
+  "unit": "microseconds per call",
+  "overhead": {
+    "one forbid rule": 3.4,
+    "residency, flags and an exception": 7.1,
+    "twenty rules": 5.7
+  }
+}
