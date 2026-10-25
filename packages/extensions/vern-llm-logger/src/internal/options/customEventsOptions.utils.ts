@@ -3,7 +3,12 @@ import { fail, isPlainObject, optionalBoolean, stringList } from './validate.uti
 import type { CustomEventsOptions } from '../../types/index.js';
 
 /** First party extensions show up with no configuration. */
-export const DEFAULT_CUSTOM_EVENTS: readonly string[] = ['usage.*', 'policy.*', 'router.*'];
+export const DEFAULT_CUSTOM_EVENTS: readonly string[] = [
+  'usage.*',
+  'policy.*',
+  'router.*',
+  'guard.*',
+];
 
 // A plain name (`myapp.cache_warm`) or a prefix pattern (`myapp.*`). Nothing fancier, so a
 // pattern can never become an expensive regular expression.

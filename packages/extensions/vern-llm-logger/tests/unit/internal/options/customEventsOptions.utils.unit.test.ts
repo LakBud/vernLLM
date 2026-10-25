@@ -9,6 +9,7 @@ describe('normalizeCustomEvents', () => {
     expect(keep('usage.budget_warning')).toBe(true);
     expect(keep('policy.decision')).toBe(true);
     expect(keep('router.decision')).toBe(true);
+    expect(keep('guard.result')).toBe(true);
     expect(keep('myapp.thing')).toBe(false);
   });
 

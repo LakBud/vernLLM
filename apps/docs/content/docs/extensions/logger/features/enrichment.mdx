@@ -62,7 +62,7 @@ A middleware can report its own events through `ctx.emit`. The logger keeps the 
 loggerMiddleware({ customEvents: ['myapp.*'] });
 ```
 
-The first party namespaces `usage.*`, `policy.*`, and `router.*` are always kept, so extensions show
+The first party namespaces `usage.*`, `policy.*`, `router.*`, and `guard.*` are always kept, so extensions show
 up with no configuration. Pass the object form to opt out of them:
 
 ```ts title="enrichment-custom-events-opt-out.ts"
