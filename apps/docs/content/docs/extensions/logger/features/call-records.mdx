@@ -89,6 +89,18 @@ The top level `provider`, `model`, and `fallbackIndex` name the target that answ
 `retries` counts the retries between them, and `retryDelayMs` and `queueWaitMs` are the time spent
 waiting on backoff and on a rate limit.
 
+## More than one chain
+
+A middleware can run a call again as a separate chain with `next.again()`, at the same time as the
+first. The logger keeps each chain's attempts apart, so one chain never closes another's. The record
+then sets `chains` to how many ran and `chain` to the one whose answer was kept (`0` is the main
+chain). A call that ran one chain has neither field.
+
+The kept chain decides what describes the answer: `path`, `attemptMs`, `ttftMs`, `usage` and the
+token rate. `attempts` and `retries` still count every chain, since all of that work was sent. A
+chain that was cancelled has no outcome of its own, so it adds nothing to the timings. When every
+chain fails, the record shows the main chain.
+
 ## Cache hits and joins
 
 For `cachedCall`, `cache` is set only when no attempt of the call's own ran:

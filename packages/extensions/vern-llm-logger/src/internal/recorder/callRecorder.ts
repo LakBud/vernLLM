@@ -30,22 +30,30 @@ import type {
 import type { Guard } from '../guard.utils.js';
 import type { AttemptContext, CallMeta, PreDispatchContext, TokenUsage } from 'vern-llm';
 
+/** What one chain of the call has done. A call with no reruns has only chain 0. */
+interface ChainState {
+  current: OpenAttempt | undefined;
+  path: PathState[];
+}
+
 /**
  * All the state for one logical call. An attempt stays open after `dispatch` resolves, since
  * validation can still fail and retry, and is closed by the next retry, fallback or the end.
+ *
+ * Attempts, the path and usage are kept per chain, because chains run at the same time. The record
+ * takes its path, timings and usage from the chain whose answer was kept, and counts the attempts
+ * of every chain.
  */
 export class CallRecorder {
   private readonly startedAtMs = nowMs();
   private ended = false;
   private streaming = false;
   private attemptCount = 0;
-  private current: OpenAttempt | undefined;
+  private readonly chains = new Map<number, ChainState>();
   private retries = 0;
   private retryDelayMs = 0;
   private queueWaitMs = 0;
-  private readonly path: PathState[] = [];
-  private usage: TokenUsage | undefined;
-  private usageFailed = false;
+  private readonly usages = new Map<number, { usage: TokenUsage; failed: boolean }>();
   private shortCircuitedBy: string | undefined;
   private readonly breaker: BreakerChange[] = [];
   private readonly middleware: MiddlewareNote[] = [];
@@ -66,31 +74,34 @@ export class CallRecorder {
   openAttempt(ctx: AttemptContext): void {
     if (this.ended) return;
 
-    // A new attempt while one is still open means a closing signal was missed, so how that
-    // attempt ended is unknown. It still counts, but its outcome is never guessed.
-    this.current = undefined;
+    // A new attempt while one is still open in the same chain means a closing signal was missed,
+    // so how that attempt ended is unknown. It still counts, but its outcome is never guessed.
+    const chain = this.chainState(ctx.chain ?? 0);
+    chain.current = undefined;
     this.attemptCount++;
 
-    const entry = enterTarget(this.path, ctx);
-    this.current = { startedAtMs: nowMs(), respondedAtMs: undefined, path: entry };
+    const entry = enterTarget(chain.path, ctx);
+    chain.current = { startedAtMs: nowMs(), respondedAtMs: undefined, path: entry };
   }
 
   /** `dispatch` resolved. The attempt stays open, see the class comment. */
-  responded(): void {
-    if (this.current) this.current.respondedAtMs = nowMs();
+  responded(chain = 0): void {
+    const attempt = this.chains.get(chain)?.current;
+    if (attempt) attempt.respondedAtMs = nowMs();
   }
 
   /** `dispatch` rejected: the adapter failed. */
-  attemptFailed(error: unknown): void {
-    const attempt = this.current;
-    if (!attempt) return;
-    this.current = undefined;
+  attemptFailed(error: unknown, chain = 0): void {
+    const state = this.chains.get(chain);
+    const attempt = state?.current;
+    if (!state || !attempt) return;
+    state.current = undefined;
 
     // Rejected before anything was sent, such as a capability the model does not have. That
     // never reached a provider, so it is not an attempt and leaves no trace of one.
     if (isLocalRejection(error)) {
       this.attemptCount--;
-      leaveTarget(this.path, attempt);
+      leaveTarget(state.path, attempt);
       return;
     }
 
@@ -98,28 +109,28 @@ export class CallRecorder {
   }
 
   /** A retry follows: the open attempt failed with `error`. */
-  retried(delayMs: number, error: unknown): void {
+  retried(delayMs: number, error: unknown, chain = 0): void {
     if (this.ended) return;
-    this.settleOpen({ error });
+    this.settleOpen(this.chainState(chain), { error });
     this.retries++;
     if (Number.isFinite(delayMs) && delayMs > 0) this.retryDelayMs += delayMs;
   }
 
   /** The call moves on to the next target: the open attempt and its target are finished. */
-  fellBack(elapsedMsOnTarget: number, error: unknown): void {
+  fellBack(elapsedMsOnTarget: number, error: unknown, chain = 0): void {
     if (this.ended) return;
-    this.settleOpen({ error });
-    closeTargetAsFailed(this.path, elapsedMsOnTarget, error);
+    const state = this.chainState(chain);
+    this.settleOpen(state, { error });
+    closeTargetAsFailed(state.path, elapsedMsOnTarget, error);
   }
 
   queued(waitedMs: number): void {
     if (!this.ended && Number.isFinite(waitedMs) && waitedMs > 0) this.queueWaitMs += waitedMs;
   }
 
-  setUsage(usage: TokenUsage, failed: boolean): void {
+  setUsage(usage: TokenUsage, failed: boolean, chain = 0): void {
     if (this.ended) return;
-    this.usage = usage;
-    this.usageFailed = failed;
+    this.usages.set(chain, { usage, failed });
   }
 
   noteBreaker(change: BreakerChange): void {
@@ -154,9 +165,15 @@ export class CallRecorder {
     const endedAtMs = nowMs();
     const failure = outcome.kind === 'error' ? outcome.error : undefined;
 
+    // The kept chain is the one whose answer came back, or the main chain when the call failed.
+    // The other chains were cancelled, so how their open attempts ended is never guessed.
+    const kept = outcome.kind === 'result' ? (outcome.result.meta?.chain ?? 0) : 0;
+    const keptState = this.chains.get(kept);
+    const keptPath = keptState?.path ?? [];
+
     // The attempt still open here answered, or failed for the reason the call failed.
-    const open = this.current;
-    this.current = undefined;
+    const open = keptState?.current;
+    for (const state of this.chains.values()) state.current = undefined;
     if (open) {
       this.settle(
         open,
@@ -171,7 +188,7 @@ export class CallRecorder {
       startedAtMs: this.startedAtMs,
       endedAtMs,
     });
-    closeLastTarget(this.path, endedAtMs, { failed: outcome.kind === 'error', error: failure });
+    closeLastTarget(keptPath, endedAtMs, { failed: outcome.kind === 'error', error: failure });
 
     const meta: CallMeta | undefined = outcome.kind === 'result' ? outcome.result.meta : undefined;
     const classified = classifyOutcome(outcome);
@@ -197,9 +214,10 @@ export class CallRecorder {
       retryDelayMs: this.retryDelayMs,
       attemptMs: timings.attemptMs,
       generationMs: timings.generationMs,
-      path: this.path.map((entry) => pathEntryOf(entry)),
-      usage: this.usage,
-      usageFailed: this.usageFailed,
+      chains: this.chains.size > 1 ? { count: this.chains.size, kept } : undefined,
+      path: keptPath.map((entry) => pathEntryOf(entry)),
+      usage: this.usages.get(kept)?.usage,
+      usageFailed: this.usages.get(kept)?.failed ?? false,
       breaker: this.breaker,
       middleware: this.middleware,
       custom: this.custom,
@@ -211,10 +229,20 @@ export class CallRecorder {
     return record;
   }
 
-  /** Settles the open attempt, if any, and leaves none open. */
-  private settleOpen(failure: { error: unknown }): void {
-    const attempt = this.current;
-    this.current = undefined;
+  /** The state of one chain, created when the chain first shows up. */
+  private chainState(chain: number): ChainState {
+    let state = this.chains.get(chain);
+    if (!state) {
+      state = { current: undefined, path: [] };
+      this.chains.set(chain, state);
+    }
+    return state;
+  }
+
+  /** Settles a chain's open attempt, if any, and leaves none open. */
+  private settleOpen(state: ChainState, failure: { error: unknown }): void {
+    const attempt = state.current;
+    state.current = undefined;
     if (attempt) this.settle(attempt, failure);
   }
 

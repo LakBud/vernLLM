@@ -102,10 +102,10 @@ export function loggerMiddleware(options?: LoggerMiddlewareOptions): LoggerMiddl
       try {
         await next();
       } catch (error) {
-        guard('attemptFailed', () => recorder.attemptFailed(error), undefined);
+        guard('attemptFailed', () => recorder.attemptFailed(error, ctx.chain), undefined);
         throw error;
       }
-      guard('responded', () => recorder.responded(), undefined);
+      guard('responded', () => recorder.responded(ctx.chain), undefined);
     },
 
     onEvent: (event, ctx) => {

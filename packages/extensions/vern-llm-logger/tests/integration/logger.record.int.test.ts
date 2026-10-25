@@ -7,7 +7,7 @@ import {
   type CallLogRecord,
   type LoggerMiddlewareOptions,
 } from '../../src/index.js';
-import { createMockClient, textResponse } from '../helpers.js';
+import { createMockClient, sleep, textResponse } from '../helpers.js';
 
 const call = { userContent: 'hi', jsonMode: false as const };
 const BASE = { model: 'gpt-4o', maxRetries: 0, logger: 'silent' as const };
@@ -186,5 +186,73 @@ describe('isolation', () => {
     expect(first!.outcome).toBe('error');
     expect(second).toMatchObject({ outcome: 'ok', attempts: 1, retries: 0 });
     expect(second).not.toHaveProperty('error');
+  });
+});
+
+describe('calls with more than one chain', () => {
+  const usage = { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 };
+  const held = (_params: unknown, signal: AbortSignal) =>
+    new Promise<never>((_resolve, reject) =>
+      signal.addEventListener('abort', () => reject(new Error('cancelled'))),
+    );
+
+  /** Starts the call, starts it again after `delayMs`, and keeps whichever chain answers first. */
+  const rerunAfter = (delayMs: number): VernLLMMiddleware => ({
+    name: 'rerun-after',
+    reruns: true,
+    wrap: async (_request, next) => {
+      const main = next();
+      await sleep(delayMs);
+      return Promise.race([main, next.again!()]);
+    },
+  });
+
+  function chained(script: Parameters<typeof createMockClient>[0], delayMs: number) {
+    const sink = memorySink();
+    const llm = new VernLLM({
+      ...BASE,
+      client: createMockClient(script).client,
+      middleware: [rerunAfter(delayMs), loggerMiddleware({ sink, logger: 'silent' })],
+    });
+    return { llm, records: () => sink.entries.map(({ entry }) => entry as CallLogRecord) };
+  }
+
+  it('records the chain that answered, with its own latency and usage', async () => {
+    const { llm, records } = chained(
+      [held, async () => (await sleep(10), textResponse('second', usage))],
+      150,
+    );
+
+    expect(await llm.call(call)).toBe('second');
+
+    const [record] = records();
+    expect(record).toMatchObject({ outcome: 'ok', attempts: 2, chains: 2, chain: 1 });
+    expect(record!.usage!.totalTokens).toBe(7);
+    // The answering chain began 150 ms into the call and took about 10 ms.
+    expect(record!.durationMs).toBeGreaterThanOrEqual(150);
+    expect(record!.attemptMs!).toBeLessThan(100);
+  });
+
+  it('records the main chain when it answers first, and never leaves the other open', async () => {
+    const { llm, records } = chained(
+      [async () => (await sleep(5), textResponse('first', usage)), held],
+      20,
+    );
+
+    expect(await llm.call(call)).toBe('first');
+
+    expect(records()).toHaveLength(1);
+    expect(records()[0]).toMatchObject({ outcome: 'ok', attempts: 2, chains: 2, chain: 0 });
+  });
+
+  it('writes no chain fields when the wrap never reruns', async () => {
+    const { llm, records } = setup({}, [
+      { name: 'plain', reruns: true, wrap: (_r, next) => next() },
+    ]);
+
+    await llm.call(call);
+
+    expect(records()[0]).not.toHaveProperty('chains');
+    expect(records()[0]).not.toHaveProperty('chain');
   });
 });

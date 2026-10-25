@@ -20,6 +20,7 @@ const base = (): RecordInput => ({
   retryDelayMs: 0,
   attemptMs: undefined,
   generationMs: undefined,
+  chains: undefined,
   path: [],
   usage: undefined,
   usageFailed: false,
@@ -51,6 +52,15 @@ describe('buildRecord', () => {
     });
     expect(Object.keys(record)).not.toContain('usage');
     expect(Object.keys(record)).not.toContain('error');
+  });
+
+  it('writes chains and the kept chain together, and only when more than one ran', () => {
+    expect(buildRecord({ ...base(), chains: { count: 2, kept: 1 } })).toMatchObject({
+      chains: 2,
+      chain: 1,
+    });
+    expect(buildRecord({ ...base(), chains: { count: 2, kept: 0 } })).toMatchObject({ chain: 0 });
+    expect(Object.keys(buildRecord(base()))).not.toContain('chains');
   });
 
   it('includes everything that was recorded', () => {
