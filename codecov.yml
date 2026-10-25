@@ -47,6 +47,12 @@ flags:
   vern-llm-policy-integration:
     paths:
       - 'packages/extensions/vern-llm-policy/**'
+  vern-llm-guard-unit:
+    paths:
+      - 'packages/extensions/vern-llm-guard/**'
+  vern-llm-guard-integration:
+    paths:
+      - 'packages/extensions/vern-llm-guard/**'
 
 coverage:
   status:
@@ -91,6 +97,11 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/extensions/vern-llm-policy/**'
+      vern-llm-guard:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/extensions/vern-llm-guard/**'
     patch:
       default:
         target: 80%
@@ -124,6 +135,10 @@ coverage:
         target: 80%
         paths:
           - 'packages/extensions/vern-llm-policy/**'
+      vern-llm-guard:
+        target: 80%
+        paths:
+          - 'packages/extensions/vern-llm-guard/**'
 
 ignore:
   - '**/index.ts'

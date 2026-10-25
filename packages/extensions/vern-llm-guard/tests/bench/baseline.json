@@ -1,0 +1,8 @@
+{
+  "unit": "microseconds per call",
+  "overhead": {
+    "one label check": 60,
+    "redact with output restore": 85,
+    "five checks": 200
+  }
+}
