@@ -132,7 +132,7 @@ export function scan(
       pending.spans[position] = spans;
       const key = `${pending.check.id}\u0000${keyOf(pending.positions[position]!)}`;
       cache.set(key, spans);
-      deps.memo?.set(`${compiled.version}\u0000${key}`, spans);
+      if (!deps.memoReadOnly) deps.memo?.set(`${compiled.version}\u0000${key}`, spans);
     });
   };
 

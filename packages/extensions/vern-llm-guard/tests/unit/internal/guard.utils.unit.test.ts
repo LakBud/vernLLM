@@ -10,6 +10,14 @@ describe('createGuard', () => {
     expect(log.errors()).toEqual(['[VernLLM] guard: op failed']);
   });
 
+  it('logs the kind of error and never its message or stack', () => {
+    const log = captureLogger();
+    createGuard(log.logger).report('op', new RangeError('quotes jane@acme.com'));
+    expect(log.everything()).toContain('RangeError');
+    expect(log.everything()).not.toContain('jane@acme.com');
+    expect(log.everything()).not.toContain('guard.utils');
+  });
+
   it('reports a value that is not an error', () => {
     const log = captureLogger();
     createGuard(log.logger).report('op', 'plain text');

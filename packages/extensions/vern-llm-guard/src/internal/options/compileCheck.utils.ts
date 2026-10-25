@@ -35,10 +35,18 @@ function compileOn(field: string, on: unknown): ReadonlySet<Source> {
   return sources;
 }
 
+/** The longest delay `setTimeout` takes: a larger one fires at once. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 function timeoutOf(value: unknown, at: string): number {
   const timeoutMs = value ?? DEFAULT_TIMEOUT_MS;
-  if (typeof timeoutMs !== 'number' || !(timeoutMs > 0)) {
-    invalid(`${at}.timeoutMs must be a positive number`);
+  if (
+    typeof timeoutMs !== 'number' ||
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > MAX_TIMEOUT_MS
+  ) {
+    invalid(`${at}.timeoutMs must be a positive number, at most ${MAX_TIMEOUT_MS}`);
   }
   return timeoutMs;
 }

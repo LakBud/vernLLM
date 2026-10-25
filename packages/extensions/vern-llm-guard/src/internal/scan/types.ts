@@ -13,6 +13,11 @@ export type CallCache = Map<string, readonly Span[]>;
 
 export interface ScanDeps {
   memo: Memo | undefined;
+  /**
+   * Read the memo but never write to it. A stream scans a growing buffer, and every prefix would
+   * become an entry of its own and push out the ones worth keeping.
+   */
+  memoReadOnly?: boolean | undefined;
   /** What a check's `when` reads. */
   ctx: CheckContext;
   /** The call's own signal. */

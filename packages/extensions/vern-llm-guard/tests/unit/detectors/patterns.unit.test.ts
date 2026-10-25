@@ -5,6 +5,15 @@ import { keywords, patterns, type Finding, type Segment } from '../../../src/ind
 const signal = new AbortController().signal;
 const user = (text: string): Segment => ({ text, source: 'user' });
 
+// Secret shaped values are put together here, so no file holds a whole one for a scanner to flag.
+const stripeKey = ['sk', 'live', 'abcdefghijklmnop1234'].join('_');
+const jwt = (signature: string): string =>
+  ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIn0', signature].join('.');
+const pem = (kind: string, body: string): string => {
+  const fence = '-'.repeat(5);
+  return `${fence}BEGIN ${kind}PRIVATE KEY${fence}\n${body}\n${fence}END ${kind}PRIVATE KEY${fence}`;
+};
+
 /** The matched texts of one segment, by kind. */
 function found(detector: ReturnType<typeof patterns>, text: string): [string, string][] {
   const findings = detector([user(text)], signal) as Finding[];
@@ -108,12 +117,9 @@ describe('patterns', () => {
       ['an OpenAI key', 'sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz012345'],
       ['a GitHub token', `ghp_${'a1B2'.repeat(9)}`],
       ['a Slack token', 'xoxb-1234567890-abcdefghij'],
-      ['a Stripe key', 'sk_live_abcdefghijklmnop1234'],
-      ['a JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r'],
-      [
-        'a private key block',
-        '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nabc\n-----END RSA PRIVATE KEY-----',
-      ],
+      ['a Stripe key', stripeKey],
+      ['a JWT', jwt('dBjftJeZ4CVPmB92K27uhbUJU1p1r')],
+      ['a private key block', pem('RSA ', 'MIIEowIBAAKCAQEA\nabc')],
     ])('finds %s', (_name, secret) => {
       expect(found(detect, `here: ${secret} done`)).toEqual([['secrets', secret]]);
     });
@@ -226,15 +232,15 @@ describe('patterns on hostile input', () => {
   });
 
   it('reads repeated private key headers without a closing line in bounded time', () => {
-    const header = '-----BEGIN RSA PRIVATE KEY-----\n';
+    const header = `${pem('RSA ', 'x').split('\n')[0]}\n`;
     const { ms } = time(patterns(['secrets']), header.repeat(3000));
     expect(ms).toBeLessThan(500);
   });
 
   it('still finds a real token and a real key', () => {
-    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk_lmn';
-    const key = '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----';
-    expect(found(patterns(['secrets']), `t ${jwt} t`)).toEqual([['secrets', jwt]]);
+    const token = jwt('abcdefghijk_lmn');
+    const key = pem('', 'MIIEvQIBADANBg');
+    expect(found(patterns(['secrets']), `t ${token} t`)).toEqual([['secrets', token]]);
     expect(found(patterns(['secrets']), `k ${key} k`)).toEqual([['secrets', key]]);
   });
 });

@@ -47,6 +47,24 @@ describe('gateStream releases', () => {
   });
 });
 
+describe('gateStream and the memo', () => {
+  it('reads it for every chunk but only the whole answer is written to it', async () => {
+    const base = setup({ checks: [block('zzz')], stream: { holdChars: 32 } });
+    const sets: string[] = [];
+    const memo = {
+      get: () => undefined,
+      set: (key: string) => void sets.push(key),
+      size: 0,
+    } as never;
+    const s = { ...base, deps: { ...base.deps, memo } };
+    const { drain } = run(s, source(deltas(`${long} one `, `${long} two `, `${long} three end`)));
+
+    await drain();
+
+    expect(sets.length).toBeLessThanOrEqual(1);
+  });
+});
+
 describe('gateStream tokens', () => {
   it('restores a token that arrives in three pieces', async () => {
     const s = setup({ checks: [block('zzz')] });

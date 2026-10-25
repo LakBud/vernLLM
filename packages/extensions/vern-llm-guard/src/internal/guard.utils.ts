@@ -1,5 +1,7 @@
 import { ConsoleLogger, type Logger } from 'vern-llm';
 
+import { errorName } from './errors.utils.js';
+
 import type { LoggerOption } from '../types/index.js';
 
 export interface Guard {
@@ -20,10 +22,8 @@ export function createGuard(option: LoggerOption | undefined): Guard {
     if (!logger) return;
 
     try {
-      logger.error(`[VernLLM] guard: ${operation} failed`, {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
+      // The kind only: a message or a stack may quote the text that was checked.
+      logger.error(`[VernLLM] guard: ${operation} failed`, { name: errorName(error) });
     } catch {
       // A throwing logger must not break a call.
     }

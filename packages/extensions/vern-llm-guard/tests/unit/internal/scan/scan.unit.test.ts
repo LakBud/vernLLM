@@ -480,6 +480,22 @@ describe('the call cache and the memo', () => {
     expect(again.report.checks.a).toMatchObject({ found: 1, memo: 2 });
   });
 
+  it('reads the memo but writes nothing to it when it is read only', async () => {
+    const detector = finds('x');
+    const { compiled, memo } = setup([{ id: 'a', detect: detector.detect }]);
+    const deps = { memo, ctx: { context: undefined, streaming: false } };
+
+    await scan(compiled, [user('x')], new Map(), deps);
+    const known = memo!.size;
+    const read = await scan(compiled, [user('x'), user('other')], new Map(), {
+      ...deps,
+      memoReadOnly: true,
+    });
+
+    expect(read.report.checks.a).toMatchObject({ found: 1, memo: 1 });
+    expect(memo!.size).toBe(known);
+  });
+
   it('works without a memo, through the call cache alone', async () => {
     const detector = finds('x');
     const { compiled } = setup([{ id: 'a', detect: detector.detect }]);

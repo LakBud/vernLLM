@@ -131,6 +131,7 @@ export function gateStream(input: StreamGateInput): {
         ...input.deps,
         skip,
         only,
+        memoReadOnly: true,
       });
     } catch (error) {
       const refusal = guardFailed(error);
