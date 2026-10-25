@@ -48,3 +48,17 @@ export const emptyReport = (): OutputReport => ({
   restored: 0,
   unrestored: 0,
 });
+
+/**
+ * Where text that has only started to arrive begins: half of a surrogate pair, a token, or the
+ * first symbol of a spotlight marker. Everything from there on is held until more arrives.
+ */
+export function tailStart(text: string, marker: string | undefined): number {
+  // Half of a surrogate pair is held too, so a character is never split between two chunks.
+  const code = text.charCodeAt(text.length - 1);
+  if (code >= 0xd800 && code <= 0xdbff) return text.length - 1;
+  const token = partialTokenStart(text);
+  return marker !== undefined && text.endsWith(marker[0]!) && !text.endsWith(marker)
+    ? Math.min(token, text.length - 1)
+    : token;
+}

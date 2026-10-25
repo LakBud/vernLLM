@@ -8,9 +8,62 @@ import { startState, stringAt } from './json.utils.js';
 
 import type { OutputReport, Segment } from '../../types/index.js';
 import type { CompiledCheck } from '../../types/resolvedConfig.js';
-import type { Span } from '../scan/types.js';
-import type { Replacement } from '../segments/types.js';
+import type { ScanFinding, Span } from '../scan/types.js';
+import type { Extracted, Replacement, SpanReplacement } from '../segments/types.js';
 import type { GateInput, GateResult } from './types.js';
+
+type Pieces = Map<number, SpanReplacement[]>;
+
+/** The text a check's `redact` finding becomes. Outside a JSON string it has to be one itself. */
+function maskFor(input: GateInput, finding: ScanFinding, text: string, start: number): string {
+  const mask = input.compiled.mask(finding.span.label ?? finding.check.label);
+  return input.json === true && !stringAt(startState(), text, start) ? JSON.stringify(mask) : mask;
+}
+
+/** The replacements that `redact` checks ask for, by segment, and how many there are. */
+function redactions(
+  input: GateInput,
+  findings: readonly ScanFinding[],
+  tokenized: readonly string[],
+): { pieces: Pieces; masked: number } {
+  const pieces: Pieces = new Map();
+  let masked = 0;
+  for (const finding of findings) {
+    // The scan blocked a redact check whose findings it could not locate, so these have offsets.
+    if (finding.check.action !== 'redact') continue;
+    const { start, end } = finding.span as { start: number; end: number };
+    const list = pieces.get(finding.segment) ?? [];
+    list.push({ start, end, text: maskFor(input, finding, tokenized[finding.segment]!, start) });
+    pieces.set(finding.segment, list);
+    masked++;
+  }
+  return { pieces, masked };
+}
+
+/** Applies the redactions and restores the tokens, segment by segment, counting both. */
+function restoreSegments(
+  input: GateInput,
+  extracted: Extracted,
+  original: readonly string[],
+  tokenized: readonly string[],
+  pieces: Pieces,
+  report: OutputReport,
+): Replacement[] {
+  const replacements: Replacement[] = [];
+  tokenized.forEach((text, index) => {
+    if (extracted.fixed[index]) return;
+    const acted = replaceSpans(text, pieces.get(index) ?? []);
+    const restored = restoreTokens(acted, input.tokens, { json: input.json === true });
+    report.restored += restored.restored;
+    report.unrestored += restored.unrestored;
+
+    if (restored.text !== original[index]) {
+      const end = original[index]!.length;
+      replacements.push({ segment: index, start: 0, end, text: restored.text });
+    }
+  });
+  return replacements;
+}
 
 /**
  * The same four steps for every answer, in this order:
@@ -46,42 +99,8 @@ export async function gateOutput(input: GateInput): Promise<GateResult> {
     return { value, report, blocked: scanned.blocked, masked: 0, ms: scanned.ms };
   }
 
-  const pieces = new Map<number, { start: number; end: number; text: string }[]>();
-  let masked = 0;
-  for (const { check, segment, span } of scanned.findings) {
-    // The scan blocked a redact check whose findings it could not locate, so these have offsets.
-    if (check.action !== 'redact') continue;
-    const start = span.start!;
-    const end = span.end!;
-    const list = pieces.get(segment) ?? [];
-    const mask = compiled.mask(span.label ?? check.label);
-    // Outside a JSON string a mask has to be one, or the document stops being JSON.
-    const text =
-      input.json === true && !stringAt(startState(), tokenized[segment]!, start)
-        ? JSON.stringify(mask)
-        : mask;
-    list.push({ start, end, text });
-    pieces.set(segment, list);
-    masked++;
-  }
-
-  const replacements: Replacement[] = [];
-  tokenized.forEach((text, index) => {
-    if (extracted.fixed[index]) return;
-    const acted = replaceSpans(text, pieces.get(index) ?? []);
-    const restored = restoreTokens(acted, tokens, { json: input.json === true });
-    report.restored += restored.restored;
-    report.unrestored += restored.unrestored;
-
-    if (restored.text !== original[index]) {
-      replacements.push({
-        segment: index,
-        start: 0,
-        end: original[index]!.length,
-        text: restored.text,
-      });
-    }
-  });
+  const { pieces, masked } = redactions(input, scanned.findings, tokenized);
+  const replacements = restoreSegments(input, extracted, original, tokenized, pieces, report);
 
   return {
     value: replacements.length === 0 ? value : applyReplacements(value, extracted, replacements),

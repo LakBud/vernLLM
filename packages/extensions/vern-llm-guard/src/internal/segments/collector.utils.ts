@@ -1,10 +1,12 @@
 import type { Segment } from '../../types/index.js';
 import type { Extracted, Path } from './types.js';
 
-export function collector(): {
+export interface Collector {
   extracted: Extracted;
   add(source: Segment['source'], text: string, path: Path, fixed?: boolean): void;
-} {
+}
+
+export function collector(): Collector {
   const extracted: Extracted = { segments: [], paths: [], fixed: [], unscanned: 0 };
   return {
     extracted,
