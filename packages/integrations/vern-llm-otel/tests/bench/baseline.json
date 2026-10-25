@@ -1,0 +1,8 @@
+{
+  "unit": "microseconds per call",
+  "overhead": {
+    "no-op tracer": 16.1,
+    "recorded spans": 24.4,
+    "spans, metrics and content": 27.3
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "unit": "microseconds per call",
+  "calls": {
+    "text answer": 1.4,
+    "ten turns of history": 2.3,
+    "streamed text": 4.5,
+    "streamed tool call": 6.6
+  }
+}

@@ -20,12 +20,7 @@ const secrets = { id: 'secrets', detect: patterns(['secrets']), action: 'block' 
 
 function setup(checks = [pii, secrets], budget = false, vern: Partial<VernLLMOptions> = {}) {
   const sink = memorySink();
-  const logger = loggerMiddleware({
-    sink,
-    logger: 'silent',
-    enrich: guardLogFields,
-    customEvents: ['guard.*'],
-  });
+  const logger = loggerMiddleware({ sink, logger: 'silent', enrich: guardLogFields });
   const shares: (number | undefined)[] = [];
   const reader: VernLLMMiddleware = {
     name: 'reader',
@@ -95,12 +90,13 @@ describe('with usage', () => {
 });
 
 describe('with the logger', () => {
-  it('records a blocked call with the guard result on it', async () => {
+  it('records a blocked call as rejected, with the guard result on it', async () => {
     const { llm, records, logger } = setup();
 
     await expect(llm.call(withKey)).rejects.toMatchObject({ code: 'content_blocked' });
 
     const [record] = records();
+    expect(record).toMatchObject({ outcome: 'rejected' });
     expect(JSON.stringify(record)).toContain('guard.result');
     expect(JSON.stringify(record)).not.toContain('AKIA');
     logger.dispose();

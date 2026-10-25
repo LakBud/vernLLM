@@ -55,6 +55,9 @@ vern-llm-bedrock:<script>` from the repo root:
   "changeset": "changeset",
   "version-packages": "changeset version",
   "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+  "bench": "vitest bench --run",
+  "bench:check": "node scripts/bench-check.ts",
+  "bench:update": "node scripts/bench-check.ts --update",
   "size": "size-limit"
 }
 ```
@@ -85,6 +88,7 @@ Every PR touching `packages/integrations/vern-llm-bedrock` runs through the same
 | Unit tests + coverage          | `pnpm nx run vern-llm-bedrock:test:unit:coverage`                                                                    |
 | Integration tests              | `pnpm nx run vern-llm-bedrock:test:int:coverage`                                                                     |
 | Build, bundle size, smoke test | `pnpm nx run vern-llm-bedrock:build && pnpm nx run vern-llm-bedrock:size && pnpm nx run vern-llm-bedrock:smoke-test` |
+| Overhead check                 | `pnpm nx run vern-llm-bedrock:build && pnpm nx run vern-llm-bedrock:bench:check`                                     |
 | Changeset present              | `pnpm changeset status --since=origin/main`                                                                          |
 
 ## Changesets

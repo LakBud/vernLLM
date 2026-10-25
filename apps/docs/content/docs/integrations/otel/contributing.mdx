@@ -51,6 +51,9 @@ vern-llm-otel:<script>` from the repo root:
   "changeset": "changeset",
   "version-packages": "changeset version",
   "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+  "bench": "vitest bench --run",
+  "bench:check": "node scripts/bench-check.ts",
+  "bench:update": "node scripts/bench-check.ts --update",
   "size": "size-limit"
 }
 ```
@@ -79,6 +82,7 @@ Every PR touching `packages/integrations/vern-llm-otel` runs through the same CI
 | Unit tests + coverage          | `pnpm nx run vern-llm-otel:test:unit:coverage`                                                              |
 | Integration tests              | `pnpm nx run vern-llm-otel:test:int:coverage`                                                               |
 | Build, bundle size, smoke test | `pnpm nx run vern-llm-otel:build && pnpm nx run vern-llm-otel:size && pnpm nx run vern-llm-otel:smoke-test` |
+| Overhead check                 | `pnpm nx run vern-llm-otel:build && pnpm nx run vern-llm-otel:bench:check`                                  |
 | Changeset present              | `pnpm changeset status --since=origin/main`                                                                 |
 
 ## Changesets

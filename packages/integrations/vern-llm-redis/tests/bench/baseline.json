@@ -1,0 +1,8 @@
+{
+  "unit": "microseconds per call",
+  "calls": {
+    "cache hit": 2.7,
+    "cache miss and store": 26.3,
+    "retry budget": 8.5
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "unit": "microseconds per call",
+  "calls": {
+    "bare call": 7.8,
+    "fallback after a failure": 39.6,
+    "cache hit": 3.3,
+    "five middleware": 14.4,
+    "stream to the end": 52.1
+  }
+}

@@ -68,6 +68,10 @@
     "bench:check": {
       "dependsOn": ["build"],
       "cache": false
+    },
+    "bench:update": {
+      "dependsOn": ["build"],
+      "cache": false
     }
   },
   "analytics": false

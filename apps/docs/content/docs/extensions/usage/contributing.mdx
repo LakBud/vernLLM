@@ -61,6 +61,7 @@ specific to this package:
   <Folder name="tests">
     <Folder name="unit" />
     <Folder name="integration" />
+    <Folder name="bench" />
   </Folder>
   <Folder name="scripts" />
 </Files>
@@ -74,16 +75,18 @@ holds and settles reservations, and `totals/` keeps the in process counters.
 Run them with `pnpm run <script>` from inside `packages/extensions/vern-llm-usage`, or
 `pnpm nx run vern-llm-usage:<script>` from the repo root:
 
-| Script                                    | What it does                                                |
-| ----------------------------------------- | ----------------------------------------------------------- |
-| `build`, `dev`                            | Build with tsdown, or rebuild on change                     |
-| `lint`, `lint:fix`                        | Run oxlint                                                  |
-| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                          |
-| `test`, `test:unit`, `test:int`           | Run all tests, or one project                               |
-| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                 |
-| `smoke-test`                              | Pack both packages and import the build through ESM and CJS |
+| Script                                    | What it does                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `build`, `dev`                            | Build with tsdown, or rebuild on change                            |
+| `lint`, `lint:fix`                        | Run oxlint                                                         |
+| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                                 |
+| `test`, `test:unit`, `test:int`           | Run all tests, or one project                                      |
+| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                        |
+| `smoke-test`                              | Pack both packages and import the build through ESM and CJS        |
+| `bench`, `bench:check`                    | Measure per call overhead, or fail when it grows past the baseline |
+| `bench:update`                            | Record a new baseline in `tests/bench/baseline.json`               |
 
-`smoke-test` runs against the built package, so run `build` first.
+`smoke-test` and `bench:check` run against the built package, so run `build` first.
 
 ## Tests
 
@@ -97,15 +100,15 @@ integration test cannot make precise, such as window boundaries across daylight 
 Every PR touching `packages/extensions/vern-llm-usage` runs through the same CI workflows described
 in [Development](/docs/development#ci). Run the equivalent commands locally first:
 
-| Check                 | Local command                                                               |
-| --------------------- | --------------------------------------------------------------------------- |
-| Lint                  | `pnpm nx run vern-llm-usage:lint`                                           |
-| Typecheck source      | `pnpm nx run vern-llm-usage:typecheck`                                      |
-| Typecheck tests       | `pnpm nx run vern-llm-usage:typecheck:test`                                 |
-| Unit tests + coverage | `pnpm nx run vern-llm-usage:test:unit:coverage`                             |
-| Integration tests     | `pnpm nx run vern-llm-usage:test:int:coverage`                              |
-| Build, smoke test     | `pnpm nx run vern-llm-usage:build && pnpm nx run vern-llm-usage:smoke-test` |
-| Changeset present     | `pnpm changeset status --since=origin/main`                                 |
+| Check                    | Local command                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Lint                     | `pnpm nx run vern-llm-usage:lint`                                                                                     |
+| Typecheck source         | `pnpm nx run vern-llm-usage:typecheck`                                                                                |
+| Typecheck tests          | `pnpm nx run vern-llm-usage:typecheck:test`                                                                           |
+| Unit tests + coverage    | `pnpm nx run vern-llm-usage:test:unit:coverage`                                                                       |
+| Integration tests        | `pnpm nx run vern-llm-usage:test:int:coverage`                                                                        |
+| Build, smoke test, bench | `pnpm nx run vern-llm-usage:build && pnpm nx run vern-llm-usage:smoke-test && pnpm nx run vern-llm-usage:bench:check` |
+| Changeset present        | `pnpm changeset status --since=origin/main`                                                                           |
 
 ## Changesets
 

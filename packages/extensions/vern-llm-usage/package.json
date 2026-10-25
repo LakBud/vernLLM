@@ -50,7 +50,10 @@
     "smoke-test": "node scripts/smoke-test.ts",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run smoke-test"
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run smoke-test",
+    "bench:check": "node scripts/bench-check.ts",
+    "bench:update": "node scripts/bench-check.ts --update",
+    "bench": "vitest bench --run"
   },
   "peerDependencies": {
     "vern-llm": "workspace:^"

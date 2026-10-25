@@ -65,6 +65,9 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run size && pnpm run smoke-test",
+    "bench:check": "node scripts/bench-check.ts",
+    "bench:update": "node scripts/bench-check.ts --update",
+    "bench": "vitest bench --run",
     "size": "size-limit"
   },
   "devDependencies": {
