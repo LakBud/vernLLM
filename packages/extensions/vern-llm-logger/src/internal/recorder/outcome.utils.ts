@@ -39,6 +39,13 @@ function statusOf(error: LLMErrorLike): number | undefined {
     : undefined;
 }
 
+/** Codes of a middleware saying no on purpose, which is not a fault of the provider or the app. */
+const REJECTED_CODES: ReadonlySet<string> = new Set([
+  'policy_denied',
+  /** Refused by a middleware for its content. */
+  'content_blocked',
+]);
+
 /** The rules that turn how a call ended into an outcome and a level. */
 export function classifyOutcome(outcome: RecorderOutcome): ClassifiedOutcome {
   if (outcome.kind === 'result') return { outcome: 'ok', level: 'info' };
@@ -54,9 +61,10 @@ export function classifyOutcome(outcome: RecorderOutcome): ClassifiedOutcome {
 
   // The caller cancelled, which is not a fault of the provider or of this app.
   if (error.type === 'aborted') return { outcome: 'aborted', level: 'info', error: summary };
-  if (error.type === 'quota_exceeded' || error.code === 'policy_denied') {
-    return { outcome: 'rejected', level: 'warn', error: summary };
-  }
+  const rejected =
+    error.type === 'quota_exceeded' ||
+    (summary.code !== undefined && REJECTED_CODES.has(summary.code));
+  if (rejected) return { outcome: 'rejected', level: 'warn', error: summary };
   return { outcome: 'error', level: 'error', error: summary };
 }
 
