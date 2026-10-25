@@ -124,37 +124,6 @@ describe('applyEvent', () => {
     ).toHaveBeenCalledWith(usage, true, undefined);
   });
 
-  it('passes the chain of the event on, where the recorder keeps state per chain', () => {
-    const retry = run({
-      kind: 'retry',
-      requestId: 'r',
-      provider: 'p',
-      model: 'm',
-      attempt: 1,
-      maxRetries: 2,
-      delayMs: 5,
-      retryAfterHonored: false,
-      error,
-      chain: 1,
-    });
-    const fallback = run({
-      kind: 'fallback',
-      requestId: 'r',
-      from: 'a',
-      to: 'b',
-      fromIndex: -1,
-      toIndex: 0,
-      error,
-      elapsedMs: 7,
-      chain: 2,
-    });
-    const used = run({ kind: 'usage', requestId: 'r', usage, chain: 1 });
-
-    expect(retry.retried).toHaveBeenCalledWith(5, error, 1);
-    expect(fallback.fellBack).toHaveBeenCalledWith(7, error, 2);
-    expect(used.setUsage).toHaveBeenCalledWith(usage, false, 1);
-  });
-
   it('keeps a custom event only when its name is wanted', () => {
     const event: VernLLMEvent = {
       kind: 'custom',

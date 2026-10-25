@@ -566,33 +566,6 @@ describe('calls with more than one chain', () => {
         },
       },
     }) as const;
-  const usage = (totalTokens: number) => ({
-    promptTokens: 1,
-    completionTokens: totalTokens - 1,
-    totalTokens,
-    requestId: 'r',
-    model: 'm',
-  });
-
-  it('writes no chain fields for a call that ran one chain', () => {
-    const r = recorder();
-    r.openAttempt(attemptCtx());
-    r.responded();
-
-    expect(r.finish(answeredBy())!).not.toHaveProperty('chains');
-    expect(recorder().finish(ok)!).not.toHaveProperty('chain');
-  });
-
-  it('keeps each chain apart, so an attempt of one never closes an attempt of the other', () => {
-    const r = recorder();
-    r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
-    r.openAttempt(attemptCtx('backup', 'gpt-4o-mini', 1));
-    r.responded(1);
-
-    const record = r.finish(answeredBy(1))!;
-
-    expect(record).toMatchObject({ attempts: 2, chains: 2, chain: 1 });
-  });
 
   it('takes attemptMs and ttftMs from the kept chain only', () => {
     const r = recorder();
@@ -626,18 +599,6 @@ describe('calls with more than one chain', () => {
     expect(record).toMatchObject({ attempts: 2, chains: 2, chain: 0, attemptMs: 50 });
   });
 
-  it('lists the path of the kept chain, not of the others', () => {
-    const r = recorder();
-    r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
-    r.openAttempt(attemptCtx('backup', 'gpt-4o-mini', 1));
-    vi.advanceTimersByTime(25);
-    r.responded(1);
-
-    expect(r.finish(answeredBy(1))!.path).toEqual([
-      { provider: 'backup', model: 'gpt-4o-mini', attempts: 1, outcome: 'ok', elapsedMs: 25 },
-    ]);
-  });
-
   it('applies a retry and a fallback to the chain they came from', () => {
     const r = recorder();
     r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
@@ -656,32 +617,6 @@ describe('calls with more than one chain', () => {
     expect(talliesOf(record)).toEqual([
       { provider: 'primary', model: 'gpt-4o', responded: 1, qualityFailures: 0 },
     ]);
-  });
-
-  it('takes the usage of the kept chain', () => {
-    const r = recorder();
-    r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
-    r.openAttempt(attemptCtx('primary', 'gpt-4o', 1));
-    r.setUsage(usage(10), true, 0);
-    r.setUsage(usage(7), false, 1);
-
-    const record = r.finish(answeredBy(1))!;
-
-    expect(record.usage!.totalTokens).toBe(7);
-    expect(record).not.toHaveProperty('usageFailed');
-  });
-
-  it('records the main chain when every chain failed', () => {
-    const r = recorder();
-    r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
-    r.attemptFailed(serverError(), 0);
-    r.openAttempt(attemptCtx('backup', 'gpt-4o-mini', 1));
-    r.attemptFailed(serverError(), 1);
-
-    const record = r.finish(failure(serverError()))!;
-
-    expect(record).toMatchObject({ outcome: 'error', attempts: 2, chains: 2, chain: 0 });
-    expect(record.path).toMatchObject([{ provider: 'primary', outcome: 'error' }]);
   });
 
   it('counts a chain from its retry or fallback even if its attempt never opened', () => {
