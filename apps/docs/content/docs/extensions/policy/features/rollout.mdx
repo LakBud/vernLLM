@@ -1,0 +1,64 @@
+---
+title: Rollout
+description: Try rules in audit mode on live traffic, canary the package, version and swap policies, and test rules as plain data.
+---
+
+A policy that removes targets can break traffic that works today. Roll it out in steps.
+
+## 1. Audit first
+
+Set `mode: 'audit'` on the policy, or on single rules. An audit rule is evaluated like any other and
+reported, and changes nothing: no removal, no denial, no flag.
+
+```ts title="policy-audit.ts"
+const policy = policyMiddleware({ mode: 'audit', targets, rules, default: 'deny' });
+```
+
+The decision lists, for each audit rule, the targets it would have removed on top of the enforced
+rules. Rules that would have changed nothing are left out. Under an audit policy, `default: 'deny'`
+is reported too, under the key `'default'`. A rule's own `mode` wins over the policy's, so you can
+enforce the rules you are sure of and audit the rest.
+
+Read the `audit` field of the `policy.decision` event for a while. A rule that would remove the
+target most calls need is a rule to look at before enforcing it.
+
+## 2. Canary
+
+The canary workflow publishes the package as `0.0.0-canary-<commit>` under the `next` tag. Install
+it in a service you can roll back, with the policy in audit mode, and compare the audit reports with
+what you expect. Then switch the rules to `enforce` one at a time.
+
+## 3. Enforce, with a version
+
+Give the rules a `version`. It is stamped on every decision and denial, so a log line says which
+rules decided.
+
+`policy.update()` replaces the policy as a whole. It is validated completely first: a bad update
+throws and the old policy keeps running. A call that already started keeps deciding on the policy it
+started with.
+
+```ts title="policy-update.ts"
+policy.update({ version: '2026-10-24.2', targets, rules: nextRules });
+```
+
+An update replaces everything except the logger, so settings you leave out go back to their
+defaults. Pass them all.
+
+## Test rules as data
+
+`policy.evaluate()` takes plain data, so a rule test is a table of calls and expected outcomes:
+
+```ts title="policy.test.ts"
+import { expect, it } from 'vitest';
+
+it.each([
+  [{ region: 'eu' }, ['openai-eu']],
+  [{ region: 'us' }, ['openai-us', 'openai-eu']],
+])('context %j may use %j', (context, expected) => {
+  const { allowed } = policy.evaluate({ context, targets: callTargets });
+  expect(allowed).toEqual(expected);
+});
+```
+
+Pass `now` to decide at a given moment, which settles whether an exception has ended, and `labels`
+to say what the labeler would have returned. Leaving `labels` out means unknown.

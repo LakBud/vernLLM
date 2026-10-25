@@ -1,0 +1,40 @@
+---
+title: Router and usage
+description: How policy nests with the router and usage extensions, allowed versus preferred, and what a closed route list does when policy removes its targets.
+---
+
+The extensions connect through nesting only. Policy narrows `ctx.targets`, and what is inside sees
+the smaller list. None imports another, and none needs a change for the others.
+
+```text title="policy-nesting.txt"
+ctx.targets    openai, anthropic, gemini
+policy         pii removes openai          → next({ targets: ['anthropic', 'gemini'] })
+router         sees anthropic, gemini      → next({ targets: ['gemini', 'anthropic'] })
+core           tries gemini, falls back to anthropic, never to openai
+```
+
+## With the router
+
+**Policy decides what is allowed. The router decides what is preferred.**
+
+- Prefer an open list in routes, `targets: [['openai', 'anthropic'], '*']`. It keeps those first
+  and lets anything else policy allowed follow
+- Or express a preference as a strategy or `exclude`, and leave "only these" to policy rules
+- Keep closed route lists for cases that really mean "only these, or fail"
+
+A route that lists only targets policy removed leaves the router nothing to order. A closed list
+fails the call with `no_eligible_targets`, and an open `'*'` keeps it alive on whatever is left.
+
+The router warns once when a route names a target the call does not have, which is what a policy
+removal looks like from inside the router. The warning is accurate, and not a bug to chase.
+
+## With usage
+
+Policy is outside usage, so a denied call reserves no budget and spends nothing. Usage prices the
+hold at the most expensive target still allowed, so removing the costly targets also lowers what a
+call reserves.
+
+## With the logger
+
+The logger sits outside policy and records denials at `warn` as `rejected`. It keeps the
+`policy.*` events by default.

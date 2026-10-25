@@ -2,5 +2,13 @@
   "title": "Extensions",
   "icon": "Puzzle",
   "root": true,
-  "pages": ["---Introduction---", "index", "---Extensions---", "logger", "usage", "router"]
+  "pages": [
+    "---Introduction---",
+    "index",
+    "---Extensions---",
+    "logger",
+    "usage",
+    "router",
+    "policy"
+  ]
 }

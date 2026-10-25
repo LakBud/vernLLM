@@ -1,0 +1,63 @@
+---
+title: Observability
+description: The policy.decision event, the errors a decision lists, and the warnings policy logs, none of which carry a context value.
+---
+
+## The decision event
+
+Every call emits one `policy.decision` event before it goes on, denied calls and cache hits and
+joins included. The record exists even when the call then fails.
+
+```ts title="policy-decision-event.ts"
+{
+  v: 1,
+  version: '2026-10-24.1',
+  outcome: 'narrowed',                          // 'allowed' | 'narrowed' | 'denied'
+  removed: { 'openai-us': 'eu-residency' },     // target to rule, or 'default'
+  flags: { duplicateSends: 'pii' },             // flag to the rule that set it false
+  exceptions: [{ rule: 'eu-residency', reason: 'DPA signed', until: '2026-11-01' }],
+  audit: { trial: ['anthropic'] },              // audit rule to the targets it would remove
+  errors: [{ rule: 'lookup', name: 'TypeError' }], // what failed, never what it said
+  labels: ['pii'],                              // or 'unknown'; absent without a labels option
+}
+```
+
+It holds rule ids, target names, labels and the kind of each error, **never a `context` value**, an
+error message or request content, so a logger or a trace can keep it. The logger keeps `policy.*`
+events by default, so they appear in its records without configuration.
+
+## Errors
+
+A rule whose pattern or `when` throws is handled by `onError`:
+
+| In                                  | `closed` (default)     | `open`        |
+| ----------------------------------- | ---------------------- | ------------- |
+| A `forbid` rule's `when` or pattern | The rule applies       | It does not   |
+| An `allow` rule's `when` or pattern | It grants nothing      | It is dropped |
+| Unknown labels                      | Rules using them apply | They do not   |
+
+A `forbid` whose pattern throws on one target removes that target and not the call. The failure is
+handled in three places:
+
+- The **decision** lists every distinct failure of a rule, with its `name` and its `message`, cut to
+  200 characters
+- The **log** warns once per rule, with the kind of error only
+- The **event** carries the kind of error only too, because a message is whatever your function
+  wrote and may hold call data
+
+A failure of the policy itself follows the same setting: `closed` denies the call, `open` runs it
+untouched.
+
+## Denials
+
+A denied call fails with an `LLMError` of type `invalid_params` and code `policy_denied`, before any
+provider is contacted. It is not retried, does not fall back, and never counts toward a circuit
+breaker. The message names rule ids only, and `issues` holds the `version`, the rules and the
+removed targets:
+
+```text title="policy-denial.txt"
+Call denied by policy: eu-residency removed every target
+```
+
+With `default: 'deny'` and no allow rule matching, `rules` is empty and the message says so.
+The logger records a denial at `warn` as `rejected`.

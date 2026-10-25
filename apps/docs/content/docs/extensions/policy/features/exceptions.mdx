@@ -1,0 +1,44 @@
+---
+title: Exceptions
+description: Time bound exceptions that lift one rule for some calls, always expire, and are always recorded with a reason.
+---
+
+Sometimes a rule must be lifted for a while: a customer signed a data processing agreement and the
+migration is still pending. `except` is the bounded, audited version of "break glass".
+
+```ts title="policy-exceptions.ts"
+{
+  id: 'eu-residency',
+  forbid: { not: { region: 'eu' } },
+  when: { context: { region: 'eu' } },
+  except: [
+    {
+      when: { context: { tenantId: 'acme' } },
+      until: '2026-11-01',
+      reason: 'DPA signed, migration pending',
+    },
+  ],
+}
+```
+
+| Field    | Meaning                                                            |
+| -------- | ------------------------------------------------------------------ |
+| `when`   | Which calls it covers. Required, since none would cover every call |
+| `until`  | When it ends, exclusive. Required, so an exception always expires  |
+| `reason` | Why it exists. Required, and recorded                              |
+
+`until` is an ISO date, read as midnight UTC, or a date and time with an offset such as
+`'2026-11-01T12:00:00+01:00'`. A time without an offset is refused, since it would depend on the
+host. A date that does not exist, such as `'2026-02-31'`, is an error when the policy is built,
+because it would otherwise roll over to March and last longer than written.
+
+## What it does
+
+- A covered call skips the rule: its `forbid` removes nothing, its `allow` grants nothing, and its
+  flags are not set
+- It lifts **only its own rule**. Other forbids still apply
+- The decision lists each exception that covered a rule, with the rule, the reason and `until`
+- An exception that has ended is ignored, and warned about once. A policy built with one that has
+  already ended warns at once
+- If its `when` throws, it covers nothing, whatever `onError` says. A way past a rule must never
+  open by accident

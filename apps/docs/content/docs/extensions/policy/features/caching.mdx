@@ -1,0 +1,39 @@
+---
+title: Caching
+description: How a cachedCall join shares a call decided under someone else's rules, why the cache key must carry what your rules differ on, and the policy.cross_join event.
+---
+
+`cachedCall` can join a call another caller already started. The joiner shares that call's answer,
+and the core ignores the joiner's `next({ targets })`.
+
+| What policy does for a joiner         | Works                                               |
+| ------------------------------------- | --------------------------------------------------- |
+| Deny it                               | Yes. Policy runs for the joiner and can refuse      |
+| Narrow the shared call to its targets | No. It ran on what the first caller's rules allowed |
+
+This matters only when two callers with different target rules share a cache key.
+
+<Callout type="warn">
+  When target rules differ by tenant or region, put that attribute in the `cacheKey`.
+</Callout>
+
+```ts title="policy-cache-key.ts"
+await llm.cachedCall({
+  cacheKey: `summary:${documentId}:${context.region}`,
+  ttl: 60_000,
+  call: { userContent, jsonMode: false, context },
+});
+```
+
+## Catching a mistake
+
+After `next()` on a join, policy checks the target that answered. If the joiner's own rules removed
+it, policy emits `policy.cross_join` and warns once per rule, so a cache key that is too coarse
+shows up instead of passing silently:
+
+```ts title="policy-cross-join.ts"
+{ v: 1, version: '2026-10-24.1', target: 'openai-us', rule: 'eu-residency' }
+```
+
+A cache hit carries no record of which target answered, so it cannot be checked. A key that
+separates the callers is the only complete answer.

@@ -1,0 +1,95 @@
+---
+title: Configuration
+description: Every vern-llm-policy option with its type and default, the rule and exception fields, and what throws when the policy is built.
+---
+
+Options are validated completely when `policyMiddleware()` is called and again on `update()`. A
+mistake throws an `Error` that starts with `policyMiddleware:` and names the field, so nothing
+fails on the first call.
+
+## Options
+
+| Option    | Type                                     | Default     | What it does                                                                                                       |
+| --------- | ---------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| `rules`   | `PolicyRule[]`                           | `[]`        | The rules, see below                                                                                               |
+| `targets` | `Record<string, Record<string, Scalar>>` | none        | Attributes you declare per target name, such as `{ region: 'eu', zdr: true }`                                      |
+| `default` | `'allow' \| 'deny'`                      | `'allow'`   | What a call may use when no applicable rule has an `allow`: every target, or none                                  |
+| `onError` | `'closed' \| 'open'`                     | `'closed'`  | What a throwing rule or a failing policy does, see [Observability](/docs/extensions/policy/features/observability) |
+| `mode`    | `'enforce' \| 'audit'`                   | `'enforce'` | `'audit'` makes every rule report instead of enforce. A rule's own `mode` wins                                     |
+| `version` | `string`                                 | none        | Names this set of rules in every decision and denial                                                               |
+| `labels`  | `(ctx) => string[] \| undefined`         | none        | Content labels for `when: { labels }`. Required by any rule that matches on labels                                 |
+| `logger`  | `Logger \| 'silent'`                     | console     | Where policy reports its own failures and warnings                                                                 |
+
+`default: 'deny'` under an audit policy reports under the key `'default'` and denies nothing.
+
+```ts title="policy-full-options.ts"
+policyMiddleware({
+  version: '2026-10-24.1',
+  default: 'allow',
+  onError: 'closed',
+  mode: 'enforce',
+  targets: { anthropic: { region: 'us', zdr: true } },
+  labels: (ctx) => ctx.state.get(guardFindings),
+  logger: 'silent',
+  rules: [],
+});
+```
+
+### Declaring targets
+
+Attributes are strings, numbers or booleans. The names `name`, `model` and `provider` are built in,
+and `not`, `any`, `gte` and `lte` are reserved for patterns, so a target cannot declare them. A
+rule can only use an attribute that at least one target declares or one of the built in ones.
+
+## Rules
+
+| Field    | Type                            | What it does                                             |
+| -------- | ------------------------------- | -------------------------------------------------------- |
+| `id`     | `string`                        | Required. Unique, non empty, and not `'default'`         |
+| `when`   | `Pattern<CallFacts>`            | When the rule applies. Omitted means always              |
+| `allow`  | `Pattern<TargetFacts>`          | Only matching targets may be used while the rule applies |
+| `forbid` | `Pattern<TargetFacts> \| 'all'` | Matching targets are removed. `'all'` denies the call    |
+| `set`    | `Record<string, boolean>`       | Flags for other middleware                               |
+| `except` | `PolicyException[]`             | Time bound ways past this rule                           |
+| `mode`   | `'enforce' \| 'audit'`          | Per rule override of the policy's `mode`                 |
+
+At most one of `allow` and `forbid`, and at least one of `allow`, `forbid` and `set`.
+
+## Exceptions
+
+| Field    | Type                 | What it does                                                                      |
+| -------- | -------------------- | --------------------------------------------------------------------------------- |
+| `when`   | `Pattern<CallFacts>` | Required. Which calls it covers                                                   |
+| `until`  | `string`             | Required. An ISO date (midnight UTC) or a date and time with an offset. Exclusive |
+| `reason` | `string`             | Required. Recorded in the decision                                                |
+
+### The `labels` function
+
+`(ctx: PreDispatchContext) => readonly string[] | undefined`. Synchronous. Return the labels the call
+has, `[]` when it was checked and has none, and `undefined` when it could not be checked. A throw
+counts as `undefined`, and anything that is not a list of strings is an error handled by `onError`.
+
+## Methods
+
+| Method            | What it does                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `evaluate(input)` | The decision a call would get from plain data. No call, no event. See [Decision](/docs/extensions/policy/API-reference/decision) |
+| `update(policy)`  | Validates a whole new policy, then swaps it. A bad one throws and the old one stays                                              |
+
+`update` takes every option except `logger`, and settings it leaves out go back to their defaults.
+
+## What throws
+
+| Mistake                                                          | Message names                     |
+| ---------------------------------------------------------------- | --------------------------------- |
+| An unknown option, rule field or exception field                 | The field                         |
+| A repeated, empty or reserved rule `id`                          | The rule                          |
+| A rule with both `allow` and `forbid`, or with none of the three | The rule                          |
+| An attribute no target declares, or a reserved attribute name    | The attribute and the known ones  |
+| An empty pattern or list, a non scalar value, nesting over 8     | The path to it                    |
+| `gte` or `lte` outside a numeric fact                            | The path to it                    |
+| A `set` that is empty or holds a non boolean                     | The flag                          |
+| An exception with no `when`, `until` or `reason`, or a bad date  | The exception                     |
+| `when: { labels }` without a `labels` option                     | The rule                          |
+| `update` given a `logger`                                        | `update cannot change the logger` |
+| `update` given `null`, `undefined` or an array                   | `options must be an object`       |

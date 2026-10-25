@@ -21,6 +21,7 @@ const extensionLabels: Record<string, string> = {
   logger: 'Logger',
   usage: 'Usage',
   router: 'Router',
+  policy: 'Policy',
 };
 
 function sectionLabel(slugs: string[]): string | undefined {

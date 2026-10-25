@@ -1,0 +1,76 @@
+---
+title: Troubleshooting
+description: Symptoms and fixes for a policy that removes too much, removes nothing, denies every call, warns about labels, or throws at construction
+---
+
+## Common symptoms
+
+<Accordions>
+  <Accordion title="A rule never removes anything">
+    Check the event: the rule is probably in `audit`, either its own `mode` or the policy's. Then
+    check `when`, and remember a missing fact never equals anything. `{ region: 'eu' }` does not
+    match a target that declares no region. Use `evaluate()` with the same context to see what
+    the rules do.
+  </Accordion>
+  <Accordion title="Every call is denied">
+    Look at `issues.rules` in the error. With `default: 'deny'` and no matching `allow`, `rules` is
+    empty and the message says the default is deny. A `forbid` with a `not` pattern removes every
+    target that does not declare the attribute, so declare it in `targets`.
+  </Accordion>
+  <Accordion title="A warning says the labels are unknown">
+    The `labels` function returned `undefined` or threw. That means it did not run for this call,
+    typically because the guard is not installed or sits in the wrong place. Return `[]` only when
+    the labeler ran and found nothing. Until fixed, rules on labels fail as `onError` says, which is
+    closed by default.
+  </Accordion>
+  <Accordion title="A rule throws, but calls still work">
+    That is `onError: 'closed'` doing its job. A `forbid` still applies and an `allow` grants
+    nothing, and the failure is listed in `errors` and warned about once. Fix the function, or use
+    `'open'` if skipping the rule is the safer failure for you.
+  </Accordion>
+  <Accordion title="A warning says a declared target matches nothing">
+    The names in `targets` are compared with the targets of the first call, once. A typo is the usual
+    cause. A middleware positioned before policy that narrows targets can also trigger it, and then
+    the warning is only advice.
+  </Accordion>
+  <Accordion title="A rule fails with: a policy function must not change the facts of a call">
+    A `when` or pattern function wrote to the `context` it was given. The write is refused and counts
+    as the rule failing, so `onError` decides what happens. Read the value, and keep any state in
+    your own variables.
+  </Accordion>
+  <Accordion title="The event lists an error with no message">
+    That is on purpose. The event and the log carry the rule and the kind of error, because a
+    message is whatever your function wrote and may hold call data. Only the decision from
+    `evaluate()` carries the message.
+  </Accordion>
+  <Accordion title="An exception is not lifting the rule">
+    It may have ended: `until` is exclusive, and a date means midnight UTC. Check the `when` of the
+    exception, which is separate from the rule's. An exception whose `when` throws covers nothing.
+    A warning is logged once when one has ended.
+  </Accordion>
+  <Accordion title="A policy.cross_join event appeared">
+    A `cachedCall` joined a call another caller started under different rules. Put whatever the
+    rules differ on, such as region or tenant, in the `cacheKey`.
+  </Accordion>
+  <Accordion title="The router warns about an unknown target">
+    A route names a target policy removed for this call. The warning is accurate. See
+    [Router and usage](/docs/extensions/policy/features/router).
+  </Accordion>
+  <Accordion title="The decision event never appears">
+    Policy emits `policy.decision` before the call goes on. The logger keeps `policy.*` by default.
+    Another consumer must subscribe to that custom event name.
+  </Accordion>
+  <Accordion title="policyMiddleware throws at construction">
+    The message starts with `policyMiddleware:` and names the field. The common ones are a typo in
+    an attribute name, a rule with both `allow` and `forbid`, a repeated `id`, an exception with no
+    `until`, an `until` that is not a real date such as `2026-02-31`, and `when: { labels }`
+    without a `labels` option.
+  </Accordion>
+  <Accordion title="update throws">
+    The new policy was refused and the old one is still running. `update` takes everything except
+    the logger and validates it as a whole, so fix the message and call it again.
+  </Accordion>
+</Accordions>
+
+Anything policy cannot decide is reported once as `[VernLLM] policy: <step> failed` through its
+`logger` option, and `onError` settles the call.

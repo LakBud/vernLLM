@@ -1,0 +1,150 @@
+---
+title: Policy Overview
+description: Rules for which providers and models a VernLLM call may use, and whether it may run at all, decided before anything is spent
+---
+
+`vern-llm-policy` is one middleware that removes the targets a call is not allowed to use, or
+denies the call when none are left. You write rules over facts you declare about each target, such
+as `region` or `zdr`, and over the call itself: its `context`, its request, and the labels a guard
+found in it.
+
+<Callout type="info">
+  Policy only removes targets. It never adds one, never reorders, and a removed target can never
+  come back through a retry or a fallback. When a rule cannot be evaluated it fails closed.
+</Callout>
+
+## What it does and does not do
+
+| Policy does                                                | Policy does not                                          |
+| ---------------------------------------------------------- | -------------------------------------------------------- |
+| Remove targets a call may not use, or deny the call        | Add a target, reorder targets, or choose a preferred one |
+| Decide before usage, the router or any provider is reached | Read or filter the content of a call                     |
+| Fail closed when a rule or a label cannot be evaluated     | Authenticate anyone, or check that `context` is true     |
+| Record every decision with rule ids, never with call data  | Enforce a flag it hands to other middleware              |
+
+Policy trusts the `context` you pass. Put the tenant, region and plan there from your own
+authenticated session, not from user input.
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-policy # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-policy # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-policy # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-policy # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` is a peer dependency and the package has no other dependency.
+
+<Cards>
+  <Card title="Features" href="/docs/extensions/policy/features">
+    Rules, labels, flags, exceptions, a safe rollout, and how decisions are reported.
+  </Card>
+  <Card title="API Reference" href="/docs/extensions/policy/API-reference">
+    Every option, and the shape of a decision.
+  </Card>
+</Cards>
+
+## Basic usage
+
+```ts title="policy-basic-usage.ts"
+import { VernLLM } from 'vern-llm';
+import { policyMiddleware } from 'vern-llm-policy';
+
+const policy = policyMiddleware({
+  version: '2026-10-24.1',
+  targets: {
+    'openai-us': { region: 'us', zdr: false },
+    'openai-eu': { region: 'eu', zdr: true },
+    anthropic: { region: 'us', zdr: true },
+  },
+  rules: [
+    { id: 'suspended', forbid: 'all', when: { context: { tenantStatus: 'suspended' } } },
+    {
+      id: 'eu-residency',
+      forbid: { not: { region: 'eu' } },
+      when: { context: { region: 'eu' } },
+    },
+  ],
+});
+
+const llm = new VernLLM({ client, model, fallback, middleware: [policy] });
+```
+
+A call with `context: { region: 'eu' }` only ever reaches `openai-eu`. A suspended tenant's call
+fails with `policy_denied` before any provider is contacted. Register the middleware once per
+`VernLLM`: two entries in one `middleware` array throw at construction.
+
+## Handle a denied call
+
+A denial is an `LLMError` with type `invalid_params` and code `policy_denied`. It is never retried
+and never falls back, so catch it where you would show the user a refusal.
+
+```ts title="policy-handle-denial.ts"
+import { LLMError } from 'vern-llm';
+
+try {
+  await llm.call({ userContent, jsonMode: false, context: { tenantStatus: 'suspended' } });
+} catch (error) {
+  if (error instanceof LLMError && error.code === 'policy_denied') {
+    // error.issues.rules says which rules removed every target
+    return refuse();
+  }
+  throw error;
+}
+```
+
+`issues` holds rule ids and target names, never a `context` value, so it is safe to log.
+
+## Where it sits
+
+```text title="policy-position.txt"
+logger, guard     see every call, including the denied ones
+policy            removes targets, or denies         (position -100)
+usage, router     see only what policy left
+core              retries and falls back over that list only
+```
+
+Everything after policy sees the smaller list, so a removed target can never come back.
+
+## Try a rule before you ship it
+
+`policy.evaluate()` returns the decision a call would get, from plain data, with no provider and no
+network:
+
+```ts title="policy-evaluate.ts"
+const decision = policy.evaluate({
+  context: { region: 'eu' },
+  targets: [
+    { name: 'openai-us', model: 'gpt-6' },
+    { name: 'openai-eu', model: 'gpt-6' },
+  ],
+});
+// decision.removed is { 'openai-us': 'eu-residency' }
+```
+
+For a rollout on live traffic, set `mode: 'audit'` first. See [Rollout](/docs/extensions/policy/features/rollout).

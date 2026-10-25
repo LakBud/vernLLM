@@ -1,0 +1,5 @@
+{
+  "title": "Policy",
+  "icon": "ShieldCheck",
+  "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
+}

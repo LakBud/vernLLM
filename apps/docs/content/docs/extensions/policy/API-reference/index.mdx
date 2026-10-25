@@ -1,0 +1,51 @@
+---
+title: API Reference Overview
+description: The public exports of vern-llm-policy, and where each option and the decision are documented
+---
+
+| Export                    | Kind     | What it is                                                                                            |
+| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `policyMiddleware`        | Function | Takes `PolicyOptions` and returns one middleware with `evaluate()` and `update()`. Once per `VernLLM` |
+| `policyMiddlewareRef`     | Constant | The `MiddlewareRef` of that entry, so a second one in the same `VernLLM` is rejected                  |
+| `policyFlags`             | Function | Reads the flags a call's rules set, from any middleware inside policy                                 |
+| `POLICY_DECISION_EVENT`   | Constant | `'policy.decision'`                                                                                   |
+| `POLICY_CROSS_JOIN_EVENT` | Constant | `'policy.cross_join'`                                                                                 |
+| `PolicyOptions`           | Type     | Every option, see [Configuration](/docs/extensions/policy/API-reference/configuration)                |
+| `Decision`                | Type     | What a decision holds, see [Decision](/docs/extensions/policy/API-reference/decision)                 |
+
+```ts title="policy-exports.ts"
+import {
+  policyMiddleware,
+  policyMiddlewareRef,
+  policyFlags,
+  POLICY_DECISION_EVENT,
+  POLICY_CROSS_JOIN_EVENT,
+} from 'vern-llm-policy';
+import type {
+  PolicyMiddleware,
+  PolicyOptions,
+  PolicyRule,
+  PolicyException,
+  PolicyUpdate,
+  Pattern,
+  TargetFacts,
+  CallFacts,
+  RequestFacts,
+  Decision,
+  DecisionError,
+  DecisionException,
+  PolicyDecisionEvent,
+  PolicyCrossJoinEvent,
+  EvaluateInput,
+  EvaluateTarget,
+} from 'vern-llm-policy';
+```
+
+<Cards>
+  <Card title="Configuration" href="/docs/extensions/policy/API-reference/configuration">
+    Every option with its type and default, and what throws at construction.
+  </Card>
+  <Card title="Decision" href="/docs/extensions/policy/API-reference/decision">
+    The decision, the events, and the input of evaluate.
+  </Card>
+</Cards>

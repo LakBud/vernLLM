@@ -1,0 +1,16 @@
+{
+  "title": "Features",
+  "icon": "Sparkles",
+  "pages": [
+    "index",
+    "rules",
+    "recipes",
+    "labels",
+    "flags",
+    "exceptions",
+    "rollout",
+    "observability",
+    "caching",
+    "router"
+  ]
+}

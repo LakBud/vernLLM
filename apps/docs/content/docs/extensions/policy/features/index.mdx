@@ -1,0 +1,49 @@
+---
+title: Features Overview
+description: Rules, labels, flags, exceptions, rollout, and observability in vern-llm-policy, all built on one pure decision function.
+---
+
+Every call goes through one synchronous function. It collects the rules that apply, combines them
+with set operations, and either narrows the targets, leaves them alone, or denies the call. Nothing
+before `next()` waits, so the decision is made before anything else can happen.
+
+<Cards>
+  <Card title="Rules" href="/docs/extensions/policy/features/rules">
+    Allow and forbid patterns, how rules combine, and why order never matters.
+  </Card>
+  <Card title="Recipes" href="/docs/extensions/policy/features/recipes">
+    Residency, plan tiers, PII, a kill switch, long prompts, tool calls and an allow list.
+  </Card>
+  <Card title="Labels" href="/docs/extensions/policy/features/labels">
+    Match on what a call contains, with unknown labels that fail closed.
+  </Card>
+  <Card title="Flags" href="/docs/extensions/policy/features/flags">
+    Boolean obligations for other middleware, where false wins.
+  </Card>
+  <Card title="Exceptions" href="/docs/extensions/policy/features/exceptions">
+    Time bound ways past one rule, always recorded.
+  </Card>
+  <Card title="Rollout" href="/docs/extensions/policy/features/rollout">
+    Audit mode, a canary, versions, and testing rules as data.
+  </Card>
+  <Card title="Observability" href="/docs/extensions/policy/features/observability">
+    The decision event, errors, and warnings.
+  </Card>
+  <Card title="Caching" href="/docs/extensions/policy/features/caching">
+    Why a cache key must carry what your rules differ on.
+  </Card>
+  <Card title="Router and usage" href="/docs/extensions/policy/features/router">
+    How policy nests with the other extensions.
+  </Card>
+</Cards>
+
+## The pipeline
+
+| Step       | What it does                                                                       |
+| ---------- | ---------------------------------------------------------------------------------- |
+| Facts      | Target facts and call facts are built, and costly ones only when a rule reads them |
+| Applicable | Enforced rules whose `when` holds and that no active exception covers              |
+| Combine    | Allows add up, forbids subtract, and a forbid always wins                          |
+| Flags      | Flags from the applicable rules are merged, and `false` wins                       |
+| Decide     | Denied when nothing is left, narrowed when some were removed, otherwise untouched  |
+| Report     | One `policy.decision` event, emitted before the call goes on                       |

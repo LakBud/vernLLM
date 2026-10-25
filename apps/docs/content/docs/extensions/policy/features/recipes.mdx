@@ -1,0 +1,149 @@
+---
+title: Recipes
+description: Copy ready rules for data residency, plan tiers, PII, a kill switch, long prompts, tool calls and an allow list, each with the decision it gives.
+---
+
+Each recipe is a full policy and the decision `evaluate()` gives for it. They are checked against the
+real package, so what they say is what happens.
+
+## Keep a region's data in the region
+
+Write the rule as what is **not** allowed, so a target nobody declared is removed too. An exception
+lifts it for one customer, until a date, with a reason.
+
+```ts title="recipe-residency.ts"
+const policy = policyMiddleware({
+  targets: {
+    'openai-us': { region: 'us' },
+    'openai-eu': { region: 'eu' },
+    anthropic: { region: 'us' },
+  },
+  rules: [
+    {
+      id: 'eu-residency',
+      forbid: { not: { region: 'eu' } },
+      when: { context: { region: 'eu' } },
+      except: [
+        {
+          when: { context: { tenantId: 'acme' } },
+          until: '2026-11-01',
+          reason: 'DPA signed, migration pending',
+        },
+      ],
+    },
+  ],
+});
+```
+
+| Call context                         | Targets left                             |
+| ------------------------------------ | ---------------------------------------- |
+| `{ region: 'eu' }`                   | `openai-eu`                              |
+| `{ region: 'us' }`                   | All three                                |
+| `{ region: 'eu', tenantId: 'acme' }` | All three, and the exception is recorded |
+
+## Give each plan its own models
+
+Allows add up, so one rule per tier reads like the price list. With `default: 'deny'` a call only
+reaches what some applicable `allow` grants.
+
+```ts title="recipe-plans.ts"
+const policy = policyMiddleware({
+  default: 'deny',
+  targets: {
+    mini: { tier: 'small' },
+    large: { tier: 'large' },
+    claude: { tier: 'large' },
+  },
+  rules: [
+    { id: 'everyone-small', allow: { tier: 'small' } },
+    { id: 'paid-large', allow: { tier: 'large' }, when: { context: { plan: ['pro', 'team'] } } },
+  ],
+});
+```
+
+A `free` call may use `mini`. A `pro` or `team` call may use all three. A call with no `plan` still
+gets `mini`, because the first rule always applies.
+
+## Send PII only where nothing is kept
+
+A content guard stores what it found, and a `labels` function hands it to policy. Unknown labels
+count as PII, so a guard that did not run never lets sensitive content through.
+
+```ts title="recipe-pii.ts"
+import { createStateKey } from 'vern-llm';
+
+export const guardFindings = createStateKey<readonly string[]>('guard.findings');
+
+const policy = policyMiddleware({
+  targets: { keeps: { zdr: false }, forgets: { zdr: true } },
+  labels: (ctx) => ctx.state.get(guardFindings),
+  rules: [{ id: 'pii-zdr', forbid: { zdr: false }, when: { labels: 'pii' } }],
+});
+```
+
+| The guard found | Targets left |
+| --------------- | ------------ |
+| `['pii']`       | `forgets`    |
+| `[]`            | Both         |
+| It did not run  | `forgets`    |
+
+The guard must run **outside** policy, so its findings are in `ctx.state` by the time policy asks.
+See [Labels](/docs/extensions/policy/features/labels).
+
+## Switch a tenant off
+
+```ts title="recipe-kill-switch.ts"
+const policy = policyMiddleware({
+  rules: [{ id: 'suspended', forbid: 'all', when: { context: { tenantStatus: 'suspended' } } }],
+});
+```
+
+A suspended tenant's call fails with `policy_denied` before any provider is contacted and before
+usage reserves any budget.
+
+## Keep long prompts and tool calls off the wrong models
+
+Declare what each target can do, and forbid the ones that cannot.
+
+```ts title="recipe-capabilities.ts"
+const policy = policyMiddleware({
+  targets: {
+    small: { window: 'short', tools: false },
+    big: { window: 'long', tools: true },
+  },
+  rules: [
+    {
+      id: 'long-prompts',
+      forbid: { window: 'short' },
+      when: { request: { inputTokens: { gte: 30_000 } } },
+    },
+    {
+      id: 'tools-need-support',
+      forbid: { not: { tools: true } },
+      when: { request: { hasTools: true } },
+    },
+  ],
+});
+```
+
+A prompt of 40,000 tokens can only use `big`. A call with tools removes `small` and names
+`tools-need-support` as the reason. `inputTokens` is an estimate, so leave room around the bound.
+
+## Approve targets by name
+
+For an environment where only reviewed targets may ever be used:
+
+```ts title="recipe-allow-list.ts"
+const policy = policyMiddleware({
+  default: 'deny',
+  rules: [{ id: 'approved', allow: { name: ['openai-eu', 'anthropic'] } }],
+});
+```
+
+A new fallback added to the `VernLLM` options is unusable until someone adds it here. A call whose
+targets are all unapproved is denied.
+
+## Before you enforce any of these
+
+Run them with `mode: 'audit'` first and read the `audit` field of the `policy.decision` event. See
+[Rollout](/docs/extensions/policy/features/rollout).

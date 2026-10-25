@@ -1,0 +1,54 @@
+---
+title: Decision
+description: The Decision that evaluate returns, the policy.decision and policy.cross_join events, the policy_denied error, and the input of evaluate.
+---
+
+## Decision
+
+| Field        | Type                                  | Meaning                                                                       |
+| ------------ | ------------------------------------- | ----------------------------------------------------------------------------- |
+| `version`    | `string`                              | The `version` of the policy that decided, when it has one                     |
+| `outcome`    | `'allowed' \| 'narrowed' \| 'denied'` | `narrowed` means some targets were removed and some are left                  |
+| `allowed`    | `string[]`                            | The targets that stay, in the order the call had them. Empty only when denied |
+| `removed`    | `Record<string, string>`              | Each removed target and the rule behind it, or `'default'`                    |
+| `rules`      | `string[]`                            | The ids named in `removed`, sorted                                            |
+| `audit`      | `Record<string, string[]>`            | Each audit rule and the targets it would have removed                         |
+| `errors`     | `DecisionError[]`                     | Each distinct failure of a rule, sorted, with its `name` and `message`        |
+| `flags`      | `Record<string, boolean>`             | The merged flags. What `policyFlags(ctx)` returns                             |
+| `flagCauses` | `Record<string, string>`              | Each `false` flag and the rule that set it                                    |
+| `exceptions` | `DecisionException[]`                 | The exceptions that covered a rule, with `rule`, `reason` and `until`         |
+| `labels`     | `string[] \| 'unknown'`               | Sorted. Absent without a `labels` option, or when no rule reads labels        |
+
+## Events
+
+`policy.decision` carries `v: 1`, `version`, `outcome`, `removed`, `flags` (the causes), `exceptions`,
+`audit`, `errors` (rule and `name` only, no message) and `labels`. `policy.cross_join` carries `v: 1`, `version`, `target` and `rule`.
+Both hold ids and names only. See [Observability](/docs/extensions/policy/features/observability)
+and [Caching](/docs/extensions/policy/features/caching).
+
+## The denial
+
+```ts title="policy-denied.ts"
+new LLMError('Call denied by policy: eu-residency removed every target', 'invalid_params', {
+  code: 'policy_denied',
+  issues: {
+    version: '2026-10-24.1',
+    rules: ['eu-residency'],
+    removed: { 'openai-us': 'eu-residency' },
+  },
+});
+```
+
+If the policy itself fails while `onError` is `closed`, the message is
+`Call denied by policy: the policy could not be evaluated`.
+
+## evaluate input
+
+| Field         | Type                           | Meaning                                                              |
+| ------------- | ------------------------------ | -------------------------------------------------------------------- |
+| `targets`     | `{ name, model, provider? }[]` | Required. The targets the call would have, in order                  |
+| `context`     | `CallContext`                  | The call's context                                                   |
+| `request`     | `Partial<RequestFacts>`        | Facts the rules read. The rest are `false`, or `0` for `inputTokens` |
+| `callTargets` | `boolean`                      | `true` when the call passes its own `targets`                        |
+| `labels`      | `string[]`                     | What the labeler would return. Left out means unknown                |
+| `now`         | `Date \| number`               | The moment to decide at. Defaults to the clock                       |

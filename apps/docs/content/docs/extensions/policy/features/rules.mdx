@@ -1,0 +1,94 @@
+---
+title: Rules
+description: Allow and forbid patterns, the one matcher behind them, how rules combine, and how to write residency rules that cannot be bypassed by an undeclared target.
+---
+
+A rule has an `id`, at most one of `allow` and `forbid`, and at least one of `allow`, `forbid` and
+[`set`](/docs/extensions/policy/features/flags).
+
+| Field    | Meaning                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------- |
+| `id`     | Unique and stable. It names the rule in decisions, errors and logs                          |
+| `when`   | A pattern over the call. Omitted means the rule always applies                              |
+| `allow`  | While the rule applies, only targets matching the pattern may be used                       |
+| `forbid` | Matching targets are removed, or `'all'` to deny the call                                   |
+| `set`    | Boolean flags for other middleware                                                          |
+| `except` | Time bound [exceptions](/docs/extensions/policy/features/exceptions)                        |
+| `mode`   | `'enforce'` (default) or `'audit'`, see [Rollout](/docs/extensions/policy/features/rollout) |
+
+## Patterns
+
+One matcher is used for target patterns and for `when`.
+
+| Pattern              | Matches when                                          |
+| -------------------- | ----------------------------------------------------- |
+| `{ key: value }`     | The fact equals the value, strictly. `1` is not `'1'` |
+| `{ key: [a, b] }`    | The fact equals any of them                           |
+| `{ k1: …, k2: … }`   | Every key matches                                     |
+| `{ not: pattern }`   | The pattern does not match                            |
+| `{ any: [p1, p2] }`  | At least one pattern matches                          |
+| `(facts) => boolean` | The function returns exactly `true`                   |
+
+A function must be synchronous and must not change `context`. It reads `context` through a read
+only view, so a write throws and counts as that rule failing, handled by `onError`. This holds for
+a function anywhere in a `when`, including inside `any`, `not`, `context` and `request`.
+
+**A missing fact never equals anything.** `{ region: 'eu' }` does not match a target that declares
+no region, while `{ not: { region: 'eu' } }` does.
+
+### Target facts
+
+`name`, `model` (the effective model, a call's override included), `provider` (only when the
+adapter knows it for certain) and every attribute you declare for the target in `targets`. Declared
+attributes are never inferred. An attribute no target declares is an error when the policy is
+built, so a typo cannot become a rule that never matches.
+
+### Call facts
+
+For `when`: `context` (a pattern over the call's `context` keys), `labels`, `request`
+(`hasTools`, `jsonOutput`, `images`, `inputTokens`, `streaming`) and `callTargets`. `inputTokens`
+takes `{ gte, lte }` bounds, and it is an estimate. The costly facts are computed only when a rule
+reads them.
+
+```ts title="policy-when.ts"
+{
+  id: 'long-prompts',
+  forbid: { name: 'small' },
+  when: { request: { inputTokens: { gte: 30_000 } } },
+}
+```
+
+## Combining
+
+```text title="policy-combining.txt"
+applicable = enforced rules whose when matches and no active exception covers
+allowed    = some applicable rule has allow ?  union of their allow patterns
+           : default 'allow' ?  every target
+           : none
+allowed    = allowed minus the union of applicable forbid patterns
+```
+
+- **A forbid always wins**, whatever an allow says
+- **Allows widen each other and forbids narrow**, so independent constraints compose without
+  knowing about each other
+- **Order never matters.** Any permutation of the rules gives the same decision, down to which rule
+  is named for a removal: the smallest `id` among those that removed a target
+- **Empty means denied** with `policy_denied`, never an empty `next()`
+
+`default: 'deny'` flips the starting point: a call may only use targets some applicable `allow`
+grants. The reason is then the string `'default'`, so a rule cannot be called `default`.
+
+## Residency
+
+Write the rule as what is not allowed, so a target nobody declared is removed too:
+
+```ts title="policy-residency.ts"
+{
+  id: 'eu-residency',
+  forbid: { not: { region: 'eu' } },
+  when: { context: { region: 'eu' } },
+}
+```
+
+`allow: { region: 'eu' }` would also work, but it grants only while it applies, and a call it does
+not apply to would still reach every target. `forbid` with `not` is the form that fails safe.

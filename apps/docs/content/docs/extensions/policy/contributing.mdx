@@ -1,0 +1,107 @@
+---
+title: Contributing
+description: Set up, test and open a pull request for vern-llm-policy, the target rules extension in the VernLLM monorepo.
+icon: GitPullRequest
+---
+
+This page covers `packages/extensions/vern-llm-policy` specifically. For the coding standard and PR
+checklist that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+No external service is needed. The tests use fake clients, and the integration test for the
+extensions uses the real logger, usage and router packages.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`. Four rules are specific here:
+
+- **Decide synchronously and purely.** `evaluate` reads only its input, with time passed in, so the
+  same input gives the same decision. Nothing before `next()` waits.
+- **Never depend on rule order.** Rules are collected into sets and combined with set operations.
+  Every new behavior needs a test over every permutation of its rules.
+- **Fail closed, and say so.** A rule that throws is handled by `onError` and listed in the
+  decision, and a user callback never breaks a call.
+- **No values in output.** Denials and events carry rule ids, target names, labels and the kind of
+  an error, never a `context` value or an error message.
+
+Options are validated once in `options/compile.utils.ts`, so a bad option throws when the policy is built.
+
+## Layout
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="policyMiddleware.ts" />
+    <File name="events.ts" />
+    <File name="flags.ts" />
+    <File name="index.ts" />
+    <Folder name="types" />
+    <Folder name="internal" defaultOpen>
+      <Folder name="evaluate" />
+      <Folder name="facts" />
+      <Folder name="match" />
+      <Folder name="middleware" />
+      <Folder name="options" />
+      <File name="errors.utils.ts" />
+      <File name="guard.utils.ts" />
+    </Folder>
+  </Folder>
+  <Folder name="tests">
+    <Folder name="unit" />
+    <Folder name="integration" />
+    <Folder name="bench" />
+  </Folder>
+  <Folder name="scripts" />
+</Files>
+
+`policyMiddleware.ts` only wires parts together, the same way the other extensions do. Each part
+lives under `internal/`: `options/` validates and compiles the rules, `match/` is the one pattern
+matcher, `facts/` builds what patterns see, `evaluate/` is the pure decision, and `middleware/`
+holds the per call work: `wrap.utils.ts` is the hook, `decideCall.utils.ts` decides a call,
+`api.utils.ts` builds `evaluate` and `update`, `live.ts` keeps the state `update` swaps, and
+`event.utils.ts` shapes the events.
+
+## Scripts
+
+Run them with `pnpm run <script>` from inside `packages/extensions/vern-llm-policy`, or
+`pnpm nx run vern-llm-policy:<script>` from the repo root:
+
+| Script                                    | What it does                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `build`, `dev`                            | Build with tsdown, or rebuild on change                            |
+| `lint`, `lint:fix`                        | Run oxlint                                                         |
+| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                                 |
+| `test`, `test:unit`, `test:int`           | Run all tests, or one project                                      |
+| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                        |
+| `smoke-test`                              | Import the build through ESM and CJS                               |
+| `bench`, `bench:check`                    | Measure per call overhead, or fail when it grows past the baseline |
+| `bench:update`                            | Record a new baseline in `tests/bench/baseline.json`               |
+
+`bench:check` runs against the built package, so run `build` first.
+
+## Before opening a PR
+
+Every PR touching this package runs through the CI workflows described in
+[Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                      | Local command                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Lint                       | `pnpm nx run vern-llm-policy:lint`                                                                                       |
+| Typecheck source and tests | `pnpm nx run vern-llm-policy:typecheck && pnpm nx run vern-llm-policy:typecheck:test`                                    |
+| Unit and integration tests | `pnpm nx run vern-llm-policy:test:unit:coverage && pnpm nx run vern-llm-policy:test:int:coverage`                        |
+| Build, smoke test, bench   | `pnpm nx run vern-llm-policy:build && pnpm nx run vern-llm-policy:smoke-test && pnpm nx run vern-llm-policy:bench:check` |
+| Changeset present          | `pnpm changeset status --since=origin/main`                                                                              |
+
+Record a change with `pnpm nx run vern-llm-policy:changeset`. The package versions and releases on
+its own changelog.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

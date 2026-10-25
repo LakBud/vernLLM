@@ -122,3 +122,9 @@ reservation. With `usageLogFields` the cost lands on the logger's record:
 
 A cache hit or join costs nothing, and carries `estimatedSavedUsd` instead. See
 [Cost and Wasted Spend](/docs/extensions/usage/features/cost) for how each figure is decided.
+
+## With policy
+
+[`vern-llm-policy`](/docs/extensions/policy) sits outside usage. A call it denies reserves no budget
+and spends nothing, and the hold for a call it narrows is priced at the most expensive target still
+allowed. See [Router and usage](/docs/extensions/policy/features/router).

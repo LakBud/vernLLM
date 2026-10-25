@@ -1,0 +1,40 @@
+---
+title: Flags
+description: Boolean obligations a policy hands to other middleware, merged so that false wins, and read with policyFlags.
+---
+
+A rule can `set` booleans for other middleware: "this call must not be sent twice", "do not log its
+content".
+
+```ts title="policy-flags.ts"
+{ id: 'pii', set: { duplicateSends: false, logContent: false }, when: { labels: 'pii' } }
+```
+
+A rule can have `set` alone, or beside an `allow` or a `forbid`. Flags from every applicable
+enforced rule are merged and **`false` wins**, whatever the order. The decision records which rule
+set each `false` flag, the smallest `id` when several did. Audit rules set none, and a rule an
+exception covers sets none.
+
+## Reading flags
+
+```ts title="policy-read-flags.ts"
+import { policyFlags } from 'vern-llm-policy';
+
+const hedging: VernLLMMiddleware = {
+  name: 'hedging',
+  wrap: (request, next, ctx) => {
+    if (policyFlags(ctx).duplicateSends === false) return next();
+    return sendTwice(request, next);
+  },
+};
+```
+
+`policyFlags(ctx)` is `{}` when no rule set one. It works in any middleware inside policy, or in
+your own `wrap`, before `next()`. The flags travel in `ctx.state`, so a reader does not need the
+policy instance.
+
+<Callout type="warn">
+  Policy never enforces a flag. It is the reader's contract: a middleware that ignores
+  `duplicateSends: false` is not stopped. The flag names are yours, so document which of your
+  middleware honor which.
+</Callout>

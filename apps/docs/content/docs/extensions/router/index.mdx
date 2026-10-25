@@ -100,3 +100,11 @@ const decision = router.preview({
 For a rollout, set `apply: false` first. Every decision is computed and emitted and no call
 changes, so you can compare against the declared order before switching it on, see
 [Observability](/docs/extensions/router/features/observability).
+
+## With policy
+
+The router decides what is preferred, and [`vern-llm-policy`](/docs/extensions/policy) decides what
+is allowed. Policy runs first and removes targets, so the router only ever orders what is left.
+Prefer an open route list such as `targets: [['main'], '*']`, which keeps working when policy
+removes a target, and see [Router and usage](/docs/extensions/policy/features/router) for the
+details.

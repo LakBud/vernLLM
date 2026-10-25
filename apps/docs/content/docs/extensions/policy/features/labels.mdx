@@ -1,0 +1,57 @@
+---
+title: Labels
+description: Match rules on what a call contains, through a labels function, and how unknown labels fail closed instead of open.
+---
+
+Rules can depend on the content of a call, such as "PII only goes to providers that keep nothing".
+Policy does not read content itself. A `labels` function supplies the labels, usually from what an
+outer middleware stored, such as a content guard.
+
+```ts title="policy-labels.ts"
+const policy = policyMiddleware({
+  targets,
+  labels: (ctx) => ctx.state.get(guardFindings),
+  rules: [{ id: 'pii-zdr', forbid: { zdr: false }, when: { labels: 'pii' } }],
+});
+```
+
+`when: { labels: ['pii', 'health'] }` needs all of them. The function is synchronous and runs once
+per call, when some rule matches on labels or has a `when` function, which may read them. A rule
+that matches on labels without a `labels` option is an error when the policy is built, so the gap
+cannot be configured by accident.
+
+## Where labels come from
+
+Policy reads labels and never produces them. A guard that sits outside policy stores what it found
+under a state key, and the `labels` function returns it:
+
+```ts title="policy-guard-labels.ts"
+import { createStateKey } from 'vern-llm';
+
+export const guardFindings = createStateKey<readonly string[]>('guard.findings');
+
+// in the guard, before policy runs
+ctx.state.set(guardFindings, ['pii']);
+
+// in the policy options
+labels: (ctx) => ctx.state.get(guardFindings),
+```
+
+`ctx.state.get` returns `undefined` when nothing was stored, which is exactly what "unknown" needs.
+
+## Found nothing, or did not run
+
+| It returns                | Means                              | A rule on labels         |
+| ------------------------- | ---------------------------------- | ------------------------ |
+| `['pii']`                 | Checked, found these               | Matches on what is there |
+| `[]`                      | Checked, found nothing             | Does not match           |
+| `undefined`, or it throws | Unknown: it did not run, or failed | Follows `onError`        |
+
+Keep `[]` and `undefined` apart. A labeler that never ran for a call must return `undefined`, and
+`[]` only when it ran and found nothing. Unknown labels follow `onError`, which is `closed` by
+default: a `forbid` on them applies, and an `allow` grants nothing. A missing or misordered guard
+therefore never fails open on exactly the rules that matter most.
+
+The decision says `labels: 'unknown'`, each rule that could not be evaluated is listed in `errors`,
+and a warning is logged once, only when a rule matches on labels. `{ not: { labels: 'ok' } }` does not turn unknown into "no label":
+it is unknown too.
