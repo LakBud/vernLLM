@@ -214,6 +214,28 @@ reviews:
         - Order independence shown over every permutation of a rule set, and scenarios against a real VernLLM that assert which targets were tried and the decision event.
         - Fixed instants passed as now, or a faked Date, instead of the real clock for anything calendar based.
 
+    - path: 'packages/extensions/vern-llm-guard/**'
+      instructions: |
+        This is vern-llm-guard: checks on what goes into a vern-llm call and what comes out, built only on the public middleware system.
+
+        Review TypeScript changes with focus on:
+        - A detector is a pure function of its segments, because the memo and evaluate depend on it. When every detector answers with an array the scan stays synchronous, and a block stops later detectors from starting.
+        - It fails closed by default: a detector that throws or times out blocks a blocking check and makes labels unknown for a labeling one, unless onError is open.
+        - Content never leaves the check: results, events, errors and logs carry check ids, labels, counts and the kind of an error, never text, offsets or an error message.
+        - The caller's input is never changed, only a copy. Tokens are keyed HMACs with no vault, and a token is restored only for a value of the same call.
+        - Streams hold back enough text for a value split over chunks, finalResult checks the whole answer, and a block cancels the provider stream.
+        - update() compiles and validates completely before swapping, and a call reads its checks once.
+        - It stays static, never imports another extension, and keeps vern-llm an unbundled peer dependency.
+
+        For new features, require unit tests and integration tests with a real VernLLM and fake clients, keep 100% coverage, and document public API changes.
+
+    - path: 'packages/extensions/vern-llm-guard/tests/**'
+      instructions: |
+        Review tests for:
+        - Meaningful assertions, with no live provider, only fakes.
+        - Scenarios against a real VernLLM that assert what the provider was sent and what the caller got back.
+        - No real text in expectations that could be mistaken for a leak, and checks that results hold no content.
+
     - path: 'packages/integrations/vern-llm-bedrock/**'
       instructions: |
         This is vern-llm-bedrock: the AWS Bedrock Converse adapter for vern-llm, built on the AWS SDK's BedrockRuntimeClient.
