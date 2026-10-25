@@ -1,3 +1,4 @@
+import { isLLMError } from '../../types/errors.js';
 import { callFactsFor, callScopeFor, noopEmit } from '../utils/callScope.utils.js';
 import { logError } from '../utils/logger.utils.js';
 import { modelForTarget } from './logicalCall.js';
@@ -166,6 +167,9 @@ export async function runOperation(
         const resolvedResult = onceNext.resolvedValue();
 
         if (resolvedResult !== undefined) {
+          // A deliberate refusal of the result, not a bug in post-processing: pass it through.
+          if (isLLMError(error) && error.code === 'content_blocked') throw error;
+
           // Rule 3: thrown strictly after next() already resolved
           // successfully. A bug in post-processing can never turn a
           // successful, already-billed call into a false failure.
