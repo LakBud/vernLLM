@@ -9,6 +9,7 @@ import { createMiddlewareStateBag } from '../../../types/middleware.js';
 import { emitEvent } from '../../execution/utils/middleware/middleware.utils.js';
 import { CUSTOM_ADAPTER } from '../adapterInfo.utils.js';
 import { callFactsFor, callScopeFor, noopEmit } from '../callScope.utils.js';
+import { chainFields } from '../chain.utils.js';
 import { middlewareContextNames } from '../middlewareLabels.utils.js';
 import { callHookSafely } from './../logger.utils.js';
 import { makeEventReporter, reportRejection } from './circuitBreaker.utils.js';
@@ -134,6 +135,7 @@ function wrapOnStateChange(
       attempt: callContext.attempt ?? 1,
       capabilities: { supportsJsonObjectMode },
       signal: callContext.signal,
+      ...chainFields(callContext.signal),
       state: callContext.state,
       own: {},
       emit: noopEmit,

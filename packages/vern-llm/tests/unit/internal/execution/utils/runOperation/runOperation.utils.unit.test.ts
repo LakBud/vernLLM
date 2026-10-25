@@ -5,6 +5,8 @@ import { LLMError } from '../../../../../../src/types/errors.js';
 import { createMiddlewareStateBag } from '../../../../../../src/types/middleware.js';
 import { declared, dependencies, fakeLogger, params, requestId } from './runOperation.helpers.js';
 
+import type { ResolvedTarget } from '../../../../../../src/internal/execution/targetOrder.js';
+import type { Chain } from '../../../../../../src/internal/execution/utils/middleware/chains.utils.js';
 import type {
   CallResult,
   VernLLMEvent,
@@ -567,6 +569,69 @@ describe('runOperation', () => {
     expect(seenContext).not.toHaveProperty('attempt');
     expect(seenContext).not.toHaveProperty('requestedProvider');
     expect(seenContext).not.toHaveProperty('requestedModel');
+  });
+
+  it('hands coreOperation the main chain: number 0 and the call params object itself, with or without a wrap', async () => {
+    const coreOperation = vi.fn(
+      async (_targets: readonly ResolvedTarget[], _chain: Chain) =>
+        ({ value: 'ok' }) satisfies CallResult,
+    );
+    const wrapped: VernLLMMiddleware = { name: 'mw', wrap: async (_request, next) => next() };
+
+    for (const middleware of [[], [wrapped]]) {
+      coreOperation.mockClear();
+
+      await runOperation(
+        dependencies({ middleware }),
+        params,
+        requestId,
+        createMiddlewareStateBag(),
+        declared,
+        coreOperation,
+      );
+
+      expect(coreOperation).toHaveBeenCalledExactlyOnceWith(declared, { number: 0, params });
+      expect(coreOperation.mock.calls[0]![1].params).toBe(params);
+    }
+
+    coreOperation.mockClear();
+
+    await runOperation(
+      dependencies({ middleware: [wrapped] }),
+      params,
+      requestId,
+      createMiddlewareStateBag(),
+      declared,
+      coreOperation,
+      true,
+    );
+
+    expect(coreOperation.mock.calls[0]![1]).toEqual({ number: 0, params });
+  });
+
+  it('gives a wrap on the main chain the call signal and no chain field', async () => {
+    const signal = new AbortController().signal;
+    let seenContext: unknown;
+
+    const middleware: VernLLMMiddleware = {
+      name: 'mw',
+      wrap: async (_request, next, ctx) => {
+        seenContext = ctx;
+        return next();
+      },
+    };
+
+    await runOperation(
+      dependencies({ middleware: [middleware] }),
+      { ...params, signal },
+      requestId,
+      createMiddlewareStateBag(),
+      declared,
+      async () => ({ value: 'ok' }),
+    );
+
+    expect((seenContext as { signal: AbortSignal }).signal).toBe(signal);
+    expect(seenContext).not.toHaveProperty('chain');
   });
 
   it('Rule 3: keeps the resolved result and logs "unknown" when wrap throws a non-Error after next() already resolved', async () => {

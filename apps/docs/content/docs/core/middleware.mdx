@@ -96,7 +96,7 @@ fallback chain:
 ```ts title="wrap-signature.ts"
 wrap?: (
   request: Readonly<WireCallRequest>,
-  next: (options?: { targets?: readonly string[] }) => Promise<CallResult>,
+  next: WrapNext,
   ctx: PreDispatchContext,
 ) => Promise<CallResult>;
 ```
@@ -122,6 +122,8 @@ a real answer yet. Read `result.meta` after `next()` resolves for what actually 
 `next({ targets })` reorders or drops the targets the call may try, by name, and never adds one.
 `ctx.targets` lists what this `wrap` may choose from. See
 [Choosing the order per call](/docs/core/provider-fallback#choosing-the-order-per-call).
+
+A `wrap` with `reruns: true` also gets `next.again()`. See [Running a chain again](#running-a-chain-again).
 
 A `wrap` that never calls `next()` short-circuits the real call, and every middleware nested inside
 it never runs either:
@@ -363,7 +365,8 @@ throws `invalid_params` before any hook runs. It is not part of the `cachedCall`
 `ctx.own` is a plain `Record<string, unknown>`, pre-namespaced to that one middleware, for scratch
 state it doesn't share with anyone else. It is the same object for every hook of one logical call,
 retries included, so a value set in `wrap` is there in `transform` and `onEvent`. The next call
-starts empty.
+starts empty. With [`next.again()`](#running-a-chain-again), middleware inside the rerunning `wrap`
+get one `ctx.own` per chain, and middleware outside it keep one for the call.
 
 <Callout type="info">
   See [Middleware](/docs/customization/middleware) for `createStateKey`, `createMiddleware`, and
@@ -632,6 +635,44 @@ A timeout normalizes to the same `'timeout'` type a slow provider call produces,
 default. `wrap` is never bounded this way: it spans the whole call, so `call()`'s own
 `timeoutMs`/`deadlineMs` already covers it.
 
+## Running a chain again
+
+A `wrap` with `reruns: true` gets `next.again()`, which runs everything inside it again as a
+separate chain: at the same time as the first, or after it. The outer layers still see one call.
+
+```ts title="rerun-once.ts"
+const rerunOnce: VernLLMMiddleware = {
+  name: 'rerun-once',
+  reruns: true,
+  wrap: async (request, next) => {
+    const first = await next();
+    if (!next.again || isAcceptable(first.value)) return first;
+    return next.again({ targets: ['fallback'] });
+  },
+};
+```
+
+- **Return a chain's result unchanged.** When the `wrap` settles, every chain whose result it
+  didn't return is cancelled, pending or not. On a throw, every chain is cancelled. A value no
+  chain produced cancels them all.
+- **Inside the chain, everything runs again:** inner `wrap`s, `transform`s, `dispatch`, the breaker
+  check, retries and fallback. Outer layers run once.
+- **Targets narrow like `next({ targets })`.** A chain can't use a target an outer layer removed.
+- **`chain`** is absent for the main chain and 1 and up for the others, on `ctx`, events and
+  `CallMeta`. Middleware inside the rerunning `wrap` get one `ctx.own` per chain; middleware outside it
+  keep one `ctx.own` for the call, in every hook. `ctx.state` is shared by every chain.
+- **Usage per chain.** Each chain reserves and refunds with `reserveUsage` and `refundUsage` like a
+  call of its own, and `onUsage` fires once per chain that got a response. A stream chain cancelled
+  mid way reports nothing, though the provider may have billed its input.
+- **At most 4 per call.** After that `next.again` is `undefined`.
+- **Check before calling:** `if (!next.again) return next();`. It's `undefined` without
+  `reruns: true`, and once the call has used its reruns.
+- **In `cachedCall()`** the main chain is the cache path, and a rerun is a fresh call for this
+  caller: it never reads the cache or joins a shared call, and its answer is cached.
+
+`reruns: true` also helps a `wrap` that gives up early: if it throws while `next()` is still
+pending, the unfinished chain is cancelled instead of left running.
+
 ## Error handling
 
 1. A non `LLMError` thrown before `next()` resolves (or by `transform`) is passed through the same
@@ -645,6 +686,8 @@ default. `wrap` is never bounded this way: it spans the whole call, so `call()`'
    logged like a failing `onUsage`, and the original result is returned instead. The one
    exception is an `LLMError` with code `content_blocked`: a `wrap` that refuses a result it has
    seen throws it on purpose, so it reaches the caller. It is not retried and has no fallback.
+   With `reruns: true`, a throw after any chain resolved keeps the first chain to resolve and
+   cancels the rest; `content_blocked` still passes through.
 4. A throwing, rejecting, or timed out `enabled` predicate is logged and treated as not applying.
 5. `dispatch` follows its own rules, see [`dispatch`](#dispatch).
 
@@ -685,6 +728,9 @@ branches.
 during `wrap`'s pre phase is visible to that same middleware's `transform`. `ctx.emit` works in
 `wrap` on every branch, and in `transform` and `dispatch` on a miss.
 
+With [`next.again()`](#running-a-chain-again), a rerun is a fresh call for this caller that writes
+its answer to the cache. Cancelling the main chain ends this caller's wait, not the shared call.
+
 See [Caching](/docs/core/caching) for `cachedCall()` itself.
 
 ## Options reference
@@ -692,6 +738,7 @@ See [Caching](/docs/core/caching) for `cachedCall()` itself.
 | Option                | Default | Notes                                                                                                                                                                                                  |
 | --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `middleware`          | `[]`    | Ordered `VernLLMMiddleware[]`. `transform`/`onEvent` order: `priority` ascending, `runsAfter`/`runsBefore` resolved, ties by array order. `wrap` nesting: the same order with `position` pins applied. |
+| `reruns`              | `false` | On a middleware entry. Gives its `wrap` `next.again()`, and cancels every chain it didn't return when it settles. See [Running a chain again](#running-a-chain-again).                                 |
 | `middlewareTimeoutMs` | `5000`  | Bounds `transform` and a function `enabled`. A value `<= 0` disables the timeout. Overridable per middleware via `timeoutMs`.                                                                          |
 
 See [Configuration](/docs/API-reference/configuration) for where `middleware` sits among every

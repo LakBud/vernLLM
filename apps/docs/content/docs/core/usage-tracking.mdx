@@ -149,6 +149,9 @@ onUsage: ({ promptTokens, cacheReadTokens = 0, cacheWriteTokens = 0, completionT
 
 - **On success**, once per completed call, after retries have finished. It does not fire once per
   retry attempt.
+- **With reruns**, `onUsage` can fire once per chain started with
+  [`next.again()`](/docs/core/middleware#running-a-chain-again) that got a response. The `usage`
+  event's `chain` tells them apart; it is absent for the main chain.
 - **On failure**, `onUsage` never fires. If a failed attempt's response included usage data, that
   spend is reported through [`onUsageFailure`](#reporting-usage-on-failure) instead, not
   lost.

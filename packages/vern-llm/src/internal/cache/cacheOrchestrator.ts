@@ -153,6 +153,22 @@ export class CacheOrchestrator {
   }
 
   /**
+   * Runs `fn` for this caller alone: no cache read, no joining, nothing others can join. Reserves
+   * as a full spend and caches the answer on success, like a miss. Used for a rerun.
+   */
+  async runFresh<T>(params: InternalCacheParams<T> & { signal: AbortSignal }): Promise<T> {
+    const cacheKey = await this.resolveCacheKey(params.cacheKey);
+
+    return withReservedUsage(
+      params,
+      false,
+      () => this.runAndCache({ ...params, cacheKey }, params.signal),
+      params.signal,
+      (logMessage, error) => logError(this.logger, logMessage, error),
+    );
+  }
+
+  /**
    * Creates and registers the shared work synchronously, so a concurrent caller always sees it in
    * time to join. `start` runs it at most once.
    */
@@ -285,6 +301,36 @@ export class CacheOrchestrator {
     }
 
     return this.registerStreamTrigger(resolvedParams);
+  }
+
+  /**
+   * Streaming counterpart to `runFresh`: caches when `finalResult` resolves, as a miss does.
+   * Leaving `chunks` early cancels this stream, like leaving a plain call's.
+   */
+  async runFreshStream<T>(
+    params: InternalCacheStreamParams<T> & { signal: AbortSignal },
+  ): Promise<{ chunks: AsyncIterable<StreamChunk>; finalResult: Promise<T> }> {
+    const cacheKey = await this.resolveCacheKey(params.cacheKey);
+    const left = new AbortController();
+    const signal = AbortSignal.any([params.signal, left.signal]);
+
+    return withReservedUsageForStream(
+      params,
+      async () => {
+        const opened = await params.openStream(signal);
+        const finalResult = opened.finalResult.then(async (value) => {
+          // Failed calls aren't cached, matching `runAndCache`.
+          await this.writeCache(cacheKey, value, params.ttl);
+          return value;
+        });
+
+        finalResult.catch(() => {});
+
+        return { chunks: onEarlyExit(opened.chunks, () => left.abort()), finalResult };
+      },
+      params.signal,
+      (logMessage, error) => logError(this.logger, logMessage, error),
+    );
   }
 
   /**

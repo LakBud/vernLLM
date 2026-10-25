@@ -40,12 +40,14 @@ await llm.call({
   </Card>
   <Card title="After a successful reservation">
     The LLM request proceeds normally. Retries do not trigger `reserveUsage` again because it wraps
-    the logical call.
+    the logical call. A chain started with
+    [`next.again()`](/docs/core/middleware#running-a-chain-again) reserves like a call of its own.
   </Card>
   <Card title="After a failed call">
     `refundUsage` runs when a reservation succeeded but the call ultimately fails. Errors from
     `refundUsage` are caught and logged, then swallowed without changing the original call error or
-    rejection. Monitor refund failures separately if failed refunds require follow-up.
+    rejection. Monitor refund failures separately if failed refunds require follow-up. A chain
+    started with `next.again()` refunds when it fails or is cancelled.
   </Card>
 </Cards>
 

@@ -120,6 +120,8 @@ export {
   type ToolCallResult,
   type CallWithToolsResult,
   type VernLLMMiddleware,
+  type WrapNext,
+  type WrapNextOptions,
   type MiddlewareContext,
   type MiddlewareContextBase,
   type AttemptContext,

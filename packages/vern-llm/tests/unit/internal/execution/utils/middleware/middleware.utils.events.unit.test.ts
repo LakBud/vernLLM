@@ -817,6 +817,34 @@ describe('call context stamping', () => {
     });
   });
 
+  it.each(events)('stamps the chain on a %s event, with or without a context', (_kind, event) => {
+    const reportEvent = vi.fn();
+
+    emitEvent(event, baseCtx({ chain: 2 }), reportEvent, [], 1000, logger);
+    emitEvent(event, baseCtx({ chain: 2, context }), reportEvent, [], 1000, logger);
+
+    expect(reportEvent.mock.calls[0]![0]).toEqual({ ...event, chain: 2 });
+    expect(reportEvent.mock.calls[1]![0]).toEqual({ ...event, chain: 2, context });
+  });
+
+  it.each([
+    ['usage', { kind: 'usage', requestId: 'r', usage } as VernLLMEvent],
+    ['usage_failure', { kind: 'usage_failure', requestId: 'r', usage, error } as VernLLMEvent],
+  ])('stamps the chain on a %s event but not on its TokenUsage', (_kind, event) => {
+    const reportEvent = vi.fn();
+
+    emitEvent(event, baseCtx({ chain: 1 }), reportEvent, [], 1000, logger);
+    emitEvent(event, baseCtx({ chain: 1, context }), reportEvent, [], 1000, logger);
+
+    expect(reportEvent.mock.calls[0]![0]).toEqual({ ...event, chain: 1 });
+    expect(reportEvent.mock.calls[1]![0]).toEqual({
+      ...event,
+      chain: 1,
+      context,
+      usage: { ...usage, context },
+    });
+  });
+
   it('does not mutate the event it was given, or the usage inside it', () => {
     const event: VernLLMEvent = { kind: 'usage', requestId: 'r', usage: { ...usage } };
 

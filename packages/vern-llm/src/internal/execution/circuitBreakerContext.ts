@@ -1,4 +1,5 @@
 import { callFactsFor, callScopeFor, noopEmit } from '../utils/callScope.utils.js';
+import { chainFields } from '../utils/chain.utils.js';
 import { reportRejection } from '../utils/circuit-breaker/circuitBreaker.utils.js';
 
 import type { CircuitBreakerAdapter, CircuitBreakerCallContext } from '../../circuitBreaker.js';
@@ -85,6 +86,7 @@ export function createBreakerGateway(options: BreakerGatewayOptions): BreakerGat
       attempt: attempt + 1,
       capabilities: { supportsJsonObjectMode },
       signal,
+      ...chainFields(signal),
       state,
       own: {},
       emit: noopEmit,

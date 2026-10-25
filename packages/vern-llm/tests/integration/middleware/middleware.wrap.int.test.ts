@@ -596,3 +596,74 @@ describe('middleware wrap, target order', () => {
     expect(order).toEqual(['c']);
   });
 });
+
+describe('middleware wrap with reruns', () => {
+  it('does not report wrap_short_circuit for a wrap that only calls again()', async () => {
+    const { client } = createMockClient([textResponse('again')]);
+    const events: VernLLMEvent[] = [];
+    const onlyAgain: VernLLMMiddleware = {
+      name: 'only-again',
+      reruns: true,
+      wrap: async (_request, next) => next.again!(),
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [onlyAgain],
+      onEvent: (event) => events.push(event),
+    });
+
+    await expect(llm.call(CALL)).resolves.toBe('again');
+
+    expect(events.filter((event) => event.kind === 'middleware')).toEqual([]);
+  });
+
+  it('still reports wrap_short_circuit for a reruns wrap that calls neither next() nor again()', async () => {
+    const { client } = createMockClient([textResponse('unused')]);
+    const events: VernLLMEvent[] = [];
+    const answersItself: VernLLMMiddleware = {
+      name: 'answers-itself',
+      reruns: true,
+      wrap: async () => ({ value: 'own answer' }),
+    };
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [answersItself],
+      onEvent: (event) => events.push(event),
+    });
+
+    await expect(llm.call(CALL)).resolves.toBe('own answer');
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: 'middleware', hook: 'wrap_short_circuit' }),
+    );
+  });
+
+  it('shows every layer the same ctx.signal object when no entry has reruns', async () => {
+    const { client } = createMockClient([textResponse('ok')]);
+    const controller = new AbortController();
+    const signals: Array<AbortSignal | undefined> = [];
+    const layer = (name: string, priority: number): VernLLMMiddleware => ({
+      name,
+      priority,
+      wrap: async (_request, next, ctx) => {
+        signals.push(ctx.signal);
+        return next();
+      },
+    });
+
+    const llm = new VernLLM({
+      client,
+      model: 'test-model',
+      middleware: [layer('a', 0), layer('b', 1)],
+    });
+
+    await llm.call({ ...CALL, signal: controller.signal });
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toBe(signals[1]);
+  });
+});

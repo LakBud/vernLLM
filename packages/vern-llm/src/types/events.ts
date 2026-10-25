@@ -22,6 +22,8 @@ export type VernLLMEvent =
       retryAfterHonored: boolean;
       error: LLMError;
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     }
   | {
       kind: 'circuit_state';
@@ -35,6 +37,8 @@ export type VernLLMEvent =
       to: CircuitState;
       consecutiveFailures: number;
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     }
   | {
       kind: 'fallback';
@@ -51,6 +55,8 @@ export type VernLLMEvent =
       /** Time spent on `from`, including its own retries, before giving up. */
       elapsedMs: number;
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     }
   | {
       kind: 'rate_limited';
@@ -63,6 +69,8 @@ export type VernLLMEvent =
       /** Which configured bucket was blocking this attempt just before it cleared. */
       reason: 'concurrency' | 'rpm' | 'tpm';
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     }
   | {
       kind: 'middleware';
@@ -73,6 +81,8 @@ export type VernLLMEvent =
       /** For `hook: 'transform'` only: which top-level fields the merged patch touched. */
       patchedFields?: string[];
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     }
   | {
       /**
@@ -84,6 +94,8 @@ export type VernLLMEvent =
       requestId: string;
       usage: TokenUsage;
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     }
   | {
       /**
@@ -95,6 +107,8 @@ export type VernLLMEvent =
       usage: TokenUsage;
       error: LLMError;
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     }
   | {
       /** Reported by a middleware through `ctx.emit`. */
@@ -106,6 +120,8 @@ export type VernLLMEvent =
       source: string;
       data?: JsonValue;
       context?: CallContext;
+      /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+      chain?: number;
     };
 
 export type OnEvent = (event: VernLLMEvent) => void;

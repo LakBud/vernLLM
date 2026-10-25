@@ -79,7 +79,7 @@ describe('runOperation, target order', () => {
       true,
     );
 
-    expect(core).toHaveBeenCalledWith([c, a]);
+    expect(core).toHaveBeenCalledWith([c, a], expect.objectContaining({ number: 0 }));
   });
 
   it('shows a wrap the order it starts with as ctx.targets, with name, declared index, model and adapter', async () => {

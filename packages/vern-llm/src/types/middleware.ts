@@ -153,6 +153,9 @@ export interface MiddlewareContextBase {
 
   /** When the call's `deadlineMs` runs out, as epoch milliseconds. Absent without a deadline. */
   deadlineAt?: number;
+
+  /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+  chain?: number;
 }
 
 /**
@@ -277,6 +280,26 @@ export interface CallResult<T = unknown> {
   cache?: 'hit' | 'join';
 }
 
+/** Options for `wrap`'s `next()` and `next.again()`. */
+export interface WrapNextOptions {
+  /** Reorders or drops targets by name, never adds one. */
+  targets?: readonly string[];
+}
+
+/** `wrap`'s `next`. Calling it runs everything inside this `wrap` once; later calls return the same result. */
+export interface WrapNext {
+  (options?: WrapNextOptions): Promise<CallResult>;
+
+  /**
+   * Runs everything inside this `wrap` again as a separate chain, at the same time as other chains
+   * or after them. Set only for entries with `reruns: true`, and not after 4 per call. Inside
+   * `cachedCall()` it's a fresh call for this caller: no cache read or joining, and its answer is
+   * cached. Return a chain's result unchanged: when the `wrap` settles, every chain whose result it
+   * didn't return is cancelled.
+   */
+  readonly again?: (options?: WrapNextOptions) => Promise<CallResult>;
+}
+
 /**
  * One entry in `VernLLMOptions.middleware`. Every hook is optional. See the middleware docs for how
  * hooks compose.
@@ -336,9 +359,15 @@ export interface VernLLMMiddleware {
    */
   wrap?: (
     request: Readonly<WireCallRequest>,
-    next: (options?: { targets?: readonly string[] }) => Promise<CallResult>,
+    next: WrapNext,
     ctx: PreDispatchContext,
   ) => Promise<CallResult>;
+
+  /**
+   * Gives this entry's `wrap` `next.again()`, and cancels every chain it starts but doesn't return,
+   * when it settles. Off by default; entries without it run exactly as before.
+   */
+  reruns?: boolean;
 
   /**
    * Wraps one attempt's provider request, after the limiter and every `transform`. `request` is

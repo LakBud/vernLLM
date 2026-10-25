@@ -1,6 +1,7 @@
 import { LLMError } from '../../types/errors.js';
 import { FallbackExhaustedError } from '../../types/fallback.js';
 import { callFactsFor, callScopeFor, noopEmit } from '../utils/callScope.utils.js';
+import { chainFields } from '../utils/chain.utils.js';
 import { createDeferred } from '../utils/deferred.utils.js';
 import { middlewareContextNames } from '../utils/middlewareLabels.utils.js';
 import { describeTargets, type ResolvedTarget } from './targetOrder.js';
@@ -235,6 +236,7 @@ function reportFallback(
     attempt: failure.attempt || 1,
     capabilities: { supportsJsonObjectMode: executor.jsonObjectModeSupported },
     signal,
+    ...chainFields(signal),
     state: failure.middlewareState,
     own: {},
     emit: noopEmit,
@@ -269,6 +271,7 @@ function metaFor(
   position: number,
   attemptCount: number,
   model: string,
+  signal: AbortSignal | undefined,
 ): CallMeta {
   return {
     provider: executor.providerName,
@@ -278,6 +281,7 @@ function metaFor(
     usedFallback: index > 0,
     attempts: attemptCount,
     position,
+    ...chainFields(signal),
   };
 }
 
@@ -287,7 +291,7 @@ function metaFor(
  */
 function buildCallResult<R>(
   outcome: FallbackChainOutcome<R>,
-  params: Pick<CallParams<unknown>, 'meta'>,
+  params: Pick<CallParams<unknown>, 'meta' | 'signal'>,
 ): CallResult<R> {
   const meta = metaFor(
     outcome.executor,
@@ -295,6 +299,7 @@ function buildCallResult<R>(
     outcome.position,
     outcome.attemptCount,
     outcome.model,
+    params.signal,
   );
 
   // `params` here is the same object `VernLLM.call()` received from the
@@ -391,6 +396,7 @@ export async function executeLogicalStreamCall<T>(
     position,
     attempts,
     modelForTarget(params, index) ?? executor.model,
+    params.signal,
   );
   if (params.meta) params.meta.current = meta;
 
@@ -404,6 +410,7 @@ export async function executeLogicalStreamCall<T>(
         outcome.position,
         outcome.attemptCount,
         outcome.model,
+        params.signal,
       ),
     );
     return outcome.result.finalResult;

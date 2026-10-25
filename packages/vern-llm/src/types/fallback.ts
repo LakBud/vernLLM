@@ -57,6 +57,8 @@ export interface CallMeta {
   attempts: number;
   /** Position of the answering target in the order tried, 0 based. */
   position: number;
+  /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
+  chain?: number;
 }
 
 /** One configured target, as a middleware sees it in `ctx.targets`. */

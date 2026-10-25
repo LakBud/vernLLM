@@ -1,6 +1,13 @@
 import { createMockClient, textResponse } from '../../helpers.js';
 
-import type { VernLLMMiddleware, VernLLMOptions } from '../../../src/types/index.js';
+import type {
+  LLMClient,
+  VernLLMMiddleware,
+  VernLLMOptions,
+  WireStreamChunk,
+} from '../../../src/types/index.js';
+
+type CreateParams = Parameters<LLMClient['chat']['completions']['create']>[0];
 
 /** The plain text call most tests make. */
 export const CALL = { userContent: 'hi', jsonMode: false as const };
@@ -95,4 +102,104 @@ export function targetChain(primaryScript: Script, bScript: Script, cScript: Scr
   };
 
   return { primary, b, c, options };
+}
+
+/**
+ * A mock response that waits until `release()` or until its attempt is aborted. `aborted()` says
+ * whether the provider call was cancelled.
+ */
+export function heldResponse(text: string) {
+  let release!: () => void;
+  let wasAborted = false;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+
+  const entry = async (_params: CreateParams, signal: AbortSignal) => {
+    await new Promise<void>((resolve, reject) => {
+      void gate.then(resolve);
+      signal.addEventListener(
+        'abort',
+        () => {
+          wasAborted = true;
+          reject(new DOMException('aborted', 'AbortError'));
+        },
+        { once: true },
+      );
+    });
+
+    return textResponse(text);
+  };
+
+  return { entry, release, aborted: () => wasAborted };
+}
+
+/** A rerunning `wrap` that starts the main chain and one more on `targets`, and keeps the first success. */
+export function raceTwo(targets?: readonly string[], name = 'race-two'): VernLLMMiddleware {
+  return {
+    name,
+    reruns: true,
+    wrap: async (_request, next) => {
+      if (!next.again) return next();
+
+      return Promise.any([next(), next.again({ targets })]);
+    },
+  };
+}
+
+export interface StreamScript {
+  text: string;
+  /** Held until released, or until the stream's signal aborts. Opens the stream only after it. */
+  gate?: Promise<void>;
+  /** Held after the first chunk, so the stream stays open until it is cancelled. */
+  hold?: boolean;
+}
+
+/** Rejects when `signal` aborts, so a held stream ends the way a real one does. */
+function whenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const abort = () => reject(new DOMException('aborted', 'AbortError'));
+
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+/** A streaming client that plays one script per call and records each call's signal. */
+export function streamClient(scripts: StreamScript[]) {
+  const signals: AbortSignal[] = [];
+  let index = 0;
+
+  const client: LLMClient = {
+    chat: {
+      completions: {
+        create: () => Promise.reject(new Error('not scripted')),
+        createStream: (_params, options) => {
+          const script = scripts[Math.min(index++, scripts.length - 1)]!;
+          signals.push(options.signal);
+
+          return {
+            [Symbol.asyncIterator]() {
+              let step = 0;
+
+              return {
+                async next(): Promise<IteratorResult<WireStreamChunk>> {
+                  if (step === 0) {
+                    if (script.gate) await Promise.race([script.gate, whenAborted(options.signal)]);
+                    step++;
+
+                    return { done: false, value: { type: 'text-delta', delta: script.text } };
+                  }
+
+                  if (script.hold) await whenAborted(options.signal);
+
+                  return { done: true, value: undefined };
+                },
+              };
+            },
+          };
+        },
+      },
+    },
+  };
+
+  return { client, signals };
 }
