@@ -9,7 +9,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** One target tried during a call, in order. */
+/** One target tried during a call, in order. For a call with several chains, the kept chain's. */
 export interface PathEntry {
   provider: string;
   model: string;
@@ -58,16 +58,21 @@ export interface CallLogRecord {
   provider?: string;
   model?: string;
   fallbackIndex?: number;
+  /** Every attempt of every chain. */
   attempts: number;
   retries: number;
   streaming: boolean;
   /** Only for `cachedCall` when no attempt ran: `hit` from the cache, `join` a shared call. */
   cache?: 'hit' | 'join';
   shortCircuitedBy?: string;
+  /** How many chains ran. Only for calls that ran more than one; `attempts` counts all of them. */
+  chains?: number;
+  /** The chain whose answer was kept, `0` for the main chain. Set whenever `chains` is. */
+  chain?: number;
   durationMs: number;
-  /** The answering attempt, from the request to the response or first chunk. */
+  /** The answering attempt of the kept chain, from the request to the response or first chunk. */
   attemptMs?: number;
-  /** Call start to first content chunk, streams only. */
+  /** Call start to the kept chain's first content chunk, streams only. */
   ttftMs?: number;
   queueWaitMs: number;
   retryDelayMs: number;

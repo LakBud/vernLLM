@@ -51,7 +51,10 @@ export function createMockClient(script: Step[]) {
   return { client, calls };
 }
 
-type StreamStep = WireStreamChunk[] | Error | (() => AsyncIterable<WireStreamChunk>);
+type StreamStep =
+  | WireStreamChunk[]
+  | Error
+  | ((signal: AbortSignal) => AsyncIterable<WireStreamChunk>);
 
 export function createMockStreamingClient(script: StreamStep[]) {
   const calls: CreateParams[] = [];
@@ -64,14 +67,17 @@ export function createMockStreamingClient(script: StreamStep[]) {
         create: async () => {
           throw new Error('createMockStreamingClient: create() was not scripted');
         },
-        createStream: (params: CreateParams): AsyncIterable<WireStreamChunk> => {
+        createStream: (
+          params: CreateParams,
+          options: { signal: AbortSignal },
+        ): AsyncIterable<WireStreamChunk> => {
           calls.push(params);
           const entry = script[Math.min(index, script.length - 1)];
           index++;
 
           /* v8 ignore next */
           if (entry === undefined) throw new Error('createMockStreamingClient: script is empty');
-          if (typeof entry === 'function') return entry();
+          if (typeof entry === 'function') return entry(options.signal);
 
           return {
             [Symbol.asyncIterator]() {

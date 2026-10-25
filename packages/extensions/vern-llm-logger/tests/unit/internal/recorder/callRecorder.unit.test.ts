@@ -13,8 +13,12 @@ import type { LoggerMiddlewareOptions } from '../../../../src/index.js';
 
 const preDispatch = (extra: Partial<PreDispatchContext> = {}) =>
   ({ requestId: 'req_1', context: undefined, ...extra }) as PreDispatchContext;
-const attemptCtx = (provider = 'primary', model = 'gpt-4o') =>
-  ({ requestedProvider: provider, requestedModel: model }) as AttemptContext;
+const attemptCtx = (provider = 'primary', model = 'gpt-4o', chain?: number) =>
+  ({
+    requestedProvider: provider,
+    requestedModel: model,
+    ...(chain === undefined ? {} : { chain }),
+  }) as AttemptContext;
 
 function recorder(options: LoggerMiddlewareOptions = {}, ctx = preDispatch()) {
   return CallRecorder.start(
@@ -542,5 +546,94 @@ describe('attempt tallies', () => {
     r.responded();
 
     expect(Object.keys(r.finish(ok)!)).not.toContain('tallies');
+  });
+});
+
+describe('calls with more than one chain', () => {
+  const answeredBy = (chain?: number) =>
+    ({
+      kind: 'result',
+      result: {
+        value: 'x',
+        meta: {
+          provider: 'primary',
+          model: 'gpt-4o',
+          fallbackIndex: -1,
+          usedFallback: false,
+          attempts: 1,
+          position: 0,
+          ...(chain === undefined ? {} : { chain }),
+        },
+      },
+    }) as const;
+
+  it('takes attemptMs and ttftMs from the kept chain only', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
+    vi.advanceTimersByTime(100);
+    r.openAttempt(attemptCtx('backup', 'gpt-4o-mini', 1));
+    vi.advanceTimersByTime(30);
+    r.responded(1);
+    r.markStream();
+    vi.advanceTimersByTime(20);
+
+    const record = r.finish(answeredBy(1))!;
+
+    // Chain 1 answered 30 ms after it began and 130 ms after the call began.
+    expect(record.attemptMs).toBe(30);
+    expect(record.ttftMs).toBe(130);
+    expect(record.durationMs).toBe(150);
+  });
+
+  it('measures the main chain when it is the one kept, however the other chain ended', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
+    vi.advanceTimersByTime(40);
+    r.openAttempt(attemptCtx('backup', 'gpt-4o-mini', 1));
+    vi.advanceTimersByTime(10);
+    r.responded(0);
+    vi.advanceTimersByTime(5);
+
+    const record = r.finish(answeredBy())!;
+
+    expect(record).toMatchObject({ attempts: 2, chains: 2, chain: 0, attemptMs: 50 });
+  });
+
+  it('applies a retry and a fallback to the chain they came from', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx('primary', 'gpt-4o', 0));
+    r.responded(0);
+    r.openAttempt(attemptCtx('primary', 'gpt-4o', 1));
+    r.attemptFailed(serverError(), 1);
+    r.retried(5, serverError(), 1);
+    r.openAttempt(attemptCtx('primary', 'gpt-4o', 1));
+    r.responded(1);
+
+    const record = r.finish(answeredBy(1))!;
+
+    expect(record).toMatchObject({ attempts: 3, retries: 1, chains: 2, chain: 1 });
+    expect(record.path[0]!.attempts).toBe(2);
+    // The first chain's attempt was left open by the retry in the other one.
+    expect(talliesOf(record)).toEqual([
+      { provider: 'primary', model: 'gpt-4o', responded: 1, qualityFailures: 0 },
+    ]);
+  });
+
+  it('counts a chain from its retry or fallback even if its attempt never opened', () => {
+    const r = recorder();
+    r.openAttempt(attemptCtx());
+    r.fellBack(10, serverError(), 1);
+
+    expect(r.finish(ok)!).toMatchObject({ chains: 2, chain: 0 });
+  });
+
+  it('ignores a closing signal for a chain it never saw', () => {
+    const r = recorder();
+
+    expect(() => {
+      r.responded(3);
+      r.attemptFailed(serverError(), 3);
+    }).not.toThrow();
+    expect(r.finish(ok)!).not.toHaveProperty('chains');
   });
 });

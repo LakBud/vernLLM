@@ -20,6 +20,7 @@ const base = (): RecordInput => ({
   retryDelayMs: 0,
   attemptMs: undefined,
   generationMs: undefined,
+  chains: undefined,
   path: [],
   usage: undefined,
   usageFailed: false,

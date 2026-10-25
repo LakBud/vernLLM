@@ -43,6 +43,10 @@ function addAnswer(record: CallLogRecord, input: RecordInput): void {
     record.model = answered.model;
     record.fallbackIndex = answered.fallbackIndex;
   }
+  if (input.chains) {
+    record.chains = input.chains.count;
+    record.chain = input.chains.kept;
+  }
   if (input.cache !== undefined) record.cache = input.cache;
   if (input.attemptMs !== undefined) record.attemptMs = roundMs(input.attemptMs);
   if (input.ttftMs !== undefined) record.ttftMs = roundMs(input.ttftMs);

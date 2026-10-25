@@ -55,7 +55,7 @@ type LogEntry = CallLogRecord | SummaryEntry | ErrorGroupEntry | BreakerEntry;
     },
     attempts: {
       description:
-        'Every request sent, across all targets. A request rejected before it was sent is not counted.',
+        'Every request sent, across all targets and chains. A request rejected before it was sent is not counted.',
       type: 'number',
       required: true,
     },
@@ -77,17 +77,27 @@ type LogEntry = CallLogRecord | SummaryEntry | ErrorGroupEntry | BreakerEntry;
       description: 'The name of the middleware that answered without calling next.',
       type: 'string',
     },
+    chains: {
+      description: 'How many chains ran. Only for a call that ran more than one, see Call Records.',
+      type: 'number',
+    },
+    chain: {
+      description: 'The chain whose answer was kept, 0 for the main chain. Set whenever chains is.',
+      type: 'number',
+    },
     durationMs: {
       description: 'The whole call, from start to end.',
       type: 'number',
       required: true,
     },
     attemptMs: {
-      description: 'The answering attempt, from request to response or first chunk.',
+      description:
+        'The answering attempt, from request to response or first chunk. For several chains, the kept chain only.',
       type: 'number',
     },
     ttftMs: {
-      description: 'Call start to first content chunk. Streams only.',
+      description:
+        'Call start to first content chunk. Streams only. For several chains, the kept chain only.',
       type: 'number',
     },
     queueWaitMs: {
@@ -107,7 +117,7 @@ type LogEntry = CallLogRecord | SummaryEntry | ErrorGroupEntry | BreakerEntry;
     },
     path: {
       description:
-        'One entry per target tried, in order: provider, model, attempts, outcome, elapsedMs, errorCode.',
+        'One entry per target tried, in order: provider, model, attempts, outcome, elapsedMs, errorCode. For several chains, the kept chain only.',
       type: 'PathEntry[]',
       required: true,
     },

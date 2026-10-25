@@ -12,10 +12,10 @@ export function applyEvent(
       recorder.queued(event.waitedMs);
       return;
     case 'retry':
-      recorder.retried(event.delayMs, event.error);
+      recorder.retried(event.delayMs, event.error, event.chain);
       return;
     case 'fallback':
-      recorder.fellBack(event.elapsedMs, event.error);
+      recorder.fellBack(event.elapsedMs, event.error, event.chain);
       return;
     case 'circuit_state':
       recorder.noteBreaker({
@@ -33,10 +33,10 @@ export function applyEvent(
       return;
     }
     case 'usage':
-      recorder.setUsage(event.usage, false);
+      recorder.setUsage(event.usage, false, event.chain);
       return;
     case 'usage_failure':
-      recorder.setUsage(event.usage, true);
+      recorder.setUsage(event.usage, true, event.chain);
       return;
     case 'custom':
       if (keepCustomEvent(event.name)) recorder.addCustom(event.name, event.data);

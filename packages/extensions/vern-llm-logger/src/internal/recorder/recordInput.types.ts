@@ -8,6 +8,7 @@ export interface RecordInput {
   classified: ClassifiedOutcome;
   /** Who answered, from the call's `meta`. */
   answered: { provider: string; model: string; fallbackIndex: number } | undefined;
+  /** Every chain's attempts and retries. */
   attempts: number;
   retries: number;
   streaming: boolean;
@@ -23,6 +24,9 @@ export interface RecordInput {
   attemptMs: number | undefined;
   /** The window the output tokens were produced in, for the token rate. */
   generationMs: number | undefined;
+  /** Set only when more than one chain ran: how many, and which one's answer was kept. */
+  chains: { count: number; kept: number } | undefined;
+  /** The kept chain's path. */
   path: readonly PathEntry[];
   usage: TokenUsage | undefined;
   usageFailed: boolean;

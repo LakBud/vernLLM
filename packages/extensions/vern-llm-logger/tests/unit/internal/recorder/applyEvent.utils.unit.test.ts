@@ -51,7 +51,7 @@ describe('applyEvent', () => {
       retryAfterHonored: false,
       error,
     });
-    expect(r.retried).toHaveBeenCalledWith(150, error);
+    expect(r.retried).toHaveBeenCalledWith(150, error, undefined);
   });
 
   it('maps fallback to leaving a target, with the core elapsed time and error', () => {
@@ -65,7 +65,7 @@ describe('applyEvent', () => {
       error,
       elapsedMs: 900,
     });
-    expect(r.fellBack).toHaveBeenCalledWith(900, error);
+    expect(r.fellBack).toHaveBeenCalledWith(900, error, undefined);
   });
 
   it('maps circuit_state to a breaker change with only the logged fields', () => {
@@ -117,10 +117,11 @@ describe('applyEvent', () => {
     expect(run({ kind: 'usage', requestId: 'r', usage }).setUsage).toHaveBeenCalledWith(
       usage,
       false,
+      undefined,
     );
     expect(
       run({ kind: 'usage_failure', requestId: 'r', usage, error }).setUsage,
-    ).toHaveBeenCalledWith(usage, true);
+    ).toHaveBeenCalledWith(usage, true, undefined);
   });
 
   it('keeps a custom event only when its name is wanted', () => {
