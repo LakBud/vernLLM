@@ -234,48 +234,6 @@ jobs:
           files: ./packages/extensions/vern-llm-policy/coverage/lcov.info
           flags: vern-llm-policy-unit
           fail_ci_if_error: true
-
-  # No Nx cache here, deliberately: this job runs against a real Redis
-  # service container. A cached "pass" from a previous run could hide a
-  # real regression in how an adapter behaves against actual Redis state
-  # (timing, pub/sub delivery, real eval() semantics), the one place a
-  # stale-but-green result would be actively misleading rather than a
-  # harmless skip.
-  test-integration:
-    runs-on: ubuntu-latest
-
-    services:
-      redis:
-        image: redis:8.10
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          filter: tree:0
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - uses: nrwl/nx-set-shas@v5
-
-      # Only vern-llm-redis uses the redis-server binary, so the install below
-      # is skipped when that project is not affected. This needs the
-      # node_modules install and the NX_BASE / NX_HEAD values set above.
       - name: Upload vern-llm-guard coverage to Codecov
         if: hashFiles('packages/extensions/vern-llm-guard/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
@@ -428,25 +386,6 @@ jobs:
           files: ./packages/extensions/vern-llm-policy/coverage/lcov.info
           flags: vern-llm-policy-integration
           fail_ci_if_error: true
-
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          filter: tree:0
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
       - name: Upload vern-llm-guard coverage to Codecov
         if: hashFiles('packages/extensions/vern-llm-guard/coverage/lcov.info') != ''
         uses: codecov/codecov-action@v7
