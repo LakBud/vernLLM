@@ -61,6 +61,7 @@ This is a pnpm monorepo with six workspaces, managed with [Nx](https://nx.dev) f
 | [`packages/extensions/vern-llm-logger`](./packages/extensions/vern-llm-logger)       | The `vern-llm-logger` package (in development): structured call logs and rolling latency percentiles.             |
 | [`packages/extensions/vern-llm-usage`](./packages/extensions/vern-llm-usage)         | The `vern-llm-usage` package (in development): estimated cost, wasted spend and budgets for each call.            |
 | [`packages/extensions/vern-llm-router`](./packages/extensions/vern-llm-router) | The `vern-llm-router` package (in development): picks the target order for each call from rules you write. |
+| [`packages/extensions/vern-llm-policy`](./packages/extensions/vern-llm-policy) | The `vern-llm-policy` package (in development): rules for which providers and models a call may use, and whether it may run. |
 | [`apps/docs`](./apps/docs)                                                           | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                  |
 
 ## License
