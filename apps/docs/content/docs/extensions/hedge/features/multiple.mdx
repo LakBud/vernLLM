@@ -1,0 +1,26 @@
+---
+title: Multiple hedges
+description: Sending more than one extra call for a very slow request, each after its own delay.
+---
+
+One hedge is the default. `maxHedges` allows up to 4, the core's limit on reruns, for calls where
+two slow targets in a row are likely.
+
+```ts title="hedge-multiple.ts"
+hedgeMiddleware({ stats: logger.stats, maxHedges: 2 });
+```
+
+- The first hedge goes out after the delay, as usual
+- Each later hedge waits one more delay, and goes one name further along `targets`, keeping the rest
+  as its own fallback
+- Each hedge takes its own [budget](/docs/extensions/hedge/features/budget) token, so with the
+  default `ratio` a second hedge is only sent when earlier calls left tokens in the bucket
+- No more are sent once the main chain has settled or any chain has answered. A hedge that fails
+  does not stop the next one
+
+The first chain to succeed is kept and the core cancels the rest. When more than one hedge was sent,
+the decision has `hedges` with the count and, when a hedge won, `winner` with the first target of that hedge. Its fallback may have given the answer. `won`
+means any hedge won.
+
+Other layers that rerun share the same 4 per call. When none are left, the later hedges are simply
+not sent.

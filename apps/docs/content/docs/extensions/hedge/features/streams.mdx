@@ -1,0 +1,20 @@
+---
+title: Streams
+description: How vern-llm-hedge races streamed calls, and what a losing stream may still cost.
+---
+
+A stream's `next()` resolves at its first content chunk, so the race is on time to first chunk. The
+delay reads the `streaming: 'true'` series for the first target.
+
+The stream that opens first is kept, and the other is cancelled the moment the winner opens. The
+kept stream's `finalResult` resolves as usual, and a hedge stream that fails leaves the main stream
+as the answer.
+
+## What a losing stream may still cost
+
+Cancelling stops generation, so the loser does not bill output it has not produced. Its input may
+still be billed, and a provider that has already cached the prompt prefix charges less than the hedge
+target, which starts cold. Usage reports the spend of chains whose result was not returned as
+`unkeptUsd`, on the call's log fields and in totals, so you can see what hedging costs.
+
+Spend that a provider reports after the call has finished is not counted.

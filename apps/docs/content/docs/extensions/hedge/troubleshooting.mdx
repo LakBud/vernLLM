@@ -1,0 +1,64 @@
+---
+title: Troubleshooting
+description: Symptoms and fixes for a hedge that never fires, fires too often, reports no data, or throws at construction
+---
+
+## Common symptoms
+
+<Accordions>
+  <Accordion title="Nothing is ever hedged and every outcome is no_data">
+    The delay is unknown. A learned delay needs the logger to have at least `minSamples` calls for
+    the first target, and the stats must be `logger.stats`. Lower the logger's `minSamples`, or set
+    `delay.fallbackMs` to hedge while the logger warms up. A fixed or function `delay` needs no
+    data.
+  </Accordion>
+  <Accordion title="The delay ignores the prompt size">
+    Register `promptSizeDimension` in the logger under the name `size`. The hedge reads the series
+    under that name and falls back to the first target's series for the stream mode without it.
+  </Accordion>
+  <Accordion title="Slow calls are not hedged and the outcome is budget">
+    The bucket is empty. It starts empty, refills `ratio` tokens per eligible call and holds at most
+    `burst`. Raise `budget.ratio` if the extra traffic is acceptable, or accept that during a wide
+    slowdown the budget protects the providers.
+  </Accordion>
+  <Accordion title="The outcome is unavailable">
+    The call has no reruns left. The core allows 4 per call, and another layer may have used them.
+    Check what else in your `middleware` list sets `reruns: true`.
+  </Accordion>
+  <Accordion title="The outcome is no_target">
+    `targets` returned no name the call has. With one target and the default `nextTargets` there is
+    nothing to hedge to, so use the single provider recipe, or add a fallback.
+  </Accordion>
+  <Accordion title="The outcome is deadline">
+    The call's deadline comes before the delay would pass, so a second chain could not answer in
+    time. This is expected for short deadlines.
+  </Accordion>
+  <Accordion title="The outcome is paused">
+    `adapt` found that this target's hedges rarely win, even at the highest quantile, and stopped
+    hedging it for `pauseMs`. Read the `hedge.adapt` events to see when. It starts over afterwards.
+  </Accordion>
+  <Accordion title="The outcome is cached, or the delay is longer than configured">
+    `cacheAware` saw this target serve the same prompt prefix from its cache recently. Set `action`
+    to `'delay'` for a longer wait instead of a skip, shorten `ttlMs`, or turn it off.
+  </Accordion>
+  <Accordion title="cacheAware never seems to apply">
+    The target's usage must report `cacheReadTokens`, and the prompts must start with the same first
+    `prefixChars` characters. Only a repeat of the prefix within `ttlMs` counts, and the memory is
+    per process.
+  </Accordion>
+  <Accordion title="A hedge never wins">
+    The delay is probably too short for this target, so the first answer is simply late by a normal
+    amount. Raise `delay.quantile` or `minMs`, and read the win rate from `hedgeDimension`.
+  </Accordion>
+  <Accordion title="hedgeDimension shows nothing">
+    The logger drops events it does not keep. `hedge.*` is kept by default in current versions of
+    `vern-llm-logger`. On an older logger add `customEvents: ['hedge.*']`.
+  </Accordion>
+  <Accordion title="Construction throws a message that starts with hedgeMiddleware:">
+    An option is invalid. The message names the field. The usual one is a quantile delay without
+    `stats`: pass `logger.stats`, or set `delay` to a number or a function.
+  </Accordion>
+</Accordions>
+
+Anything the hedge cannot decide is reported once as `[VernLLM] hedge: <step> failed` through its
+`logger` option, and the call runs as if the hedge were not there.

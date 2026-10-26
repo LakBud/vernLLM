@@ -1,0 +1,61 @@
+---
+title: Adapting to the win rate
+description: Raise a target's delay or stop hedging it when its hedges rarely win, and report a target whose hedges often win.
+---
+
+A hedge that never wins is wasted traffic, and one that always wins means the first target is the
+problem. With `adapt`, the hedge counts how its hedges did for each first target and reacts.
+
+```ts title="hedge-adapt.ts"
+hedgeMiddleware({ stats: logger.stats, adapt: true });
+```
+
+`true` takes the defaults. Pass an object to change them:
+
+| Option         | Default  | Meaning                                                      |
+| -------------- | -------- | ------------------------------------------------------------ |
+| `window`       | `50`     | How many recent hedged calls to judge by                     |
+| `minHedges`    | `20`     | The fewest hedged calls to judge by                          |
+| `lowWinRate`   | `0.1`    | Below this, the delay is too short for that target           |
+| `highWinRate`  | `0.5`    | Above this, the first target is slow                         |
+| `quantileStep` | `0.02`   | How much each raise adds to the quantile                     |
+| `maxQuantile`  | `0.99`   | The highest quantile a raise reaches                         |
+| `pauseMs`      | `300000` | How long a target is not hedged once raising no longer helps |
+
+## Rarely winning
+
+Below `lowWinRate` the target's quantile is raised by `quantileStep`, so the hedge waits longer, and
+the count starts again. At `maxQuantile` the target is not hedged for `pauseMs` (outcome `paused`),
+then starts over at the configured quantile. A fixed or function `delay` has no quantile, so such a
+target is paused at once.
+
+## Often winning
+
+Above `highWinRate` the first target itself is slow. This is reported, and again every `minHedges`
+hedged calls while the rate stays high, so a listener that holds the target back for a while hears
+it again once that ends. Nothing else changes: the hedge keeps winning for you.
+
+## The `hedge.adapt` event
+
+Every change is a custom event, and the logger keeps it by default.
+
+```ts title="hedge-adapt-event.ts"
+{ action: 'raise_quantile', target: 'primary', winRate: 0.04, hedges: 20, quantile: 0.97 }
+{ action: 'pause', target: 'primary', winRate: 0.05, hedges: 20 }
+{ action: 'slow', target: 'primary', winRate: 0.7, hedges: 20 }
+```
+
+Any middleware can react to it. The router can: its `holdBack` option holds a target back for a
+while when an event names it. No extension imports another.
+
+```ts title="hedge-adapt-router.ts"
+routerMiddleware({
+  health: () => llm,
+  holdBack: [{ event: 'hedge.adapt', when: { action: 'slow' }, holdMs: 30_000 }],
+});
+```
+
+While the first target is held back, healthy targets go first, so the hedge's own first target
+changes too. See the router's [health page](/docs/extensions/router/features/health).
+
+The counts are kept in this process only. Calls where every chain failed are not counted.

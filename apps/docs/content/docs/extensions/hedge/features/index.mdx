@@ -1,0 +1,49 @@
+---
+title: Features Overview
+description: How vern-llm-hedge learns its delay, caps its extra traffic, picks where to hedge and reports what happened.
+---
+
+Every call that can be hedged goes through one flow: skip when it should not be hedged, otherwise
+start the call, wait for the delay, and if the call is still open and a budget token is free, start
+the same call on another target and keep the first success.
+
+<Cards>
+  <Card title="Delay" href="/docs/extensions/hedge/features/delay">
+    A live quantile per target, stream mode and prompt size, and what happens without data.
+  </Card>
+  <Card title="Budget" href="/docs/extensions/hedge/features/budget">
+    A token bucket that keeps extra traffic near a fixed share of calls.
+  </Card>
+  <Card title="Multiple hedges" href="/docs/extensions/hedge/features/multiple">
+    Up to four extra calls for a very slow request, each after its own delay.
+  </Card>
+  <Card title="Adapting to the win rate" href="/docs/extensions/hedge/features/adapt">
+    Raise a delay or pause a target when hedges rarely win, and report a slow one.
+  </Card>
+  <Card title="Cache awareness" href="/docs/extensions/hedge/features/cache">
+    Wait longer or skip when the first target has the prompt cached.
+  </Card>
+  <Card title="Recipes" href="/docs/extensions/hedge/features/recipes">
+    Where to hedge and when not to, with policy, usage and cost.
+  </Card>
+  <Card title="Streams" href="/docs/extensions/hedge/features/streams">
+    Racing time to first chunk, and what a losing stream may still cost.
+  </Card>
+  <Card title="Observability" href="/docs/extensions/hedge/features/observability">
+    The decision event, log fields, and outcome counts in the logger.
+  </Card>
+</Cards>
+
+## How the extensions fit
+
+The hedge sits at position `10`, inside the logger, guard, policy, usage and router, and outside the
+attempts it races. Each of them sees one call.
+
+| With    | What happens                                                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------- |
+| Router  | The hedge goes to the router's second choice. Its attempt counts as load like any other                 |
+| Policy  | A removed target never reaches `ctx.targets`, so it cannot be hedged to                                 |
+| Guard   | Input is checked once. Each attempt is redacted for its own target, and the kept answer is checked once |
+| Usage   | One reservation. Both chains' spend is counted, and the unkept part is reported as `unkeptUsd`          |
+| Logger  | One record per call with the kept chain's latency. `hedge.*` events are kept by default                 |
+| Caching | In `cachedCall` a winning hedge's answer is cached, and a cache hit is never hedged                     |

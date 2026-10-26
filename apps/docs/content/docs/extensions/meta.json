@@ -10,6 +10,7 @@
     "usage",
     "router",
     "policy",
-    "guard"
+    "guard",
+    "hedge"
   ]
 }

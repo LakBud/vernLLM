@@ -1,0 +1,56 @@
+---
+title: Observability
+description: The hedge.decision event, the log fields, and reading outcome counts and latency from the logger.
+---
+
+Every call that reaches the hedge reports one `hedge.decision`, sent or skipped, once the call
+settles. The logger keeps `hedge.*` events by default.
+
+```ts title="hedge-decision.ts"
+{
+  v: 1,
+  outcome: 'won',   // see the table
+  delayMs: 840,     // when a delay was computed
+  target: 'backup', // where the hedge went first, when sent
+  ms: 1210,         // start of the call to the kept answer, when sent
+  hedges: 2,        // how many hedges were sent, only when more than one
+  winner: 'backup', // the winning hedge's first target, only when more than one was sent and one won
+}
+```
+
+| Outcome       | Meaning                                                      |
+| ------------- | ------------------------------------------------------------ |
+| `won`         | The hedge answered first and was kept                        |
+| `lost`        | A hedge was sent and the main chain was kept, or both failed |
+| `not_needed`  | The first chain answered within the delay                    |
+| `failed`      | The first chain failed within the delay                      |
+| `aborted`     | The caller cancelled the call within the delay               |
+| `budget`      | The delay passed and the budget had no token                 |
+| `unavailable` | The call has no reruns left, so a second chain cannot start  |
+| `no_target`   | `targets` returned nothing usable                            |
+| `not_allowed` | `when` said no                                               |
+| `paused`      | Adapting to the win rate paused this target                  |
+| `cached`      | Cache awareness skipped the hedge                            |
+| `no_data`     | The delay is unknown                                         |
+| `deadline`    | The call's deadline comes before the delay                   |
+
+A second event, `hedge.adapt`, is emitted when the win rate changes what the hedge does for a
+target. See [Adapting](/docs/extensions/hedge/features/adapt).
+
+## Counting outcomes
+
+Add `hedgeDimension` to the logger and its snapshot splits calls by outcome, next to provider and
+stream mode, with the latency of each group. That shows how many calls were hedged, how often a hedge
+won, how often the budget stopped one, and the p99 of hedged calls next to the rest.
+
+```ts title="hedge-snapshot.ts"
+logger.stats.snapshot(); // series per hedge outcome: counts and percentiles over the window
+```
+
+A hedge that rarely wins is wasted traffic. A hedge that often wins means the first target is the
+problem.
+
+## Log fields
+
+`hedgeLogFields(ctx)` returns `{ hedge: 'won', hedge_delay_ms: 840 }`, or `undefined` before the
+hedge has reported. Pass it to the logger's `enrich`.

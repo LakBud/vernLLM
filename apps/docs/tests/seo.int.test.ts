@@ -81,6 +81,7 @@ describe('docs SEO', () => {
       { slugs: ['extensions', 'router', 'changelog'], title: 'Changelog' },
       { slugs: ['extensions', 'policy', 'changelog'], title: 'Changelog' },
       { slugs: ['extensions', 'guard', 'changelog'], title: 'Changelog' },
+      { slugs: ['extensions', 'hedge', 'changelog'], title: 'Changelog' },
       { slugs: ['core', 'retries'], title: 'Retries' },
     ]);
 
@@ -94,6 +95,7 @@ describe('docs SEO', () => {
       'extensions/router/changelog': 'Changelog (Router)',
       'extensions/policy/changelog': 'Changelog (Policy)',
       'extensions/guard/changelog': 'Changelog (Guard)',
+      'extensions/hedge/changelog': 'Changelog (Hedge)',
       'core/retries': 'Retries',
     });
   });

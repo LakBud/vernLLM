@@ -23,6 +23,7 @@ const extensionLabels: Record<string, string> = {
   router: 'Router',
   policy: 'Policy',
   guard: 'Guard',
+  hedge: 'Hedge',
 };
 
 function sectionLabel(slugs: string[]): string | undefined {

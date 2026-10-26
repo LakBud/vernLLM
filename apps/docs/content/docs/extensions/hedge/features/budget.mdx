@@ -1,0 +1,21 @@
+---
+title: Budget
+description: The token bucket that keeps vern-llm-hedge's extra traffic near a fixed share of calls.
+---
+
+Hedging costs extra requests, so a token bucket caps them.
+
+```ts title="hedge-budget.ts"
+hedgeMiddleware({ stats: logger.stats, budget: { ratio: 0.05, burst: 10 } });
+```
+
+- Each eligible call adds `ratio` tokens, up to `burst`. The bucket starts empty
+- A hedge takes one whole token, when the delay passes
+- With no token the call carries on unhedged, with outcome `budget`
+
+Two details keep it honest. Only eligible calls refill the bucket, so skipped calls never build up a
+burst. The token is taken when the delay passes, not up front, so calls that answer in time cost
+nothing. With every call slow, hedges stay near `ratio` of calls.
+
+If a service gets slow everywhere at once, the budget stops the hedge from doubling a struggling
+provider's load.

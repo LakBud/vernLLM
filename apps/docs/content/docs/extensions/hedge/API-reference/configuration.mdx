@@ -1,0 +1,55 @@
+---
+title: Configuration
+description: Every vern-llm-hedge option with its type and default, and what throws when the middleware is built.
+---
+
+Options are validated completely when `hedgeMiddleware()` is called. A mistake throws an `Error`
+that starts with `hedgeMiddleware:` and names the field, so nothing fails on the first call.
+
+## Options
+
+| Option       | Type                                                    | Default                      | What it does                                                                             |
+| ------------ | ------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------- |
+| `stats`      | `{ quantile(filter, q, metric) }`                       | none                         | Rolling stats, `logger.stats` fits. Required unless `delay` is a number or a function    |
+| `delay`      | number, function or `{ quantile, minMs?, fallbackMs? }` | `{ quantile: 0.95 }`         | When to hedge, see [Delay](/docs/extensions/hedge/features/delay)                        |
+| `budget`     | `{ ratio?, burst? }`                                    | `{ ratio: 0.05, burst: 10 }` | The token bucket, see [Budget](/docs/extensions/hedge/features/budget)                   |
+| `maxHedges`  | `number`                                                | `1`                          | Hedges per call, 1 to 4, see [Multiple hedges](/docs/extensions/hedge/features/multiple) |
+| `adapt`      | `boolean \| AdaptOptions`                               | off                          | Win rate adaptation, see [Adapting](/docs/extensions/hedge/features/adapt)               |
+| `cacheAware` | `boolean \| CacheAwareOptions`                          | off                          | Prompt cache awareness, see [Cache awareness](/docs/extensions/hedge/features/cache)     |
+| `targets`    | `(ctx, request) => string[]`                            | `nextTargets`                | Where the hedge may go, in order. Empty skips                                            |
+| `when`       | `(ctx) => boolean`                                      | always                       | Whether this call may be hedged                                                          |
+| `statsTtlMs` | `number`                                                | `1000`                       | How long a stats read is reused. `0` reads every time                                    |
+| `logger`     | `Logger \| 'silent'`                                    | console                      | Where the hedge reports its own failures and warnings                                    |
+
+## Validation
+
+| Field              | Rule                                         |
+| ------------------ | -------------------------------------------- |
+| `stats`            | Has a `quantile` function whenever it is set |
+| `delay` (number)   | Positive and finite                          |
+| `delay.quantile`   | Above 0 and below 1                          |
+| `delay.minMs`      | At least 0                                   |
+| `delay.fallbackMs` | Positive and finite                          |
+| `budget.ratio`     | Above 0 and at most 1                        |
+| `budget.burst`     | At least 1                                   |
+| `maxHedges`        | An integer from 1 to 4                       |
+| `adapt`            | `true` or an object, see the list below      |
+| `cacheAware`       | `true` or an object, see the list below      |
+| `targets`, `when`  | Functions                                    |
+| `statsTtlMs`       | At least 0                                   |
+
+## Adapt and cache awareness
+
+| Field                    | Rule                                |
+| ------------------------ | ----------------------------------- |
+| `adapt.window`           | An integer of at least 1            |
+| `adapt.minHedges`        | An integer from 1 to `adapt.window` |
+| `adapt.lowWinRate`       | From 0 up to 1                      |
+| `adapt.highWinRate`      | Above `lowWinRate`, and at most 1   |
+| `adapt.quantileStep`     | Above 0 and below 1                 |
+| `adapt.maxQuantile`      | Above 0 and below 1                 |
+| `adapt.pauseMs`          | Positive and finite                 |
+| `cacheAware.ttlMs`       | Positive and finite                 |
+| `cacheAware.prefixChars` | An integer of at least 1            |
+| `cacheAware.action`      | `'delay'` or `'skip'`               |
+| `cacheAware.delayFactor` | Above 1                             |

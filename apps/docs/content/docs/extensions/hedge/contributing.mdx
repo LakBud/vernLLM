@@ -1,0 +1,110 @@
+---
+title: Contributing
+description: Set up, test and open a pull request for vern-llm-hedge, the tail latency extension in the VernLLM monorepo.
+icon: GitPullRequest
+---
+
+This page covers `packages/extensions/vern-llm-hedge` specifically. For the coding standard and PR
+checklist that apply repo wide, see [Contributing](/docs/contributing).
+
+## Setup
+
+Fork the repo and branch off `main`, then install the workspace:
+
+```bash
+pnpm install
+```
+
+No external service is needed. The tests use fake clients that hold a response until the test
+answers it, and the extensions suite uses the real logger, usage, router, policy and guard packages.
+
+## Coding standard
+
+Follow the same reliability and typing standard as `vern-llm`. Three rules are specific here:
+
+- **Never change the outcome of a call.** A skipped call runs exactly as without the hedge, and the
+  winning chain's result is returned unchanged so the core can match and cancel the others.
+- **A user function never doubles traffic by failing.** A throw from `targets`, `when`, `delay` or
+  `stats` means "do not hedge".
+- **No values in output.** The decision event carries an outcome, target names and numbers, never
+  request or response content.
+
+Options are validated once in `internal/options/`, so a bad option throws when the hedge is built.
+
+## Layout
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="hedgeMiddleware.ts" />
+    <File name="dimensions.ts" />
+    <File name="logFields.ts" />
+    <File name="stateKeys.ts" />
+    <File name="targets.ts" />
+    <File name="events.ts" />
+    <File name="index.ts" />
+    <Folder name="types" />
+    <Folder name="internal" defaultOpen>
+      <Folder name="middleware" />
+      <Folder name="options" />
+      <Folder name="delay" />
+      <File name="adapt.ts" />
+      <File name="budget.ts" />
+      <File name="cacheAware.ts" />
+      <File name="race.utils.ts" />
+      <File name="size.utils.ts" />
+      <File name="guard.utils.ts" />
+    </Folder>
+  </Folder>
+  <Folder name="tests">
+    <Folder name="unit" />
+    <Folder name="integration" />
+    <Folder name="bench" />
+  </Folder>
+  <Folder name="scripts" />
+</Files>
+
+`hedgeMiddleware.ts` only builds the parts and wires them together. `internal/middleware/` has the
+hooks: `plan` decides whether a call may be hedged, `sendHedges` waits and sends, `settleRace`
+keeps the first answer, and `record` writes the decision. `internal/options/` validates and fills
+defaults, `internal/delay/` learns the delay from the stats, and `budget.ts`, `adapt.ts` and
+`cacheAware.ts` are the three pieces of state. `race.utils.ts` has the timer and the first success
+logic, and `size.utils.ts` has the prompt size buckets shared by the dimension and the delay.
+
+## Scripts
+
+Run them with `pnpm run <script>` from inside `packages/extensions/vern-llm-hedge`, or
+`pnpm nx run vern-llm-hedge:<script>` from the repo root:
+
+| Script                                    | What it does                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `build`, `dev`                            | Build with tsdown, or rebuild on change                            |
+| `lint`, `lint:fix`                        | Run oxlint                                                         |
+| `typecheck`, `typecheck:test`             | Typecheck the source, or the tests                                 |
+| `test`, `test:unit`, `test:int`           | Run all tests, or one project                                      |
+| `test:unit:coverage`, `test:int:coverage` | Run a project with coverage                                        |
+| `smoke-test`                              | Install the packed build and use it through ESM and CJS            |
+| `bench`, `bench:check`                    | Measure per call overhead, or fail when it grows past the baseline |
+| `bench:update`                            | Record a new baseline in `tests/bench/baseline.json`               |
+
+`bench:check` and `smoke-test` run against the built package, so run `build` first.
+
+## Before opening a PR
+
+Every PR touching this package runs through the CI workflows described in
+[Development](/docs/development#ci). Run the equivalent commands locally first:
+
+| Check                      | Local command                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Lint                       | `pnpm nx run vern-llm-hedge:lint`                                                                                     |
+| Typecheck source and tests | `pnpm nx run vern-llm-hedge:typecheck && pnpm nx run vern-llm-hedge:typecheck:test`                                   |
+| Unit and integration tests | `pnpm nx run vern-llm-hedge:test:unit:coverage && pnpm nx run vern-llm-hedge:test:int:coverage`                       |
+| Build, smoke test, bench   | `pnpm nx run vern-llm-hedge:build && pnpm nx run vern-llm-hedge:smoke-test && pnpm nx run vern-llm-hedge:bench:check` |
+| Changeset present          | `pnpm changeset status --since=origin/main`                                                                           |
+
+Record a change with `pnpm nx run vern-llm-hedge:changeset`. The package versions and releases on
+its own changelog.
+
+## Code of Conduct and Security
+
+Participation in this project is governed by the same [Code of Conduct](/docs/code-of-conduct) and
+[Security](/docs/security) policy as `vern-llm`.

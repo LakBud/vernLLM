@@ -1,0 +1,91 @@
+---
+title: Hedge Overview
+description: Send the same call to the next target when the first answer is slower than that target usually is, keep whichever answers first, and cancel the other
+---
+
+`vern-llm-hedge` is one middleware that cuts the slow tail of your latency. When a call's first
+answer takes longer than that target usually takes, it starts the same call on the next target too,
+keeps whichever answers first, and lets the core cancel the other.
+
+<Callout type="info">
+  The delay is learned from the logger's own latency percentiles, a token bucket caps the extra
+  traffic at about 5% of calls, and a call with no data is never hedged. Nothing is hedged until the
+  logger has seen enough calls.
+</Callout>
+
+## What it does and does not do
+
+| Hedge does                                                              | Hedge does not                                                                           |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Start an extra chain after a learned delay, up to four with `maxHedges` | Hedge without spare budget, or when no data says how long to wait                        |
+| Keep the first chain that succeeds, and cancel the other                | Retry a failed call, the core's retries and fallback do that                             |
+| Go through the same breakers, limiters and hooks as any attempt         | Import the router, policy or usage                                                       |
+| Report one `hedge.decision` per call, sent or skipped                   | Guarantee the loser cost nothing, see [Streams](/docs/extensions/hedge/features/streams) |
+
+## Install
+
+<Tabs items={['pnpm', 'npm', 'yarn', 'bun']}>
+  <Tab value="pnpm">
+
+```bash
+pnpm add vern-llm-hedge # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="npm">
+
+```bash
+npm install vern-llm-hedge # [!code word:install]
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add vern-llm-hedge # [!code word:add]
+```
+
+  </Tab>
+  <Tab value="bun">
+
+```bash
+bun add vern-llm-hedge # [!code word:add]
+```
+
+  </Tab>
+</Tabs>
+
+`vern-llm` is a peer dependency and the package has no other dependency.
+
+## Quick start
+
+```ts title="hedge-quick-start.ts"
+import { VernLLM } from 'vern-llm';
+import { loggerMiddleware } from 'vern-llm-logger';
+import { hedgeDimension, hedgeMiddleware, promptSizeDimension } from 'vern-llm-hedge';
+
+const logger = loggerMiddleware({
+  dimensions: { size: promptSizeDimension, hedge: hedgeDimension },
+});
+
+const hedge = hedgeMiddleware({ stats: logger.stats });
+
+const llm = new VernLLM({
+  client,
+  model: 'gpt-6-sol',
+  fallback: [{ client: backupClient, model: 'claude-sonnet-5-5', name: 'backup' }],
+  middleware: [logger, hedge],
+});
+```
+
+The dimension must be named `size`: the hedge reads the series the logger recorded under that name.
+Start with a low `budget.ratio` and watch `hedgeDimension` before raising it.
+
+<Cards>
+  <Card title="Features" href="/docs/extensions/hedge/features">
+    How the delay is learned, the budget, recipes, streams and reading outcomes.
+  </Card>
+  <Card title="API Reference" href="/docs/extensions/hedge/API-reference">
+    Every export, option and the decision event.
+  </Card>
+</Cards>

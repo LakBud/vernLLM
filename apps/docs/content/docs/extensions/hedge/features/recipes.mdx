@@ -1,0 +1,49 @@
+---
+title: Recipes
+description: Where vern-llm-hedge sends the extra call and when it stays out, with policy flags, usage and cost.
+---
+
+Two options decide where and whether: `targets` and `when`. Neither needs another extension to be
+imported by the hedge. You pass their functions in.
+
+## Where to hedge
+
+The default is `nextTargets(ctx)`: the call's targets after the first, in order, so the hedge has
+its own fallback.
+
+```ts title="hedge-targets.ts"
+import { hedgeMiddleware, nextTargets } from 'vern-llm-hedge';
+
+// One provider only: send it again to the same one.
+hedgeMiddleware({ delay: 800, targets: (ctx) => [ctx.targets[0]!.name] });
+
+// Never hedge into a target that costs more than twice the first.
+hedgeMiddleware({
+  stats: logger.stats,
+  targets: (ctx, request) => {
+    const first = usage.costFor(ctx.targets[0]!, request) ?? Infinity;
+    return nextTargets(ctx).filter((name) => {
+      const target = ctx.targets.find((t) => t.name === name)!;
+      return (usage.costFor(target, request) ?? Infinity) <= 2 * first;
+    });
+  },
+});
+```
+
+Names the call does not have, or repeated names, are dropped. An empty list skips the call
+(`no_target`). A function that throws also skips it, so a bug never doubles traffic.
+
+## When to hedge
+
+```ts title="hedge-when.ts"
+import { policyFlags } from 'vern-llm-policy';
+import { usageBudgetShare } from 'vern-llm-usage';
+
+hedgeMiddleware({
+  stats: logger.stats,
+  when: (ctx) => policyFlags(ctx).duplicateSends !== false && (usageBudgetShare(ctx) ?? 0) < 0.9,
+});
+```
+
+The first condition keeps content that must not go to two providers on one. The second stops
+hedging when a usage budget is nearly spent. A skipped call reports `not_allowed`.

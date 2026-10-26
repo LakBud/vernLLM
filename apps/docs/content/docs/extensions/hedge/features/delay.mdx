@@ -1,0 +1,53 @@
+---
+title: Delay
+description: How vern-llm-hedge learns how long to wait before hedging, per target, stream mode and prompt size.
+---
+
+By default the delay is the p95 of the logger's `attemptMs` for the first target, the call's stream
+mode and its prompt size bucket. A target that gets slower moves its own threshold.
+
+```ts title="hedge-delay.ts"
+hedgeMiddleware({
+  stats: logger.stats,
+  delay: { quantile: 0.95, minMs: 200, fallbackMs: 1500 },
+});
+```
+
+## Where the number comes from
+
+1. The series for the first target, stream mode and size bucket
+2. If it has too few samples (the logger's `minSamples`), the series for the first target and stream mode
+3. If that has too few too, `fallbackMs` when set
+4. Otherwise the delay is unknown and the call is not hedged, with outcome `no_data`
+
+`minMs` is a floor for the learned value and for `fallbackMs`. A cold start never doubles traffic.
+
+## Prompt size
+
+A long prompt is slow for a good reason, so one delay for every size hedges long prompts needlessly
+and short ones too late. Register `promptSizeDimension` in the logger under the name `size`:
+
+| Bucket | Prompt tokens |
+| ------ | ------------- |
+| `xs`   | under 1,000   |
+| `s`    | under 4,000   |
+| `m`    | under 16,000  |
+| `l`    | under 64,000  |
+| `xl`   | 64,000 and up |
+
+The hedge buckets the current call from its request estimate, so it reads the series recorded for
+prompts of that size. Without the dimension it reads the series for the stream mode. The estimate can differ a little from
+the token count the provider reports, so a prompt near a bucket edge may be read from the next bucket.
+
+## Other delays
+
+A number is a fixed delay in milliseconds and needs no `stats`. A function
+`(ctx, request) => number | undefined` is yours, and `undefined` skips the call. A source that throws
+counts as no data and is logged once.
+
+Reads are cached for `statsTtlMs` (default 1000) so a busy service does not query the logger on
+every call.
+
+## The deadline
+
+When the call's deadline falls before the delay would pass, the call is not hedged (`deadline`).

@@ -1,0 +1,37 @@
+---
+title: Cache awareness
+description: Wait longer, or skip the hedge, when the first target has the prompt's prefix in its provider cache.
+---
+
+A provider's prompt cache makes a repeat of a long prompt cheap and fast. A hedge to another provider
+starts cold and pays full price for that prefix. With `cacheAware`, the hedge notices when the first
+target has the prefix cached.
+
+```ts title="hedge-cache-aware.ts"
+hedgeMiddleware({ stats: logger.stats, cacheAware: { action: 'delay', delayFactor: 2 } });
+```
+
+| Option        | Default   | Meaning                                                              |
+| ------------- | --------- | -------------------------------------------------------------------- |
+| `ttlMs`       | `300000`  | How long a target is assumed to keep a prefix cached                 |
+| `prefixChars` | `2000`    | How many leading characters of the prompt identify its prefix        |
+| `action`      | `'delay'` | `'delay'` waits `delayFactor` times as long, `'skip'` does not hedge |
+| `delayFactor` | `2`       | How much longer `'delay'` waits, above 1                             |
+
+`true` takes the defaults.
+
+## How it knows
+
+When a call's usage reports `cacheReadTokens` above zero, the hedge remembers that this target served
+this prompt prefix from its cache, for `ttlMs`. The next call that starts the same way, to the same
+first target, is treated as warm. A prompt shorter than `prefixChars` is matched whole, and providers
+only cache long prefixes, so the default fits real prompt caches.
+
+With `'skip'` the outcome is `cached`. With `'delay'` the call is hedged later, and its decision shows
+the longer `delayMs`.
+
+The match is a heuristic. The prefix is the role and text of the first `prefixChars` characters, so
+the model, tools and images are not part of it, and the usage event's provider is taken to be the
+target's name.
+
+The memory is in this process only, holds at most 10,000 prefixes, and holds hashes, never text.

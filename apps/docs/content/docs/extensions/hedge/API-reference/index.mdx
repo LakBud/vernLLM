@@ -1,0 +1,39 @@
+---
+title: API Reference Overview
+description: The public exports of vern-llm-hedge, and where each option and the decision are documented
+---
+
+| Export                 | Kind     | What it is                                                                            |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `hedgeMiddleware`      | Function | Takes `HedgeOptions` and returns one middleware, at position `10`. Once per `VernLLM` |
+| `hedgeMiddlewareRef`   | Constant | The `MiddlewareRef` of that entry, so a second one in the same `VernLLM` is rejected  |
+| `nextTargets`          | Function | The default `targets`: the call's targets after the first                             |
+| `promptSizeDimension`  | Function | A logger dimension: `xs`, `s`, `m`, `l` or `xl` from the recorded prompt tokens       |
+| `hedgeDimension`       | Function | A logger dimension: the call's `hedge.decision` outcome                               |
+| `hedgeLogFields`       | Function | The outcome and delay of a call, for the logger's `enrich`                            |
+| `HEDGE_ADAPT_EVENT`    | Constant | `'hedge.adapt'`                                                                       |
+| `HEDGE_DECISION_EVENT` | Constant | `'hedge.decision'`                                                                    |
+
+```ts title="hedge-exports.ts"
+import {
+  hedgeMiddleware,
+  hedgeMiddlewareRef,
+  nextTargets,
+  promptSizeDimension,
+  hedgeDimension,
+  hedgeLogFields,
+  HEDGE_ADAPT_EVENT,
+  HEDGE_DECISION_EVENT,
+} from 'vern-llm-hedge';
+import type {
+  AdaptEvent,
+  AdaptOptions,
+  CacheAwareOptions,
+  HedgeOptions,
+  HedgeDecisionEvent,
+  HedgeOutcome,
+} from 'vern-llm-hedge';
+```
+
+See [Configuration](/docs/extensions/hedge/API-reference/configuration) for the options, and
+[Observability](/docs/extensions/hedge/features/observability) for the decision event.

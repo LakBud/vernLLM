@@ -1,0 +1,15 @@
+{
+  "title": "Features",
+  "icon": "Sparkles",
+  "pages": [
+    "index",
+    "delay",
+    "budget",
+    "multiple",
+    "adapt",
+    "cache",
+    "recipes",
+    "streams",
+    "observability"
+  ]
+}
