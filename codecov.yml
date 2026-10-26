@@ -53,6 +53,12 @@ flags:
   vern-llm-guard-integration:
     paths:
       - 'packages/extensions/vern-llm-guard/**'
+  vern-llm-hedge-unit:
+    paths:
+      - 'packages/extensions/vern-llm-hedge/**'
+  vern-llm-hedge-integration:
+    paths:
+      - 'packages/extensions/vern-llm-hedge/**'
 
 coverage:
   status:
@@ -102,6 +108,11 @@ coverage:
         threshold: 0.5%
         paths:
           - 'packages/extensions/vern-llm-guard/**'
+      vern-llm-hedge:
+        target: auto
+        threshold: 0.5%
+        paths:
+          - 'packages/extensions/vern-llm-hedge/**'
     patch:
       default:
         target: 80%
@@ -139,6 +150,10 @@ coverage:
         target: 80%
         paths:
           - 'packages/extensions/vern-llm-guard/**'
+      vern-llm-hedge:
+        target: 80%
+        paths:
+          - 'packages/extensions/vern-llm-hedge/**'
 
 ignore:
   - '**/index.ts'
