@@ -1,8 +1,14 @@
+import { DEFAULT_HOLD_MS, MAX_COOLDOWN_MS } from '../targetState.js';
 import { resolveRoutes } from './normalizeRoutes.utils.js';
 import { sourcesOf } from './normalizeStrategy.utils.js';
 import { invalid } from './validate.utils.js';
 
-import type { ResolvedConfig, RouterOptions, TargetCapabilities } from '../../types/index.js';
+import type {
+  ResolvedConfig,
+  ResolvedHoldBack,
+  RouterOptions,
+  TargetCapabilities,
+} from '../../types/index.js';
 
 function resolveCapabilities(
   capabilities: RouterOptions['capabilities'],
@@ -16,6 +22,28 @@ function resolveCapabilities(
     resolved.set(name, { ...value });
   }
   return resolved;
+}
+
+function resolveHoldBack(rules: RouterOptions['holdBack']): ResolvedHoldBack[] {
+  if (rules === undefined) return [];
+  if (!Array.isArray(rules)) invalid('holdBack must be an array');
+  return rules.map((rule, index) => {
+    const label = `holdBack[${index}]`;
+    if (typeof rule?.event !== 'string' || rule.event === '') {
+      invalid(`${label}: event must be a non empty string`);
+    }
+    const holdMs = rule.holdMs ?? DEFAULT_HOLD_MS;
+    if (!Number.isFinite(holdMs) || holdMs <= 0) {
+      invalid(`${label}: holdMs must be a number above 0`);
+    }
+    const when: [string, string | number | boolean][] = Object.entries(rule.when ?? {});
+    for (const [field, value] of when) {
+      if (!['string', 'number', 'boolean'].includes(typeof value)) {
+        invalid(`${label}: when "${field}" must be a string, number or boolean`);
+      }
+    }
+    return { event: rule.event, when, holdMs: Math.min(holdMs, MAX_COOLDOWN_MS) };
+  });
 }
 
 /** Validates the options once, so a mistake fails at construction instead of mid call. */
@@ -54,6 +82,7 @@ export function normalizeOptions(options: RouterOptions = {}): ResolvedConfig {
     cost: options.cost,
     statsTtlMs,
     slowStartMs,
+    holdBack: resolveHoldBack(options.holdBack),
     random: options.random ?? Math.random,
     logger: options.logger,
   };

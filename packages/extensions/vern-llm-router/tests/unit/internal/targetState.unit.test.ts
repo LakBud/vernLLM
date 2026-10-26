@@ -70,6 +70,7 @@ describe('TargetState', () => {
     for (let i = 0; i < 1000; i++) state.attemptStarted(`t${i}`);
     expect(state.size).toBe(256);
     state.rateLimited('late', 1, 0);
+    state.holdBack('late', 1, 0);
     state.recovered('late', 0);
     expect(state.read('late', 0)).toEqual({ inFlight: 0, cooling: false, warmingFactor: 1 });
   });

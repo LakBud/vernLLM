@@ -160,6 +160,19 @@ export interface RouteOptions {
   limits?: RouteLimits;
 }
 
+/**
+ * Holds a target back when a middleware reports it with a custom event. The event's `data.target`
+ * names the target; an event without a string `target` is ignored.
+ */
+export interface HoldBackOptions {
+  /** The custom event name, such as `'my.slow'`. */
+  event: string;
+  /** Fields of `data` that must equal these values for the event to count. */
+  when?: Readonly<Record<string, string | number | boolean>>;
+  /** Milliseconds the target is held back. Default `10000`, at most `60000`. */
+  holdMs?: number;
+}
+
 export interface RouterOptions {
   /** The first route that matches a call decides its order. None matching keeps the order as it is. */
   routes?: readonly RouteOptions[];
@@ -180,6 +193,11 @@ export interface RouterOptions {
    * `0` turns warming off.
    */
   slowStartMs?: number;
+  /**
+   * Custom events that hold a target back: it is treated like a target in a 429 cooldown, so
+   * healthy targets go first for `holdMs`, and it is still used when nothing else is left.
+   */
+  holdBack?: readonly HoldBackOptions[];
   /** Replaces `Math.random`, for tests. Returns a number in `[0, 1)`. */
   random?: () => number;
   /** Rolling stats for `latency`, `predictedLatency`, `quality` and limits. `logger.stats` fits. */

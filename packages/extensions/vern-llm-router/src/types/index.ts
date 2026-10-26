@@ -1,5 +1,6 @@
 export type {
   ContextMatch,
+  HoldBackOptions,
   ContextValue,
   LeastBusyStrategy,
   LoggerOption,
@@ -31,6 +32,7 @@ export type { CircuitStateName, CostSource, HealthSource, StatsSource } from './
 export type { CustomCall, CustomCandidate, CustomMetric, TargetSignals } from './signals.js';
 export type {
   ResolvedConfig,
+  ResolvedHoldBack,
   ResolvedLimits,
   ResolvedRoute,
   ResolvedStrategy,

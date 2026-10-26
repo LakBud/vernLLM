@@ -202,6 +202,14 @@ describe('normalizeOptions', () => {
     ['a non function health', { health: {} }, 'health must be a function'],
     ['a non function random', { random: 1 }, 'random must be a function'],
     ['a negative slowStartMs', { slowStartMs: -1 }, 'slowStartMs must be'],
+    ['a holdBack that is not an array', { holdBack: {} }, 'holdBack must be an array'],
+    ['a holdBack rule without an event', { holdBack: [{}] }, 'holdBack[0]: event must be'],
+    ['a holdBack holdMs of 0', { holdBack: [{ event: 'x', holdMs: 0 }] }, 'holdMs must be'],
+    [
+      'a holdBack filter of an object',
+      { holdBack: [{ event: 'x', when: { a: {} } }] },
+      'when "a" must be',
+    ],
     [
       'a non boolean route health',
       { routes: [{ name: 'a', health: 'off' }] },
@@ -218,6 +226,21 @@ describe('normalizeOptions', () => {
     expect(normalizeOptions({ routes: [{ name: 'a', health: false }] }).routes[0]?.health).toBe(
       false,
     );
+  });
+
+  it('resolves holdBack rules with a default and a capped hold', () => {
+    expect(normalizeOptions().holdBack).toEqual([]);
+    expect(
+      normalizeOptions({
+        holdBack: [
+          { event: 'a', when: { k: 'v' } },
+          { event: 'b', holdMs: 600_000 },
+        ],
+      }).holdBack,
+    ).toEqual([
+      { event: 'a', when: [['k', 'v']], holdMs: 10_000 },
+      { event: 'b', when: [], holdMs: 60_000 },
+    ]);
   });
 
   it('resolves weighted and least-busy strategies', () => {

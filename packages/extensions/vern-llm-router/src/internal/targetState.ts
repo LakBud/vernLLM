@@ -5,6 +5,9 @@ const MAX_TARGETS = 256;
 export const DEFAULT_COOLDOWN_MS = 5_000;
 export const MAX_COOLDOWN_MS = 60_000;
 
+/** How long a target is held back by an event rule that names no time. */
+export const DEFAULT_HOLD_MS = 10_000;
+
 /** The lowest share of traffic a target gets right after its breaker closes. */
 const WARMING_FLOOR = 0.1;
 
@@ -66,6 +69,13 @@ export class TargetState {
     const wait =
       retryAfterMs !== undefined && retryAfterMs > 0 ? retryAfterMs : DEFAULT_COOLDOWN_MS;
     entry.cooldownUntil = Math.max(entry.cooldownUntil, now + Math.min(wait, MAX_COOLDOWN_MS));
+  }
+
+  /** A middleware reported the target as degraded: hold it back like a cooldown for `ms`. */
+  holdBack(name: string, ms: number, now: number): void {
+    const entry = this.entry(name);
+    if (!entry) return;
+    entry.cooldownUntil = Math.max(entry.cooldownUntil, now + Math.min(ms, MAX_COOLDOWN_MS));
   }
 
   /** The breaker closed after being open: start ramping the target back up. */

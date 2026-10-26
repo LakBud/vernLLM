@@ -38,3 +38,10 @@ call reserves.
 
 The logger sits outside policy and records denials at `warn` as `rejected`. It keeps the
 `policy.*` events by default.
+
+## With Hedge
+
+A target policy removed never reaches `ctx.targets`, so it can never be hedged to. For content that
+must not go to two providers, set a `duplicateSends` flag and skip the extra call with
+`when: (ctx) => policyFlags(ctx).duplicateSends !== false`. See
+[Recipes](/docs/extensions/hedge/features/recipes).

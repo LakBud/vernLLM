@@ -28,6 +28,12 @@ option throws a plain `Error` prefixed `routerMiddleware:` at construction, neve
       description: 'Where breaker states and rate limits are read. A getter, such as () => llm.',
       type: '() => HealthSource | undefined',
     },
+    holdBack: {
+      description:
+        'Custom events that hold a target back. Each rule has `event`, optional `when` (fields of `data` to match) and `holdMs`. `data.target` names the target.',
+      type: 'HoldBackOptions[]',
+      default: '[]',
+    },
     slowStartMs: {
       description: 'Milliseconds a target ramps back after its breaker closes. 0 turns it off.',
       type: 'number',

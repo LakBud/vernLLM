@@ -50,6 +50,32 @@ describe('trackEvent', () => {
     expect(state.read('d', 0).warmingFactor).toBe(1);
   });
 
+  it('ignores custom data that is not an object with a target', () => {
+    const state = new TargetState(1000);
+    const rules = [{ event: 'x', when: [], holdMs: 1_000 }];
+    for (const data of [undefined, null, 'a', ['a'], { target: 1 }]) {
+      trackEvent(state, { kind: 'custom', name: 'x', data } as VernLLMEvent, 0, rules);
+    }
+    expect(state.size).toBe(0);
+  });
+
+  it('holds back the named target for a matching custom event, for at most a minute', () => {
+    const state = new TargetState(1000);
+    const rules = [{ event: 'x', when: [['kind', 'slow']] as const, holdMs: 1_000 }];
+    trackEvent(
+      state,
+      { kind: 'custom', name: 'x', data: { target: 'a', kind: 'slow' } } as never,
+      0,
+      rules,
+    );
+    expect(state.read('a', 999).cooling).toBe(true);
+    expect(state.read('a', 1_000).cooling).toBe(false);
+
+    state.holdBack('b', 10 * 60_000, 0);
+    expect(state.read('b', 59_999).cooling).toBe(true);
+    expect(state.read('b', 60_000).cooling).toBe(false);
+  });
+
   it('ignores other events', () => {
     const state = new TargetState(1000);
     trackEvent(state, { kind: 'custom', name: 'x' } as VernLLMEvent);
