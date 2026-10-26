@@ -65,7 +65,7 @@ interface Attempt {
   respondedAtMs: number | undefined;
   provider: string;
   model: string;
-  /** Status and duration are final. The span itself may stay open, see `applyUsage`. */
+  /** Status and duration are final. The span itself may stay open until the call settles. */
   settled: boolean;
   /** Time to first chunk was recorded. */
   firstChunkRecorded: boolean;
@@ -500,10 +500,9 @@ export class CallTracker {
       ),
     );
 
-    // Tokens spent on an attempt that then failed are recorded, but the failure is closed by
-    // the retry, fallback, or error that follows. With another chain open, which attempt answers
-    // is not known yet, so settling is left to `complete`.
-    if (!failed && this.current.size === 1) this.settle(attempt, undefined);
+    // Usage is written to the span, but which attempt answers is only known when the call
+    // settles, so `complete` settles it. A failed attempt is closed by the retry, fallback, or
+    // error that follows.
   }
 
   /**
@@ -597,11 +596,11 @@ export class CallTracker {
     const { guard, metrics } = deps;
 
     try {
-      const kept = this.meta?.chain ?? 0;
       const attemptFailure = failure && { error: lastAttemptErrorOf(failure.error) };
-      // The chain the call's outcome belongs to: the kept chain, or the only chain there was.
-      const owner = this.current.has(kept)
-        ? kept
+      // The chain the outcome belongs to: the one the result came from, or when the call has no
+      // result, the only chain there was. A chain that failed on its own was closed already.
+      const owner = this.meta
+        ? (this.meta.chain ?? 0)
         : this.chainsSeen.size === 1
           ? [...this.current.keys()][0]
           : undefined;

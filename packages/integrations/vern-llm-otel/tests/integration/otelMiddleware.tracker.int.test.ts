@@ -319,7 +319,10 @@ describe('a call with more than one chain', () => {
     );
 
   /** Starts a second chain next to the main one and returns whichever answers first successfully. */
-  const racing = (onStarted: () => void, settleFirst = false): VernLLMMiddleware => ({
+  const racing = (
+    onStarted: () => void,
+    pick: Scenario['pick'] = 'success',
+  ): VernLLMMiddleware => ({
     name: 'racing',
     reruns: true,
     position: 10,
@@ -328,18 +331,22 @@ describe('a call with more than one chain', () => {
       // Both are observed, so the one that loses can never be an unhandled rejection.
       for (const chain of chains) chain.catch(() => {});
       onStarted();
-      return settleFirst ? Promise.race(chains) : Promise.any(chains);
+      if (pick === 'success') return Promise.any(chains);
+      if (pick === 'first') return Promise.race(chains);
+      // Waits for every chain, then deliberately returns one of them.
+      await Promise.allSettled(chains);
+      return chains[pick]!;
     },
   });
 
   type Scenario = {
     steps: Parameters<typeof createMockClient>[0];
     onStarted: () => void;
-    /** Return whichever chain settles first, even when that is a failure. */
-    settleFirst?: boolean;
+    /** The first chain to succeed (default), the first to settle, or a chain picked by number. */
+    pick?: 'success' | 'first' | number;
   };
 
-  function llmOf({ steps, onStarted, settleFirst }: Scenario, observed = true) {
+  function llmOf({ steps, onStarted, pick }: Scenario, observed = true) {
     const { client } = createMockClient(steps);
     return new VernLLM({
       ...BASE,
@@ -348,7 +355,7 @@ describe('a call with more than one chain', () => {
         ...(observed
           ? [otelMiddleware({ tracer: trace.tracer, meter: meter.meter, logger: 'silent' })]
           : []),
-        racing(onStarted, settleFirst),
+        racing(onStarted, pick),
       ],
     });
   }
@@ -381,7 +388,7 @@ describe('a call with more than one chain', () => {
   const failsWhileOtherOpen = (): Scenario => ({
     steps: [new Error('first'), pending],
     onStarted: () => {},
-    settleFirst: true,
+    pick: 'first',
   });
 
   it('gives each chain its own attempt span, and attaches the answer to the chain that gave it', async () => {
@@ -413,17 +420,18 @@ describe('a call with more than one chain', () => {
     expect(trace.openSpans()).toEqual([]);
   });
 
-  it('does not settle an attempt that reported usage while another chain was open', async () => {
+  it('does not settle an attempt that reported usage when another chain is the one returned', async () => {
     const make = (): Scenario => {
       const main = gated('main');
       const second = gated('second');
       return {
         steps: [main.step, second.step],
+        // The second chain reports usage first, and the main chain is the one returned.
         onStarted: () => {
-          // The second chain reports usage first, then the main chain is the one returned.
           setTimeout(second.release, 5);
           setTimeout(main.release, 30);
         },
+        pick: 0,
       };
     };
     expect(await outcomeOf(make, true)).toBe(await outcomeOf(make, false));
@@ -431,6 +439,10 @@ describe('a call with more than one chain', () => {
 
     const settled = attemptSpans().filter((span) => span.status.code === 1);
     expect(settled).toHaveLength(1);
+    // Both reported usage, only the returned chain's attempt is the answer.
+    expect(unknownSpans()).toHaveLength(1);
+    expect(unknownSpans()[0]?.attributes['gen_ai.usage.input_tokens']).toBe(3);
+    expect(unknownSpans()[0]?.status.code).toBe(0);
     const durations = pointsOf((await meter.collect()).get('gen_ai.client.operation.duration'));
     expect(histogramOf(durations[0]).count).toBe(1);
     expect(trace.openSpans()).toEqual([]);
@@ -454,6 +466,24 @@ describe('a call with more than one chain', () => {
         .map((span) => span.status.code)
         .sort(),
     ).toEqual([1, 2]);
+    expect(trace.openSpans()).toEqual([]);
+  });
+
+  it('puts the error of a failed rerun on that rerun while the main chain is still pending', async () => {
+    const make = (): Scenario => ({
+      steps: [pending, new Error('boom')],
+      onStarted: () => {},
+      pick: 'first',
+    });
+    expect(await outcomeOf(make, true)).toBe(await outcomeOf(make, false));
+    await sleep(10);
+
+    const failed = attemptSpans().filter((span) => span.status.code === 2);
+    expect(attemptSpans()).toHaveLength(2);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.attributes['vernllm.attempt.outcome']).toBeUndefined();
+    expect(unknownSpans()).toHaveLength(1);
+    expect(unknownSpans()[0]?.status.code).toBe(0);
     expect(trace.openSpans()).toEqual([]);
   });
 
