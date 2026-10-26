@@ -61,7 +61,7 @@ export function routerMiddleware(options: RouterOptions = {}): RouterMiddleware 
     // Static, with no `enabled`, so events arrive in order. Also sees breaker changes made
     // outside any call, such as a shared breaker another process opened.
     onEvent: (event) => {
-      guard('trackEvent', () => trackEvent(state, event), undefined);
+      guard('trackEvent', () => trackEvent(state, event, Date.now(), config.holdBack), undefined);
     },
 
     wrap: async (request, next, ctx) => {

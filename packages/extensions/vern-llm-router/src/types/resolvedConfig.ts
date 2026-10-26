@@ -40,6 +40,13 @@ export interface ResolvedRoute {
   limits: ResolvedLimits;
 }
 
+/** A hold back rule after validation. */
+export interface ResolvedHoldBack {
+  event: string;
+  when: readonly (readonly [string, string | number | boolean])[];
+  holdMs: number;
+}
+
 export interface ResolvedConfig {
   routes: readonly ResolvedRoute[];
   capabilities: ReadonlyMap<string, TargetCapabilities>;
@@ -49,6 +56,7 @@ export interface ResolvedConfig {
   cost: CostSource | undefined;
   statsTtlMs: number;
   slowStartMs: number;
+  holdBack: readonly ResolvedHoldBack[];
   random: () => number;
   logger: LoggerOption | undefined;
 }

@@ -26,6 +26,22 @@ as it is. A route with `health: false` skips the open and limited step.
 A provider 429 starts a cooldown for the `Retry-After` it carried, 5 seconds without one and at
 most 60.
 
+## Hold back on events
+
+Any middleware can tell the router a target is degraded with a custom event. `holdBack` names the
+events to listen to. A matching event treats the target like one in a 429 cooldown, so healthy
+targets go first and the target is still used when nothing else is left.
+
+```ts title="router-hold-back.ts"
+routerMiddleware({
+  health: () => llm,
+  holdBack: [{ event: 'my.degraded', when: { action: 'slow' }, holdMs: 20_000 }],
+});
+```
+
+The event's `data.target` must be the target name. `when` compares top level fields of `data` for
+equality. `holdMs` defaults to 10 seconds and is capped at 60.
+
 ## Slow start
 
 After a breaker closes, a target ramps back over `slowStartMs` (default 30 seconds, 0 turns it off),

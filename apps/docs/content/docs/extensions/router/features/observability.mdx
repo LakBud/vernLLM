@@ -54,3 +54,10 @@ const logger = loggerMiddleware({
 Applied, drift means the first choice failed and the chain fell back. In shadow mode it compares
 what the router would have picked with what the declared order answered, so a rollout is judged
 before it is switched on.
+
+## With Hedge
+
+When a call is hedged, the extra call goes to the router's second choice, and the router counts it
+as load on that provider like any other attempt. To hold back a target whose hedges often win, see
+[Hold back on events](/docs/extensions/router/features/health#hold-back-on-events) and
+[Hedge](/docs/extensions/hedge/features).
