@@ -12,6 +12,7 @@ export function sumSeries(
   const result: UsageTotals = {
     estimatedCostUsd: 0,
     wastedUsd: 0,
+    unkeptUsd: 0,
     estimatedSavedUsd: 0,
     calls: 0,
     bySource: { reported: 0, table: 0, unpriced: 0 },
@@ -22,6 +23,7 @@ export function sumSeries(
   };
   let nanoUsd = 0;
   let wastedNanoUsd = 0;
+  let unkeptNanoUsd = 0;
   let savedNanoUsd = 0;
 
   for (const entry of series) {
@@ -31,6 +33,7 @@ export function sumSeries(
 
     nanoUsd += entry.nanoUsd;
     wastedNanoUsd += entry.wastedNanoUsd;
+    unkeptNanoUsd += entry.unkeptNanoUsd;
     savedNanoUsd += entry.savedNanoUsd;
     result.calls += entry.calls;
     result.bySource.table += entry.tableCharges;
@@ -46,6 +49,7 @@ export function sumSeries(
 
   result.estimatedCostUsd = nanoToUsd(nanoUsd);
   result.wastedUsd = nanoToUsd(wastedNanoUsd);
+  result.unkeptUsd = nanoToUsd(unkeptNanoUsd);
   result.estimatedSavedUsd = nanoToUsd(savedNanoUsd);
   return result;
 }

@@ -25,6 +25,11 @@ Returned by `totals(filter?, options?)`, see [Totals and Remaining](/docs/extens
       type: 'number',
       required: true,
     },
+    unkeptUsd: {
+      description: 'The part spent by chains whose result was not returned.',
+      type: 'number',
+      required: true,
+    },
     estimatedSavedUsd: {
       description: 'An estimate of what cache hits and joins spared.',
       type: 'number',
@@ -137,6 +142,11 @@ metered.
       description: 'The part spent on attempts whose response was then rejected.',
       type: 'number',
       required: true,
+    },
+    unkeptUsd: {
+      description:
+        'The part spent by chains whose result was not returned. Present only when above zero.',
+      type: 'number',
     },
     costSource: {
       description:

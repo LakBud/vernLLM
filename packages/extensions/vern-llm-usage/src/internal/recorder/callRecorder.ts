@@ -10,6 +10,8 @@ export interface CallSummary {
   wastedUsd: number;
   /** Absent when the call reported no usage at all, such as a cache hit. */
   costSource?: CostSource;
+  /** Absent unless a chain whose result was not returned spent something. */
+  unkeptUsd?: number;
 }
 
 /** The token kinds of one report, as the provider gave them. */
@@ -28,6 +30,8 @@ export interface ChargeDetail {
   kinds: TokenKinds;
   /** The money came from the provider's response, not from the price table. */
   reported?: boolean;
+  /** The chain that made the request, absent for the main chain. */
+  chain?: number;
 }
 
 /** The charges of one call that one provider and model produced, in integer nano dollars. */
@@ -37,6 +41,8 @@ export interface ChargePart {
   model?: string | undefined;
   nanoUsd: number;
   wastedNanoUsd: number;
+  /** The part spent by chains whose result was not returned. */
+  unkeptNanoUsd: number;
   tokens: TokenKinds;
   tableCharges: number;
   reportedCharges: number;
@@ -47,6 +53,7 @@ export interface ChargePart {
 export interface CallSnapshot {
   nanoUsd: number;
   wastedNanoUsd: number;
+  unkeptNanoUsd: number;
   tokens: TokenKinds;
   tableCharges: number;
   reportedCharges: number;
@@ -61,9 +68,19 @@ export interface CallSnapshot {
   parts: ChargePart[];
 }
 
-interface PartTally extends Omit<ChargePart, 'tableCharges'> {
+interface PartTally extends Omit<ChargePart, 'tableCharges' | 'unkeptNanoUsd'> {
   charges: number;
 }
+
+/** One priced charge, kept so the spend of chains that were not returned can be split out. */
+interface PricedCharge {
+  partKey: string;
+  chain: number;
+  nanoUsd: number;
+}
+
+const partKeyOf = (detail: ChargeDetail | undefined): string =>
+  JSON.stringify([detail?.provider ?? null, detail?.model ?? null]);
 
 const emptyKinds = (): TokenKinds => ({
   input: 0,
@@ -88,11 +105,18 @@ export class CallRecorder {
   private readonly kinds: TokenKinds = emptyKinds();
   private last: { provider?: string; model: string } | undefined;
   private readonly parts = new Map<string, PartTally>();
+  private readonly priced: PricedCharge[] = [];
+  private kept = 0;
   private ended = false;
 
   /** Whether `commit` has settled the call, after which nothing more is recorded. */
   get done(): boolean {
     return this.ended;
+  }
+
+  /** Which chain's result the call returned. The main chain unless told otherwise. */
+  keep(chain: number): void {
+    this.kept = chain;
   }
 
   /**
@@ -131,6 +155,7 @@ export class CallRecorder {
 
     this.total += nanoUsd;
     part.nanoUsd += nanoUsd;
+    this.priced.push({ partKey: partKeyOf(detail), chain: detail?.chain ?? 0, nanoUsd });
     if (wasted) {
       this.wasted += nanoUsd;
       part.wastedNanoUsd += nanoUsd;
@@ -138,7 +163,7 @@ export class CallRecorder {
   }
 
   private partFor(detail: ChargeDetail | undefined): PartTally {
-    const key = JSON.stringify([detail?.provider ?? null, detail?.model ?? null]);
+    const key = partKeyOf(detail);
     let part = this.parts.get(key);
     if (!part) {
       part = {
@@ -158,17 +183,27 @@ export class CallRecorder {
 
   /** What the call adds to the totals. Valid before and after `commit`. */
   snapshot(): CallSnapshot {
+    const unkept = new Map<string, number>();
+    let unkeptTotal = 0;
+    for (const charge of this.priced) {
+      if (charge.chain === this.kept) continue;
+      unkeptTotal += charge.nanoUsd;
+      unkept.set(charge.partKey, (unkept.get(charge.partKey) ?? 0) + charge.nanoUsd);
+    }
+
     return {
       nanoUsd: this.total,
       wastedNanoUsd: this.wasted,
+      unkeptNanoUsd: unkeptTotal,
       tokens: { ...this.kinds },
       tableCharges: this.charges - this.unpricedCharges - this.reportedCharges,
       reportedCharges: this.reportedCharges,
       unpricedCharges: this.unpricedCharges,
       provider: this.last?.provider,
       model: this.last?.model,
-      parts: [...this.parts.values()].map(({ charges, ...part }) => ({
+      parts: [...this.parts.entries()].map(([key, { charges, ...part }]) => ({
         ...part,
+        unkeptNanoUsd: unkept.get(key) ?? 0,
         tokens: { ...part.tokens },
         tableCharges: charges - part.unpricedCharges - part.reportedCharges,
       })),
@@ -193,6 +228,8 @@ export class CallRecorder {
       estimatedCostUsd: nanoToUsd(this.total),
       wastedUsd: nanoToUsd(this.wasted),
     };
+    const { unkeptNanoUsd } = this.snapshot();
+    if (unkeptNanoUsd > 0) summary.unkeptUsd = nanoToUsd(unkeptNanoUsd);
     if (this.charges > 0) {
       const tableCharges = this.charges - this.unpricedCharges - this.reportedCharges;
       summary.costSource = this.anyUnpriced ? 'unpriced' : tableCharges > 0 ? 'table' : 'reported';

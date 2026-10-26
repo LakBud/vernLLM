@@ -14,6 +14,7 @@ function outcome(overrides: Partial<CallOutcome> = {}, nanoUsd = 1_000_000): Cal
     snapshot: {
       nanoUsd,
       wastedNanoUsd: 0,
+      unkeptNanoUsd: 0,
       tokens,
       tableCharges: 1,
       reportedCharges: 0,
@@ -26,6 +27,7 @@ function outcome(overrides: Partial<CallOutcome> = {}, nanoUsd = 1_000_000): Cal
           model: 'm',
           nanoUsd,
           wastedNanoUsd: 0,
+          unkeptNanoUsd: 0,
           tokens,
           tableCharges: 1,
           reportedCharges: 0,
@@ -50,6 +52,7 @@ describe('TotalsRegistry', () => {
     expect(registry().read({}, {}, Date.now())).toEqual({
       estimatedCostUsd: 0,
       wastedUsd: 0,
+      unkeptUsd: 0,
       estimatedSavedUsd: 0,
       calls: 0,
       bySource: { reported: 0, table: 0, unpriced: 0 },
@@ -106,6 +109,7 @@ describe('TotalsRegistry', () => {
       model,
       nanoUsd,
       wastedNanoUsd,
+      unkeptNanoUsd: 0,
       tokens: { ...noTokens, input: 10 },
       tableCharges: 1,
       reportedCharges: 0,

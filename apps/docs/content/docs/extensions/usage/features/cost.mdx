@@ -64,6 +64,17 @@ A call can spend tokens on an answer it then throws away: a soft failure that wa
 that did not parse. The result is `wastedUsd`, the part of `estimatedCostUsd` spent on attempts whose
 response was rejected, so you can see what retries cost.
 
+## Spend on chains that were not returned
+
+A call can run more than one chain at once, such as a middleware that starts the same call on
+another target and keeps the first answer. Every chain's spend is in `estimatedCostUsd`.
+`unkeptUsd` is the part spent by chains whose result was not returned, so you can see what the extra
+chains cost. It is on the call's fields only when it is above zero, and always in `totals()`.
+
+Only spend reported before the call finishes is counted. A chain cancelled before its provider
+reported usage adds nothing, and its input may still be billed. See
+[Hedge](/docs/extensions/hedge/features/streams) for one middleware that does this.
+
 ## Saved spend
 
 A cache hit or a joined call makes no provider call, so it costs nothing. `estimatedSavedUsd` is

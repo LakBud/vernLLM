@@ -18,6 +18,8 @@ export interface UsageTotals {
   estimatedCostUsd: number;
   /** The part spent on attempts whose response was then rejected. */
   wastedUsd: number;
+  /** The part spent by chains whose result was not returned, when a call ran more than one. */
+  unkeptUsd: number;
   /** An estimate of what cache hits and joins spared, which made no provider call. */
   estimatedSavedUsd: number;
   /** Calls that finished, cache hits and joins included. A call a budget rejected is not one. */
