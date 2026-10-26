@@ -53,6 +53,8 @@ import { DeferredSpan } from './deferredSpan.js';
 import type { Failure, Outcome, TrackerDeps } from '../../types/index.js';
 
 interface Attempt {
+  /** The chain the attempt belongs to: `0` for the main chain, 1 and up for `next.again()`. */
+  chain: number;
   /** Started on first use, see `DeferredSpan`. */
   span: DeferredSpan;
   /** When the request was handed to the adapter, after the rate limiter and every transform. */
@@ -79,13 +81,14 @@ const NON_RECORDING_SPAN = trace.wrapSpanContext(INVALID_SPAN_CONTEXT);
 export class CallTracker {
   private readonly startedAtMs = nowMs();
   private attemptCount = 0;
-  private current: Attempt | undefined;
+  /** The open attempt of each chain. A call with one chain has one entry, under `0`. */
+  private readonly current = new Map<number, Attempt>();
   private streaming = false;
   private shortCircuitedBy: string | undefined;
   private meta: CallMeta | undefined;
   private ended = false;
-  /** Local rate limit waiting reported for the attempt about to be dispatched. */
-  private pendingWaitMs = 0;
+  /** Local rate limit waiting reported for the attempt about to be dispatched, by chain. */
+  private readonly pendingWaitMs = new Map<number, number>();
 
   private constructor(
     private readonly deps: TrackerDeps,
@@ -199,14 +202,16 @@ export class CallTracker {
   startAttempt(ctx: AttemptContext, request: Readonly<WireCallRequest>): Attempt | undefined {
     if (this.ended) return undefined;
 
-    // A new attempt while one is still open means a closing signal was missed, so how that
-    // attempt ended is unknown. It is closed without a status or a duration measurement rather
-    // than being reported as a success.
-    this.abandonAttempt();
+    // A new attempt on a chain that still has one open means a closing signal was missed, so
+    // how that attempt ended is unknown. It is closed without a status or a duration measurement
+    // rather than being reported as a success. Another chain's attempt is not touched: chains
+    // run side by side.
+    const chain = ctx.chain ?? 0;
+    this.abandonAttempt(chain);
     this.attemptCount++;
 
-    const waitedMs = this.pendingWaitMs;
-    this.pendingWaitMs = 0;
+    const waitedMs = this.pendingWaitMs.get(chain) ?? 0;
+    this.pendingWaitMs.delete(chain);
 
     // A hand built context can predate `adapter`, so its absence is not an error.
     const provider = this.deps.config.providerName(
@@ -218,6 +223,7 @@ export class CallTracker {
     const startedAtEpochMs = Date.now();
 
     const attempt: Attempt = {
+      chain,
       span: new DeferredSpan(() =>
         this.startAttemptSpan(ctx, request, provider, startedAtEpochMs, waitedMs),
       ),
@@ -229,7 +235,7 @@ export class CallTracker {
       settled: false,
       firstChunkRecorded: false,
     };
-    this.current = attempt;
+    this.current.set(chain, attempt);
     return attempt;
   }
 
@@ -289,7 +295,7 @@ export class CallTracker {
 
   private endDispatch(attempt: Attempt, failure: Failure | undefined): void {
     // Superseded, or already closed by the end of the call.
-    if (attempt !== this.current) return;
+    if (attempt !== this.current.get(attempt.chain)) return;
 
     if (!failure) {
       attempt.respondedAtMs = nowMs();
@@ -301,12 +307,12 @@ export class CallTracker {
     // not an inference operation, so it leaves no span, no duration, and no attempt count,
     // unless something already started the span.
     if (!attempt.span.started && isLocalRejection(failure.error)) {
-      this.current = undefined;
+      this.current.delete(attempt.chain);
       this.attemptCount--;
       return;
     }
 
-    this.closeAttempt(failure);
+    this.closeAttempt(attempt.chain, failure);
   }
 
   /** Span work for one event. Metrics are recorded separately, before this runs. */
@@ -314,6 +320,7 @@ export class CallTracker {
     // A late event still fed metrics, but the spans are already ended.
     if (this.ended) return;
 
+    const chain = event.chain ?? 0;
     switch (event.kind) {
       case 'retry':
         this.addEvent(SPAN_EVENT.retry, {
@@ -322,8 +329,8 @@ export class CallTracker {
           [EVENT_ATTR.retryAfterHonored]: event.retryAfterHonored,
           [ATTR.errorType]: errorTypeOf(event.error),
         });
-        this.pendingWaitMs = 0;
-        this.closeAttempt({ error: event.error });
+        this.pendingWaitMs.delete(chain);
+        this.closeAttempt(chain, { error: event.error });
         return;
       case 'fallback':
         this.addEvent(SPAN_EVENT.fallback, {
@@ -332,11 +339,11 @@ export class CallTracker {
           [EVENT_ATTR.elapsedMs]: event.elapsedMs,
           [ATTR.errorType]: errorTypeOf(event.error),
         });
-        this.pendingWaitMs = 0;
-        this.closeAttempt({ error: event.error });
+        this.pendingWaitMs.delete(chain);
+        this.closeAttempt(chain, { error: event.error });
         return;
       case 'rate_limited':
-        this.applyRateLimit(event.waitedMs);
+        this.applyRateLimit(chain, event.waitedMs);
         return;
       case 'circuit_state':
         this.addEvent(SPAN_EVENT.circuitState, {
@@ -348,10 +355,10 @@ export class CallTracker {
         });
         return;
       case 'usage':
-        this.applyUsage(event, false);
+        this.applyUsage(chain, event, false);
         return;
       case 'usage_failure':
-        this.applyUsage(event, true);
+        this.applyUsage(chain, event, true);
         return;
       case 'middleware':
         if (event.hook === 'wrap_short_circuit') this.shortCircuitedBy = event.middleware;
@@ -372,8 +379,8 @@ export class CallTracker {
   }
 
   /** Context measurements are recorded against, so exemplars link to the right span. */
-  measurementContext(): Context {
-    const span = this.current?.span;
+  measurementContext(chain = 0): Context {
+    const span = this.current.get(chain)?.span;
     return span ? trace.setSpan(this.context, span) : this.context;
   }
 
@@ -403,7 +410,8 @@ export class CallTracker {
 
     // The core resolves a stream on a keep-alive ping, before content. The first chunk is timed
     // when the answering attempt's dispatch settles, which is here if that already happened.
-    if (this.current) this.applyStreaming(this.current);
+    const answering = this.current.get(this.meta?.chain ?? 0);
+    if (answering) this.applyStreaming(answering);
 
     // Observed on the side and never replaced: a derived promise that rethrows would create an
     // unhandled rejection the core deliberately avoids, and swapping `chunks` would change its
@@ -429,9 +437,9 @@ export class CallTracker {
   }
 
   /** The wait comes before its attempt is dispatched, so it is held for that attempt. */
-  private applyRateLimit(waitedMs: number): void {
+  private applyRateLimit(chain: number, waitedMs: number): void {
     if (!Number.isFinite(waitedMs) || waitedMs <= 0) return;
-    this.pendingWaitMs += waitedMs;
+    this.pendingWaitMs.set(chain, (this.pendingWaitMs.get(chain) ?? 0) + waitedMs);
   }
 
   /**
@@ -465,10 +473,11 @@ export class CallTracker {
   }
 
   private applyUsage(
+    chain: number,
     event: Extract<VernLLMEvent, { kind: 'usage' | 'usage_failure' }>,
     failed: boolean,
   ): void {
-    const attempt = this.current;
+    const attempt = this.current.get(chain);
     if (!attempt) return;
 
     const { genAiConventions } = this.deps.config;
@@ -551,12 +560,12 @@ export class CallTracker {
   }
 
   /** Ends an attempt whose outcome was never observed, see `startAttempt`. */
-  private abandonAttempt(): void {
-    const attempt = this.current;
+  private abandonAttempt(chain: number): void {
+    const attempt = this.current.get(chain);
     if (!attempt) return;
 
     attempt.settled = true;
-    this.current = undefined;
+    this.current.delete(chain);
     this.safely('abandonAttempt', () =>
       attempt.span.setAttribute(VERNLLM_ATTR.attemptOutcome, ATTEMPT_OUTCOME_UNKNOWN),
     );
@@ -564,14 +573,14 @@ export class CallTracker {
   }
 
   /** The single place an attempt ends. */
-  private closeAttempt(failure: Failure | undefined): void {
-    const attempt = this.current;
+  private closeAttempt(chain: number, failure: Failure | undefined): void {
+    const attempt = this.current.get(chain);
     if (!attempt) return;
 
     try {
       this.settle(attempt, failure);
     } finally {
-      this.current = undefined;
+      this.current.delete(chain);
       this.safely('endAttemptSpan', () => attempt.span.end());
     }
   }
@@ -584,17 +593,24 @@ export class CallTracker {
     const { guard, metrics } = deps;
 
     try {
-      const attempt = this.current;
-      if (attempt) {
+      const kept = this.meta?.chain ?? 0;
+      const attemptFailure = failure && { error: lastAttemptErrorOf(failure.error) };
+      for (const [chain, attempt] of [...this.current]) {
+        // Another chain's attempt that is still open when the call returns was not the answer, and
+        // how it ended is unknown, like an attempt whose closing signal was missed.
+        if (!failure && chain !== kept) {
+          this.abandonAttempt(chain);
+          continue;
+        }
+
         // The answering attempt never got a usage event when the provider omitted usage.
-        const attemptFailure = failure && { error: lastAttemptErrorOf(failure.error) };
         guard('settleAttempt', () => this.settle(attempt, attemptFailure), undefined);
 
         if (!failure && this.captureContent && deps.content) {
           const { content } = deps;
           guard('captureOutput', () => content.captureOutput(attempt.span, value), undefined);
         }
-        this.closeAttempt(attemptFailure);
+        this.closeAttempt(chain, attemptFailure);
       }
 
       const reason = failure

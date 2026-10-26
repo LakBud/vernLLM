@@ -11,6 +11,6 @@ export function handleEvent(
 ): void {
   // A hand built context can predate `adapter`, so its absence is not an error.
   const adapterProvider = ctx?.stage === 'attempt' ? ctx.adapter?.provider : undefined;
-  metrics.recordEvent(event, tracker?.measurementContext(), adapterProvider);
+  metrics.recordEvent(event, tracker?.measurementContext(event.chain ?? 0), adapterProvider);
   tracker?.applyEvent(event);
 }
