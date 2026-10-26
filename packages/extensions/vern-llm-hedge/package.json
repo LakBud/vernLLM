@@ -1,0 +1,87 @@
+{
+  "name": "vern-llm-hedge",
+  "version": "0.0.0",
+  "description": "Latency triggered hedging for vern-llm: when a target answers slower than usual, ask the next one too and keep the first answer",
+  "keywords": [
+    "vern-llm",
+    "hedge",
+    "hedging",
+    "tail-latency",
+    "fallback",
+    "llm"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:unit:coverage": "vitest run --project unit --coverage",
+    "test:int": "vitest run --project integration",
+    "test:int:coverage": "vitest run --project integration --coverage",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "bench:check": "node scripts/bench-check.ts",
+    "bench:update": "node scripts/bench-check.ts --update",
+    "bench": "vitest bench --run",
+    "smoke-test": "node scripts/smoke-test.ts",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run smoke-test"
+  },
+  "peerDependencies": {
+    "vern-llm": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "publint": "^0.3.24",
+    "tsdown": "^0.23.1",
+    "typescript": "^5.9.3",
+    "unplugin-unused": "^0.6.0",
+    "vern-llm": "workspace:^",
+    "vern-llm-guard": "workspace:^",
+    "vern-llm-logger": "workspace:^",
+    "vern-llm-policy": "workspace:^",
+    "vern-llm-router": "workspace:^",
+    "vern-llm-usage": "workspace:^",
+    "vitest": "^4.1.11"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@11.27.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LakBud/vernLLM.git",
+    "directory": "packages/extensions/vern-llm-hedge"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

@@ -246,6 +246,14 @@ jobs:
           files: ./packages/extensions/vern-llm-guard/coverage/lcov.info
           flags: vern-llm-guard-unit
           fail_ci_if_error: true
+      - name: Upload vern-llm-hedge coverage to Codecov
+        if: hashFiles('packages/extensions/vern-llm-hedge/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/extensions/vern-llm-hedge/coverage/lcov.info
+          flags: vern-llm-hedge-unit
+          fail_ci_if_error: true
 
   # No Nx cache here, deliberately: this job runs against a real Redis
   # service container. A cached "pass" from a previous run could hide a
@@ -398,6 +406,14 @@ jobs:
           files: ./packages/extensions/vern-llm-guard/coverage/lcov.info
           flags: vern-llm-guard-integration
           fail_ci_if_error: true
+      - name: Upload vern-llm-hedge coverage to Codecov
+        if: hashFiles('packages/extensions/vern-llm-hedge/coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./packages/extensions/vern-llm-hedge/coverage/lcov.info
+          flags: vern-llm-hedge-integration
+          fail_ci_if_error: true
 
   docs:
     runs-on: ubuntu-latest
@@ -442,15 +458,15 @@ jobs:
       # targets have no ordering guarantee within the same project and
       # can run concurrently, racing on that file.
       - name: Lint affected docs
-        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard --verbose
+        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose
 
       - name: Typecheck affected docs
-        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard --verbose
+        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose
 
       # Fails on any internal /docs/... link whose page or #anchor doesn't
       # exist. The test target covers the checker itself.
       - name: Check affected docs links
-        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard --verbose
+        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose
 
       # Next.js writes its incremental build cache to apps/docs/.next/cache,
       # which Nx does not track (the build target's outputs are dist). It is
@@ -468,4 +484,4 @@ jobs:
             next-${{ runner.os }}-
 
       - name: Build affected docs
-        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard --verbose
+        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose

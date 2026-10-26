@@ -48,13 +48,15 @@
       "dependsOn": ["^build"],
       "inputs": ["default", "^production"],
       "outputs": ["{projectRoot}/coverage"],
-      "cache": true
+      "cache": true,
+      "parallelism": false
     },
     "test:int:coverage": {
       "dependsOn": ["^build"],
       "inputs": ["default", "^production"],
       "outputs": ["{projectRoot}/coverage"],
-      "cache": true
+      "cache": true,
+      "parallelism": false
     },
     "size": {
       "dependsOn": ["build"],

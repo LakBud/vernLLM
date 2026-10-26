@@ -236,6 +236,27 @@ reviews:
         - Scenarios against a real VernLLM that assert what the provider was sent and what the caller got back.
         - No real text in expectations that could be mistaken for a leak, and checks that results hold no content.
 
+    - path: 'packages/extensions/vern-llm-hedge/**'
+      instructions: |
+        This is vern-llm-hedge: when a call's first answer is slower than that target usually is, it sends the same call to the next target too, keeps the first success and lets the core cancel the other. It is built only on the public middleware system.
+
+        Review TypeScript changes with focus on:
+        - It never changes what a call returns or throws. A skipped call runs exactly as without it, and the winning chain's result is returned unchanged so the core can match it to its chain and cancel the others.
+        - A user function that throws (targets, when, delay, stats) is treated as "do not hedge", so a bug never doubles traffic.
+        - The budget refills on eligible calls only and a token is taken when the delay passes. No data means no hedge.
+        - Every path ends in exactly one hedge.decision, and reporting never throws.
+        - Timers and abort listeners are always cleaned up.
+        - It stays static, never imports another extension, and keeps vern-llm an unbundled peer dependency.
+
+        For new features, require unit tests and integration tests with a real VernLLM and held fake clients, keep 100% coverage, and document public API changes.
+
+    - path: 'packages/extensions/vern-llm-hedge/tests/**'
+      instructions: |
+        Review tests for:
+        - Meaningful assertions, with no live provider, only fakes.
+        - Held clients that answer when the test says so, instead of sleeps, and assertions on which targets were contacted and which request was cancelled.
+        - Real small timers only where the delay itself is under test.
+
     - path: 'packages/integrations/vern-llm-bedrock/**'
       instructions: |
         This is vern-llm-bedrock: the AWS Bedrock Converse adapter for vern-llm, built on the AWS SDK's BedrockRuntimeClient.
