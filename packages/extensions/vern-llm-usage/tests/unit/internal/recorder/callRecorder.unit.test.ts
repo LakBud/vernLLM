@@ -73,6 +73,7 @@ describe('CallRecorder', () => {
     expect(recorder.snapshot()).toEqual({
       nanoUsd: 4_000_000,
       wastedNanoUsd: 3_000_000,
+      unkeptNanoUsd: 0,
       tokens: { input: 30, output: 4, cacheRead: 2, cacheWrite: 0, reasoning: 2 },
       tableCharges: 2,
       reportedCharges: 0,
@@ -85,6 +86,7 @@ describe('CallRecorder', () => {
           model: 'a',
           nanoUsd: 3_000_000,
           wastedNanoUsd: 3_000_000,
+          unkeptNanoUsd: 0,
           tokens: kinds(10),
           tableCharges: 1,
           reportedCharges: 0,
@@ -95,6 +97,7 @@ describe('CallRecorder', () => {
           model: 'b',
           nanoUsd: 0,
           wastedNanoUsd: 0,
+          unkeptNanoUsd: 0,
           tokens: kinds(20),
           tableCharges: 0,
           reportedCharges: 0,
@@ -103,6 +106,7 @@ describe('CallRecorder', () => {
         {
           nanoUsd: 1_000_000,
           wastedNanoUsd: 0,
+          unkeptNanoUsd: 0,
           tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
           tableCharges: 1,
           reportedCharges: 0,

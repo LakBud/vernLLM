@@ -19,6 +19,7 @@ export function applyEvent(recorder: CallRecorder, event: VernLLMEvent, price: U
       model: event.usage.model,
       kinds: tokenKinds(event.usage),
       reported: reported !== undefined,
+      ...(event.chain !== undefined && { chain: event.chain }),
     },
   );
 }

@@ -54,6 +54,7 @@ describe('totals', () => {
     expect(usage.totals()).toEqual({
       estimatedCostUsd: expect.closeTo(0.00104, 12),
       wastedUsd: 0,
+      unkeptUsd: 0,
       estimatedSavedUsd: 0,
       calls: 2,
       bySource: { reported: 0, table: 2, unpriced: 0 },

@@ -12,6 +12,7 @@ export interface Series {
   attribution: Attribution;
   nanoUsd: number;
   wastedNanoUsd: number;
+  unkeptNanoUsd: number;
   savedNanoUsd: number;
   calls: number;
   tableCharges: number;
@@ -50,6 +51,7 @@ export const emptySeries = (provider: string, model: string, attribution: Attrib
   attribution,
   nanoUsd: 0,
   wastedNanoUsd: 0,
+  unkeptNanoUsd: 0,
   savedNanoUsd: 0,
   calls: 0,
   tableCharges: 0,
@@ -65,6 +67,7 @@ export const emptySeries = (provider: string, model: string, attribution: Attrib
 export function addPartToSeries(series: Series, part: ChargePart): void {
   series.nanoUsd += part.nanoUsd;
   series.wastedNanoUsd += part.wastedNanoUsd;
+  series.unkeptNanoUsd += part.unkeptNanoUsd;
   series.tableCharges += part.tableCharges;
   series.reportedCharges += part.reportedCharges;
   series.unpricedCharges += part.unpricedCharges;

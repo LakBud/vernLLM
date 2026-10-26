@@ -116,6 +116,9 @@ export function usageMiddleware(options: UsageMiddlewareOptions): UsageMiddlewar
         throw error;
       }
 
+      // Spend of any other chain is reported apart, as spend on results that were not returned.
+      guard('keepChain', () => recorder.keep(result.meta?.chain ?? 0), undefined);
+
       if (isStreamResult(result.value)) {
         // A stream's usage arrives while it is read, so the call ends when `finalResult` settles.
         // This runs before any outer middleware's observer, since this `wrap` returns first.

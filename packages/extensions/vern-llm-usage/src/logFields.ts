@@ -11,6 +11,11 @@ export interface UsageLogFields {
   /** Absent when the call reported no usage at all, such as a cache hit. */
   costSource?: CostSource;
   /**
+   * The part of `estimatedCostUsd` spent by chains whose result was not returned, when a call ran
+   * more than one chain. Absent when nothing was spent that way.
+   */
+  unkeptUsd?: number;
+  /**
    * Only on a cache hit or join: an estimate of what it spared, by pricing the request and the
    * stored answer at the primary target. Absent when the primary has no price.
    */
