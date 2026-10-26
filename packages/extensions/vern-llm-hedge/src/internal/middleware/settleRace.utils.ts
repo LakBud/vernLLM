@@ -41,6 +41,7 @@ export async function settleRace(
     target: targets[0],
     ms: Date.now() - callStart,
     ...hedgesOf(sentCount),
+    // The winning hedge's first target; its fallback may be the one that answered.
     ...(sentCount > 1 && raced.winner > 0 && { winner: targets[raced.winner - 1] }),
   });
   // Unchanged, so the core finds the chain it came from and cancels the others.

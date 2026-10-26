@@ -41,7 +41,11 @@ export interface HedgeDecisionEvent {
   target?: string;
   /** How many hedges were sent, only when more than one. */
   hedges?: number;
-  /** Which target's answer was kept, only when more than one hedge was sent and one won. */
+  /**
+   * The first target of the hedge whose answer was kept, only when more than one hedge was sent
+   * and one won. A hedge keeps the rest of the order as its fallback, so the answer itself may
+   * have come from a later target.
+   */
   winner?: string;
   /** From the start of the call to the kept answer, when a hedge was sent and one answered. */
   ms?: number;

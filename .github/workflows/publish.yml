@@ -160,6 +160,8 @@ jobs:
 
       - name: Commit changelog docs update
         if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router' || steps.tag.outputs.name == 'vern-llm-policy' || steps.tag.outputs.name == 'vern-llm-guard' || steps.tag.outputs.name == 'vern-llm-hedge'
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.name }}
         run: |
           set -euo pipefail
 
@@ -185,6 +187,11 @@ jobs:
             "apps/docs/content/docs/extensions/guard/changelog.mdx"
             "apps/docs/content/docs/extensions/hedge/changelog.mdx"
           )
+
+          # A hedge release touches only its own page.
+          if [ "$TAG_NAME" = "vern-llm-hedge" ]; then
+            files=("apps/docs/content/docs/extensions/hedge/changelog.mdx")
+          fi
 
           # A package without a release yet has no generated page, so skip it.
           copied=()

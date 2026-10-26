@@ -1,5 +1,5 @@
 import { VernLLM } from 'vern-llm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { hedgeMiddleware, type HedgeOptions } from '../../src/index.js';
 import { eventProbe, heldClient, serverError, settle, targetChain, waitFor } from '../helpers.js';
@@ -107,11 +107,20 @@ describe('a fast first target', () => {
 
   it('leaves no timer behind, so the delay never outlives the call', async () => {
     const { llm } = setup({ delay: 60_000 });
+    const scheduled = vi.spyOn(globalThis, 'setTimeout');
+    const cleared = vi.spyOn(globalThis, 'clearTimeout');
 
-    await llm.call(call);
+    try {
+      await llm.call(call);
 
-    // A pending 60 second timer would keep the process alive; this returns at once.
-    await expect(settle(1)).resolves.toBeUndefined();
+      // The hedge's 60 second timer was started, and its handle was cleared when the call ended.
+      const index = scheduled.mock.calls.findIndex(([, ms]) => ms === 60_000);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(cleared).toHaveBeenCalledWith(scheduled.mock.results[index]!.value);
+    } finally {
+      scheduled.mockRestore();
+      cleared.mockRestore();
+    }
   });
 });
 

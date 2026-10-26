@@ -81,13 +81,23 @@ describe('a hedge that cannot start', () => {
   });
 
   it('gives its budget token back, so the next hedge can still go out', async () => {
-    const wrap = wrapOf({ delay: 10, budget: { ratio: 1, burst: 1 } });
+    // Half a token per call: the first call earns half, the second reaches a whole one and
+    // spends it on a hedge that cannot start, and the third only has a whole token to spend
+    // if that one was given back.
+    const wrap = wrapOf({ delay: 10, budget: { ratio: 0.5, burst: 1 } });
     let starts = 0;
     const nextOf = (again: () => Promise<unknown>) => {
       const next = (() => later('main', 40)) as unknown as WrapNext;
       Object.defineProperty(next, 'again', { get: () => again });
       return next;
     };
+    const hedges = () => {
+      starts++;
+      return later('hedge', 0);
+    };
+
+    await wrap(request, nextOf(hedges), ctxOf().ctx);
+    expect(starts).toBe(0);
 
     await wrap(
       request,
@@ -96,15 +106,9 @@ describe('a hedge that cannot start', () => {
       }),
       ctxOf().ctx,
     );
-    await wrap(
-      request,
-      nextOf(() => {
-        starts++;
-        return later('hedge', 0);
-      }),
-      ctxOf().ctx,
-    );
+    expect(starts).toBe(0);
 
+    await wrap(request, nextOf(hedges), ctxOf().ctx);
     expect(starts).toBe(1);
   });
 });

@@ -34,13 +34,13 @@ function setup(options: HedgeOptions) {
 
 describe('a first target with the prompt in its cache', () => {
   it('is waited for longer before a hedge goes out', async () => {
-    const { answered, chain, last } = setup({ cacheAware: { prefixChars: 100 } });
+    const { answered, chain, last } = setup({ delay: 100, cacheAware: { prefixChars: 100 } });
     await answered(prompt, 400);
 
-    // Past the plain delay of 20 ms and inside the doubled one: not hedged.
-    await answered(`${prompt} A new question.`, 400, 30);
+    // Past the plain delay of 100 ms and inside the doubled one: not hedged.
+    await answered(`${prompt} A new question.`, 400, 150);
 
-    expect(last()).toMatchObject({ outcome: 'not_needed', delayMs: 40 });
+    expect(last()).toMatchObject({ outcome: 'not_needed', delayMs: 200 });
     expect(chain.tried()).toEqual(['primary', 'primary']);
   });
 
@@ -75,7 +75,7 @@ describe('a first target with the prompt in its cache', () => {
   it('is hedged as usual once the cache would have expired', async () => {
     const { answered, last } = setup({ cacheAware: { ttlMs: 30, prefixChars: 100 } });
     await answered(prompt, 400);
-    await settle(50);
+    await settle(80);
 
     await answered(prompt, undefined);
 

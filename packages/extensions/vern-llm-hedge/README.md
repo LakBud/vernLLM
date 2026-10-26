@@ -29,9 +29,35 @@ The delay is the p95 of the logger's `attemptMs` for the first target, the strea
 
 A token bucket keeps extra calls near 5% of eligible calls (`budget: { ratio: 0.05, burst: 10 }`). The bucket starts empty and the token is taken when the delay passes, so calls that answer in time cost nothing.
 
-`targets(ctx, request)` says where the hedge may go and defaults to `nextTargets(ctx)`, the call's targets after the first. `when(ctx)` says whether a call may be hedged. Both take recipes, such as skipping calls a policy marked `duplicateSends: false`, or targets that cost more than twice the first.
+`targets(ctx, request)` says where the hedge may go and defaults to `nextTargets(ctx)`, the call's targets after the first. `when(ctx)` says whether a call may be hedged. Both take recipes, such as skipping calls a policy marked `duplicateSends: false`, or targets that cost more than twice the first:
 
-Each call reports one `hedge.decision` with an outcome: `won`, `lost`, `not_needed`, `budget`, `unavailable`, `no_target`, `not_allowed`, `no_data` or `deadline`. `hedgeDimension` splits the logger's counts and latency by outcome, and `hedgeLogFields(ctx)` puts the outcome on the call's record.
+```ts
+import { hedgeMiddleware, nextTargets } from 'vern-llm-hedge';
+import { policyFlags } from 'vern-llm-policy';
+
+// The same target again, for a single provider.
+hedgeMiddleware({ delay: 800, targets: (ctx) => [ctx.targets[0]!.name] });
+
+// Never hedge into a target that costs more than twice the first.
+hedgeMiddleware({
+  stats: logger.stats,
+  targets: (ctx, request) => {
+    const first = usage.costFor(ctx.targets[0]!, request) ?? Infinity;
+    return nextTargets(ctx).filter((name) => {
+      const target = ctx.targets.find((t) => t.name === name)!;
+      return (usage.costFor(target, request) ?? Infinity) <= 2 * first;
+    });
+  },
+});
+
+// Keep content that must not go to two providers on one.
+hedgeMiddleware({
+  stats: logger.stats,
+  when: (ctx) => policyFlags(ctx).duplicateSends !== false,
+});
+```
+
+Each call reports one `hedge.decision` with an outcome: `won`, `lost`, `not_needed`, `failed`, `aborted`, `budget`, `unavailable`, `no_target`, `not_allowed`, `paused`, `cached`, `no_data` or `deadline`. `hedgeDimension` splits the logger's counts and latency by outcome, and `hedgeLogFields(ctx)` puts the outcome on the call's record.
 
 `maxHedges` (up to 4) sends more than one hedge, each after one more delay. `adapt: true` raises the delay of a first target whose hedges rarely win, pauses it when that stops helping, and reports a target whose hedges often win as a `hedge.adapt` event. `cacheAware: true` waits longer, or skips the hedge, when the first target served the prompt's prefix from its provider cache recently, since a hedge elsewhere starts cold. All three are off by default.
 
