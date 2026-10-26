@@ -24,8 +24,6 @@ function setup() {
     sink,
     minSamples: 1,
     logger: 'silent',
-    // Named here, so the test does not depend on what the logger keeps by default.
-    customEvents: ['hedge.*'],
     dimensions: { size: promptSizeDimension, hedge: hedgeDimension },
     enrich: hedgeLogFields,
   });
@@ -175,6 +173,35 @@ describe('with the router', () => {
   });
 });
 
+describe('with the router holding back a slow target', () => {
+  it('sends calls to another target first once the hedge reports the first one as slow', async () => {
+    const primary = heldClient('primary');
+    const chain = targetChain({ primary: primary.client });
+    const holder: { llm?: VernLLM } = {};
+    const router = routerMiddleware({
+      logger: 'silent',
+      health: () => holder.llm as never,
+      holdBack: [{ event: 'hedge.adapt', when: { action: 'slow' }, holdMs: 60_000 }],
+    });
+    const hedge = hedgeMiddleware({
+      delay: 10,
+      budget: { ratio: 1, burst: 4 },
+      adapt: { window: 4, minHedges: 4, highWinRate: 0.5 },
+      logger: 'silent',
+    });
+    const llm = new VernLLM({ ...chain.options, middleware: [router, hedge] });
+    holder.llm = llm;
+
+    // The held first target never answers, so each hedge to `b` wins.
+    for (let i = 0; i < 4; i++) expect(await llm.call(call)).toBe('b');
+    expect(chain.tried()).toEqual(['primary', 'b', 'primary', 'b', 'primary', 'b', 'primary', 'b']);
+
+    // The fourth win reported `primary` as slow, so the router now starts with `b`.
+    expect(await llm.call(call)).toBe('b');
+    expect(chain.tried().slice(8)).toEqual(['b']);
+  });
+});
+
 describe('with the policy', () => {
   function withPolicy(rules: PolicyOptions['rules']) {
     const primary = heldClient('primary');
@@ -275,28 +302,15 @@ describe('with the guard', () => {
 });
 
 describe('with usage', () => {
-  const prices = {
-    'primary-model': { input: 2, output: 2 },
-    'b-model': { input: 1, output: 1 },
-  };
-
-  it('counts what both chains spent when both reported', async () => {
-    // The cost of the first target answering alone, as the control.
-    const alone = heldClient('primary');
-    const control = usageMiddleware({ prices, pricesAsOf: today, logger: 'silent' });
-    const controlLlm = new VernLLM({
-      ...targetChain({ primary: alone.client }).options,
-      middleware: [control],
-    });
-    const answered = controlLlm.call(call);
-    await waitFor(() => alone.requests.length === 1);
-    alone.requests[0]!.answer('primary', 1_000);
-    await answered;
-
+  it('counts what both chains spent when both reported, and reports the one that was not kept', async () => {
     const primary = heldClient('primary');
     const b = heldClient('b');
     const chain = targetChain({ primary: primary.client, b: b.client });
-    const usage = usageMiddleware({ prices, pricesAsOf: today, logger: 'silent' });
+    const usage = usageMiddleware({
+      prices: { 'primary-model': { input: 2, output: 2 }, 'b-model': { input: 1, output: 1 } },
+      pricesAsOf: today,
+      logger: 'silent',
+    });
     const hedge = hedgeMiddleware({ delay: 10, budget, logger: 'silent' });
     const llm = new VernLLM({ ...chain.options, middleware: [usage, hedge] });
 
@@ -309,6 +323,7 @@ describe('with usage', () => {
 
     const totals = usage.totals();
     expect(totals.calls).toBe(1);
-    expect(totals.estimatedCostUsd).toBeGreaterThan(control.totals().estimatedCostUsd);
+    expect(totals.estimatedCostUsd).toBeGreaterThan(totals.unkeptUsd);
+    expect(totals.unkeptUsd).toBeGreaterThan(0);
   });
 });

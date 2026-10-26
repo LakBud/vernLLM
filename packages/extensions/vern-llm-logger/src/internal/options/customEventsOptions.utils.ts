@@ -8,6 +8,7 @@ export const DEFAULT_CUSTOM_EVENTS: readonly string[] = [
   'policy.*',
   'router.*',
   'guard.*',
+  'hedge.*',
 ];
 
 // A plain name (`myapp.cache_warm`) or a prefix pattern (`myapp.*`). Nothing fancier, so a
