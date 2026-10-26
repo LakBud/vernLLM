@@ -89,6 +89,8 @@ export class CallTracker {
   private ended = false;
   /** Local rate limit waiting reported for the attempt about to be dispatched, by chain. */
   private readonly pendingWaitMs = new Map<number, number>();
+  /** Every chain that started an attempt, including those already closed. */
+  private readonly chainsSeen = new Set<number>();
 
   private constructor(
     private readonly deps: TrackerDeps,
@@ -207,6 +209,7 @@ export class CallTracker {
     // rather than being reported as a success. Another chain's attempt is not touched: chains
     // run side by side.
     const chain = ctx.chain ?? 0;
+    this.chainsSeen.add(chain);
     this.abandonAttempt(chain);
     this.attemptCount++;
 
@@ -498,8 +501,9 @@ export class CallTracker {
     );
 
     // Tokens spent on an attempt that then failed are recorded, but the failure is closed by
-    // the retry, fallback, or error that follows.
-    if (!failed) this.settle(attempt, undefined);
+    // the retry, fallback, or error that follows. With another chain open, which attempt answers
+    // is not known yet, so settling is left to `complete`.
+    if (!failed && this.current.size === 1) this.settle(attempt, undefined);
   }
 
   /**
@@ -595,10 +599,16 @@ export class CallTracker {
     try {
       const kept = this.meta?.chain ?? 0;
       const attemptFailure = failure && { error: lastAttemptErrorOf(failure.error) };
+      // The chain the call's outcome belongs to: the kept chain, or the only chain there was.
+      const owner = this.current.has(kept)
+        ? kept
+        : this.chainsSeen.size === 1
+          ? [...this.current.keys()][0]
+          : undefined;
       for (const [chain, attempt] of [...this.current]) {
-        // Another chain's attempt that is still open when the call returns was not the answer, and
-        // how it ended is unknown, like an attempt whose closing signal was missed.
-        if (!failure && chain !== kept) {
+        // Another chain's attempt that is still open when the call returns did not give the
+        // outcome, and how it ended is unknown, like an attempt whose closing signal was missed.
+        if (chain !== owner) {
           this.abandonAttempt(chain);
           continue;
         }

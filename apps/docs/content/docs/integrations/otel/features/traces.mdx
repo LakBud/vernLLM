@@ -39,7 +39,7 @@ Attempts across targets are ordered by span start time.
 
 ## Attempts that run side by side
 
-A middleware that reruns the rest of the pipeline with `next.again()` can have several attempts in flight at once. Each chain gets its own attempt spans under the same call span. The attempt that answers keeps its usage and status. An attempt cancelled when the call settles ends with `vernllm.attempt.outcome` set to `unknown`, and `vernllm.total_attempts` counts all of them. Only the answering attempt is recorded in the attempt duration metrics.
+A middleware that reruns the rest of the pipeline with `next.again()` can have several attempts in flight at once. Each chain gets its own attempt spans under the same call span. The attempt that answers keeps its usage and status. An attempt cancelled when the call settles ends with `vernllm.attempt.outcome` set to `unknown`, and `vernllm.total_attempts` counts all of them. Attempts with a known outcome, failures included, record an attempt duration. Cancelled attempts with an unknown outcome do not.
 
 ## Call span attributes
 

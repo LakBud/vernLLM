@@ -319,7 +319,7 @@ describe('a call with more than one chain', () => {
     );
 
   /** Starts a second chain next to the main one and returns whichever answers first successfully. */
-  const racing = (onStarted: () => void): VernLLMMiddleware => ({
+  const racing = (onStarted: () => void, settleFirst = false): VernLLMMiddleware => ({
     name: 'racing',
     reruns: true,
     position: 10,
@@ -328,69 +328,116 @@ describe('a call with more than one chain', () => {
       // Both are observed, so the one that loses can never be an unhandled rejection.
       for (const chain of chains) chain.catch(() => {});
       onStarted();
-      return Promise.any(chains);
+      return settleFirst ? Promise.race(chains) : Promise.any(chains);
     },
   });
 
-  function llmOf(steps: Parameters<typeof createMockClient>[0], onStarted: () => void) {
+  type Scenario = {
+    steps: Parameters<typeof createMockClient>[0];
+    onStarted: () => void;
+    /** Return whichever chain settles first, even when that is a failure. */
+    settleFirst?: boolean;
+  };
+
+  function llmOf({ steps, onStarted, settleFirst }: Scenario, observed = true) {
     const { client } = createMockClient(steps);
     return new VernLLM({
       ...BASE,
       client,
       middleware: [
-        otelMiddleware({ tracer: trace.tracer, meter: meter.meter, logger: 'silent' }),
-        racing(onStarted),
+        ...(observed
+          ? [otelMiddleware({ tracer: trace.tracer, meter: meter.meter, logger: 'silent' })]
+          : []),
+        racing(onStarted, settleFirst),
       ],
     });
   }
 
+  /** What a call gives back or throws, so a run with otel can be compared with one without. */
+  async function outcomeOf(make: () => Scenario, observed: boolean) {
+    try {
+      return await llmOf(make(), observed).call(call);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   const attemptSpans = () => trace.spans().filter((span) => span.name !== 'vernllm.call');
+  const unknownSpans = () =>
+    attemptSpans().filter((span) => span.attributes['vernllm.attempt.outcome'] === 'unknown');
 
-  it('gives each chain its own attempt span, and attaches the answer to the chain that gave it', async () => {
+  const mainAnswers = (): Scenario => {
     const main = gated('main');
-    const llm = llmOf([main.step, pending], () => setTimeout(main.release, 10));
-
-    await llm.call(call);
-    await sleep(20);
-
-    const [answered, cancelled] = [
-      attemptSpans().find((span) => span.attributes['gen_ai.usage.input_tokens'] === 3),
-      attemptSpans().find((span) => span.attributes['vernllm.attempt.outcome'] === 'unknown'),
-    ];
-    expect(attemptSpans()).toHaveLength(2);
-    expect(answered?.status.code).toBe(1);
-    expect(answered?.attributes['gen_ai.usage.output_tokens']).toBe(4);
-    // The other chain was still open when the call returned, so its outcome is not known.
-    expect(cancelled?.status.code).toBe(0);
-    expect(cancelled?.attributes['gen_ai.usage.input_tokens']).toBeUndefined();
-    expect(trace.openSpans()).toEqual([]);
-
-    const call_ = trace.spans().find((span) => span.name === 'vernllm.call');
-    expect(call_?.attributes['vernllm.total_attempts']).toBe(2);
-    expect(call_?.status.code).toBe(1);
+    return { steps: [main.step, pending], onStarted: () => setTimeout(main.release, 10) };
+  };
+  const secondAnswers = (): Scenario => {
+    const second = gated('second');
+    return { steps: [pending, second.step], onStarted: () => setTimeout(second.release, 10) };
+  };
+  const oneFails = (): Scenario => {
+    const main = gated('main');
+    return { steps: [main.step, new Error('boom')], onStarted: () => setTimeout(main.release, 20) };
+  };
+  const failsWhileOtherOpen = (): Scenario => ({
+    steps: [new Error('first'), pending],
+    onStarted: () => {},
+    settleFirst: true,
   });
 
-  it('keeps the answer of a later chain when that one is returned', async () => {
-    const second = gated('second');
-    const llm = llmOf([pending, second.step], () => setTimeout(second.release, 10));
-
-    expect(await llm.call(call)).toBe('second');
+  it('gives each chain its own attempt span, and attaches the answer to the chain that gave it', async () => {
+    expect(await outcomeOf(mainAnswers, true)).toBe(await outcomeOf(mainAnswers, false));
     await sleep(20);
 
     const answered = attemptSpans().filter((span) => span.status.code === 1);
+    expect(attemptSpans()).toHaveLength(2);
     expect(answered).toHaveLength(1);
     expect(answered[0]?.attributes['gen_ai.usage.input_tokens']).toBe(3);
-    expect(
-      attemptSpans().filter((span) => span.attributes['vernllm.attempt.outcome'] === 'unknown'),
-    ).toHaveLength(1);
+    expect(answered[0]?.attributes['gen_ai.usage.output_tokens']).toBe(4);
+    // The other chain was still open when the call returned, so its outcome is not known.
+    expect(unknownSpans()).toHaveLength(1);
+    expect(unknownSpans()[0]?.status.code).toBe(0);
+    expect(unknownSpans()[0]?.attributes['gen_ai.usage.input_tokens']).toBeUndefined();
+    expect(trace.openSpans()).toEqual([]);
+
+    const callSpan = trace.spans().find((span) => span.name === 'vernllm.call');
+    expect(callSpan?.attributes['vernllm.total_attempts']).toBe(2);
+    expect(callSpan?.status.code).toBe(1);
+  });
+
+  it('keeps the answer of a later chain when that one is returned', async () => {
+    expect(await outcomeOf(secondAnswers, true)).toBe(await outcomeOf(secondAnswers, false));
+    await sleep(20);
+
+    expect(attemptSpans().filter((span) => span.status.code === 1)).toHaveLength(1);
+    expect(unknownSpans()).toHaveLength(1);
+    expect(trace.openSpans()).toEqual([]);
+  });
+
+  it('does not settle an attempt that reported usage while another chain was open', async () => {
+    const make = (): Scenario => {
+      const main = gated('main');
+      const second = gated('second');
+      return {
+        steps: [main.step, second.step],
+        onStarted: () => {
+          // The second chain reports usage first, then the main chain is the one returned.
+          setTimeout(second.release, 5);
+          setTimeout(main.release, 30);
+        },
+      };
+    };
+    expect(await outcomeOf(make, true)).toBe(await outcomeOf(make, false));
+    await sleep(40);
+
+    const settled = attemptSpans().filter((span) => span.status.code === 1);
+    expect(settled).toHaveLength(1);
+    const durations = pointsOf((await meter.collect()).get('gen_ai.client.operation.duration'));
+    expect(histogramOf(durations[0]).count).toBe(1);
     expect(trace.openSpans()).toEqual([]);
   });
 
   it('records the duration of the attempt that answered, and none for the one that did not', async () => {
-    const main = gated('main');
-    const llm = llmOf([main.step, pending], () => setTimeout(main.release, 10));
-
-    await llm.call(call);
+    await outcomeOf(mainAnswers, true);
     await sleep(20);
 
     const durations = pointsOf((await meter.collect()).get('gen_ai.client.operation.duration'));
@@ -399,23 +446,26 @@ describe('a call with more than one chain', () => {
   });
 
   it('ends a chain that failed without touching the attempt another chain still has open', async () => {
-    const main = gated('main');
-    const llm = llmOf([main.step, new Error('boom')], () => setTimeout(main.release, 20));
-
-    expect(await llm.call(call)).toBe('main');
+    expect(await outcomeOf(oneFails, true)).toBe(await outcomeOf(oneFails, false));
     await sleep(30);
 
-    expect(attemptSpans()).toHaveLength(2);
     expect(
       attemptSpans()
         .map((span) => span.status.code)
         .sort(),
     ).toEqual([1, 2]);
-    expect(
-      attemptSpans().find((span) => span.status.code === 1)?.attributes[
-        'gen_ai.usage.input_tokens'
-      ],
-    ).toBe(3);
+    expect(trace.openSpans()).toEqual([]);
+  });
+
+  it('puts the error of a failed call on the chain that failed, and the one still open is unknown', async () => {
+    expect(await outcomeOf(failsWhileOtherOpen, true)).toBe(
+      await outcomeOf(failsWhileOtherOpen, false),
+    );
+    await sleep(10);
+
+    expect(attemptSpans()).toHaveLength(2);
+    expect(attemptSpans().filter((span) => span.status.code === 2)).toHaveLength(1);
+    expect(unknownSpans()).toHaveLength(1);
     expect(trace.openSpans()).toEqual([]);
   });
 });
