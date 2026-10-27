@@ -74,6 +74,10 @@ export function createHosted<Kind extends string>(
         }
         fresh.forEach(({ key }, index) => cache?.set(key, hits[index]!));
         return hits;
+      } catch (error) {
+        // Stop the batches still queued or in flight
+        flight.controller.abort(error);
+        throw error;
       } finally {
         flight.settled = true;
         drop(flight);
