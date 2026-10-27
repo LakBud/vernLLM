@@ -1,0 +1,116 @@
+---
+title: Hosted detectors
+description: Detectors backed by a provider's classifier, so a check can catch harmful content that no pattern describes
+---
+
+`patterns` and `keywords` match text. A hosted detector asks a provider's classifier instead. It is
+still a plain [detector](/docs/extensions/guard/features/checks#detectors): the guard keeps deciding
+labels, redaction, the memo, timeouts and what a failure means, and the provider only answers what
+is in the text.
+
+## openaiModeration
+
+Harmful content, from OpenAI's Moderation API, which is free: hate, harassment, self-harm, sexual,
+violence and illicit.
+
+```ts title="guard-moderation.ts"
+import OpenAI from 'openai';
+import { guardMiddleware, openaiModeration } from 'vern-llm-guard';
+
+const moderation = openaiModeration({
+  client: new OpenAI(),
+  model: 'omni-moderation-2024-09-26',
+  thresholds: { 'self-harm': 0.3 },
+});
+
+guardMiddleware({
+  version: '2026-10-27.1',
+  checks: [
+    {
+      id: 'self-harm',
+      detect: moderation.only('self-harm', 'self-harm/intent', 'self-harm/instructions'),
+      action: 'block',
+      on: ['user', 'output'],
+    },
+    {
+      id: 'harm',
+      detect: moderation.only('violence', 'hate', 'harassment'),
+      on: ['user', 'output'],
+    },
+  ],
+});
+```
+
+<Callout type="warn">
+  The text a check reads is sent to OpenAI. Use it only where the app already trusts OpenAI with
+  that text.
+</Callout>
+
+<TypeTable
+  type={{
+    client: {
+      description: 'Anything with moderations.create. The OpenAI client fits.',
+      type: '{ moderations: { create } }',
+      required: true,
+    },
+    model: {
+      description: 'Pin a dated model to keep results stable under the memo. An alias warns once.',
+      type: 'string',
+      default: "'omni-moderation-latest'",
+    },
+    thresholds: {
+      description:
+        'A category counts at or above its score, instead of the flag OpenAI sets. Other categories use the flag.',
+      type: '{ [category]: number }',
+    },
+    batchSize: { description: 'Texts per request, 1 to 256.', type: 'number', default: '32' },
+    chunkChars: {
+      description: 'Longer texts are split in chunks of this size, at least 1000.',
+      type: 'number',
+      default: '8000',
+    },
+    overlapChars: {
+      description: 'How much of the last chunk the next one starts with.',
+      type: 'number',
+      default: '200',
+    },
+    concurrency: { description: 'Requests in flight at once.', type: 'number', default: '4' },
+    cache: {
+      description: 'Findings kept per source and text. false turns it off.',
+      type: 'false | { max?: number }',
+      default: '{ max: 10_000 }',
+    },
+    onUsage: {
+      description: 'Called for each request with the model, the texts sent and the milliseconds.',
+      type: '(info) => void',
+    },
+    logger: {
+      description: 'Where the model alias warning goes.',
+      type: "Logger | 'silent'",
+      default: 'a console logger',
+    },
+  }}
+/>
+
+### Findings
+
+- One finding per category that counts, labeled `moderation.<category>`, such as
+  `moderation.self-harm/intent`
+- The API returns no positions, so a finding covers the whole text. These checks label and block,
+  and a `redact` check on them blocks
+- `only(...)` takes the category names and gives a detector over the same requests and cache.
+  Several checks over one text cost one request
+- A long text is checked in chunks, and a category counts if it counts in any of them
+
+### Errors and cost
+
+- Any error or malformed answer is thrown. The check's `onError` decides, and `closed` is the default
+- The check's `timeoutMs` cancels the request, and a request that nobody waits for any more is
+  cancelled with it
+- The memo and the detector's cache send each text once, so a long history is not checked again
+  every turn
+
+## Measure before you enforce
+
+A classifier is a heuristic too. Run a new check in `mode: 'audit'`, then measure it with
+[`evaluate`](/docs/extensions/guard/features/rollout) over a labeled set before it blocks a call.

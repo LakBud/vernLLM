@@ -11,3 +11,5 @@ description: How guard checks apply to a stored answer on a cache hit, and what 
   (`memo: { max }`, or `false`)
 - The memo holds offsets and kinds, never text. It is keyed by `version`, so changing the checks
   starts a new one
+- A [hosted detector](/docs/extensions/guard/features/hosted-detectors) keeps its own cache of labels
+  and offsets per source and text, so a text goes to its provider once

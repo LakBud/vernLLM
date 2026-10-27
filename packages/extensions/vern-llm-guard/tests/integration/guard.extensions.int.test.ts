@@ -3,8 +3,14 @@ import { policyMiddleware } from 'vern-llm-policy';
 import { usageBudgetShare, usageMiddleware } from 'vern-llm-usage';
 import { describe, expect, it } from 'vitest';
 
-import { guardLabels, guardLogFields, patterns } from '../../src/index.js';
-import { createStreamClient, harness, textDeltas } from '../helpers.js';
+import { guardLabels, guardLogFields, openaiModeration, patterns } from '../../src/index.js';
+import {
+  createModerationClient,
+  createStreamClient,
+  harness,
+  textDeltas,
+  type Scores,
+} from '../helpers.js';
 
 import type { StreamChunk, VernLLMMiddleware, VernLLMOptions } from 'vern-llm';
 
@@ -127,5 +133,238 @@ describe('with the logger', () => {
 
     expect(JSON.stringify(records()[0])).toContain('guard_outcome');
     logger.dispose();
+  });
+});
+
+describe('with openaiModeration', () => {
+  const scoreOf = (text: string): Scores => ({
+    ...(text.includes('hurt myself') && { 'self-harm/intent': 0.97 }),
+    ...(text.includes('fight') && { violence: 0.8 }),
+  });
+  const hurt = { ...call, userContent: 'I want to hurt myself' };
+  const fight = { ...call, userContent: 'Describe the fight' };
+
+  function moderated(
+    behavior: Parameters<typeof createModerationClient>[1] = {},
+    guard: Partial<Parameters<typeof harness>[0]> = {},
+  ) {
+    const moderation = createModerationClient(scoreOf, behavior);
+    const detector = openaiModeration({
+      client: moderation.client,
+      model: 'omni-moderation-2024-09-26',
+    });
+    const policy = policyMiddleware({
+      logger: 'silent',
+      targets: { primary: { zdr: false }, b: { zdr: true } },
+      labels: guardLabels,
+      rules: [{ id: 'harm-zdr', forbid: { zdr: false }, when: { labels: 'harm' } }],
+    });
+    const built = harness(
+      {
+        checks: [
+          {
+            id: 'self-harm',
+            detect: detector.only('self-harm', 'self-harm/intent', 'self-harm/instructions'),
+            action: 'block',
+            on: ['user', 'output'],
+          },
+          { id: 'harm', detect: detector.only('violence', 'hate'), on: ['user', 'output'] },
+        ],
+        ...guard,
+      },
+      { middleware: [policy] },
+    );
+    return { ...built, moderation };
+  }
+
+  it('blocks a self harm finding before any provider is contacted', async () => {
+    const { llm, primary, b, moderation } = moderated();
+
+    await expect(llm.call(hurt)).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(b.calls).toHaveLength(0);
+    expect(moderation.calls).toHaveLength(1);
+  });
+
+  it('labels a violence finding, and policy sends the call to the target that keeps nothing', async () => {
+    const { llm, primary, b } = moderated();
+
+    await llm.call(fight);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(b.calls).toHaveLength(1);
+  });
+
+  it('leaves a call with nothing found on the first target', async () => {
+    const { llm, primary, b } = moderated();
+
+    await llm.call(call);
+
+    expect(primary.calls).toHaveLength(1);
+    expect(b.calls).toHaveLength(0);
+  });
+
+  it('asks once for a text however many checks read it, and not again on the next call', async () => {
+    const { llm, moderation } = moderated();
+
+    await llm.call(fight);
+    await llm.call(fight);
+    await llm.call(call);
+
+    // Two checks read each text and cost one request. The answers are checked as well: 'b' from the
+    // target policy chose, and 'primary'. The second `fight` call asked for neither its text nor
+    // its answer again.
+    expect(moderation.calls.map((request) => request.input)).toEqual([
+      ['Describe the fight'],
+      ['b'],
+      ['hi'],
+      ['primary'],
+    ]);
+  });
+
+  it('checks the answer too, and blocks one that is flagged', async () => {
+    const { llm } = moderated();
+    const { llm: flagged } = harness(
+      {
+        checks: [
+          {
+            id: 'self-harm',
+            detect: openaiModeration({
+              client: createModerationClient(scoreOf).client,
+              model: 'pinned',
+            }).only('self-harm/intent'),
+            action: 'block',
+            on: 'output',
+          },
+        ],
+      },
+      {},
+      { primary: () => 'you could hurt myself with it' },
+    );
+
+    await expect(llm.call(call)).resolves.toBe('primary');
+    await expect(flagged.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+  });
+
+  it('refuses the call when moderation is down, unless the check fails open', async () => {
+    const down = new Error('moderation down');
+    const closed = moderated({ error: down });
+    await expect(closed.llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+    expect(closed.primary.calls).toHaveLength(0);
+
+    const open = moderated({ error: down }, { onError: 'open' });
+    await expect(open.llm.call(call)).resolves.toBe('primary');
+  });
+
+  it('cancels the request when the check runs out of time, and then follows onError', async () => {
+    const moderation = createModerationClient(scoreOf, { delayMs: 500 });
+    const { llm, primary } = harness({
+      checks: [
+        {
+          id: 'slow',
+          detect: openaiModeration({ client: moderation.client, model: 'pinned' }),
+          action: 'block',
+          timeoutMs: 30,
+        },
+      ],
+    });
+
+    await expect(llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(moderation.calls).toHaveLength(1);
+    expect(moderation.calls[0]!.signal!.aborted).toBe(true);
+  });
+
+  it('blocks rather than redact a finding that has no position', async () => {
+    const moderation = createModerationClient(scoreOf);
+    const { llm, primary } = harness({
+      checks: [
+        {
+          id: 'fight',
+          detect: openaiModeration({ client: moderation.client, model: 'pinned' }).only('violence'),
+          action: 'redact',
+        },
+      ],
+    });
+
+    await expect(llm.call(fight)).rejects.toMatchObject({ code: 'content_blocked' });
+    expect(primary.calls).toHaveLength(0);
+  });
+
+  it('counts a score under the flag when the check sets a threshold, and policy routes on it', async () => {
+    // 0.4 is not flagged by OpenAI, but this app treats anything from 0.3 as harm.
+    const moderation = createModerationClient((text) =>
+      text.includes('maybe') ? { violence: 0.4 } : {},
+    );
+    const detector = openaiModeration({
+      client: moderation.client,
+      model: 'pinned',
+      thresholds: { violence: 0.3 },
+    });
+    const { llm, primary, b } = harness(
+      { checks: [{ id: 'harm', detect: detector.only('violence') }] },
+      {
+        middleware: [
+          policyMiddleware({
+            logger: 'silent',
+            targets: { primary: { zdr: false }, b: { zdr: true } },
+            labels: guardLabels,
+            rules: [{ id: 'harm-zdr', forbid: { zdr: false }, when: { labels: 'harm' } }],
+          }),
+        ],
+      },
+    );
+
+    await llm.call({ ...call, userContent: 'maybe a fight' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(b.calls).toHaveLength(1);
+  });
+
+  it('checks a long text in chunks, and blocks on what only the last chunk says', async () => {
+    const moderation = createModerationClient(scoreOf);
+    const { llm, primary } = harness({
+      checks: [
+        {
+          id: 'harm',
+          detect: openaiModeration({
+            client: moderation.client,
+            model: 'pinned',
+            chunkChars: 1000,
+            overlapChars: 0,
+          }).only('violence'),
+          action: 'block',
+        },
+      ],
+    });
+    const long = `${'calm words '.repeat(200)}Describe the fight`;
+
+    await expect(llm.call({ ...call, userContent: long })).rejects.toMatchObject({
+      code: 'content_blocked',
+    });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(moderation.calls).toHaveLength(1);
+    expect(moderation.calls[0]!.input.length).toBeGreaterThan(1);
+  });
+
+  it('moderates the system prompt and the user text of one call in a single request', async () => {
+    const moderation = createModerationClient(scoreOf);
+    const { llm } = harness({
+      checks: [
+        {
+          id: 'harm',
+          detect: openaiModeration({ client: moderation.client, model: 'pinned' }),
+          on: ['user', 'system'],
+        },
+      ],
+    });
+
+    await llm.call({ ...call, systemPrompt: 'You are a calm assistant', userContent: 'hello' });
+
+    expect(moderation.calls).toHaveLength(1);
+    expect([...moderation.calls[0]!.input].sort()).toEqual(['You are a calm assistant', 'hello']);
   });
 });
