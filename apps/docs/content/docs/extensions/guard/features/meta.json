@@ -4,6 +4,7 @@
   "pages": [
     "index",
     "checks",
+    "hosted-detectors",
     "redaction",
     "streaming",
     "labels",

@@ -10,7 +10,15 @@ import {
   type WireStreamChunk,
 } from 'vern-llm';
 
-import { guardLabels, guardMiddleware, type GuardOptions } from '../src/index.js';
+import { MODERATION_CATEGORIES } from '../src/detectors/openaiModeration.js';
+import {
+  guardLabels,
+  guardMiddleware,
+  type GuardOptions,
+  type ModerationCategory,
+  type ModerationClient,
+  type ModerationResult,
+} from '../src/index.js';
 
 // Copied from the other extension packages on purpose, so the packages stay independent of each
 // other and of the core's own test files.
@@ -217,4 +225,65 @@ export function fakeContext(overrides: Partial<PreDispatchContext> = {}) {
     ...overrides,
   } as unknown as PreDispatchContext;
   return { ctx, emitted };
+}
+
+/** Scores by category. A category counts as flagged from 0.5, the way the stub reports it. */
+export type Scores = Partial<Record<ModerationCategory, number>>;
+
+/** A moderation result with every category present. */
+export function moderationResult(scores: Scores = {}): ModerationResult {
+  const categories: Partial<Record<ModerationCategory, boolean>> = {};
+  const category_scores: Partial<Record<ModerationCategory, number>> = {};
+  for (const category of MODERATION_CATEGORIES) {
+    const score = scores[category] ?? 0;
+    categories[category] = score >= 0.5;
+    category_scores[category] = score;
+  }
+  return { flagged: Object.values(categories).includes(true), categories, category_scores };
+}
+
+const pause = (ms: number, signal: AbortSignal | undefined): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  });
+
+/**
+ * A moderation client that scores each text with `score`, and records every request. With
+ * `delayMs` it answers late and stops when its signal aborts, and `peak` says how many requests
+ * were in flight at once. An `error` is thrown instead of an answer.
+ */
+export function createModerationClient(
+  score: (text: string) => Scores = () => ({}),
+  behavior: { delayMs?: number; error?: Error } = {},
+) {
+  const calls: { model: string; input: string[]; signal: AbortSignal | undefined }[] = [];
+  let active = 0;
+  let peak = 0;
+
+  const client: ModerationClient = {
+    moderations: {
+      create: async (body, options) => {
+        calls.push({ model: body.model, input: [...body.input], signal: options?.signal });
+        active += 1;
+        peak = Math.max(peak, active);
+        try {
+          if (behavior.delayMs !== undefined) await pause(behavior.delayMs, options?.signal);
+          if (behavior.error) throw behavior.error;
+          return { results: body.input.map((text) => moderationResult(score(text))) };
+        } finally {
+          active -= 1;
+        }
+      },
+    },
+  };
+
+  return { client, calls, peak: () => peak };
 }

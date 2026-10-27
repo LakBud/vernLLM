@@ -140,6 +140,8 @@ type Detector = (
 
 Built in and dependency free: `patterns(['email', 'phone', 'card', 'iban', 'ip', 'secrets'])` with validation (Luhn, mod 97), `patterns({ label: RegExp })` and `keywords(list)`. They are heuristics, so run them in `mode: 'audit'` first.
 
+For harmful content there is `openaiModeration({ client })`, backed by OpenAI's free Moderation API. A finding is a category, labeled `moderation.<category>`, over the whole text, so these checks label and block. `.only('self-harm', 'violence')` gives a detector for some categories that shares one request per text. It sends the checked text to OpenAI.
+
 ## Labels for policy
 
 ```ts

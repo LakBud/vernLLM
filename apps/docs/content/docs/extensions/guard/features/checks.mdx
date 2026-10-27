@@ -54,7 +54,7 @@ and below.
 
 ## Detectors
 
-<Tabs items={['patterns', 'keywords', 'your own']}>
+<Tabs items={['patterns', 'keywords', 'openaiModeration', 'your own']}>
   <Tab value="patterns">
 
 ```ts title="guard-patterns.ts"
@@ -67,6 +67,14 @@ patterns({ ticket: /TCK-\d{6}/g }); // your own expressions, one label each
 
 ```ts title="guard-keywords.ts"
 keywords(['project-x', 'codename'], { caseSensitive: false }); // whole words only
+```
+
+  </Tab>
+  <Tab value="openaiModeration">
+
+```ts title="guard-moderation.ts"
+const moderation = openaiModeration({ client: new OpenAI(), model: 'omni-moderation-2024-09-26' });
+moderation.only('self-harm', 'violence'); // some categories, sharing one request per text
 ```
 
   </Tab>
@@ -90,6 +98,9 @@ type Detector = (
 <Callout type="warn">
   The built in detectors are heuristics. Run a new check in `mode: 'audit'` first.
 </Callout>
+
+`openaiModeration` asks a provider instead of matching text. See
+[Hosted detectors](/docs/extensions/guard/features/hosted-detectors).
 
 ## When a detector fails
 
