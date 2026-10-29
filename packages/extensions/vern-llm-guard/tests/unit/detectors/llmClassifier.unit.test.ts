@@ -91,6 +91,26 @@ describe('llmClassifier', () => {
       ]);
     });
 
+    it.each(['constructor', '__proto__'])(
+      'does not read a quote for %s from the object prototype',
+      async (name) => {
+        const stub = createClassifierLLM(() => ({}), {
+          answer: (answer) => ({
+            results: answer.results.map(({ id }) => ({ id, categories: [name], quotes: {} })),
+          }),
+        });
+        const detect = llmClassifier({
+          llm: stub.llm,
+          categories: { [name]: 'Something' },
+          quotes: true,
+        });
+
+        expect(await run(detect, user('anything'))).toEqual([
+          { segment: 0, label: `classifier.${name}` },
+        ]);
+      },
+    );
+
     it('keeps a finding without a span for a quote that is not in the text, next to the ones that are', async () => {
       const { detect } = setup(() => ({ competitor: ['Acme', 'Globex'] }), { quotes: true });
 

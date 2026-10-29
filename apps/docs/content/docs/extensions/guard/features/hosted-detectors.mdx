@@ -116,9 +116,12 @@ Rules only you can describe, judged by a model: "recommends a specific investmen
 competitor", "has nothing to do with support". You write the categories in plain language.
 
 ```ts title="guard-classifier.ts"
+import Anthropic from '@anthropic-ai/sdk';
 import { VernLLM } from 'vern-llm';
 import { fromAnthropic } from 'vern-llm/adapters';
 import { guardMiddleware, llmClassifier } from 'vern-llm-guard';
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const classifier = llmClassifier({
   llm: new VernLLM({ client: fromAnthropic(anthropic), model: 'a-small-model' }),
@@ -228,7 +231,8 @@ guardMiddleware({
 - Any error or malformed answer is thrown, and the check's `onError` decides. The check's
   `timeoutMs` cancels the call
 - Verdicts are matched to texts by id, and an answer that does not cover each text exactly once is
-  an error, so a failure never quietly lets text through
+  an error. By default (`onError: 'closed'`) that blocks the call. With `onError: 'open'` the call
+  goes on without this check's findings
 
 ## Measure before you enforce
 

@@ -8,7 +8,8 @@ import type { Verdict } from './request.js';
 export function hitsOf(verdict: Verdict, text: string, quotes: boolean): Hit[] {
   return [...new Set(verdict.categories)].flatMap((category) => {
     const label = `${CLASSIFIER_PREFIX}${category}`;
-    const found = quotes ? verdict.quotes![category] : undefined;
+    const own = quotes && Object.hasOwn(verdict.quotes!, category);
+    const found = own ? verdict.quotes![category] : undefined;
     return found !== undefined && found.length > 0 ? matchSpans(text, label, found) : [{ label }];
   });
 }
