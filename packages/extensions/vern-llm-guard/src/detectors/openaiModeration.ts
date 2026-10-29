@@ -1,6 +1,6 @@
 import { createGuard } from '../internal/guard.utils.js';
+import { createAnalyze } from '../internal/hosted/analyze.js';
 import { createHosted } from '../internal/hosted/instance.js';
-import { createAnalyze } from '../internal/moderation/analyze.js';
 import { hitsOf } from '../internal/moderation/hits.js';
 import { resolveModerationOptions } from '../internal/moderation/options.utils.js';
 import { createModerationRequest } from '../internal/moderation/request.js';

@@ -121,6 +121,7 @@ try {
     'guardMiddleware',
     'guardMiddlewareRef',
     'keywords',
+    'llmClassifier',
     'openaiModeration',
     'patterns',
   ];

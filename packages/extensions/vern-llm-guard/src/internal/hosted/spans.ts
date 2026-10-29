@@ -1,4 +1,4 @@
-import type { Span } from '../scan/types.js';
+import type { Hit } from './types.js';
 
 const escape = (text: string): string => text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 
@@ -35,8 +35,8 @@ export function matchSpans(
   label: string,
   matches: readonly string[],
   wholeWord = false,
-): Span[] {
-  const spans: Span[] = [];
+): Hit[] {
+  const spans: Hit[] = [];
   for (const match of new Set(matches)) {
     const places = locate(text, [match], wholeWord);
     if (places.length === 0) spans.push({ label });
