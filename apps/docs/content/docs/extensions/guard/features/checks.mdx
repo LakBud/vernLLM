@@ -54,7 +54,7 @@ and below.
 
 ## Detectors
 
-<Tabs items={['patterns', 'keywords', 'openaiModeration', 'your own']}>
+<Tabs items={['patterns', 'keywords', 'openaiModeration', 'llmClassifier', 'your own']}>
   <Tab value="patterns">
 
 ```ts title="guard-patterns.ts"
@@ -75,6 +75,17 @@ keywords(['project-x', 'codename'], { caseSensitive: false }); // whole words on
 ```ts title="guard-moderation.ts"
 const moderation = openaiModeration({ client: new OpenAI(), model: 'omni-moderation-2024-09-26' });
 moderation.only('self-harm', 'violence'); // some categories, sharing one request per text
+```
+
+  </Tab>
+  <Tab value="llmClassifier">
+
+```ts title="guard-classifier.ts"
+const classifier = llmClassifier({
+  llm: new VernLLM({ client, model: 'a-small-model' }), // its own instance
+  categories: { competitor: 'Names or compares against a competitor' },
+});
+classifier.only('competitor'); // some categories, sharing one call per text
 ```
 
   </Tab>
@@ -99,7 +110,7 @@ type Detector = (
   The built in detectors are heuristics. Run a new check in `mode: 'audit'` first.
 </Callout>
 
-`openaiModeration` asks a provider instead of matching text. See
+`openaiModeration` and `llmClassifier` ask a provider instead of matching text. See
 [Hosted detectors](/docs/extensions/guard/features/hosted-detectors).
 
 ## When a detector fails

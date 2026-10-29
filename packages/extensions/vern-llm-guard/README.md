@@ -142,6 +142,8 @@ Built in and dependency free: `patterns(['email', 'phone', 'card', 'iban', 'ip',
 
 For harmful content there is `openaiModeration({ client })`, backed by OpenAI's free Moderation API. A finding is a category, labeled `moderation.<category>`, over the whole text, so these checks label and block. `.only('self-harm', 'violence')` gives a detector for some categories that shares one request per text. It sends the checked text to OpenAI.
 
+For rules only you can describe, such as "recommends a specific investment" or "names a competitor", there is `llmClassifier({ llm, categories })`. A model judges each text against your categories, and a finding is a category labeled `classifier.<category>`. With `quotes: true` each finding gets a span from the text the model quoted, so a `redact` check can mask it. Give it its own `VernLLM`: a guard on the one it uses refuses its calls. The model sees the checked text.
+
 ## Labels for policy
 
 ```ts

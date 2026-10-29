@@ -1,6 +1,7 @@
 import { isLLMError, type CallResult } from 'vern-llm';
 
 import { guardLabelsKey } from '../../labels.js';
+import { refuseClassifierCall } from './classifierCall.js';
 import { createFinish } from './finish.utils.js';
 import { refuseStart, scanRequest } from './input.utils.js';
 import { readOutput } from './output.utils.js';
@@ -15,6 +16,8 @@ export function createWrap(getLive: () => Live): NonNullable<GuardMiddleware['wr
     // One reference for the whole call, so an update in the middle changes nothing for it.
     const live = getLive();
     const { compiled, memo, guard } = live;
+
+    refuseClassifierCall(ctx.state, guard);
 
     const started = await scanRequest(live, request, ctx);
     if ('error' in started) {

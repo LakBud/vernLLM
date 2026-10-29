@@ -1,5 +1,12 @@
 export { keywords, type KeywordsOptions } from './detectors/keywords.js';
 export {
+  llmClassifier,
+  type ClassifierAnswer,
+  type ClassifierLLM,
+  type ClassifierUsage,
+  type LLMClassifierOptions,
+} from './detectors/llmClassifier.js';
+export {
   openaiModeration,
   type ModerationCategory,
   type ModerationClient,

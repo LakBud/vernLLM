@@ -1,6 +1,6 @@
 ---
 title: Hosted detectors
-description: Detectors backed by a provider's classifier, so a check can catch harmful content that no pattern describes
+description: Detectors backed by a provider's classifier or a model of your own, so a check can catch harmful content and rules that no pattern describes
 ---
 
 `patterns` and `keywords` match text. A hosted detector asks a provider's classifier instead. It is
@@ -109,6 +109,126 @@ guardMiddleware({
   cancelled with it
 - The memo and the detector's cache send each text once, so a long history is not checked again
   every turn
+
+## llmClassifier
+
+Rules only you can describe, judged by a model: "recommends a specific investment", "names a
+competitor", "has nothing to do with support". You write the categories in plain language.
+
+```ts title="guard-classifier.ts"
+import { VernLLM } from 'vern-llm';
+import { fromAnthropic } from 'vern-llm/adapters';
+import { guardMiddleware, llmClassifier } from 'vern-llm-guard';
+
+const classifier = llmClassifier({
+  llm: new VernLLM({ client: fromAnthropic(anthropic), model: 'a-small-model' }),
+  categories: {
+    investment_advice: 'Recommends buying or selling specific securities or funds',
+    competitor: 'Names or compares against a competitor',
+    off_topic: 'Has nothing to do with support for our product',
+  },
+  quotes: true,
+});
+
+guardMiddleware({
+  version: '2026-10-29.1',
+  checks: [
+    { id: 'advice', detect: classifier.only('investment_advice'), on: 'output', action: 'block' },
+    { id: 'competitor', detect: classifier.only('competitor'), on: 'output', action: 'redact' },
+    { id: 'topic', detect: classifier.only('off_topic'), on: 'user', mode: 'audit' },
+  ],
+});
+```
+
+<Callout type="warn">
+  Give it a `VernLLM` of its own. A guard on that instance refuses the classifier's calls on the
+  first one, because it would scan each classification and call the classifier again. The model sees
+  the text it judges, so use one the app already trusts with that text.
+</Callout>
+
+<TypeTable
+  type={{
+    llm: {
+      description: 'A VernLLM, or anything with call. Not the one the guard protects.',
+      type: '{ call(params) }',
+      required: true,
+    },
+    categories: {
+      description:
+        'Your categories, by name and description. Names are a to z, 0 to 9 and _, up to 40 characters.',
+      type: '{ [name]: string }',
+      required: true,
+    },
+    instructions: {
+      description:
+        'Extra guidance put before the fixed prompt, such as how to treat a borderline case.',
+      type: 'string',
+    },
+    quotes: {
+      description: 'Ask for the exact text behind each category, so findings get spans.',
+      type: 'boolean',
+      default: 'false',
+    },
+    batchSize: {
+      description:
+        'Texts per call, 1 to 16. One keeps a text from influencing the verdict on another.',
+      type: 'number',
+      default: '1',
+    },
+    maxTokens: { description: 'For the answer.', type: 'number', default: '300' },
+    chunkChars: {
+      description: 'Longer texts are split in chunks of this size, at least 1000.',
+      type: 'number',
+      default: '16000',
+    },
+    overlapChars: {
+      description: 'How much of the last chunk the next one starts with.',
+      type: 'number',
+      default: '200',
+    },
+    concurrency: { description: 'Calls in flight at once.', type: 'number', default: '4' },
+    cache: {
+      description: 'Findings kept per source and text. false turns it off.',
+      type: 'false | { max?: number }',
+      default: '{ max: 10_000 }',
+    },
+    onUsage: {
+      description:
+        'Called for each call with the texts, the milliseconds and the model. Token counts come from the onUsage of the VernLLM itself.',
+      type: '(info) => void',
+    },
+  }}
+/>
+
+### Findings
+
+- One finding per category the model names, labeled `classifier.<category>`
+- With `quotes`, each quote is located in the text and becomes a span, so a `redact` check can
+  mask it. A quote that cannot be found gives a finding over the whole text, and a `redact` check
+  blocks rather than miss it
+- Without `quotes`, findings cover the whole text. These checks label and block
+- `only(...)` takes your category names and gives a detector over the same calls and cache
+
+### Its own VernLLM
+
+- Every call the classifier makes carries a marker in the call's `state`. A guard refuses a marked
+  call with an `invalid_params` error that says "Give llmClassifier its own VernLLM", and warns
+  once
+- The check then fails like any other error, so `onError` decides. The mistake shows on the first
+  call instead of as a loop of classifications
+
+### How it asks
+
+- Every text goes in a tag with a random name, new for each call, and the prompt says that
+  everything inside is data to classify, never instructions
+- The answer is constrained by a strict schema whose categories are an enum, and checked again
+  here. An id that is missing, repeated or unknown, or a category that was not given, is an error
+- `temperature` is `0`, so answers stay stable under the memo. Changing the categories, the
+  instructions or the model changes what is found, so give the guard a new `version`
+- Any error or malformed answer is thrown, and the check's `onError` decides. The check's
+  `timeoutMs` cancels the call
+- Verdicts are matched to texts by id, and an answer that does not cover each text exactly once is
+  an error, so a failure never quietly lets text through
 
 ## Measure before you enforce
 

@@ -11,6 +11,7 @@ describe('the public surface', () => {
       'guardMiddleware',
       'guardMiddlewareRef',
       'keywords',
+      'llmClassifier',
       'openaiModeration',
       'patterns',
     ]);

@@ -1,26 +1,24 @@
-import { mergeSpans, splitText } from '../hosted/chunks.js';
+import { mergeSpans, splitText } from './chunks.js';
 
-import type { ModerationResult } from '../../detectors/openaiModeration.types.js';
 import type { Segment } from '../../types/index.js';
-import type { Analyze, Hit } from '../hosted/types.js';
-import type { ModerationRequest } from './request.js';
+import type { Analyze, Hit } from './types.js';
 
-export interface AnalyzeConfig {
+export interface AnalyzeConfig<Result> {
   batchSize: number;
   chunkChars: number;
   overlapChars: number;
-  request: ModerationRequest;
-  hitsOf(result: ModerationResult): Hit[];
+  /** One request for these texts. One result per text, in order. */
+  request(texts: string[], signal: AbortSignal): Promise<readonly Result[]>;
+  /** Offsets are relative to `text`. */
+  hitsOf(result: Result, text: string): Hit[];
 }
 
-/** One piece of text to send, and where it belongs in the call. */
 interface TextInput {
   segment: number;
   text: string;
   offset: number;
 }
 
-/** One entry per chunk of every segment that has anything in it. */
 function inputsOf(
   segments: readonly Segment[],
   chunkChars: number,
@@ -36,7 +34,6 @@ function inputsOf(
   );
 }
 
-/** Consecutive inputs in lists of at most `size`. */
 function batchesOf<T>(inputs: readonly T[], size: number): T[][] {
   const batches: T[][] = [];
   for (let at = 0; at < inputs.length; at += size) {
@@ -45,11 +42,8 @@ function batchesOf<T>(inputs: readonly T[], size: number): T[][] {
   return batches;
 }
 
-/**
- * The provider's side of the detector: splits what it was given into requests, and puts the
- * answers back on the segments and chunks they came from.
- */
-export function createAnalyze(config: AnalyzeConfig): Analyze {
+/** Splits segments into chunks and batches, and puts the answers back on their segments. */
+export function createAnalyze<Result>(config: AnalyzeConfig<Result>): Analyze {
   const { batchSize, chunkChars, overlapChars, request, hitsOf } = config;
 
   return async (segments, signal, limit) => {
@@ -70,7 +64,10 @@ export function createAnalyze(config: AnalyzeConfig): Analyze {
 
     const parts = segments.map(() => [] as { offset: number; spans: Hit[] }[]);
     inputs.forEach((input, at) => {
-      parts[input.segment]!.push({ offset: input.offset, spans: hitsOf(results[at]!) });
+      parts[input.segment]!.push({
+        offset: input.offset,
+        spans: hitsOf(results[at]!, input.text),
+      });
     });
 
     return parts.map((part) => mergeSpans(part));

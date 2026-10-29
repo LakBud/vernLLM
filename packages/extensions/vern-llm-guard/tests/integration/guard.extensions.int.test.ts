@@ -1,18 +1,30 @@
+import { VernLLM, type StreamChunk, type VernLLMMiddleware, type VernLLMOptions } from 'vern-llm';
 import { loggerMiddleware, memorySink } from 'vern-llm-logger';
 import { policyMiddleware } from 'vern-llm-policy';
 import { usageBudgetShare, usageMiddleware } from 'vern-llm-usage';
 import { describe, expect, it } from 'vitest';
 
-import { guardLabels, guardLogFields, openaiModeration, patterns } from '../../src/index.js';
 import {
+  guardLabels,
+  guardLogFields,
+  llmClassifier,
+  openaiModeration,
+  patterns,
+} from '../../src/index.js';
+import {
+  captureLogger,
+  classifierResponder,
+  createClassifierLLM,
   createModerationClient,
+  createResponderClient,
   createStreamClient,
   harness,
+  lastUserText,
   textDeltas,
+  tokenIn,
+  type Found,
   type Scores,
 } from '../helpers.js';
-
-import type { StreamChunk, VernLLMMiddleware, VernLLMOptions } from 'vern-llm';
 
 // The real logger, usage and policy around the guard, as a service would run them. The guard
 // imports none of them: they are dev dependencies of this test only.
@@ -366,5 +378,262 @@ describe('with openaiModeration', () => {
 
     expect(moderation.calls).toHaveLength(1);
     expect([...moderation.calls[0]!.input].sort()).toEqual(['You are a calm assistant', 'hello']);
+  });
+});
+
+describe('with llmClassifier', () => {
+  const categories = {
+    investment_advice: 'Recommends buying or selling a specific security',
+    competitor: 'Names a competitor',
+  };
+  const decide = (text: string): Found => ({
+    ...(text.includes('buy NVDA') && { investment_advice: ['buy NVDA'] }),
+    ...(text.includes('Acme') && { competitor: ['Acme'] }),
+  });
+
+  /** A real `VernLLM` of its own over a stub client, as the classifier's model. */
+  function judge(decided = decide) {
+    const stub = createResponderClient(classifierResponder(decided));
+    const model = new VernLLM({
+      client: stub.client,
+      model: 'judge',
+      maxRetries: 0,
+      logger: 'silent',
+    });
+    return { model, calls: stub.calls, texts: () => stub.calls.map(lastUserText) };
+  }
+
+  /** What the judge was asked to classify, from the boundary of each of its calls. */
+  const classified = (calls: ReturnType<typeof judge>['calls']): string[] =>
+    calls.flatMap((params) => {
+      const content = lastUserText(params);
+      return [...content.matchAll(/<t_[0-9a-f]{6} id="\d+">\n([\s\S]*?)\n<\/t_[0-9a-f]{6}>/g)].map(
+        (match) => match[1]!,
+      );
+    });
+
+  function judged(
+    guard: Partial<Parameters<typeof harness>[0]> = {},
+    answers: Parameters<typeof harness>[2] = {},
+    decided = decide,
+  ) {
+    const model = judge(decided);
+    const classifier = llmClassifier({ llm: model.model, categories, quotes: true });
+    const built = harness(
+      {
+        checks: [
+          {
+            id: 'advice',
+            detect: classifier.only('investment_advice'),
+            action: 'block',
+            on: 'output',
+          },
+          {
+            id: 'competitor',
+            detect: classifier.only('competitor'),
+            action: 'redact',
+            on: 'output',
+          },
+        ],
+        ...guard,
+      },
+      {},
+      answers,
+    );
+    return { ...built, judged: model };
+  }
+
+  it('blocks an answer with investment advice', async () => {
+    const {
+      llm,
+      primary,
+      judged: model,
+    } = judged({}, { primary: () => 'You should buy NVDA today' });
+
+    await expect(llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(1);
+    expect(classified(model.calls)).toEqual(['You should buy NVDA today']);
+  });
+
+  it('masks a competitor in the answer, from the quote the model gave', async () => {
+    const { llm } = judged({}, { primary: () => 'Try Acme instead, or ask us' });
+
+    const answer = await llm.call(call);
+
+    expect(answer).not.toContain('Acme');
+    expect(answer).toContain('instead, or ask us');
+  });
+
+  it('asks the model once for an answer however many checks read it, and leaves a clean one alone', async () => {
+    const { llm, judged: model } = judged({}, { primary: () => 'We can help with that' });
+
+    await expect(llm.call(call)).resolves.toBe('We can help with that');
+
+    expect(model.calls).toHaveLength(1);
+  });
+
+  it('does not ask again for the history of a conversation', async () => {
+    const model = judge();
+    const classifier = llmClassifier({ llm: model.model, categories });
+    const { llm } = harness({
+      checks: [{ id: 'topic', detect: classifier.only('competitor'), on: ['user', 'output'] }],
+    });
+
+    await llm.call({ ...call, userContent: 'hello' });
+    await llm.call({
+      ...call,
+      history: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'primary' },
+      ],
+      userContent: 'and then?',
+    });
+
+    // The first turn's question and answer, then only what is new: the history is not sent again,
+    // and the second answer is the same text as the first, from the same source.
+    expect(classified(model.calls).sort()).toEqual(['and then?', 'hello', 'primary']);
+  });
+
+  it('redacts a competitor in the request for the provider and puts it back in the answer', async () => {
+    const model = judge();
+    const classifier = llmClassifier({ llm: model.model, categories, quotes: true });
+    const { llm, primary } = harness(
+      {
+        checks: [
+          { id: 'competitor', detect: classifier.only('competitor'), action: 'redact', on: 'user' },
+        ],
+      },
+      {},
+      { primary: (params) => `I heard about ${tokenIn(params)}` },
+    );
+
+    const answer = await llm.call({ ...call, userContent: 'Is Acme any good?' });
+
+    expect(lastUserText(primary.calls[0]!)).not.toContain('Acme');
+    expect(answer).toBe('I heard about Acme');
+  });
+
+  it('blocks rather than redact a quote it cannot find in the text', async () => {
+    const { llm, primary } = judged({
+      checks: [
+        {
+          id: 'competitor',
+          detect: llmClassifier({
+            llm: judge(() => ({ competitor: ['Globex'] })).model,
+            categories,
+            quotes: true,
+          }).only('competitor'),
+          action: 'redact',
+        },
+      ],
+    });
+
+    await expect(llm.call({ ...call, userContent: 'Is Acme any good?' })).rejects.toMatchObject({
+      code: 'content_blocked',
+    });
+    expect(primary.calls).toHaveLength(0);
+  });
+
+  it('blocks rather than redact a finding when it did not ask for quotes', async () => {
+    const model = judge();
+    const { llm, primary } = harness({
+      checks: [
+        {
+          id: 'competitor',
+          detect: llmClassifier({ llm: model.model, categories }).only('competitor'),
+          action: 'redact',
+        },
+      ],
+    });
+
+    await expect(llm.call({ ...call, userContent: 'Is Acme any good?' })).rejects.toMatchObject({
+      code: 'content_blocked',
+    });
+    expect(primary.calls).toHaveLength(0);
+  });
+
+  it('refuses the call when the model is down, unless the check fails open', async () => {
+    const down = createClassifierLLM(decide, { error: new Error('model down') });
+    const checks = [
+      {
+        id: 'topic',
+        detect: llmClassifier({ llm: down.llm, categories }),
+        action: 'block' as const,
+      },
+    ];
+
+    const closed = harness({ checks });
+    await expect(closed.llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+    expect(closed.primary.calls).toHaveLength(0);
+
+    const open = harness({ checks, onError: 'open' });
+    await expect(open.llm.call(call)).resolves.toBe('primary');
+  });
+
+  it('cancels the model call when the check runs out of time, and then follows onError', async () => {
+    const slow = createClassifierLLM(decide, { delayMs: 500 });
+    const { llm, primary } = harness({
+      checks: [
+        {
+          id: 'slow',
+          detect: llmClassifier({ llm: slow.llm, categories }),
+          action: 'block',
+          timeoutMs: 30,
+        },
+      ],
+    });
+
+    await expect(llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(slow.calls[0]!.params.signal!.aborted).toBe(true);
+  });
+
+  it('refuses a classifier that was given the VernLLM the guard protects, and says why once', async () => {
+    const log = captureLogger();
+    let guarded: VernLLM | undefined;
+    const classifier = llmClassifier({
+      llm: { call: (params) => guarded!.call(params as never) },
+      categories,
+    });
+    const built = harness({
+      checks: [{ id: 'topic', detect: classifier.only('competitor'), action: 'block' }],
+      logger: log.logger,
+    });
+    guarded = built.llm;
+
+    // No loop: the classifier's call is refused at once, the check cannot answer, and onError
+    // closed blocks the call.
+    await expect(built.llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+    await expect(built.llm.call({ ...call, userContent: 'again' })).rejects.toMatchObject({
+      code: 'content_blocked',
+    });
+
+    expect(built.primary.calls).toHaveLength(0);
+    const warned = log
+      .warnings()
+      .filter((line) => line.includes('Give llmClassifier its own VernLLM'));
+    expect(warned).toHaveLength(1);
+  });
+
+  it('lets the call through when that check fails open, and still says why', async () => {
+    const log = captureLogger();
+    let guarded: VernLLM | undefined;
+    const classifier = llmClassifier({
+      llm: { call: (params) => guarded!.call(params as never) },
+      categories,
+    });
+    const built = harness({
+      checks: [{ id: 'topic', detect: classifier, onError: 'open' }],
+      logger: log.logger,
+    });
+    guarded = built.llm;
+
+    await expect(built.llm.call(call)).resolves.toBe('primary');
+
+    expect(log.warnings().some((line) => line.includes('Give llmClassifier its own VernLLM'))).toBe(
+      true,
+    );
   });
 });

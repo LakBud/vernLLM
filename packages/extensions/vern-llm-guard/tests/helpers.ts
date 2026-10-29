@@ -1,6 +1,7 @@
 import {
   VernLLM,
   createMiddlewareStateBag,
+  type CallParams,
   type LLMClient,
   type Logger,
   type PreDispatchContext,
@@ -14,6 +15,8 @@ import { MODERATION_CATEGORIES } from '../src/detectors/openaiModeration.js';
 import {
   guardLabels,
   guardMiddleware,
+  type ClassifierAnswer,
+  type ClassifierLLM,
   type GuardOptions,
   type ModerationCategory,
   type ModerationClient,
@@ -286,4 +289,75 @@ export function createModerationClient(
   };
 
   return { client, calls, peak: () => peak };
+}
+
+/** What a stub classifier finds in a text: each category that applies, with its quotes. */
+export type Found = Record<string, string[]>;
+
+const TAGGED = /<(t_[0-9a-f]{6}) id="(\d+)">\n([\s\S]*?)\n<\/\1>/g;
+
+/** The texts a classifier call was sent, in id order, and the boundary tag they came in. */
+export function classifierInput(userContent: string): { boundary: string; texts: string[] } {
+  const matches = [...userContent.matchAll(TAGGED)];
+  const texts: string[] = [];
+  for (const [, , id, text] of matches) texts[Number(id)] = text!;
+  return { boundary: matches[0]?.[1] ?? '', texts };
+}
+
+/** The answer a model would give: what `decide` finds in each text, by id. */
+export function classifierAnswer(
+  decide: (text: string) => Found,
+  userContent: string,
+): ClassifierAnswer {
+  const { texts } = classifierInput(userContent);
+  return {
+    results: texts.map((text, id) => {
+      const found = decide(text);
+      return { id, categories: Object.keys(found), quotes: found };
+    }),
+  };
+}
+
+/** What a `VernLLM` over a stub client answers, so a real one can act as the classifier's model. */
+export const classifierResponder =
+  (decide: (text: string) => Found): Responder =>
+  (params) =>
+    JSON.stringify(classifierAnswer(decide, lastUserText(params)));
+
+/**
+ * A model for `llmClassifier` that decides each text with `decide`, and records every call. With
+ * `delayMs` it answers late and stops when its signal aborts, `peak` says how many calls were in
+ * flight at once, and `answer` changes what it says. An `error` is thrown instead of an answer.
+ */
+export function createClassifierLLM(
+  decide: (text: string) => Found = () => ({}),
+  behavior: {
+    delayMs?: number;
+    error?: Error;
+    answer?: (answer: ClassifierAnswer) => unknown;
+  } = {},
+) {
+  const calls: (ReturnType<typeof classifierInput> & { params: CallParams<ClassifierAnswer> })[] =
+    [];
+  let active = 0;
+  let peak = 0;
+
+  const llm: ClassifierLLM = {
+    call: async (params) => {
+      const content = params.userContent as string;
+      calls.push({ params, ...classifierInput(content) });
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        if (behavior.delayMs !== undefined) await pause(behavior.delayMs, params.signal);
+        if (behavior.error) throw behavior.error;
+        const answer = classifierAnswer(decide, content);
+        return behavior.answer ? behavior.answer(answer) : answer;
+      } finally {
+        active -= 1;
+      }
+    },
+  };
+
+  return { llm, calls, peak: () => peak };
 }
