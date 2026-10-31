@@ -2,12 +2,35 @@
 'vern-llm-guard': minor
 ---
 
-First release of `vern-llm-guard`, a middleware that checks what goes into a call and what comes out: label it, redact values, or block it.
+First release of `vern-llm-guard`, a middleware that checks what goes into a call and what comes out, and can label it, redact values, or block it. Built in detectors cover emails, phone numbers, cards, IBANs, IPs, secrets and keywords. `openaiModeration()` checks for harmful content with OpenAI's free Moderation API, including images. `llmClassifier()` judges rules only you can describe with a model you give it, and can return a level per category and the exact text behind each finding. Answers are checked too, including streams and tool call arguments.
 
-`guardMiddleware({ version, checks })` runs outside policy, usage and the router, so a blocked call reserves no budget and opens no connection. A check pairs a detector with an `action`: `label` (default) adds a label for policy, `redact` replaces each value with a keyed token the provider sees and restores it in the answer, and `block` refuses the call with `content_blocked`. `on` points a check at the request, a role, or the answer. `mode: 'audit'` reports what a check would do without doing it. A detector that throws or times out follows `onError`, which is `closed` by default.
+```ts
+import { VernLLM } from 'vern-llm';
+import {
+  guardMiddleware,
+  keywords,
+  llmClassifier,
+  openaiModeration,
+  patterns,
+} from 'vern-llm-guard';
 
-`patterns(['email', 'phone', 'card', 'iban', 'ip', 'secrets'])` and `keywords(list)` are built in, dependency free and validated (Luhn, mod 97), and a detector is a pure function so you can bring your own. Tokens are HMACs, nothing is stored, and an email token keeps the shape of an address on a domain that is never real. `redactFor` redacts per target, so a trusted primary can see the value while a fallback gets a token.
+const classifier = llmClassifier({
+  llm: classifierLlm, // a VernLLM of its own, not the one this guard protects
+  categories: { competitor: 'Names or compares against a competitor' },
+  quotes: true,
+});
 
-Answers are checked too, plain, JSON mode and tool call arguments. A streamed answer is held, checked and released with `release: 'checked' | 'immediate'`, `holdChars` and `windowChars`, and `finalResult` checks the whole answer. `parallel` starts a slow blocking check with the call instead of before it. `spotlight` marks untrusted text so the model reads it as data.
+const guard = guardMiddleware({
+  version: '2026-10-31.1',
+  checks: [
+    { id: 'pii', detect: patterns(['email', 'card']), action: 'redact' },
+    { id: 'banned', detect: keywords(['project-x']), action: 'block' },
+    { id: 'harm', detect: openaiModeration({ client: openai, images: true }), action: 'block' },
+    { id: 'rivals', detect: classifier.only('competitor'), action: 'redact', on: 'output' },
+  ],
+});
 
-`guardLabels` feeds policy's `labels` option, and `guardLogFields` gives a log record `guard_outcome`, `guard_labels` and `guard_ms`. Every call emits one `guard.result` event with counts, kinds and timings, never content or offsets. `guard.evaluate()` returns the result a call would get from plain data, for measuring false positives before a check leaves audit. `guard.update()` validates new checks and swaps them atomically, and `guard.redactText` masks debug logs for the core's `redact` option.
+const llm = new VernLLM({ client, model, middleware: [guard] });
+```
+
+A new package, so existing code keeps compiling and behaving the same at runtime. A call a check blocks fails with `content_blocked`.
