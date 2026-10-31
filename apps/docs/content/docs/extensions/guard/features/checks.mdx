@@ -95,7 +95,7 @@ classifier.only('competitor'); // some categories, sharing one call per text
 
 ```ts title="guard-bedrock.ts"
 const aws = bedrockGuardrail({ client, guardrailIdentifier: 'gr-abc123', guardrailVersion: '3' });
-aws.only('pii', 'topic'); // some kinds, sharing one request per text
+aws.only('pii', 'topic'); // some kinds, sharing requests and cache
 ```
 
   </Tab>

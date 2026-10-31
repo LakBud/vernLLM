@@ -138,7 +138,7 @@ describe('bedrockGuardrail with the real @aws-sdk/client-bedrock-runtime client'
     await vi.waitFor(() => expect(server!.requests).toHaveLength(1));
     controller.abort(new Error('timed out'));
 
-    // The SDK ends the request with its own abort error.
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    // The call ends with its own reason, not the SDK's abort error.
+    await expect(pending).rejects.toThrow('timed out');
   });
 });

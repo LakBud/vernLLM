@@ -276,7 +276,8 @@ guardMiddleware({
   block
 - The check's `action` decides what happens. Bedrock's own action is ignored
 - `only(...)` takes `pii`, `regex`, `word`, `topic` and `content`, and gives a detector over the same
-  requests and cache. Three checks on one guardrail cost one request per text
+  requests and cache. Three checks on one guardrail share its in flight requests and cached
+  results, so a text is not sent again while its result is cached
 
 ## Choosing between them
 
@@ -306,8 +307,9 @@ the answer, `patterns` for secrets.
 ## When a hosted detector fails
 
 A network error, a throttled request, a malformed answer or a result for the wrong number of texts
-is thrown as it is, and the check's `onError` decides. `closed`, the default, blocks the call, which
-is right for a check you rely on. Use `open` for a check that is a convenience, so an outage at the
+is thrown as it is, and the check's `onError` decides. With `closed`, the default, a failed blocking
+check blocks the call, which is right for a check you rely on, and a failed labeling check makes its
+labels unknown without blocking. Use `open` for a check that is a convenience, so an outage at the
 provider does not become an outage of your app. The check's `timeoutMs` cancels the request.
 
 ## Measure before you enforce

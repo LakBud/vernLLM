@@ -41,9 +41,10 @@ function warnDraft(option: Logger | 'silent' | undefined): void {
  * sensitive information and word policies are located in the text and give spans. Topic and
  * content findings cover the whole text.
  *
- * It makes one request per text, shared by every view, and the guardrail's own action is ignored:
- * what to do with a finding is up to the caller. `.only('pii', 'regex')` gives a detector for some
- * kinds over the same requests and cache.
+ * Every view shares the requests in flight and the cached results, so a text is not sent again
+ * while its result is cached. The guardrail's own action is ignored: what to do with a finding is
+ * up to the caller. `.only('pii', 'regex')` gives a detector for some kinds over the same requests
+ * and cache.
  *
  * It sends the text it checks to Bedrock. A `DRAFT` version can change at any time, so it warns
  * once and turns the cache off.

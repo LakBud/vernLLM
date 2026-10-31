@@ -23,6 +23,7 @@ const aws = bedrockGuardrail({
   guardrailVersion: '3',
 });
 
+const signal = AbortSignal.timeout(5000);
 const found = await aws([{ text: 'Mail jane@acme.com', source: 'user' }], signal);
 // [{ segment: 0, label: 'pii.EMAIL', start: 5, end: 18 }]
 
@@ -112,10 +113,12 @@ The text you check is sent to Bedrock, and the identity behind the client needs
 
 ## How it runs
 
-- One request per text, whatever the views and calls that read it. A request that nobody waits for
-  any more is cancelled
-- A request carries one text, since Bedrock returns assessments per guardrail and not per content
-  block. Bedrock bills per text unit, rounded up for each request
+- Views and calls share the requests in flight and the cached results, so a text that is already
+  being checked, or whose result is cached, is not sent again. A cache miss makes one request per
+  chunk of the text, and the same text is sent again when the cache is off, an entry was evicted or
+  the version is `DRAFT`. A request that nobody waits for any more is cancelled
+- A request carries one chunk of text, since Bedrock returns assessments per guardrail and not per
+  content block. Bedrock bills per text unit, rounded up for each request
 - The cache holds labels and offsets, never text. A published version can be cached, a `DRAFT`
   cannot
 - Any error is thrown as it is: throttling, access denied, a response without assessments. The

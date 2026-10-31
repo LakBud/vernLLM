@@ -71,14 +71,22 @@ export function createLookup(config: LookupConfig): Lookup {
         }
       }
     };
-    const onAbort = (): void => release(signal.reason);
+    // A call that is aborted stops at once with its own reason, even when other calls keep the
+    // requests it shared going.
+    let stop!: (reason: unknown) => void;
+    const stopped = new Promise<never>((_resolve, reject) => (stop = reject));
+    const onAbort = (): void => {
+      release(signal.reason);
+      stop(signal.reason);
+    };
     signal.addEventListener('abort', onAbort, { once: true });
 
     try {
       const answers = new Map<Flight, Hit[][]>();
-      await Promise.all(
-        [...waitingOn].map(async (flight) => answers.set(flight, await flight.answer)),
-      );
+      await Promise.race([
+        stopped,
+        Promise.all([...waitingOn].map(async (flight) => answers.set(flight, await flight.answer))),
+      ]);
       return keys.map((key) => {
         const entry = joined.get(key);
         return known.get(key) ?? answers.get(entry!.flight)![entry!.index]!;

@@ -61,10 +61,11 @@ const aws = bedrockGuardrail({
   guardrailVersion: '3',
 });
 
+const signal = AbortSignal.timeout(5000);
 const found = await aws([{ text: 'Mail jane@acme.com', source: 'user' }], signal);
 // [{ segment: 0, label: 'pii.EMAIL', start: 5, end: 18 }]
 ```
 
-A finding is labeled `pii.<type>`, `regex.<name>`, `word.<type>`, `topic.<name>` or `content.<type>`. Matches in sensitive information, regexes and words become spans. Topics and content filters cover the whole text. `.only('pii', 'topic')` gives a detector for some kinds that shares one request per text and one cache. The text you check is sent to Bedrock, and a `DRAFT` version warns once and is never cached.
+A finding is labeled `pii.<type>`, `regex.<name>`, `word.<type>`, `topic.<name>` or `content.<type>`. Matches in sensitive information, regexes and words become spans. Topics and content filters cover the whole text. `.only('pii', 'topic')` gives a detector for some kinds that shares requests and one cache with the rest, so a text is not sent again while its result is cached. The text you check is sent to Bedrock, and a `DRAFT` version warns once and is never cached.
 
 See the [documentation](https://vernllm.dev/docs/integrations/bedrock) for every option.

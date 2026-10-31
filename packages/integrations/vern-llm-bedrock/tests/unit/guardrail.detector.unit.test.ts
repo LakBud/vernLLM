@@ -170,6 +170,31 @@ describe('bedrockGuardrail', () => {
       expect(requests).toHaveLength(1);
     });
 
+    it('stops a call that is aborted at once, while another call keeps the shared request going', async () => {
+      let finish!: () => void;
+      const { detect, requests, signals } = setup({}, async (input) => {
+        await new Promise<void>((resolve) => (finish = resolve));
+        return answer(textOf(input));
+      });
+      const text = [user(`${EMAIL} stocks`)];
+      const first = new AbortController();
+
+      const gone = detect.only('pii')(text, first.signal);
+      const kept = detect.only('topic')(text, new AbortController().signal);
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      await later(5);
+
+      first.abort(new Error('first gave up'));
+
+      // It does not wait for the request, which is still going for the other call.
+      await expect(gone).rejects.toThrow('first gave up');
+      expect(signals[0]!.aborted).toBe(false);
+
+      finish();
+      await expect(kept).resolves.toEqual([{ segment: 0, label: 'topic.Investing' }]);
+      expect(requests).toHaveLength(1);
+    });
+
     it('keeps a text from one source apart from the same text from another', async () => {
       const { detect, requests, signal } = setup();
 
