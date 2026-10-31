@@ -63,7 +63,7 @@
     "vern-llm": "workspace:^"
   },
   "devDependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1160.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.11.0",
     "@opentelemetry/sdk-metrics": "^2.11.0",
