@@ -151,7 +151,7 @@
     "@vitest/coverage-v8": "^4.1.11",
     "ioredis": "^5.11.1",
     "publint": "^0.3.24",
-    "redis": "^4.7.1",
+    "redis": "^6.3.1",
     "size-limit": "13.1.1",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
