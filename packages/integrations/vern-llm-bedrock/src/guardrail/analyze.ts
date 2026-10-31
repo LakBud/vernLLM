@@ -1,8 +1,9 @@
 import { hitsOf } from './findings.js';
-import { mergeSpans, splitText } from './hosted/chunks.js';
+import { mergeSpans, splitText, type Chunk } from './hosted/chunks.js';
 
-import type { Analyze } from './hosted/types.js';
+import type { Analyze, Hit } from './hosted/types.js';
 import type { Ask } from './request.js';
+import type { Segment, Source } from './types.js';
 
 export interface AnalyzeConfig {
   chunkChars: number;
@@ -22,27 +23,24 @@ export function createAnalyze(config: AnalyzeConfig): Analyze {
     const failed = new AbortController();
     const stop = AbortSignal.any([signal, failed.signal]);
 
-    return Promise.all(
-      segments.map(async ({ text, source }) => {
-        if (text.trim() === '') return [];
+    /** Asks about one chunk in a free slot, and stops the others if it fails. */
+    const askChunk = ({ offset, text }: Chunk, source: Source) =>
+      limit(async () => {
+        try {
+          return { offset, spans: hitsOf(await ask(text, source, stop), text) };
+        } catch (error) {
+          failed.abort(error);
+          throw error;
+        }
+      });
 
-        const parts = await Promise.all(
-          splitText(text, chunkChars, overlapChars).map((chunk) =>
-            limit(async () => {
-              try {
-                return {
-                  offset: chunk.offset,
-                  spans: hitsOf(await ask(chunk.text, source, stop), chunk.text),
-                };
-              } catch (error) {
-                failed.abort(error);
-                throw error;
-              }
-            }),
-          ),
-        );
-        return mergeSpans(parts);
-      }),
-    );
+    const analyzeSegment = async ({ text, source }: Segment): Promise<Hit[]> => {
+      if (text.trim() === '') return [];
+
+      const chunks = splitText(text, chunkChars, overlapChars);
+      return mergeSpans(await Promise.all(chunks.map((chunk) => askChunk(chunk, source))));
+    };
+
+    return Promise.all(segments.map(analyzeSegment));
   };
 }

@@ -1,9 +1,5 @@
 import type { Segment } from '../types.js';
 
-// This folder is the shared part of a hosted detector: views by kind, one request per text, a cache
-// and a limit on requests in flight. Hosted detectors elsewhere in this repo use the same design
-// and keep their own copy, since packages don't import each other. Keep the copies in step.
-
 /** One finding as it is remembered: a label and offsets, never the text. */
 export interface Span {
   readonly label?: string;

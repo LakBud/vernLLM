@@ -49,38 +49,46 @@ export function createFlights(
     }
   };
 
+  /** Asks the provider about the texts and remembers what it answers. A failure stops the rest. */
+  const ask = async (
+    fresh: readonly FreshText[],
+    controller: AbortController,
+  ): Promise<Hit[][]> => {
+    try {
+      const hits = await analyze(
+        fresh.map((entry) => entry.segment),
+        controller.signal,
+        limit,
+      );
+      if (!Array.isArray(hits) || hits.length !== fresh.length) {
+        throw new Error(`${name}: the provider answered for the wrong number of texts`);
+      }
+      fresh.forEach(({ key }, index) => remember?.(key, hits[index]!));
+      return hits;
+    } catch (error) {
+      controller.abort(error);
+      throw error;
+    }
+  };
+
   const start = (fresh: readonly FreshText[]): Flight => {
-    const flight = {
-      controller: new AbortController(),
+    const controller = new AbortController();
+    const flight: Flight = {
+      controller,
       keys: fresh.map((entry) => entry.key),
       waiters: 0,
       settled: false,
-    } as Flight;
+      answer: ask(fresh, controller),
+    };
     fresh.forEach(({ key }, index) => entries.set(key, { flight, index }));
 
-    flight.answer = (async () => {
-      try {
-        const hits = await analyze(
-          fresh.map((entry) => entry.segment),
-          flight.controller.signal,
-          limit,
-        );
-        if (!Array.isArray(hits) || hits.length !== fresh.length) {
-          throw new Error(`${name}: the provider answered for the wrong number of texts`);
-        }
-        fresh.forEach(({ key }, index) => remember?.(key, hits[index]!));
-        return hits;
-      } catch (error) {
-        // Stop the requests still queued or in flight.
-        flight.controller.abort(error);
-        throw error;
-      } finally {
-        flight.settled = true;
-        drop(flight);
-      }
-    })();
-    // The calls waiting on it see the failure. This keeps one nobody waits on from going unhandled.
-    flight.answer.catch(() => {});
+    // Once over, the flight is forgotten. The calls waiting on it see any failure, and handling it
+    // here keeps a flight nobody waits on from going unhandled.
+    const finish = (): void => {
+      flight.settled = true;
+      drop(flight);
+    };
+    flight.answer.then(finish, finish);
     return flight;
   };
 

@@ -35,19 +35,8 @@ function warnDraft(option: Logger | 'silent' | undefined): void {
 }
 
 /**
- * A detector backed by an Amazon Bedrock guardrail, run through `ApplyGuardrail`: topics, content
- * filters, sensitive information, regexes and word lists you manage in AWS. A finding is labeled
- * `pii.<type>`, `regex.<name>`, `word.<type>`, `topic.<name>` or `content.<type>`. Matches in
- * sensitive information and word policies are located in the text and give spans. Topic and
- * content findings cover the whole text.
- *
- * Every view shares the requests in flight and the cached results, so a text is not sent again
- * while its result is cached. The guardrail's own action is ignored: what to do with a finding is
- * up to the caller. `.only('pii', 'regex')` gives a detector for some kinds over the same requests
- * and cache.
- *
- * It sends the text it checks to Bedrock. A `DRAFT` version can change at any time, so it warns
- * once and turns the cache off.
+ * A detector backed by an Amazon Bedrock guardrail, run through `ApplyGuardrail`. It sends the text
+ * it checks to Bedrock. Labels, options and caching are in the Bedrock guardrails docs.
  */
 export function bedrockGuardrail(options: BedrockGuardrailOptions): GuardrailDetector {
   const settings = resolveOptions(NAME, options);

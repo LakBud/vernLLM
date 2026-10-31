@@ -20,29 +20,28 @@ function located(text: string, label: string, match: string | undefined, wholeWo
   return match ? matchSpans(text, label, [match], wholeWord) : [{ label }];
 }
 
+/** The findings of the items that count, each turned into hits by `toHits`. */
+function each<T extends Item>(items: readonly T[] | undefined, toHits: (item: T) => Hit[]): Hit[] {
+  return (items ?? []).filter(counts).flatMap((item) => toHits(item));
+}
+
 /** The findings of one assessment. Topics and content filters return no match, so they cover the text. */
 function assessed(assessment: GuardrailAssessment, text: string): Hit[] {
   const { topicPolicy, contentPolicy, wordPolicy, sensitiveInformationPolicy } = assessment;
 
   return [
-    ...(sensitiveInformationPolicy?.piiEntities ?? [])
-      .filter(counts)
-      .flatMap(({ type, match }) => located(text, `pii.${type ?? 'unknown'}`, match)),
-    ...(sensitiveInformationPolicy?.regexes ?? [])
-      .filter(counts)
-      .flatMap(({ name, match }) => located(text, `regex.${name ?? 'unnamed'}`, match)),
-    ...(wordPolicy?.customWords ?? [])
-      .filter(counts)
-      .flatMap(({ match }) => located(text, 'word.custom', match, true)),
-    ...(wordPolicy?.managedWordLists ?? [])
-      .filter(counts)
-      .flatMap(({ type, match }) => located(text, `word.${type ?? 'unknown'}`, match)),
-    ...(topicPolicy?.topics ?? [])
-      .filter(counts)
-      .map(({ name }) => ({ label: `topic.${name ?? 'unknown'}` })),
-    ...(contentPolicy?.filters ?? [])
-      .filter(counts)
-      .map(({ type }) => ({ label: `content.${type ?? 'unknown'}` })),
+    ...each(sensitiveInformationPolicy?.piiEntities, ({ type, match }) =>
+      located(text, `pii.${type ?? 'unknown'}`, match),
+    ),
+    ...each(sensitiveInformationPolicy?.regexes, ({ name, match }) =>
+      located(text, `regex.${name ?? 'unnamed'}`, match),
+    ),
+    ...each(wordPolicy?.customWords, ({ match }) => located(text, 'word.custom', match, true)),
+    ...each(wordPolicy?.managedWordLists, ({ type, match }) =>
+      located(text, `word.${type ?? 'unknown'}`, match),
+    ),
+    ...each(topicPolicy?.topics, ({ name }) => [{ label: `topic.${name ?? 'unknown'}` }]),
+    ...each(contentPolicy?.filters, ({ type }) => [{ label: `content.${type ?? 'unknown'}` }]),
   ];
 }
 
