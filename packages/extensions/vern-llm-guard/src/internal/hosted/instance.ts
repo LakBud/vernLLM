@@ -13,8 +13,8 @@ export type { Analyze, Hit, HostedConfig, HostedDetector } from './types.js';
 export function createHosted<Kind extends string>(
   config: HostedConfig<Kind>,
 ): HostedDetector<Kind> {
-  const { name, kinds, kindOf, analyze, concurrency, cache } = config;
+  const { name, kinds, kindOf, analyze, concurrency, cache, images, levels } = config;
   const lookup = createLookup({ name, analyze, concurrency, cache });
 
-  return createView({ name, kinds, kindOf, lookup });
+  return createView({ name, kinds, kindOf, lookup, images, levels });
 }

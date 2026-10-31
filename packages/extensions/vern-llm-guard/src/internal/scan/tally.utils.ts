@@ -30,6 +30,8 @@ export function tally(
   spans.forEach((list, position) => {
     const segment = positions[position]!;
     for (const span of list) {
+      // A segment the detector did not read found nothing.
+      if (span.unscanned === true) continue;
       if (skip?.(segment, span, check)) continue;
       result.found++;
       if (span.label !== undefined) result.kinds.add(span.label);

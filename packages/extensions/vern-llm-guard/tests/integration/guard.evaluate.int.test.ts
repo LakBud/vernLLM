@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { keywords, patterns, type Check, type Detector } from '../../src/index.js';
+import {
+  keywords,
+  patterns,
+  type Check,
+  type Detector,
+  type Finding,
+  type ImageDetector,
+} from '../../src/index.js';
 import { harness } from '../helpers.js';
 
 const pii: Check = { id: 'pii', detect: patterns(['email']) };
@@ -176,5 +183,44 @@ describe('redactText', () => {
     });
 
     expect(guard.redactText('jane@acme.com')).toBe('[EMAIL]');
+  });
+});
+
+describe('evaluate with images', () => {
+  const messages = [
+    {
+      role: 'user' as const,
+      content: [
+        { type: 'text' as const, text: 'is this ok' },
+        { type: 'image' as const, data: 'VIOLENT', mimeType: 'image/png' },
+        { type: 'image' as const, data: 'calm', mimeType: 'image/png' },
+      ],
+    },
+  ];
+  const violent: ImageDetector = Object.assign(
+    (segments: Parameters<ImageDetector>[0]): Finding[] =>
+      segments.flatMap((segment, index): Finding[] =>
+        'image' in segment && segment.image.data === 'VIOLENT'
+          ? [{ segment: index, label: 'violent' }]
+          : [],
+      ),
+    { images: true as const },
+  );
+
+  it('reads the images of a request with a check that takes them', async () => {
+    const { guard } = harness({ checks: [{ id: 'pic', detect: violent, action: 'block' }] });
+
+    const result = await guard.evaluate({ messages });
+
+    expect(result).toMatchObject({
+      outcome: 'blocked',
+      input: { checks: { pic: { found: 1 } }, unscanned: 0 },
+    });
+  });
+
+  it('counts them as unscanned when no check takes them', async () => {
+    const { guard } = harness({ checks: [pii] });
+
+    expect((await guard.evaluate({ messages })).input.unscanned).toBe(2);
   });
 });

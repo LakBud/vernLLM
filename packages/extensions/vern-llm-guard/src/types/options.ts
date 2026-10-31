@@ -1,4 +1,4 @@
-import type { AttemptContext, Logger, PreDispatchContext, WireMessage } from 'vern-llm';
+import type { AttemptContext, CallMeta, Logger, PreDispatchContext, WireMessage } from 'vern-llm';
 
 /** Same shape as `VernLLMOptions.logger`. */
 export type LoggerOption = Logger | 'silent';
@@ -12,9 +12,17 @@ export interface Segment {
   source: Source;
 }
 
+/** One image a detector scans. Only a detector with `images: true` is given one. */
+export interface ImageSegment {
+  /** `data` is base64 with no `data:` prefix, as in the core's `ImageBlock`. */
+  image: { data: string; mimeType: string };
+  source: Source;
+}
+
 /**
  * One thing a detector found. `segment` is an index into the segments the detector was given.
- * `start` and `end` are offsets into that segment's text, end exclusive.
+ * `start` and `end` are offsets into that segment's text, end exclusive. An image has no text, so
+ * a finding on one has no offsets.
  */
 export interface Finding {
   segment: number;
@@ -22,17 +30,57 @@ export interface Finding {
   label?: string;
   start?: number;
   end?: number;
+  /**
+   * The detector did not read this segment, such as an image of a format it cannot take. It counts
+   * as unscanned and finds nothing. No other field is read.
+   */
+  unscanned?: true;
 }
+
+/** The call around the text a detector judges. Set for output checks. */
+export interface CallView {
+  /**
+   * The request's text segments, as the provider saw them: a value that was replaced by a token
+   * is the token. For an answer that depends on what the model was given, such as its tool results.
+   */
+  input: readonly Segment[];
+  /**
+   * What answered the call, for a plain answer. For a stream it is set once `finalResult` settles,
+   * and never while the text is still arriving. Absent on a cache hit.
+   */
+  meta?: CallMeta;
+}
+
+type DetectorFindings = Finding[] | Promise<Finding[]>;
 
 /**
  * Finds things in text. A detector is a pure function of its segments: the memo and `evaluate`
  * depend on it. It gets every segment that needs scanning in one call, and returns only the findings
  * it stands behind. Returning an array keeps the scan synchronous.
+ *
+ * Two optional properties say what else it takes. `images: true` also gives it image segments, and
+ * is written with `ImageDetector`. `callView: true` gives it the call around the text as the third
+ * argument, and the guard never memoizes it, since its findings depend on more than the text. It is
+ * not called `call`, which every function already has.
  */
-export type Detector = (
+export type Detector = ((
   segments: readonly Segment[],
   signal: AbortSignal,
-) => Finding[] | Promise<Finding[]>;
+  call?: CallView,
+) => DetectorFindings) & {
+  readonly images?: true;
+  readonly callView?: true;
+};
+
+/** A detector that also reads images. It fits wherever a `Detector` does. */
+export type ImageDetector = ((
+  segments: readonly (Segment | ImageSegment)[],
+  signal: AbortSignal,
+  call?: CallView,
+) => DetectorFindings) & {
+  readonly images: true;
+  readonly callView?: true;
+};
 
 /** What a check can be pointed at. `'input'` is every role of the request. */
 export type CheckOn = 'input' | 'user' | 'tool' | 'system' | 'assistant' | 'output';

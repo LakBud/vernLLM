@@ -26,7 +26,7 @@ export function createWrap(getLive: () => Live): NonNullable<GuardMiddleware['wr
       throw refuseStart(live, ctx, started.error);
     }
 
-    const { state, inputSegments, refusal } = started;
+    const { state, inputSegments, covered, recount, refusal } = started;
     const finish = createFinish(ctx, state);
 
     if (refusal !== undefined) {
@@ -41,9 +41,18 @@ export function createWrap(getLive: () => Live): NonNullable<GuardMiddleware['wr
     const reportParallel = (error: unknown): void => guard.report('parallel checks', error);
     // One that answers at once is joined here, so a block costs no provider call.
     const stop = new AbortController();
-    let parallel = startParallel(compiled, inputSegments, state.cache, memo, ctx, stop.signal);
+    let parallel = startParallel(
+      compiled,
+      inputSegments,
+      state.cache,
+      memo,
+      ctx,
+      stop.signal,
+      covered,
+    );
     if (parallel !== undefined && !(parallel instanceof Promise)) {
       const joined = await joinParallel(parallel, compiled, state.input, reportParallel);
+      recount();
       state.ms += joined.ms;
       if (joined.refusal !== undefined) {
         finish(true);
@@ -64,6 +73,7 @@ export function createWrap(getLive: () => Live): NonNullable<GuardMiddleware['wr
 
     if (parallel !== undefined) {
       const joined = await joinParallel(parallel, compiled, state.input, reportParallel);
+      recount();
       state.ms += joined.ms;
       const refusal = joined.refusal;
       if (refusal !== undefined) {

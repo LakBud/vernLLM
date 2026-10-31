@@ -1,4 +1,4 @@
-import type { OutputReport, PhaseReport } from '../../types/index.js';
+import type { OutputReport, PhaseReport, Segment } from '../../types/index.js';
 import type { CompiledCheck, CompiledChecks } from '../../types/resolvedConfig.js';
 import type { CallCache, Memo } from '../scan/types.js';
 import type { TokenMap } from '../tokens/tokens.js';
@@ -13,6 +13,8 @@ export interface CallState {
   memo: Memo | undefined;
   cache: CallCache;
   tokens: TokenMap;
+  /** The request's text as the caller sent it, which an output check with `call` reads. */
+  inputText: readonly Segment[];
   labels: readonly string[] | undefined;
   input: PhaseReport;
   output?: OutputReport;

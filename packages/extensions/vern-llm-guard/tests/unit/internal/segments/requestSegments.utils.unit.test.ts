@@ -66,3 +66,47 @@ describe('requestSegments', () => {
     expect(segments).toEqual([]);
   });
 });
+
+describe('requestSegments with images', () => {
+  it('cuts a user image into an image segment, with its path, when asked', () => {
+    const { segments, paths, fixed, unscanned } = requestSegments(messages, { images: true });
+
+    expect(segments[2]).toEqual({
+      image: { data: 'AAAA', mimeType: 'image/png' },
+      source: 'user',
+    });
+    expect(paths[2]).toEqual([1, 'content', 1]);
+    // An image is never rewritten.
+    expect(fixed[2]).toBe(true);
+    expect(unscanned).toBe(0);
+  });
+
+  it('keeps the text segments in the same order around it', () => {
+    const { segments } = requestSegments(messages, { images: true });
+    const texts = segments.map((segment) => ('text' in segment ? segment.text : '<image>'));
+
+    expect(texts).toEqual([
+      'be brief',
+      'look at this',
+      '<image>',
+      'and this',
+      'checking',
+      '{"q":"jane"}',
+      'result text',
+      'thanks',
+    ]);
+  });
+
+  it('still counts an image with no data as unscanned', () => {
+    const { segments, unscanned } = requestSegments(
+      [{ role: 'user', content: [{ type: 'image', data: '', mimeType: 'image/png' }] }],
+      { images: true },
+    );
+    expect(segments).toEqual([]);
+    expect(unscanned).toBe(1);
+  });
+
+  it('counts images as unscanned, as it always did, without the option', () => {
+    expect(requestSegments(messages, { images: false }).unscanned).toBe(1);
+  });
+});

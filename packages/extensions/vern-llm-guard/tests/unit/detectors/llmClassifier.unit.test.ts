@@ -7,7 +7,7 @@ import {
   type Segment,
 } from '../../../src/index.js';
 import { classifierCallKey } from '../../../src/internal/middleware/classifierCall.js';
-import { createClassifierLLM, type Found } from '../../helpers.js';
+import { createClassifierLLM, type Found, type Levels } from '../../helpers.js';
 
 const signal = new AbortController().signal;
 const user = (text: string): Segment => ({ text, source: 'user' });
@@ -535,6 +535,161 @@ describe('llmClassifier', () => {
       await run(detect, user('Acme'));
 
       expect(calls).toHaveLength(2);
+    });
+  });
+});
+
+describe('llmClassifier with levels', () => {
+  const names = Object.keys(categories);
+  /** Grades a category by a word: `buy NVDA` is medium advice, `maybe buy` low, `Acme` high. */
+  const graded = (text: string): Levels => ({
+    ...(text.includes('buy NVDA') && { investment_advice: 2 }),
+    ...(text.includes('maybe buy') && { investment_advice: 1 }),
+    ...(text.includes('Acme') && { competitor: 3 }),
+  });
+
+  function levelled(
+    options: Partial<LLMClassifierOptions<keyof typeof categories>> = {},
+    behavior: Parameters<typeof createClassifierLLM>[1] = {},
+  ) {
+    return setup(
+      byWord,
+      { levels: true, ...options },
+      { levels: { names, of: graded }, ...behavior },
+    );
+  }
+
+  it('asks for a level per category, in the schema and in the prompt', async () => {
+    const { detect, calls } = levelled();
+
+    await run(detect, user('anything'));
+
+    const { jsonSchema, systemPrompt } = calls[0]!.params;
+    const schema = jsonSchema!.schema as unknown as {
+      properties: {
+        results: {
+          items: {
+            required: string[];
+            properties: Record<string, { required: string[]; properties: Record<string, unknown> }>;
+          };
+        };
+      };
+    };
+    const entry = schema.properties.results.items;
+    expect(entry.required).toEqual(['id', 'levels']);
+    expect(entry.properties.levels!.required).toEqual(names);
+    expect(entry.properties.levels!.properties.competitor).toEqual({
+      type: 'integer',
+      enum: [0, 1, 2, 3],
+    });
+    expect(entry.properties).not.toHaveProperty('categories');
+    expect(systemPrompt).toContain('give every category a level');
+    expect(systemPrompt).toContain('3 high (explicit, central or severe)');
+  });
+
+  it('puts the level in the label of every category above zero', async () => {
+    const { detect } = levelled();
+
+    expect(await run(detect, user('fine'), user('buy NVDA now, or Acme'))).toEqual([
+      { segment: 1, label: 'classifier.investment_advice:2' },
+      { segment: 1, label: 'classifier.competitor:3' },
+    ]);
+  });
+
+  it('keeps findings at or above minLevel, from one shared call', async () => {
+    const { detect, calls } = levelled();
+    const low = detect.only('investment_advice', { minLevel: 1 });
+    const medium = detect.only('investment_advice', { minLevel: 2 });
+
+    const texts = [user('maybe buy this'), user('buy NVDA')];
+    const [watch, block] = await Promise.all([
+      run(low as never, ...texts),
+      run(medium as never, ...texts),
+    ]);
+
+    expect(watch.map((finding) => finding.label)).toEqual([
+      'classifier.investment_advice:1',
+      'classifier.investment_advice:2',
+    ]);
+    expect(block).toEqual([{ segment: 1, label: 'classifier.investment_advice:2' }]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('reads minLevel 1 by default, and never reports level 0', async () => {
+    const { detect } = levelled();
+
+    expect(
+      await run(detect.only('investment_advice') as never, user('maybe buy'), user('plain')),
+    ).toEqual([{ segment: 0, label: 'classifier.investment_advice:1' }]);
+  });
+
+  it('asks for quotes only from level 1, and gives spans for them', async () => {
+    const { detect, calls } = levelled({ quotes: true });
+
+    const found = await run(detect, user('buy NVDA now, or Acme'));
+
+    expect(calls[0]!.params.systemPrompt).toContain('For every category at level 1 or above');
+    expect(found).toEqual([
+      { segment: 0, label: 'classifier.investment_advice:2', start: 0, end: 8 },
+      { segment: 0, label: 'classifier.competitor:3', start: 17, end: 21 },
+    ]);
+  });
+
+  it('takes the kinds of an only view whatever the level in the label', () => {
+    const { detect } = levelled();
+
+    expect(() => detect.only('investment_advice', { minLevel: 3 })).not.toThrow();
+    expect(() => detect.only('nope' as never)).toThrow('llmClassifier: unknown kind "nope"');
+  });
+
+  it('rejects a minLevel outside 1 to 3, and options with no kinds', () => {
+    const { detect } = levelled();
+
+    for (const minLevel of [0, 4, 1.5, Number.NaN]) {
+      expect(() => detect.only('competitor', { minLevel })).toThrow(
+        'llmClassifier: minLevel must be an integer from 1 to 3',
+      );
+    }
+    expect(() =>
+      (detect.only as unknown as (options: unknown) => unknown)({ minLevel: 2 }),
+    ).toThrow('llmClassifier: only() needs at least one kind');
+  });
+
+  it('takes no options without levels', () => {
+    const { detect } = setup();
+
+    expect(() => detect.only('competitor', { minLevel: 2 })).toThrow(
+      'llmClassifier: only() takes options only with levels: true',
+    );
+  });
+
+  it('rejects levels that are not a boolean', () => {
+    expect(() => setup(byWord, { levels: 'yes' as never })).toThrow(
+      'llmClassifier: levels must be a boolean',
+    );
+  });
+
+  describe('an answer that does not fit', () => {
+    const answered = (levels: unknown) => ({
+      answer: (): unknown => ({ results: [{ id: 0, levels }] }),
+    });
+    const ask = (levels: unknown) => {
+      const { detect } = levelled({}, answered(levels));
+      return run(detect, user('x'));
+    };
+    const misfit = 'llmClassifier: the model returned an answer that does not fit';
+
+    it('is an error when a category has no level', async () => {
+      await expect(ask({ investment_advice: 1 })).rejects.toThrow(misfit);
+    });
+
+    it('is an error for a level outside 0 to 3, or a category that was not given', async () => {
+      await expect(ask({ investment_advice: 4, competitor: 0 })).rejects.toThrow(misfit);
+      await expect(ask({ investment_advice: 1, competitor: 0, other: 1 })).rejects.toThrow(misfit);
+    });
+
+    it('is an error when the levels are not an object', async () => {
+      await expect(ask(['advice'])).rejects.toThrow(misfit);
     });
   });
 });

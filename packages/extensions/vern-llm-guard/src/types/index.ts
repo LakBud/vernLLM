@@ -1,4 +1,5 @@
 export type {
+  CallView,
   Check,
   CheckAction,
   CheckContext,
@@ -8,6 +9,8 @@ export type {
   Finding,
   GuardOptions,
   GuardUpdate,
+  ImageDetector,
+  ImageSegment,
   LoggerOption,
   Segment,
   Source,

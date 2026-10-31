@@ -19,6 +19,10 @@ export interface CompiledCheck {
   readonly timeoutMs: number;
   /** Whether a failing detector refuses (`true`) or is skipped (`false`). */
   readonly failClosed: boolean;
+  /** Whether the detector also reads image segments. */
+  readonly images: boolean;
+  /** Whether the detector is given the call, and so is never memoized. */
+  readonly callView: boolean;
 }
 
 /** A validated, frozen set of options. A call reads one from start to end. */
@@ -39,6 +43,8 @@ export interface CompiledChecks {
   readonly parallel: readonly CompiledCheck[];
   /** What to mark, when spotlight is on. */
   readonly spotlight: ReadonlySet<Source> | undefined;
+  /** Whether some check reads user images, so the request's images are cut into segments. */
+  readonly images: boolean;
 }
 
 export interface CompiledStream {

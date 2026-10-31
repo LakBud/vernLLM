@@ -1,7 +1,7 @@
 import { ScanRun } from './scanRun.js';
 
-import type { Segment } from '../../types/index.js';
 import type { CompiledChecks } from '../../types/resolvedConfig.js';
+import type { InputSegment } from '../segments/types.js';
 import type { CallCache, ScanDeps, ScanResult } from './types.js';
 
 /**
@@ -14,7 +14,7 @@ import type { CallCache, ScanDeps, ScanResult } from './types.js';
  */
 export function scan(
   compiled: CompiledChecks,
-  segments: readonly Segment[],
+  segments: readonly InputSegment[],
   cache: CallCache,
   deps: ScanDeps,
 ): ScanResult | Promise<ScanResult> {

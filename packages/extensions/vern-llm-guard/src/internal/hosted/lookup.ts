@@ -3,13 +3,13 @@ import { segmentKey } from '../scan/spans.utils.js';
 import { createFlights, type Flight, type FlightEntry, type FreshText } from './flights.js';
 import { createLimit } from './limit.js';
 
-import type { Segment } from '../../types/index.js';
 import type { Memo, Span } from '../scan/types.js';
-import type { Analyze, Hit } from './types.js';
+import type { InputSegment } from '../segments/types.js';
+import type { Analyze, Hit, ImageAnalyze } from './types.js';
 
 /** Answers with the findings for each segment, in order, asking the provider only about new texts. */
 export type Lookup = (
-  segments: readonly Segment[],
+  segments: readonly InputSegment[],
   signal: AbortSignal,
 ) => Promise<(readonly Span[])[]>;
 
@@ -28,7 +28,8 @@ export function createLookup(config: LookupConfig): Lookup {
   const { name, analyze, concurrency } = config;
   const cache: Memo | undefined = config.cache === false ? undefined : createMemo(config.cache.max);
   const remember = cache && ((key: string, hits: readonly Span[]): void => cache.set(key, hits));
-  const flights = createFlights(name, analyze, createLimit(concurrency), remember);
+  // A detector that takes images writes its analysis wider, and only such a detector is given one.
+  const flights = createFlights(name, analyze as ImageAnalyze, createLimit(concurrency), remember);
 
   return async (segments, signal) => {
     const keys = segments.map(segmentKey);

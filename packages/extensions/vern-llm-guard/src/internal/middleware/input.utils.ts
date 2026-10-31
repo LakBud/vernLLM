@@ -2,6 +2,7 @@ import { GUARD_RESULT_EVENT } from '../../events.js';
 import { contentBlocked } from '../contentBlocked.utils.js';
 import { errorName } from '../errors.utils.js';
 import { scan } from '../scan/scan.js';
+import { isImage } from '../segments/isImage.utils.js';
 import { requestSegments } from '../segments/requestSegments.utils.js';
 import { hasMarkable, markerFor } from '../spotlight/spotlight.js';
 import { createTokenMap, tokenFor } from '../tokens/tokens.js';
@@ -9,6 +10,7 @@ import { STATE, type CallState } from './state.js';
 
 import type { GuardResult, Segment } from '../../types/index.js';
 import type { CallCache, ScanResult } from '../scan/types.js';
+import type { InputSegment } from '../segments/types.js';
 import type { Live } from './live.js';
 import type { JsonValue, LLMError, PreDispatchContext, WireCallRequest } from 'vern-llm';
 
@@ -16,7 +18,11 @@ import type { JsonValue, LLMError, PreDispatchContext, WireCallRequest } from 'v
 export interface Started {
   state: CallState;
   /** The request as the caller sent it, for the checks that run alongside the call. */
-  inputSegments: Segment[];
+  inputSegments: InputSegment[];
+  /** The image segments some check read, shared with the checks that run alongside the call. */
+  covered: Set<number>;
+  /** Sets the report's count of unscanned things, once every check that reads images has run. */
+  recount: () => void;
   /** Set when an enforced check refused the call. */
   refusal: LLMError | undefined;
 }
@@ -34,8 +40,9 @@ export async function scanRequest(
   let refusal: LLMError | undefined;
 
   try {
-    const extracted = requestSegments(request.messages);
+    const extracted = requestSegments(request.messages, { images: compiled.images });
     const cache: CallCache = new Map();
+    const covered = new Set<number>();
     const scanned: ScanResult = await scan(compiled, extracted.segments, cache, {
       memo,
       ctx,
@@ -43,9 +50,15 @@ export async function scanRequest(
       deadlineAt: ctx.deadlineAt,
       // The checks that run alongside the call start after this.
       only: compiled.serial,
+      covered,
     });
 
-    scanned.report.unscanned = extracted.unscanned;
+    // An image that no check read is as unscanned as one that was never cut out.
+    const images = extracted.segments.filter(isImage).length;
+    const recount = (): void => {
+      scanned.report.unscanned = extracted.unscanned + images - covered.size;
+    };
+    recount();
 
     // One token per value, from the request as the caller sent it. A raw target may echo a value
     // it was given, and it is tokenized from this map when the answer comes back.
@@ -53,12 +66,14 @@ export async function scanRequest(
     if (scanned.blocked === undefined) {
       for (const { check, segment, span } of scanned.findings) {
         if (check.action !== 'redact') continue;
+        // An image has no offsets, so a redact check on one blocked the call and never gets here.
+        const text = (extracted.segments[segment] as Segment).text;
         const label = span.label ?? check.label;
         tokenFor(
           tokens,
           key,
           label,
-          extracted.segments[segment]!.text.slice(span.start!, span.end),
+          text.slice(span.start!, span.end),
           check.restore ? undefined : compiled.mask(label),
         );
       }
@@ -71,6 +86,7 @@ export async function scanRequest(
       marked: compiled.spotlight !== undefined && hasMarkable(request.messages, compiled.spotlight),
       cache,
       tokens,
+      inputText: extracted.segments.filter((segment): segment is Segment => !isImage(segment)),
       labels: scanned.unknown ? undefined : scanned.labels,
       input: scanned.report,
       ms: scanned.ms,
@@ -90,7 +106,7 @@ export async function scanRequest(
       );
     }
 
-    return { state, inputSegments: extracted.segments, refusal };
+    return { state, inputSegments: extracted.segments, covered, recount, refusal };
   } catch (error) {
     return { error };
   }

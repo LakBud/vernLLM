@@ -4,10 +4,38 @@ import { compile } from '../../../../src/internal/options/compile.utils.js';
 import { createMemo } from '../../../../src/internal/scan/memo.utils.js';
 import { scan } from '../../../../src/internal/scan/scan.js';
 
-import type { Check, Detector, Finding, Segment } from '../../../../src/index.js';
+import type {
+  Check,
+  Detector,
+  Finding,
+  ImageDetector,
+  ImageSegment,
+  Segment,
+} from '../../../../src/index.js';
 import type { CallCache, ScanResult } from '../../../../src/internal/scan/types.js';
 
 export const user = (text: string): Segment => ({ text, source: 'user' });
+
+/** An image segment of the user, as the guard cuts one out of a content block. */
+export const image = (data: string, source: ImageSegment['source'] = 'user'): ImageSegment => ({
+  image: { data, mimeType: 'image/png' },
+  source,
+});
+
+/** A detector that takes images, and finds `label` in each one. It remembers what it was given. */
+export function readsImages(label = 'pic') {
+  const calls: (Segment | ImageSegment)[][] = [];
+  const detect: ImageDetector = Object.assign(
+    (segments: readonly (Segment | ImageSegment)[]): Finding[] => {
+      calls.push([...segments]);
+      return segments.flatMap((segment, index): Finding[] =>
+        'image' in segment ? [{ segment: index, label }] : [],
+      );
+    },
+    { images: true as const },
+  );
+  return { detect: vi.fn(detect) as unknown as ImageDetector, calls };
+}
 export const tool = (text: string): Segment => ({ text, source: 'tool' });
 
 /** A detector that finds `needle` in every segment, and remembers what it was given. */
@@ -36,7 +64,7 @@ export function setup(
   const cache: CallCache = new Map();
   const memo = createMemo(100);
   const run = (
-    segments: Segment[],
+    segments: (Segment | ImageSegment)[],
     deps: Partial<Parameters<typeof scan>[3]> = {},
   ): ScanResult | Promise<ScanResult> =>
     scan(compiled, segments, cache, {

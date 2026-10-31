@@ -84,5 +84,6 @@ function walkNode(
 export function outputSegments(value: unknown): Extracted {
   const parts = collector();
   walkNode(parts, value, [], 0, false);
-  return parts.extracted;
+  // Nothing of an answer is an image.
+  return parts.extracted as Extracted;
 }

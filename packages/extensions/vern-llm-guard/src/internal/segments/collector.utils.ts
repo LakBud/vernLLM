@@ -1,13 +1,15 @@
-import type { Segment } from '../../types/index.js';
-import type { Extracted, Path } from './types.js';
+import type { ImageSegment, Segment } from '../../types/index.js';
+import type { Extracted, InputSegment, Path } from './types.js';
 
 export interface Collector {
-  extracted: Extracted;
+  extracted: Extracted<InputSegment>;
   add(source: Segment['source'], text: string, path: Path, fixed?: boolean): void;
+  /** An image is never rewritten, so it is always fixed. */
+  addImage(source: ImageSegment['source'], image: ImageSegment['image'], path: Path): void;
 }
 
 export function collector(): Collector {
-  const extracted: Extracted = { segments: [], paths: [], fixed: [], unscanned: 0 };
+  const extracted: Extracted<InputSegment> = { segments: [], paths: [], fixed: [], unscanned: 0 };
   return {
     extracted,
     add(source, text, path, fixed = false) {
@@ -16,6 +18,11 @@ export function collector(): Collector {
       extracted.segments.push({ text, source });
       extracted.paths.push(path);
       extracted.fixed.push(fixed);
+    },
+    addImage(source, image, path) {
+      extracted.segments.push({ image, source });
+      extracted.paths.push(path);
+      extracted.fixed.push(true);
     },
   };
 }

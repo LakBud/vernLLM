@@ -64,6 +64,8 @@ export function compile(options: GuardOptions): CompiledChecks {
   });
 
   const parallel = checks.filter((check) => check.parallel);
+  // Only a user message holds an image, so a check on other roles has none to read.
+  const images = checks.some((check) => check.images && check.sources.has('user'));
 
   return Object.freeze({
     version,
@@ -79,5 +81,6 @@ export function compile(options: GuardOptions): CompiledChecks {
     parallel: Object.freeze(parallel),
     spotlight,
     stream,
+    images,
   });
 }

@@ -4,9 +4,10 @@ import { contentBlocked } from '../contentBlocked.utils.js';
 import { errorName } from '../errors.utils.js';
 import { scan } from '../scan/scan.js';
 
-import type { PhaseReport, Segment } from '../../types/index.js';
+import type { PhaseReport } from '../../types/index.js';
 import type { CompiledChecks } from '../../types/resolvedConfig.js';
 import type { CallCache, Memo, ScanResult } from '../scan/types.js';
+import type { InputSegment } from '../segments/types.js';
 
 /** How a check that runs alongside the call ended: its scan, or the guard failing around it. */
 export type ParallelOutcome = ScanResult | { error: unknown };
@@ -19,11 +20,12 @@ const noop = (): void => {};
  */
 export function startParallel(
   compiled: CompiledChecks,
-  segments: readonly Segment[],
+  segments: readonly InputSegment[],
   cache: CallCache,
   memo: Memo | undefined,
   ctx: PreDispatchContext,
   stop: AbortSignal,
+  covered?: Set<number>,
 ): ParallelOutcome | Promise<ScanResult> | undefined {
   if (compiled.parallel.length === 0) return undefined;
 
@@ -37,6 +39,7 @@ export function startParallel(
       signal,
       deadlineAt: ctx.deadlineAt,
       only,
+      covered,
     });
   } catch (error) {
     return { error };

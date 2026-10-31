@@ -11,7 +11,10 @@ export const CLASSIFIER_PREFIX = 'classifier.';
 export interface ClassifierAnswer {
   results: {
     id: number;
+    /** With `levels`, the categories at level 1 or above. */
     categories: string[];
+    /** Only with `levels`: every category's level, 0 none, 1 low, 2 medium, 3 high. */
+    levels?: { [category: string]: number };
     /** Exact text behind each category. Only with `quotes`. */
     quotes?: { [category: string]: string[] };
   }[];
@@ -41,6 +44,13 @@ export interface LLMClassifierOptions<Name extends string = string> extends Host
   instructions?: string;
   /** Ask for quotes, so findings get spans. Default `false`. */
   quotes?: boolean;
+  /**
+   * Ask for a level per category, 0 none, 1 low, 2 medium, 3 high, so `only(...kinds, { minLevel })`
+   * can act on how strong a finding is. A label then ends in its level, such as
+   * `classifier.advice:2`. It changes the prompt and the answers, so give the guard a new
+   * `version`. Default `false`.
+   */
+  levels?: boolean;
   /** Texts per call, 1 to 16. Default `1`. */
   batchSize?: number;
   /** Default `300`. */

@@ -1,10 +1,14 @@
-import type { Segment } from '../../types/index.js';
+import type { ImageSegment, Segment } from '../../types/index.js';
+
+/** What the scan reads: text, and images for the detectors that take them. */
+export type InputSegment = Segment | ImageSegment;
 
 /** Where a segment lives, from the root that was extracted. */
 export type Path = readonly (string | number)[];
 
-export interface Extracted {
-  segments: Segment[];
+/** What was cut out of a value. It holds only text unless images were asked for. */
+export interface Extracted<S extends InputSegment = Segment> {
+  segments: S[];
   /** One path per segment, in the same order. */
   paths: Path[];
   /**
@@ -12,7 +16,7 @@ export interface Extracted {
    * blocks are signed, so they must go back verbatim.
    */
   fixed: boolean[];
-  /** Things no text detector can read, such as images or values nested too deep. */
+  /** Things no detector can read, such as images no check takes or values nested too deep. */
   unscanned: number;
 }
 

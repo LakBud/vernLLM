@@ -6,7 +6,7 @@ import { hasMarkable, spotlight } from '../spotlight/spotlight.js';
 import { tokenFor } from '../tokens/tokens.js';
 import { STATE, redactsFor, type CallState } from './state.js';
 
-import type { GuardMiddleware } from '../../types/index.js';
+import type { GuardMiddleware, Segment } from '../../types/index.js';
 import type { Replacement } from '../segments/types.js';
 import type { Live } from './live.js';
 
@@ -31,7 +31,7 @@ export function createTransform(getLive: () => Live): NonNullable<GuardMiddlewar
     }
 
     try {
-      const extracted = requestSegments(request.messages);
+      const extracted = requestSegments(request.messages, { images: state.compiled.images });
       const scanned = await scan(state.compiled, extracted.segments, state.cache, {
         memo: state.memo,
         ctx,
@@ -71,7 +71,7 @@ export function createTransform(getLive: () => Live): NonNullable<GuardMiddlewar
           state.tokens,
           key,
           label,
-          extracted.segments[segment]!.text.slice(start, end),
+          (extracted.segments[segment] as Segment).text.slice(start, end),
           check.restore ? undefined : state.compiled.mask(label),
         );
         replacements.push({ segment, start, end, text: token });

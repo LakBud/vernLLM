@@ -22,6 +22,7 @@ export interface ClassifierRequestConfig {
   categories: readonly (readonly [name: string, description: string])[];
   instructions: string | undefined;
   quotes: boolean;
+  levels: boolean;
   maxTokens: number;
   report: (info: ClassifierUsage) => void;
 }
@@ -46,10 +47,10 @@ function inOrder(results: readonly Verdict[], count: number): Verdict[] {
 
 /** One call to the model, with its answer checked against the texts sent. */
 export function createClassifierRequest(config: ClassifierRequestConfig): ClassifierRequest {
-  const { llm, categories, instructions, quotes, maxTokens, report } = config;
+  const { llm, categories, instructions, quotes, levels, maxTokens, report } = config;
   const names = categories.map(([name]) => name);
-  const schema = answerSchema(names, quotes);
-  const validator = createValidator(names, quotes);
+  const schema = answerSchema(names, quotes, levels);
+  const validator = createValidator(names, quotes, levels);
 
   return async (texts, signal) => {
     signal.throwIfAborted();
@@ -58,7 +59,7 @@ export function createClassifierRequest(config: ClassifierRequestConfig): Classi
     const started = performance.now();
 
     const answer = await llm.call({
-      systemPrompt: buildPrompt({ categories, instructions, quotes, boundary }),
+      systemPrompt: buildPrompt({ categories, instructions, quotes, levels, boundary }),
       userContent: buildContent(texts, boundary),
       jsonMode: true,
       jsonSchema: { name: 'classification', schema, strict: true },

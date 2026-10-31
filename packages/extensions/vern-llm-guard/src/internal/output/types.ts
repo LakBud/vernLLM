@@ -2,7 +2,7 @@ import type { OutputReport } from '../../types/index.js';
 import type { CompiledChecks } from '../../types/resolvedConfig.js';
 import type { CallCache, ScanDeps, ScanResult } from '../scan/types.js';
 import type { TokenMap } from '../tokens/tokens.js';
-import type { StreamChunk } from 'vern-llm';
+import type { CallMeta, StreamChunk } from 'vern-llm';
 
 export interface GateInput {
   compiled: CompiledChecks;
@@ -49,6 +49,11 @@ export interface StreamGateInput {
   tokens: TokenMap;
   cache: CallCache;
   deps: Omit<ScanDeps, 'skip' | 'only'>;
+  /**
+   * What answered the call, read when `finalResult` settles: the core fills it in as the stream
+   * goes, so earlier it can be partial. Windows of text never get it.
+   */
+  meta?: (() => CallMeta | undefined) | undefined;
   /** The answer is JSON text, so restored values are escaped. */
   json: boolean;
   /** A spotlight marker the model may have echoed. It is removed as the text arrives. */
