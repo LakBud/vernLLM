@@ -149,7 +149,7 @@
     "@size-limit/file": "13.1.1",
     "@types/node": "^26.4.1",
     "@vitest/coverage-v8": "^4.1.11",
-    "ioredis": "^5.11.1",
+    "ioredis": "^6.0.0",
     "publint": "^0.3.24",
     "redis": "^4.7.1",
     "size-limit": "13.1.1",
