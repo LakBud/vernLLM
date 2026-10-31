@@ -111,11 +111,11 @@
     },
     {
       "path": "dist/guardrail/index.mjs",
-      "limit": "3.5 KB"
+      "limit": "4.5 KB"
     },
     {
       "path": "dist/guardrail/index.cjs",
-      "limit": "3.5 KB"
+      "limit": "4.5 KB"
     }
   ]
 }

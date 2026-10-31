@@ -750,12 +750,11 @@ describe('with bedrockGuardrail', () => {
     // The history's user message is not asked again. Its assistant message is read as input now,
     // where the first turn read it as the model's output, so the guardrail sees it once more. The
     // second answer is the same text as the first, from the same source, and is not asked again.
-    expect(guardrail.calls.map(({ text, source }) => `${source} ${text}`)).toEqual([
-      'INPUT hello',
-      'OUTPUT primary',
-      'INPUT primary',
-      'INPUT and then?',
-    ]);
+    // Two checks share the detector and start their requests together, so the order of the second
+    // turn's requests is not fixed. The first turn is sequential, so its order is.
+    const asked = guardrail.calls.map(({ text, source }) => `${source} ${text}`);
+    expect(asked.slice(0, 2)).toEqual(['INPUT hello', 'OUTPUT primary']);
+    expect(asked.slice(2).sort()).toEqual(['INPUT and then?', 'INPUT primary']);
   });
 
   it('blocks rather than redact a topic, which has no position', async () => {

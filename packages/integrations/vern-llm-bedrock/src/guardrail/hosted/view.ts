@@ -1,4 +1,4 @@
-import type { Detector, Finding, GuardrailDetector, GuardrailKind } from '../types.js';
+import type { Detector, Finding, GuardrailKind, Segment } from '../types.js';
 import type { Lookup } from './lookup.js';
 
 export interface ViewConfig {
@@ -8,24 +8,35 @@ export interface ViewConfig {
   /** The kind a label belongs to. */
   kindOf(label: string): string;
   lookup: Lookup;
+  /** Whether the detectors take image segments. */
+  images: boolean;
 }
 
 /**
  * The detector callers see: every finding numbered by its segment, and `only` for a view of some
  * kinds over the same lookup.
  */
-export function createView(config: ViewConfig): GuardrailDetector {
-  const { name, kinds, kindOf, lookup } = config;
+export function createView(config: ViewConfig): Detector & {
+  only(...wanted: GuardrailKind[]): Detector;
+} {
+  const { name, kinds, kindOf, lookup, images } = config;
 
   const view = (wanted?: ReadonlySet<string>): Detector => {
-    return async (segments, signal): Promise<Finding[]> => {
+    const detect = async (
+      segments: readonly Segment[],
+      signal: AbortSignal,
+    ): Promise<Finding[]> => {
       const found = await lookup(segments, signal);
       return found.flatMap((spans, segment) =>
         spans
-          .filter((span) => wanted === undefined || wanted.has(kindOf(span.label!)))
+          // A segment that was not read says so whatever kinds the view wants.
+          .filter(
+            (span) => span.unscanned || wanted === undefined || wanted.has(kindOf(span.label!)),
+          )
           .map((span) => ({ segment, ...span })),
       );
     };
+    return images ? Object.assign(detect, { images: true as const }) : detect;
   };
 
   return Object.assign(view(), {

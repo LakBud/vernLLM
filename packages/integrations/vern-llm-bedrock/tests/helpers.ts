@@ -101,3 +101,24 @@ export function at<T>(items: readonly T[], index: number): T {
   if (item === undefined) throw new Error(`Expected an element at index ${index}`);
   return item;
 }
+
+const base64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64');
+
+/** A PNG whose header says `width` by `height`, with `extra` bytes after it. Enough to be read, not drawn. */
+export function pngImage(width = 64, height = 64, extra = 0) {
+  const bytes = new Uint8Array(24 + extra);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  return { data: base64(bytes), mimeType: 'image/png', bytes };
+}
+
+/** A JPEG whose first frame says `width` by `height`, behind one segment to skip. */
+export function jpegImage(width = 64, height = 64) {
+  const bytes = new Uint8Array(2 + 6 + 19);
+  bytes.set([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0]);
+  bytes.set([0xff, 0xc0, 0, 17, 8], 8);
+  new DataView(bytes.buffer).setUint16(13, height);
+  new DataView(bytes.buffer).setUint16(15, width);
+  return { data: base64(bytes), mimeType: 'image/jpeg', bytes };
+}

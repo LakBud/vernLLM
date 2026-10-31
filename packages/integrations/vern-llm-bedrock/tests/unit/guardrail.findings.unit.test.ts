@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { hitsOf } from '../../src/guardrail/findings.js';
+import { groundingHitsOf, hitsOf } from '../../src/guardrail/findings.js';
 
 import type { GuardrailAssessment } from '@aws-sdk/client-bedrock-runtime';
 
@@ -138,5 +138,50 @@ describe('hitsOf', () => {
         hitsOf([{}, { topicPolicy: {}, wordPolicy: {}, contentPolicy: {} } as never], text),
       ).toEqual([]);
     });
+  });
+});
+
+describe('groundingHitsOf', () => {
+  const grounding = (...filters: object[]) =>
+    [{ contextualGroundingPolicy: { filters } }] as GuardrailAssessment[];
+
+  it('labels each filter that counts, over the whole text it judged', () => {
+    const found = groundingHitsOf(
+      grounding(
+        { type: 'GROUNDING', score: 0.2, threshold: 0.7, action: 'BLOCKED', detected: true },
+        { type: 'RELEVANCE', score: 0.9, threshold: 0.7, action: 'NONE', detected: false },
+      ),
+      40,
+    );
+
+    expect(found).toEqual([{ label: 'grounding.GROUNDING', start: 0, end: 40 }]);
+  });
+
+  it('counts both filters, a detect only one, and names a type the SDK left out unknown', () => {
+    const found = groundingHitsOf(
+      grounding(
+        { type: 'GROUNDING', action: 'NONE', detected: true },
+        { type: 'RELEVANCE', action: 'BLOCKED' },
+        { action: 'BLOCKED' },
+      ),
+      5,
+    );
+
+    expect(found.map(({ label }) => label)).toEqual([
+      'grounding.GROUNDING',
+      'grounding.RELEVANCE',
+      'grounding.unknown',
+    ]);
+  });
+
+  it('reads the grounding filters only, and finds nothing without them', () => {
+    expect(groundingHitsOf([pii('jane@acme.com') as GuardrailAssessment], 10)).toEqual([]);
+    expect(groundingHitsOf([], 10)).toEqual([]);
+    expect(groundingHitsOf([{ contextualGroundingPolicy: {} }], 10)).toEqual([]);
+  });
+
+  it('keeps what two guardrails both found once', () => {
+    const filter = { type: 'GROUNDING', action: 'BLOCKED', detected: true };
+    expect(groundingHitsOf([...grounding(filter), ...grounding(filter)], 3)).toHaveLength(1);
   });
 });

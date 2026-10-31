@@ -6,6 +6,9 @@ export interface GuardrailSettings {
   guardrailIdentifier: string;
   guardrailVersion: string;
   concurrency: number;
+  images: boolean;
+  unsupportedImages: 'error' | 'skip';
+  imageConcurrency: number;
   chunkChars: number;
   overlapChars: number;
   cache: false | { max: number };
@@ -22,6 +25,7 @@ const isText = (value: unknown): value is string => typeof value === 'string' &&
 export function resolveOptions(name: string, options: BedrockGuardrailOptions): GuardrailSettings {
   const { client, guardrailIdentifier, guardrailVersion, onUsage } = options;
   const { concurrency = 4, chunkChars = 12_000, overlapChars = 200, cache = {} } = options;
+  const { images = false, unsupportedImages = 'error', imageConcurrency = 4 } = options;
 
   if (typeof client?.send !== 'function') {
     throw new TypeError(`${name}: client.send must be a function`);
@@ -34,6 +38,15 @@ export function resolveOptions(name: string, options: BedrockGuardrailOptions): 
   }
   if (!isInteger(concurrency, 1)) {
     throw new TypeError(`${name}: concurrency must be an integer of at least 1`);
+  }
+  if (typeof images !== 'boolean') {
+    throw new TypeError(`${name}: images must be a boolean`);
+  }
+  if (unsupportedImages !== 'error' && unsupportedImages !== 'skip') {
+    throw new TypeError(`${name}: unsupportedImages must be 'error' or 'skip'`);
+  }
+  if (!isInteger(imageConcurrency, 1)) {
+    throw new TypeError(`${name}: imageConcurrency must be an integer of at least 1`);
   }
   if (!isInteger(chunkChars, 1000)) {
     throw new TypeError(`${name}: chunkChars must be an integer of at least 1000`);
@@ -59,6 +72,9 @@ export function resolveOptions(name: string, options: BedrockGuardrailOptions): 
     guardrailIdentifier,
     guardrailVersion,
     concurrency,
+    images,
+    unsupportedImages,
+    imageConcurrency,
     chunkChars,
     overlapChars,
     cache: cache === false ? false : { max },

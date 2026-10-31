@@ -301,6 +301,16 @@ guardMiddleware({
   at any time, so it warns once and turns the detector's cache off.
 </Callout>
 
+### Images and grounding
+
+- `images: true` also checks the images in a request, as `content.<type>` findings with no span.
+  PNG and JPEG only, up to 4 MB and 8000 by 8000 pixels. Images are sent to Bedrock only with the
+  option set
+- `aws.grounding()` judges an output against the tool results of the call, as
+  `grounding.GROUNDING` or `grounding.RELEVANCE` over the chunk that failed. Use it as an `output`
+  check, with `release: 'immediate'` on streams
+- Limits and options are on the [Guardrails page](/docs/integrations/bedrock/guardrails)
+
 ### Findings
 
 - Labeled `pii.<type>`, `regex.<name>`, `word.<type>`, `topic.<name>` or `content.<type>`
