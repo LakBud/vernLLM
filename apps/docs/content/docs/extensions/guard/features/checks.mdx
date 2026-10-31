@@ -54,7 +54,9 @@ and below.
 
 ## Detectors
 
-<Tabs items={['patterns', 'keywords', 'openaiModeration', 'llmClassifier', 'your own']}>
+<Tabs
+  items={['patterns', 'keywords', 'openaiModeration', 'llmClassifier', 'bedrockGuardrail', 'your own']}
+>
   <Tab value="patterns">
 
 ```ts title="guard-patterns.ts"
@@ -89,6 +91,14 @@ classifier.only('competitor'); // some categories, sharing one call per text
 ```
 
   </Tab>
+  <Tab value="bedrockGuardrail">
+
+```ts title="guard-bedrock.ts"
+const aws = bedrockGuardrail({ client, guardrailIdentifier: 'gr-abc123', guardrailVersion: '3' });
+aws.only('pii', 'topic'); // some kinds, sharing requests and cache
+```
+
+  </Tab>
   <Tab value="your own">
 
 ```ts title="guard-detector.ts"
@@ -110,7 +120,7 @@ type Detector = (
   The built in detectors are heuristics. Run a new check in `mode: 'audit'` first.
 </Callout>
 
-`openaiModeration` and `llmClassifier` ask a provider instead of matching text. See
+`openaiModeration`, `llmClassifier` and `bedrockGuardrail` ask a provider instead of matching text. See
 [Hosted detectors](/docs/extensions/guard/features/hosted-detectors).
 
 ## When a detector fails

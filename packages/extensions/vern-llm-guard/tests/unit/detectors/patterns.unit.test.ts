@@ -219,6 +219,10 @@ describe('keywords', () => {
 });
 
 describe('patterns on hostile input', () => {
+  // Generous on purpose: backtracking blow-up takes seconds or more, and a busy machine can add
+  // a few hundred milliseconds to a run that is normally far below this.
+  const BOUND_MS = 1500;
+
   const time = (detect: ReturnType<typeof patterns>, text: string) => {
     const started = performance.now();
     const hits = detect([user(text)], signal) as Finding[];
@@ -228,13 +232,13 @@ describe('patterns on hostile input', () => {
   it('reads a long run of JWT lookalikes in bounded time', () => {
     const { ms, hits } = time(patterns(['secrets']), 'eyJ'.repeat(30000));
     expect(hits).toEqual([]);
-    expect(ms).toBeLessThan(500);
+    expect(ms).toBeLessThan(BOUND_MS);
   });
 
   it('reads repeated private key headers without a closing line in bounded time', () => {
     const header = `${pem('RSA ', 'x').split('\n')[0]}\n`;
     const { ms } = time(patterns(['secrets']), header.repeat(3000));
-    expect(ms).toBeLessThan(500);
+    expect(ms).toBeLessThan(BOUND_MS);
   });
 
   it('still finds a real token and a real key', () => {

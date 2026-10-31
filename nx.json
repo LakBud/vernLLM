@@ -44,6 +44,15 @@
       "inputs": ["default"],
       "cache": true
     },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "test:unit": {
+      "dependsOn": ["^build"]
+    },
+    "test:int": {
+      "dependsOn": ["^build"]
+    },
     "test:unit:coverage": {
       "dependsOn": ["^build"],
       "inputs": ["default", "^production"],

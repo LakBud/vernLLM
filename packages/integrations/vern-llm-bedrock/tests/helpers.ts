@@ -1,7 +1,9 @@
 import {
+  ApplyGuardrailCommand,
   BedrockRuntimeClient,
   ConverseCommand,
   ConverseStreamCommand,
+  type ApplyGuardrailRequest,
   type ConverseRequest,
   type ConverseStreamRequest,
 } from '@aws-sdk/client-bedrock-runtime';
@@ -19,15 +21,22 @@ export type ConverseStreamHandler = (
   options: { signal: AbortSignal },
 ) => Promise<{ stream?: AsyncIterable<unknown> }>;
 
+/** Stands in for Bedrock answering an `ApplyGuardrailCommand`; the response may be partial. */
+export type ApplyGuardrailHandler = (
+  input: ApplyGuardrailRequest,
+  options: { signal: AbortSignal },
+) => Promise<unknown>;
+
 /**
  * A real `BedrockRuntimeClient` whose `send` is stubbed, so tests drive the
  * adapter through the SDK's own command classes without any network call.
  * Each command's input goes to the matching handler, with the abort signal
- * `fromBedrock` passed to `send`.
+ * passed to `send`.
  */
 export function stubbedClient(handlers: {
   converse?: ConverseHandler;
   converseStream?: ConverseStreamHandler;
+  applyGuardrail?: ApplyGuardrailHandler;
 }): BedrockRuntimeClient {
   const client = new BedrockRuntimeClient({
     region: 'us-east-1',
@@ -45,6 +54,9 @@ export function stubbedClient(handlers: {
     }
     if (command instanceof ConverseStreamCommand && handlers.converseStream) {
       return handlers.converseStream(command.input, { signal });
+    }
+    if (command instanceof ApplyGuardrailCommand && handlers.applyGuardrail) {
+      return handlers.applyGuardrail(command.input, { signal });
     }
     throw new Error(`stubbedClient has no handler for ${String(command)}`);
     // `send` is overloaded per command type; one stub serves both commands.

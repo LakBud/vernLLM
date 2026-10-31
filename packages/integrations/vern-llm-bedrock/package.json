@@ -31,6 +31,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./guardrail": {
+      "import": {
+        "types": "./dist/guardrail/index.d.mts",
+        "default": "./dist/guardrail/index.mjs"
+      },
+      "require": {
+        "types": "./dist/guardrail/index.d.cts",
+        "default": "./dist/guardrail/index.cjs"
+      }
     }
   },
   "files": [
@@ -98,6 +108,14 @@
     {
       "path": "dist/index.cjs",
       "limit": "5 KB"
+    },
+    {
+      "path": "dist/guardrail/index.mjs",
+      "limit": "3.5 KB"
+    },
+    {
+      "path": "dist/guardrail/index.cjs",
+      "limit": "3.5 KB"
     }
   ]
 }
