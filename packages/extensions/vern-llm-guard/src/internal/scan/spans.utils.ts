@@ -43,7 +43,11 @@ function segmentOf(entry: Partial<Finding>, texts: readonly (string | undefined)
  * no text, so `text` is `undefined` and a finding on it can have no offsets.
  */
 function spanOf(entry: Partial<Finding>, text: string | undefined): Span {
-  if (entry.unscanned === true) return { unscanned: true };
+  if (entry.unscanned === true) {
+    // Text always reaches the detector, so "not read" would hide it from every check.
+    if (text !== undefined) throw new TypeError('only an image can be marked unscanned');
+    return { unscanned: true };
+  }
   if (entry.label !== undefined && typeof entry.label !== 'string') {
     throw new TypeError('a finding label must be a string');
   }

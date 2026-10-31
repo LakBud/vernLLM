@@ -342,6 +342,18 @@ describe('images', () => {
     expect(covered.size).toBe(0);
   });
 
+  it('cannot be marked unscanned on a text: that is an error, not a way to skip it', async () => {
+    const hiding = Object.assign(() => [{ segment: 0, unscanned: true as const }], {
+      images: true as const,
+    });
+    const { run } = setup([{ id: 'pic', detect: hiding, action: 'block' }]);
+
+    const result = await run([user('some text')]);
+
+    expect(result.blocked).toMatchObject({ check: 'pic', failed: true });
+    expect(result.report.errors).toEqual([{ check: 'pic', name: 'TypeError' }]);
+  });
+
   it('are rejected as a detector config that is not a capability', async () => {
     const { compile } = await import('../../../../src/internal/options/compile.utils.js');
     const detect = Object.assign(() => [], { images: 'yes' });

@@ -128,10 +128,17 @@ type Detector = (
 A detector can say what else it takes with two optional properties.
 
 ```ts title="guard-capabilities.ts"
-import type { CallView, ImageDetector } from 'vern-llm-guard';
+import type { Finding, ImageDetector, ImageSegment, Segment } from 'vern-llm-guard';
 
-const reads: ImageDetector = Object.assign(
-  (segments, signal) => findings, // segments may include { image, source }
+const hasImage = (segment: Segment | ImageSegment): segment is ImageSegment => 'image' in segment;
+
+const unreadable: ImageDetector = Object.assign(
+  (segments: readonly (Segment | ImageSegment)[]): Finding[] =>
+    segments.flatMap((segment, index): Finding[] =>
+      hasImage(segment) && segment.image.mimeType !== 'image/png'
+        ? [{ segment: index, unscanned: true }]
+        : [],
+    ),
   { images: true as const },
 );
 ```

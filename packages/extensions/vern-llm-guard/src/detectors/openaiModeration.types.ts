@@ -71,7 +71,12 @@ export interface OpenAIModerationOptions extends HostedOptions {
   /** Texts per request, 1 to 256. Default 32. */
   batchSize?: number;
   /**
-   * What an image the API cannot take means: a format other than PNG, JPEG, WebP or GIF, or more
+   * Also check the images in a request, one request each. Default `false`, so images are never
+   * sent to OpenAI unless you ask.
+   */
+  images?: boolean;
+  /**
+   * With `images`, what an image the API cannot take means: a format other than PNG, JPEG, WebP or GIF, or more
    * than 20 MB. `'error'` (default) fails the check, so `onError` decides and `closed` blocks the
    * call. `'skip'` leaves the image unread and counts it as unscanned.
    */

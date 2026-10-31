@@ -450,10 +450,25 @@ describe('openaiModeration with images', () => {
     const detect = openaiModeration({
       client: stub.client,
       model: 'omni-moderation-2024-09-26',
+      images: true,
       ...options,
     });
     return { detect, ...stub };
   }
+
+  it('does not take images unless asked', async () => {
+    const { detect, images } = withImages({ images: false });
+
+    expect(detect.images).toBeUndefined();
+    expect(detect.only('violence').images).toBeUndefined();
+    expect(images).toHaveLength(0);
+  });
+
+  it('rejects an images option that is not a boolean', () => {
+    expect(() => withImages({ images: 'yes' as never })).toThrow(
+      'openaiModeration: images must be a boolean',
+    );
+  });
 
   it('says it takes images, for the detector and every view of it', () => {
     const { detect } = withImages();
@@ -498,6 +513,7 @@ describe('openaiModeration with images', () => {
     const detect = openaiModeration({
       client: stub.client,
       model: 'pinned',
+      images: true,
       thresholds: { violence: 0.3 },
     });
 
@@ -578,7 +594,7 @@ describe('openaiModeration with images', () => {
     const client: ModerationClient = {
       moderations: { create: async () => ({ results: [] }) },
     };
-    const detect = openaiModeration({ client, model: 'pinned' });
+    const detect = openaiModeration({ client, model: 'pinned', images: true });
 
     await expect(readAll(detect, picture('x'))).rejects.toThrow(
       'openaiModeration: the API answered for the wrong number of images',

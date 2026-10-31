@@ -813,7 +813,12 @@ describe('with openaiModeration and an image', () => {
 
   function checked(options: Partial<Parameters<typeof openaiModeration>[0]> = {}) {
     const moderation = createModerationClient(() => ({}), { image: flagged });
-    const detect = openaiModeration({ client: moderation.client, model: 'pinned', ...options });
+    const detect = openaiModeration({
+      client: moderation.client,
+      model: 'pinned',
+      images: true,
+      ...options,
+    });
     const built = harness({
       checks: [{ id: 'violence', detect: detect.only('violence'), action: 'block', on: 'user' }],
     });
@@ -863,6 +868,15 @@ describe('with openaiModeration and an image', () => {
 
     expect(primary.calls).toHaveLength(1);
     expect(result().input.unscanned).toBe(1);
+  });
+
+  it('sends no image to OpenAI unless images is on', async () => {
+    const { llm, primary, moderation } = checked({ images: false });
+
+    await expect(llm.call(asking(fight))).resolves.toBe('primary');
+
+    expect(primary.calls).toHaveLength(1);
+    expect(moderation.images).toHaveLength(0);
   });
 
   it('reads an image once across calls', async () => {

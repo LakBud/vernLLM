@@ -64,6 +64,17 @@ guardMiddleware({
       type: '{ [category]: number }',
     },
     batchSize: { description: 'Texts per request, 1 to 256.', type: 'number', default: '32' },
+    images: {
+      description: 'Also check the images in a request, one request each. They are sent to OpenAI.',
+      type: 'boolean',
+      default: 'false',
+    },
+    unsupportedImages: {
+      description:
+        "With images, what an image the API cannot take means. 'skip' leaves it unread and counts it as unscanned.",
+      type: "'error' | 'skip'",
+      default: "'error'",
+    },
     chunkChars: {
       description: 'Longer texts are split in chunks of this size, at least 1000.',
       type: 'number',
@@ -104,13 +115,13 @@ guardMiddleware({
 
 ### Images
 
-A check with `on: ['user']` or `'input'` also sends the images in the request. Text goes the way it
-always did, and each image is its own request.
+Images are off by default. Set `images: true` and a check on user messages also sends the images in
+the request. Text goes the way it always did, and each image is its own request.
 
-- PNG, JPEG, WebP and GIF, up to 20 MB each. `unsupportedImages: 'error'` (default) throws for any
+- PNG, JPEG, WebP and GIF, up to 20 MB each. With `images`, `unsupportedImages: 'error'` (default) throws for any
   other image, so `onError` decides. `'skip'` leaves it unread and counts it as unscanned
 - Findings on an image have no offsets, so a `redact` check on them blocks
-- Images are sent to OpenAI. Leave the check off for requests that must not leave your systems
+- Images are sent to OpenAI only with `images: true`
 
 ### Errors and cost
 
