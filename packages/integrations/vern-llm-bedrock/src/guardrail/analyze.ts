@@ -1,14 +1,32 @@
-import { hitsOf } from './findings.js';
+import { groundingHitsOf, hitsOf } from './findings.js';
 import { mergeSpans, splitText, type Chunk } from './hosted/chunks.js';
+import { imageBlock } from './image.js';
+import { sideOf, type Send } from './request.js';
 
-import type { Analyze, Hit } from './hosted/types.js';
-import type { Ask } from './request.js';
-import type { Segment, Source } from './types.js';
+import type { Analyze, Ground, GroundedSegment, Limit, Span } from './hosted/types.js';
+import type { ImageSegment, Segment } from './types.js';
+import type { GuardrailContentBlock } from '@aws-sdk/client-bedrock-runtime';
+
+/** Bedrock judges up to 5000 characters of an answer in one grounding request. */
+export const GROUNDING_CHUNK_CHARS = 5000;
 
 export interface AnalyzeConfig {
+  name: string;
   chunkChars: number;
   overlapChars: number;
-  ask: Ask;
+  send: Send;
+  images: boolean;
+  unsupportedImages: 'error' | 'skip';
+  /** Caps image requests apart from text, within the instance's own limit. */
+  imageLimit: Limit;
+}
+
+/** The blocks that give an answer its context: each source as its own block, then the question. */
+function groundingBlocks({ sources, query }: Ground): GuardrailContentBlock[] {
+  return [
+    ...sources.map((text) => ({ text: { text, qualifiers: ['grounding_source' as const] } })),
+    ...(query === undefined ? [] : [{ text: { text: query, qualifiers: ['query' as const] } }]),
+  ];
 }
 
 /**
@@ -17,30 +35,69 @@ export interface AnalyzeConfig {
  * first failure stops the requests still waiting for a slot, before the next one starts.
  */
 export function createAnalyze(config: AnalyzeConfig): Analyze {
-  const { chunkChars, overlapChars, ask } = config;
+  const { name, chunkChars, overlapChars, send, images, unsupportedImages, imageLimit } = config;
 
   return (segments, signal, limit) => {
     const failed = new AbortController();
     const stop = AbortSignal.any([signal, failed.signal]);
+    const fail = (error: unknown): never => {
+      failed.abort(error);
+      throw error;
+    };
 
-    /** Asks about one chunk in a free slot, and stops the others if it fails. */
-    const askChunk = ({ offset, text }: Chunk, source: Source) =>
+    /** Runs a request in a free slot, and stops the others if it fails. */
+    const slot = <T>(request: () => Promise<T>) =>
       limit(async () => {
         try {
-          return { offset, spans: hitsOf(await ask(text, source, stop), text) };
+          return await request();
         } catch (error) {
-          failed.abort(error);
-          throw error;
+          return fail(error);
         }
       });
 
-    const analyzeSegment = async ({ text, source }: Segment): Promise<Hit[]> => {
-      if (text.trim() === '') return [];
+    /** Asks about each chunk of a text, and puts the findings on the whole text. */
+    const readChunks = async (
+      chunks: readonly Chunk[],
+      ask: (part: string) => Promise<Span[]>,
+    ): Promise<Span[]> =>
+      mergeSpans(
+        await Promise.all(
+          chunks.map(({ offset, text }) => slot(async () => ({ offset, spans: await ask(text) }))),
+        ),
+      );
 
-      const chunks = splitText(text, chunkChars, overlapChars);
-      return mergeSpans(await Promise.all(chunks.map((chunk) => askChunk(chunk, source))));
+    const readText = ({ text, source }: Segment): Promise<Span[]> =>
+      readChunks(splitText(text, chunkChars, overlapChars), async (part) =>
+        hitsOf(await send(sideOf(source), [{ text: { text: part } }], stop), part),
+      );
+
+    const readGrounded = ({ text, ground }: GroundedSegment): Promise<Span[]> =>
+      readChunks(splitText(text, GROUNDING_CHUNK_CHARS, 0), async (part) =>
+        groundingHitsOf(
+          await send('OUTPUT', [...groundingBlocks(ground), { text: { text: part } }], stop),
+          part.length,
+        ),
+      );
+
+    const readImage = async ({ image, source }: ImageSegment): Promise<Span[]> => {
+      if (!images) fail(new TypeError(`${name}: images are off, set images: true`));
+
+      const prepared = imageBlock(image);
+      if ('refusal' in prepared) {
+        if (unsupportedImages === 'skip') return [{ unscanned: true }];
+        return fail(new Error(`${name}: ${prepared.refusal}`));
+      }
+      return imageLimit(() =>
+        slot(async () => hitsOf(await send(sideOf(source), [prepared.block], stop), '')),
+      );
     };
 
-    return Promise.all(segments.map(analyzeSegment));
+    const read = (segment: Segment | ImageSegment | GroundedSegment): Promise<Span[]> => {
+      if ('image' in segment) return readImage(segment);
+      if (segment.text.trim() === '') return Promise.resolve([]);
+      return 'ground' in segment ? readGrounded(segment) : readText(segment);
+    };
+
+    return Promise.all(segments.map(read));
   };
 }

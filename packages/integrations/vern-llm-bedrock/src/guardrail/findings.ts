@@ -54,3 +54,19 @@ export function hitsOf(assessments: readonly GuardrailAssessment[], text: string
   const hits = assessments.flatMap((assessment) => assessed(assessment, text));
   return mergeSpans([{ offset: 0, spans: hits }]);
 }
+
+/**
+ * The findings of a grounding check on one text, from the contextual grounding filters only: the
+ * other policies are not what this check is for. A filter that counts covers the whole text it
+ * judged, since the guardrail says whether the answer is grounded and not where it is not.
+ */
+export function groundingHitsOf(
+  assessments: readonly GuardrailAssessment[],
+  length: number,
+): Hit[] {
+  const hits = assessments
+    .flatMap((assessment) => assessment.contextualGroundingPolicy?.filters ?? [])
+    .filter(counts)
+    .map(({ type }) => ({ label: `grounding.${type ?? 'unknown'}`, start: 0, end: length }));
+  return mergeSpans([{ offset: 0, spans: hits }]);
+}

@@ -40,7 +40,7 @@ segment by index, and carries offsets when it can locate the text.
   detectors](/docs/extensions/guard/features/hosted-detectors#bedrockguardrail).
 </Callout>
 
-The text you check is sent to Bedrock, and the identity behind the client needs
+The text you check is sent to Bedrock, and so are images when `images` is on, and the identity behind the client needs
 `bedrock:ApplyGuardrail` on the guardrail.
 
 <TypeTable
@@ -73,6 +73,23 @@ The text you check is sent to Bedrock, and the identity behind the client needs
       default: '200',
     },
     concurrency: { description: 'Requests in flight at once.', type: 'number', default: '4' },
+    images: {
+      description:
+        'Also check the images in a request, one request each. They are sent to Bedrock.',
+      type: 'boolean',
+      default: 'false',
+    },
+    unsupportedImages: {
+      description:
+        "With images, what an image Bedrock cannot take means. 'skip' leaves it unread and counts it as unscanned.",
+      type: "'error' | 'skip'",
+      default: "'error'",
+    },
+    imageConcurrency: {
+      description: 'With images, image requests in flight at once, within concurrency.',
+      type: 'number',
+      default: '4',
+    },
     cache: {
       description: 'Findings kept per source and text. false turns it off.',
       type: 'false | { max?: number }',
@@ -111,14 +128,76 @@ The text you check is sent to Bedrock, and the identity behind the client needs
   same assessments and count the same
 - `only(...)` takes `pii`, `regex`, `word`, `topic` and `content`. An unknown kind is an error
 
+## Images
+
+Images are off by default. Set `images: true` and a segment `{ image: { data, mimeType }, source }`
+is sent as its own request, with `data` as base64 and no `data:` prefix. In `vern-llm-guard` a check
+on user messages gives the detector the images in the request.
+
+- Bedrock takes PNG and JPEG only, up to 4 MB and 8000 by 8000 pixels. The size is read from the
+  image header before anything is sent
+- Image filters are content filters only, so a finding is `content.<type>` over the whole image,
+  with no span. Bedrock reads only the first 100 words of text inside an image
+- Which categories apply to images depends on the Region. See AWS's table for [image content
+  filters](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-mmfilter.html)
+- Bedrock allows 25 images a second, so `imageConcurrency` caps image requests apart from text
+- An image is cached by a hash of its data, so one that comes back in the history is sent once
+- An image Bedrock cannot take fails the check, so `onError` decides and `closed` blocks the call.
+  With `unsupportedImages: 'skip'` it is counted as unscanned instead. Use `skip` when a missed
+  image is better than a blocked call, such as a chat that accepts WebP
+
+## Grounding
+
+`aws.grounding(...)` judges an answer against the tool results of the call, with the guardrail's
+contextual grounding check. It reads the call around the answer, so it is for output checks.
+
+```ts title="bedrock-grounding.ts"
+const grounded = aws.grounding({ sources: ['tool'] });
+const found = await grounded([{ text: 'It is Lyon.', source: 'output' }], signal, {
+  input: [
+    { text: 'Paris is the capital of France.', source: 'tool' },
+    { text: 'What is the capital of France?', source: 'user' },
+  ],
+});
+// [{ segment: 0, label: 'grounding.GROUNDING', start: 0, end: 11 }]
+```
+
+In `vern-llm-guard` the call is given for you:
+
+```ts title="guard-grounding.ts"
+{ id: 'grounded', detect: aws.grounding(), on: 'output', action: 'block' }
+```
+
+- **Sources:** each input segment from `sources` (default `['tool']`) is its own grounding source.
+  Bedrock takes up to 100000 characters in total, and more fails the check
+- **Question:** the last user text, up to 1000 characters. A longer question is sent as its last
+  1000 characters (`queryOverflow: 'tail'`, the default) or fails the check (`'error'`). Without a
+  user text, only grounding is judged
+- **Answer:** sent in chunks of 5000 characters, each against the same sources and question
+- **Findings:** `grounding.GROUNDING` for an answer the sources do not support, and
+  `grounding.RELEVANCE` for one that does not address the question. A chunk that fails covers its
+  own span, so a check can block, label or mask it. The thresholds are the guardrail's, set in AWS
+- **No source, no check:** a call without the sources returns no findings and sends nothing
+- **Only grounding:** the other policies of the guardrail are not read here, and the sources and
+  the question are not checked by them
+- **Cache:** keyed by the sources, the question and the answer together, since the verdict depends on
+  all three. `DRAFT` disables it, as for the rest of the detector
+- Used as an input check, it fails with an error, since the call is not there yet
+
+<Callout type="warn">
+  On a stream, Bedrock judges each chunk and calls the whole answer relevant if any chunk is, and
+  grounding needs the text to judge. Use `release: 'immediate'` so the final answer is judged and a
+  block ends the stream, or a plain call.
+</Callout>
+
 ## How it runs
 
 - Views and calls share the requests in flight and the cached results, so a text that is already
   being checked, or whose result is cached, is not sent again. A cache miss makes one request per
   chunk of the text, and the same text is sent again when the cache is off, an entry was evicted or
   the version is `DRAFT`. A request that nobody waits for any more is cancelled
-- A request carries one chunk of text, since Bedrock returns assessments per guardrail and not per
-  content block. Bedrock bills per text unit, rounded up for each request
+- A request carries one chunk of text or one image, since Bedrock returns assessments per guardrail
+  and not per content block. A grounding request also carries its sources and question. Bedrock bills per text unit, rounded up for each request
 - The cache holds labels and offsets, never text. A published version can be cached, a `DRAFT`
   cannot
 - Any error is thrown as it is: throttling, access denied, a response without assessments. The
