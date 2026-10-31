@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/extensions/vernllm-guard.png" alt="vern-llm-guard logo" width="96" />
+</p>
+
 <h1 align="center">vern-llm-guard</h1>
 
 <p align="center">Checks on what goes into a <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a> call: label it for policy, redact values before the provider sees them, or block it.</p>

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/extensions/vernllm-policy.png" alt="vern-llm-policy logo" width="96" />
+</p>
+
 <h1 align="center">vern-llm-policy</h1>
 
 <p align="center">Rules for which providers and models a <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a> call may use, and whether it may run at all.</p>

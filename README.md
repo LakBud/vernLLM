@@ -2,6 +2,8 @@
   <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/banner.png" alt="VernLLM banner" />
 </p>
 
+<h1 align="center">VernLLM</h1>
+
 <p align="center">
   <a href="https://vernllm.dev">Documentation</a> ·
   <a href="./packages/vern-llm">Package</a> ·

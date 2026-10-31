@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/extensions/vernllm-logger.png" alt="vern-llm-logger logo" width="96" />
+</p>
+
 <h1 align="center">vern-llm-logger</h1>
 
 <p align="center">Structured call logs, rolling latency percentiles, and slow call and error detection for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a>.</p>

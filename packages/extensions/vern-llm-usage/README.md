@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/extensions/vernllm-usage.png" alt="vern-llm-usage logo" width="96" />
+</p>
+
 <h1 align="center">vern-llm-usage</h1>
 
 <p align="center">Estimated cost, wasted spend and budgets for <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a> calls.</p>

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/extensions/vernllm-router.png" alt="vern-llm-router logo" width="96" />
+</p>
+
 <h1 align="center">vern-llm-router</h1>
 
 <p align="center">Picks the target order for each <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a> call, from rules you write.</p>

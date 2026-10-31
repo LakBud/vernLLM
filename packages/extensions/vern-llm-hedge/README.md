@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/LakBud/vernLLM/main/apps/docs/public/extensions/vernllm-hedge.png" alt="vern-llm-hedge logo" width="96" />
+</p>
+
 <h1 align="center">vern-llm-hedge</h1>
 
 <p align="center">Cuts the slow tail of <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a> latency by sending a slow call to the next target too and keeping the first answer.</p>
