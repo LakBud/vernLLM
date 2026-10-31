@@ -117,7 +117,16 @@ describe('fromNodeRedis', () => {
       '17',
       ['a', 'b'],
     ]);
-    expect(client.scan).toHaveBeenCalledWith(0, { MATCH: 'prefix*', COUNT: 1000 });
+    // node-redis 5 and later reject a numeric cursor, and 4 accepts the string.
+    expect(client.scan).toHaveBeenCalledWith('0', { MATCH: 'prefix*', COUNT: 1000 });
+
+    // node-redis 5 and later reply with a string cursor.
+    client.scan.mockResolvedValueOnce({ cursor: '0', keys: [] });
+    await expect(wrapped.scan?.('17', 'MATCH', 'prefix*', 'COUNT', 1000)).resolves.toEqual([
+      '0',
+      [],
+    ]);
+    expect(client.scan).toHaveBeenLastCalledWith('17', { MATCH: 'prefix*', COUNT: 1000 });
   });
 });
 
