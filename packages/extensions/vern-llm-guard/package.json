@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-guard",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Checks on what goes into a vern-llm call and what comes out: label, redact or block",
   "keywords": [
     "vern-llm",

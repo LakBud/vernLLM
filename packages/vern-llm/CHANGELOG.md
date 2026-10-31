@@ -1,5 +1,96 @@
 # vern-llm
 
+## 3.1.0
+
+### Minor Changes
+
+- a56208b: `retryBudget` accepts a `RetryBudgetAdapter`, so one budget can be shared across processes, and `readRetryBudgetState()` reads it live.
+
+  Pass an object with `assertAvailable` and `recordAttempt`, plus optional `getSnapshot`, `readState` and `setLogger`, where the options would go. Options still build the in-process `RetryBudget`, which now implements the interface. An object with only one of the two required methods, or an optional member that is not a function, throws `LLMError('invalid_params')` at construction.
+
+  `VernLLM.readRetryBudgetState(target?)` calls the adapter's `readState` and falls back to `getRetryBudgetState()`, like `readRateLimitState()` and `readCircuitStates()`.
+
+  A budget never breaks a call: a `recordAttempt` that throws or returns a rejected promise is logged, and an `assertAvailable` that throws anything but an `LLMError` is logged and the retry goes ahead. `RetryBudgetAdapter` and `RetryBudgetSnapshot` are exported.
+
+- ab379e1: `LLMErrorCode` gains `budget_exceeded` (type `quota_exceeded`) and `policy_denied` (type `invalid_params`), so packages can reject a call before any provider is contacted with a code callers can branch on. The core does not throw either one itself.
+
+  `budget_exceeded` is not retryable even though `quota_exceeded` otherwise is, since a spent budget stays spent until its window resets. Neither code counts toward the circuit breaker.
+
+  ```ts
+  if (isLLMError(err) && err.code === 'budget_exceeded') {
+    // back off until the budget window resets
+  }
+  ```
+
+  Existing code keeps behaving the same at runtime. A new member on an exported union can break an exhaustive `switch` over `LLMErrorCode`, which then needs the two new cases.
+
+- ab379e1: Add `TokenUsage.costUsd`, the cost the provider says a call had, in USD.
+
+  It is filled from OpenRouter's `usage.cost` by the OpenAI compatible adapter, for plain and streamed calls, and from the `costUsd` a `fromFetch` `mapResponse` returns. It stays out of the usage when the response has no cost, or a negative or non finite one.
+
+  ```ts
+  onUsage: ({ costUsd, totalTokens }) => billing.record({ costUsd, totalTokens }),
+  ```
+
+  Nothing existing changes: the field is optional and no adapter reports it unless the provider sends one.
+
+- efd7c10: A `wrap` can run everything inside it again as a separate chain with `next.again()`, at the same time as the first chain or after it.
+
+  ```ts
+  const rerunOnce: VernLLMMiddleware = {
+    name: 'rerun-once',
+    reruns: true,
+    wrap: async (request, next) => {
+      const first = await next();
+      if (!next.again || isAcceptable(first.value)) return first;
+      return next.again({ targets: ['fallback'] });
+    },
+  };
+  ```
+
+  Set `reruns: true` on the middleware entry to get it. When the `wrap` settles, every chain whose result it didn't return is cancelled, so return a chain's result unchanged; on a throw, every chain is cancelled. Targets narrow as with `next({ targets })`. Each chain reserves and refunds with `reserveUsage` and `refundUsage` like a call of its own. At most 4 per call, after which `next.again` is `undefined`, as it is for entries without `reruns`. In `cachedCall()`, a rerun is a fresh call for this caller that never reads the cache or joins a shared call, reserves as a full spend, and writes its answer to the cache.
+
+  Contexts, events and `CallMeta` carry an optional `chain`, absent for the main chain. Middleware inside a rerunning `wrap` get one `ctx.own` per chain; middleware outside it keep one `ctx.own` per call, in every hook. `WrapNext` and `WrapNextOptions` are exported.
+
+  Existing code keeps compiling and behaving the same at runtime: entries without `reruns` run exactly as before, and every new field and `next.again` is optional.
+
+- 7cd4a9d: `LLMErrorCode` gains `content_blocked` (type `invalid_params`), for a middleware that refuses a call, or the answer it got, because of its content. It is told apart from provider faults, budgets and policy in logs and `catch` blocks. Like any `invalid_params` error it is not retried, stops fallback and never counts toward the circuit breaker. The core does not throw it itself.
+
+  A `wrap` can now refuse a result it has seen. An `LLMError` with code `content_blocked` thrown after `next()` resolved is rethrown to the caller. Every other throw after `next()` is still logged and swallowed, so a bug in post processing can't fail a billed call.
+
+  ```ts
+  const refuseEmpty: VernLLMMiddleware = {
+    name: 'refuse-empty',
+    wrap: async (request, next) => {
+      const result = await next();
+      if (result.value === '') {
+        throw new LLMError(
+          'Call blocked: content refused by middleware "refuse-empty"',
+          'invalid_params',
+          {
+            code: 'content_blocked',
+          },
+        );
+      }
+      return result;
+    },
+  };
+  ```
+
+  A new member on an exported union can break an exhaustive `switch` over `LLMErrorCode`, which then needs the new case.
+
+- 7897628: Middleware `ctx` carries three read only facts about how the call started: `streaming`, `callTargets` and `deadlineAt`.
+
+  `ctx.streaming` is whether the call asked for a stream. `ctx.callTargets` is the call's own `targets`, a frozen copy, when it passed one, and an order another middleware passes to `next({ targets })` never changes it. `ctx.deadlineAt` is when the call's `deadlineMs` runs out, in epoch milliseconds, and is absent without a deadline.
+
+  All three are optional and read the same way `ctx.context` is, in every hook, stage and fallback attempt. For `cachedCall`, each caller's `deadlineAt` comes from its own `deadlineMs`.
+
+- a5d4af8: `CallResult` gains `cache?: 'hit' | 'join'`, set by `cachedCall()` when no call of its own ran, so a middleware can tell a stored value from a shared in flight call.
+
+  A streamed join returns before the shared call has answered, so its `meta` is still unset when `next()` returns and it looked like a hit. `cache` is decided when the cache is read, so it is known at once, for streams too.
+
+  Existing code keeps compiling and behaving the same: the field is optional and only `cachedCall()` sets it.
+
 ## 3.0.0
 
 ### Major Changes
