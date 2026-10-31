@@ -332,6 +332,8 @@ knows.
   `maxRetryAfterMs` caps how long a provider can make you wait.
 - **No surprises.** VernLLM never reorders targets on its own, and bad config, such as duplicate
   target names or an invalid rate limit, throws at construction instead of in production.
+- **Ready made policy.** Ordering, provider rules, and content checks also ship as
+  [extensions](#extensions).
 
 ```ts title="residency-policy.ts"
 const residency: VernLLMMiddleware = {
@@ -411,6 +413,217 @@ await llm.call({ userContent, context: { tenantId: 't1', region: 'eu' } });
 
 LiteLLM offers `CustomLogger` hooks that can modify request params, and Portkey runs guardrail hooks
 before and after a request in the gateway.
+
+## Extensions
+
+[Extensions](/docs/extensions) are optional packages that add a capability inside VernLLM as
+[middleware](/docs/core/middleware). Each depends only on `vern-llm`, so core stays small and you
+install only what you use. They nest in a fixed order, so the order you list them in never matters.
+
+| Package                                      | Adds                                                                               |
+| -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [`vern-llm-logger`](/docs/extensions/logger) | One structured record per call, rolling latency percentiles, slow call detection   |
+| [`vern-llm-usage`](/docs/extensions/usage)   | Estimated cost and wasted spend per call, budgets that reject before a call        |
+| [`vern-llm-router`](/docs/extensions/router) | Target order from rules, health, latency, or cost, with a dry run and shadow mode  |
+| [`vern-llm-policy`](/docs/extensions/policy) | Removes targets a call may not use, or denies the call, and fails closed           |
+| [`vern-llm-guard`](/docs/extensions/guard)   | Labels, redacts, or blocks what goes into a call and what comes out, streams too   |
+| [`vern-llm-hedge`](/docs/extensions/hedge)   | Starts the next target when the first is slower than usual, keeps the first answer |
+
+### What each one does differently
+
+- **Logger.** Percentiles come from a bounded memory sketch with 1 percent relative error, kept per
+  provider, model, stream mode, and any dimension you add, such as prompt size. Only successful
+  provider calls are timed, so a fast 400 or a slow timeout can't distort a p99. A call is slow
+  against its own target's live p99, and a burst of one error becomes a single `error_group`. Prompt
+  text, output text, and error messages are never recorded.
+- **Usage.** Money is held as integer nano dollars, so sums never drift. Cache reads, cache writes by
+  TTL, and reasoning tokens each get their own rate, and a cost the provider reported wins and is
+  tagged as reported. `wastedUsd` splits out spend on rejected attempts and `unkeptUsd` spend on
+  chains that lost a race. Budgets are hard or soft, follow calendar windows in your time zone, and
+  a hold that is never settled frees itself after 10 minutes.
+- **Router.** Targets are scored on a log scale across latency, cost, and quality, so units combine
+  and an outlier only hurts itself. Cost can be divided by the success rate, a small share of calls
+  explores so no target starves of data, and a target whose breaker just closed ramps back in. A 429
+  cools a target for its `Retry-After`. One pure function backs real calls, `preview()`, and shadow
+  mode, so they agree.
+- **Policy.** Rule order never matters, since allows add up and forbids subtract, and a rule that
+  can't be evaluated fails closed by default. Exceptions must expire and carry a reason, and each
+  one that applied is recorded. `evaluate()` tests rules as plain data, `update()` validates a whole
+  policy before swapping it, and a `cachedCall` join that slips past a rule is caught and warned
+  about.
+- **Guard.** Redaction uses keyed HMAC tokens with no vault, restored in answers and streams, with a
+  hold window so a value split across chunks is still caught. An email token stays shaped like an
+  address, so validators still pass. `redactFor` can show a trusted primary the raw value and a
+  fallback only the token, and spotlight marks untrusted text without breaking prompt caching.
+- **Hedge.** The delay is the live p95 of the first target for that stream mode and prompt size. A
+  token bucket that starts empty holds extra traffic near 5 percent of calls. With `adapt`, a target
+  whose hedges rarely win is waited on longer, then paused, and with `cacheAware` the hedge waits
+  longer or skips when the first target has the prompt cached.
+
+<VerdictTable
+  tools={['VernLLM', 'AI SDK + AI Gateway', 'LiteLLM', 'Portkey']}
+  rowHeader="Capability"
+  rows={[
+    {
+      label: 'Latency percentiles',
+      best: 'VernLLM',
+      note: 'AI Gateway reports p50 and p95 per provider across its own traffic. VernLLM measures your calls, split by any dimension.',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Per target, stream mode, and prompt size, in your code',
+        },
+        'AI SDK + AI Gateway': {
+          level: 'good',
+          detail: 'p50 and p95 per provider, last hour',
+          via: 'hosted',
+        },
+        LiteLLM: { level: 'limited', detail: 'Average latency for routing' },
+        Portkey: { level: 'partial', detail: 'Mean latency in analytics', via: 'hosted' },
+      },
+    },
+    {
+      label: 'Slow call alerts',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Fixed threshold or own live p99' },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'good', detail: 'Slow response alert threshold', via: 'proxy' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Budget check before the call',
+      best: ['VernLLM', 'LiteLLM'],
+      note: 'LiteLLM reserves by default too. Figures from VernLLM are estimates from a price table you supply.',
+      cells: {
+        VernLLM: { level: 'strong', detail: 'Holds the worst case on all budgets or none' },
+        'AI SDK + AI Gateway': {
+          level: 'good',
+          detail: 'Budgets per team, project, key, user',
+          via: 'hosted',
+        },
+        LiteLLM: { level: 'strong', detail: 'Reserves max cost, settles to actual', via: 'proxy' },
+        Portkey: {
+          level: 'partial',
+          detail: 'Key expires at limit, no hold documented',
+          via: 'gateway',
+        },
+      },
+    },
+    {
+      label: 'Budget windows',
+      best: 'VernLLM',
+      cells: {
+        VernLLM: { level: 'excellent', detail: 'Calendar hour, day, month in your time zone' },
+        'AI SDK + AI Gateway': { level: 'none', label: 'Not documented' },
+        LiteLLM: { level: 'partial', detail: 'UTC, some windows rolling', via: 'proxy' },
+        Portkey: { level: 'partial', detail: 'Weekly or monthly, UTC only', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Ordering targets',
+      best: ['AI SDK + AI Gateway', 'LiteLLM'],
+      note: 'The router only reorders targets a call already has. Dry run and shadow mode show a change first.',
+      cells: {
+        VernLLM: {
+          level: 'strong',
+          detail: 'Rules, weighted, least busy, rank by latency and cost',
+        },
+        'AI SDK + AI Gateway': {
+          level: 'excellent',
+          detail: 'Sort by cost, first token, throughput',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'excellent', detail: 'Shuffle, least busy, latency, cost' },
+        Portkey: { level: 'strong', detail: 'Weighted and conditional', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Quality aware ranking',
+      best: 'VernLLM',
+      note: 'The others rank by cost, latency, throughput, or load. None was found that weighs answers rejected as unusable.',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Cost divided by success rate, explores, slow start',
+        },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'none' },
+      },
+    },
+    {
+      label: 'Provider and region rules',
+      note: 'AI Gateway can enforce zero data retention per request or team wide. Policy relies on facts you declare for each target.',
+      cells: {
+        VernLLM: {
+          level: 'strong',
+          detail: 'Rules over target facts, order never matters, fails closed',
+        },
+        'AI SDK + AI Gateway': {
+          level: 'strong',
+          detail: 'Zero data retention, only, order',
+          via: 'gateway',
+        },
+        LiteLLM: { level: 'good', detail: 'Region and context window checks' },
+        Portkey: { level: 'good', detail: 'Conditional routing in config', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Content checks',
+      best: 'Portkey',
+      note: 'The built in detectors are heuristics, so run a new check in audit mode before it can block.',
+      cells: {
+        VernLLM: {
+          level: 'good',
+          detail: 'Patterns, hosted detectors, redact or block, streams',
+        },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'good', detail: 'Presidio mask or block', via: 'proxy' },
+        Portkey: { level: 'excellent', detail: 'Plugin library, redact or deny', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Restoring redacted values',
+      best: 'VernLLM',
+      note: 'LiteLLM masking needs Presidio services deployed.',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'Keyed tokens, restored in answers and streams, per target',
+        },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'good', detail: 'Restores masked values in the answer', via: 'proxy' },
+        Portkey: { level: 'limited', detail: 'Redacts, restoring not documented', via: 'gateway' },
+      },
+    },
+    {
+      label: 'Hedging slow calls',
+      best: 'VernLLM',
+      note: 'Timeouts and fallback act after the wait. A hedge starts the next target during it.',
+      cells: {
+        VernLLM: {
+          level: 'strong',
+          detail: 'Learned delay, extra traffic capped, first answer wins',
+        },
+        'AI SDK + AI Gateway': { level: 'none' },
+        LiteLLM: { level: 'none' },
+        Portkey: { level: 'none' },
+      },
+    },
+  ]}
+/>
+
+Gateways run these checks once for every caller. The extensions run in your process, can read the
+call's `context`, and reject before any provider is contacted, so a rejection never counts toward a
+breaker. The comparison draws on AI Gateway [provider
+metrics](https://vercel.com/docs/ai-gateway/models-and-providers/metrics) and [zero data
+retention](https://vercel.com/docs/ai-gateway/zdr), LiteLLM [budgets](https://docs.litellm.ai/docs/proxy/users),
+[alerts](https://docs.litellm.ai/docs/proxy/alerting), [Presidio
+guardrail](https://docs.litellm.ai/docs/proxy/guardrails/pii_masking_v2) and
+[router](https://docs.litellm.ai/docs/routing), and Portkey [budget
+limits](https://portkey.ai/docs/aigw/product/ai-gateway/virtual-keys/budget-limits). No hedging was
+found in any of them.
 
 ## Feature matrix
 
@@ -548,6 +761,7 @@ Tags show where a feature runs when it isn't in the client library.
     {
       label: 'Caller budgets',
       best: ['AI SDK + AI Gateway', 'LiteLLM'],
+      note: 'The usage extension adds budgets per context value.',
       cells: {
         VernLLM: { level: 'limited', detail: 'Hooks you wire up' },
         'AI SDK + AI Gateway': {
@@ -562,6 +776,7 @@ Tags show where a feature runs when it isn't in the client library.
     {
       label: 'Guardrails',
       best: 'Portkey',
+      note: 'The guard extension adds checks and redaction.',
       cells: {
         VernLLM: { level: 'limited', detail: 'Through middleware' },
         'AI SDK + AI Gateway': { level: 'none' },
@@ -795,7 +1010,7 @@ and is moving into the open gateway with 2.0.
     {
       label: 'Automatic selection',
       best: ['AI SDK + AI Gateway', 'LiteLLM'],
-      note: 'VernLLM leaves this out on purpose: the order is the whole policy.',
+      note: 'The core leaves this out on purpose: the order is the whole policy. The router extension adds it, opt in.',
       cells: {
         VernLLM: { level: 'na', label: 'Never reorders' },
         'AI SDK + AI Gateway': {
@@ -1016,6 +1231,20 @@ call never means sharing a bill. See [Budget Reservation](/docs/core/budget-rese
       },
     },
     {
+      label: 'Budgets',
+      note: 'LiteLLM reads a Redis counter reconciled with its database, and a restart can leave a stale counter until it is corrected.',
+      cells: {
+        VernLLM: {
+          level: 'excellent',
+          detail: 'One script holds all or none, Redis clock',
+          via: 'redis',
+        },
+        'AI SDK + AI Gateway': { level: 'excellent', detail: 'Nothing to run', via: 'hosted' },
+        LiteLLM: { level: 'good', detail: 'Redis counter', via: 'proxy' },
+        Portkey: { level: 'strong', via: 'gateway' },
+      },
+    },
+    {
       label: 'When the store is down',
       best: 'VernLLM',
       cells: {
@@ -1125,13 +1354,16 @@ failing provider from VernLLM's breaker.
 
 ## Honest tradeoffs
 
-1. VernLLM is an LLM call framework, not a gateway. No proxy, dashboard, key management, or limits on your
-   own callers.
+1. VernLLM is an LLM call framework, not a gateway. No proxy, dashboard, or key management. Budgets
+   per caller come from the usage extension, keyed by values you pass in `context`.
 2. State is per process until you add [`vern-llm-redis`](/docs/integrations/redis).
-3. No pricing table. Usage is token counts.
+3. No built in pricing table. Usage is token counts, and the usage extension prices them from a
+   table you supply.
 4. It is not an agent or UI framework, and it never executes tools for you.
 5. Semantic caching is a [worked guide](/docs/guides/caching-methods/semantic), not a built in
    adapter.
 6. It covers OpenAI compatible providers, Anthropic, and Gemini, Bedrock through
    [`vern-llm-bedrock`](/docs/integrations/bedrock), and `fromFetch` for the rest. The others list far
    more.
+7. Extension limits are stated up front: guard detectors are heuristics, usage costs are estimates
+   from your price table, and a hedge can still bill for the call that lost.
