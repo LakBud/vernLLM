@@ -217,7 +217,23 @@ jobs:
           fi
 
           git commit -m "docs: update changelog"
-          git push origin HEAD:main
+
+          # Packages released from the same merge run in parallel and push
+          # the same pages, so a rejected push rebases and retries. A rebase
+          # that leaves nothing new means another run already pushed it.
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep $((attempt * 3))
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort; exit 1; }
+            if git diff --quiet origin/main HEAD; then
+              echo "Changelog already up to date on main"
+              exit 0
+            fi
+          done
+          exit 1
 
       - name: Deploy to Vercel
         if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router' || steps.tag.outputs.name == 'vern-llm-policy' || steps.tag.outputs.name == 'vern-llm-guard' || steps.tag.outputs.name == 'vern-llm-hedge'
