@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   openaiModeration,
   type Finding,
+  type ImageSegment,
   type ModerationClient,
   type Segment,
 } from '../../../src/index.js';
@@ -425,5 +426,162 @@ describe('openaiModeration', () => {
 
       expect(await run(detect, user('violence'))).toHaveLength(1);
     });
+  });
+});
+
+describe('openaiModeration with images', () => {
+  const picture = (data: string, mimeType = 'image/png'): ImageSegment => ({
+    image: { data, mimeType },
+    source: 'user',
+  });
+  /** What the guard calls it with: images go only to a detector that says it takes them. */
+  const readAll = (
+    detect: ReturnType<typeof openaiModeration>,
+    ...segments: (Segment | ImageSegment)[]
+  ): Promise<Finding[]> =>
+    Promise.resolve(
+      (detect as unknown as (s: unknown, signal: AbortSignal) => Finding[])(segments, signal),
+    );
+
+  const byUrl = (url: string): Scores => (url.includes('VIOLENT') ? { violence: 0.9 } : {});
+
+  function withImages(options: Partial<Parameters<typeof openaiModeration>[0]> = {}) {
+    const stub = createModerationClient(byWord, { image: byUrl });
+    const detect = openaiModeration({
+      client: stub.client,
+      model: 'omni-moderation-2024-09-26',
+      ...options,
+    });
+    return { detect, ...stub };
+  }
+
+  it('says it takes images, for the detector and every view of it', () => {
+    const { detect } = withImages();
+
+    expect(detect.images).toBe(true);
+    expect(detect.only('violence').images).toBe(true);
+  });
+
+  it('sends each image alone, as a data URL, and labels what it flags with no span', async () => {
+    const { detect, images, calls } = withImages();
+
+    const found = await readAll(detect, picture('VIOLENT'), picture('calm'), picture('VIOLENT2'));
+
+    expect(images.map((request) => request.url)).toEqual([
+      'data:image/png;base64,VIOLENT',
+      'data:image/png;base64,calm',
+      'data:image/png;base64,VIOLENT2',
+    ]);
+    expect(images.every((request) => request.parts === 1)).toBe(true);
+    expect(calls).toHaveLength(0);
+    expect(found).toEqual([
+      { segment: 0, label: 'moderation.violence' },
+      { segment: 2, label: 'moderation.violence' },
+    ]);
+  });
+
+  it('reads texts and images of one call, and keeps each finding on its own segment', async () => {
+    const { detect, images, calls } = withImages();
+
+    const found = await readAll(detect, user('hate'), picture('VIOLENT'), user('fine'));
+
+    expect(calls).toHaveLength(1);
+    expect(images).toHaveLength(1);
+    expect(found).toEqual([
+      { segment: 0, label: 'moderation.hate' },
+      { segment: 1, label: 'moderation.violence' },
+    ]);
+  });
+
+  it('counts an image by its score when a threshold asks for it', async () => {
+    const stub = createModerationClient(byWord, { image: () => ({ violence: 0.4 }) });
+    const detect = openaiModeration({
+      client: stub.client,
+      model: 'pinned',
+      thresholds: { violence: 0.3 },
+    });
+
+    expect(await readAll(detect, picture('x'))).toEqual([
+      { segment: 0, label: 'moderation.violence' },
+    ]);
+  });
+
+  it('asks once for an image however often it is given, in a call or across calls', async () => {
+    const { detect, images } = withImages();
+
+    await readAll(detect, picture('VIOLENT'), picture('VIOLENT'));
+    await readAll(detect, picture('VIOLENT'));
+
+    expect(images).toHaveLength(1);
+  });
+
+  it('reports what an image request cost', async () => {
+    const onUsage = vi.fn();
+    const { detect } = withImages({ onUsage });
+
+    await readAll(detect, picture('calm'));
+
+    expect(onUsage).toHaveBeenCalledWith({
+      model: 'omni-moderation-2024-09-26',
+      texts: 0,
+      images: 1,
+      ms: expect.any(Number),
+    });
+  });
+
+  describe('an image the API cannot take', () => {
+    const tiff = picture('AAAA', 'image/tiff');
+    // Base64 of just over 20 MB of bytes.
+    const huge = picture('A'.repeat(28 * 1024 * 1024));
+
+    it('is an error by default, so the check decides, and nothing is sent', async () => {
+      const { detect, images } = withImages();
+
+      await expect(readAll(detect, tiff)).rejects.toThrow(
+        'openaiModeration: the API takes PNG, JPEG, WebP and GIF images only',
+      );
+      await expect(readAll(detect, huge)).rejects.toThrow(
+        'openaiModeration: the API takes images up to 20 MB',
+      );
+      expect(images).toHaveLength(0);
+    });
+
+    it('is counted as unscanned with skip, and the rest of the call is still read', async () => {
+      const { detect, images } = withImages({ unsupportedImages: 'skip' });
+
+      const found = await readAll(detect, tiff, picture('VIOLENT'), huge);
+
+      expect(found).toEqual([
+        { segment: 0, unscanned: true },
+        { segment: 1, label: 'moderation.violence' },
+        { segment: 2, unscanned: true },
+      ]);
+      expect(images).toHaveLength(1);
+    });
+
+    it('is passed on by every view, so it is counted whatever the categories', async () => {
+      const { detect } = withImages({ unsupportedImages: 'skip' });
+
+      expect(await readAll(detect.only('hate') as never, tiff)).toEqual([
+        { segment: 0, unscanned: true },
+      ]);
+    });
+
+    it('rejects an unknown mode', () => {
+      expect(() => withImages({ unsupportedImages: 'maybe' as never })).toThrow(
+        "openaiModeration: unsupportedImages must be 'error' or 'skip'",
+      );
+    });
+  });
+
+  it('throws when the API answers an image with the wrong number of results', async () => {
+    const client: ModerationClient = {
+      moderations: { create: async () => ({ results: [] }) },
+    };
+    const detect = openaiModeration({ client, model: 'pinned' });
+
+    await expect(readAll(detect, picture('x'))).rejects.toThrow(
+      'openaiModeration: the API answered for the wrong number of images',
+    );
   });
 });

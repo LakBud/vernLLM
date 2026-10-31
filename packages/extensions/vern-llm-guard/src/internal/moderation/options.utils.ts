@@ -16,6 +16,7 @@ export interface ModerationSettings {
   thresholds: { [K in ModerationCategory]?: number };
   /** Whether any category counts by score, so every result needs its scores. */
   limited: boolean;
+  unsupportedImages: 'error' | 'skip';
   settings: HostedSettings;
   report: (info: ModerationUsage) => void;
 }
@@ -31,13 +32,14 @@ export function resolveModerationOptions(options: OpenAIModerationOptions): Mode
     batchSize,
     thresholds,
     limited: Object.keys(thresholds).length > 0,
+    unsupportedImages: options.unsupportedImages ?? 'error',
     settings: hostedSettings(MODERATION_NAME, options, { chunkChars: 8000, overlapChars: 200 }),
     report: usageReporter(MODERATION_NAME, options.onUsage),
   };
 }
 
 function validate(options: OpenAIModerationOptions): void {
-  const { client, model, thresholds, batchSize } = options;
+  const { client, model, thresholds, batchSize, unsupportedImages } = options;
 
   if (typeof client?.moderations?.create !== 'function') {
     throw new TypeError(`${MODERATION_NAME}: client.moderations.create must be a function`);
@@ -50,6 +52,13 @@ function validate(options: OpenAIModerationOptions): void {
     !(Number.isInteger(batchSize) && batchSize >= 1 && batchSize <= 256)
   ) {
     throw new TypeError(`${MODERATION_NAME}: batchSize must be an integer from 1 to 256`);
+  }
+  if (
+    unsupportedImages !== undefined &&
+    unsupportedImages !== 'error' &&
+    unsupportedImages !== 'skip'
+  ) {
+    throw new TypeError(`${MODERATION_NAME}: unsupportedImages must be 'error' or 'skip'`);
   }
   if (thresholds === undefined) return;
 

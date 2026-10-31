@@ -1,6 +1,6 @@
-import type { Segment } from '../../types/index.js';
+import type { InputSegment } from '../segments/types.js';
 import type { Limit } from './limit.js';
-import type { Analyze, Hit } from './types.js';
+import type { Hit, ImageAnalyze } from './types.js';
 
 /** One request to the provider, shared by every call that needs one of its texts. */
 export interface Flight {
@@ -22,7 +22,7 @@ export interface FlightEntry {
 /** A text nobody has asked about yet, and the key it is remembered by. */
 export interface FreshText {
   key: string;
-  segment: Segment;
+  segment: InputSegment;
 }
 
 export interface Flights {
@@ -37,7 +37,7 @@ export interface Flights {
  */
 export function createFlights(
   name: string,
-  analyze: Analyze,
+  analyze: ImageAnalyze,
   limit: Limit,
   remember: ((key: string, hits: Hit[]) => void) | undefined,
 ): Flights {

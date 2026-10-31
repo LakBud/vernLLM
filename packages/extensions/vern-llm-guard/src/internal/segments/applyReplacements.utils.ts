@@ -1,6 +1,7 @@
+import { isImage } from './isImage.utils.js';
 import { replaceSpans } from './replaceSpans.utils.js';
 
-import type { Extracted, Path, Replacement } from './types.js';
+import type { Extracted, InputSegment, Path, Replacement } from './types.js';
 
 function setAt(node: unknown, path: Path, depth: number, value: string): unknown {
   if (depth === path.length) return value;
@@ -22,14 +23,16 @@ function setAt(node: unknown, path: Path, depth: number, value: string): unknown
  */
 export function applyReplacements<T>(
   root: T,
-  extracted: Extracted,
+  extracted: Extracted<InputSegment>,
   replacements: readonly Replacement[],
 ): T {
   const bySegment = new Map<number, Replacement[]>();
   for (const replacement of replacements) {
     const segment = extracted.segments[replacement.segment];
+    // An image has no text to replace in.
     if (
       segment === undefined ||
+      isImage(segment) ||
       !Number.isInteger(replacement.start) ||
       !Number.isInteger(replacement.end) ||
       replacement.start < 0 ||
@@ -45,7 +48,7 @@ export function applyReplacements<T>(
 
   let result: unknown = root;
   for (const [index, list] of bySegment) {
-    const original = extracted.segments[index]!.text;
+    const original = (extracted.segments[index] as { text: string }).text;
     const text = replaceSpans(original, list);
 
     result = setAt(result, extracted.paths[index]!, 0, text);

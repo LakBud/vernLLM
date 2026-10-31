@@ -1,4 +1,5 @@
 import { errorName } from '../errors.utils.js';
+import { isImage } from '../segments/isImage.utils.js';
 import { isThenable } from '../thenable.utils.js';
 import { segmentKey, toSpans } from './spans.utils.js';
 import { tally } from './tally.utils.js';
@@ -6,6 +7,7 @@ import { budgetFor, withTimeout } from './timeout.utils.js';
 
 import type { AuditEffect, CheckError, CheckReport, Finding, Segment } from '../../types/index.js';
 import type { CompiledCheck, CompiledChecks } from '../../types/resolvedConfig.js';
+import type { InputSegment } from '../segments/types.js';
 import type { CallCache, ScanDeps, ScanFinding, ScanResult, Span } from './types.js';
 
 const round = (ms: number): number => Math.round(ms * 100) / 100;
@@ -51,7 +53,7 @@ export class ScanRun {
 
   constructor(
     private readonly compiled: CompiledChecks,
-    private readonly segments: readonly Segment[],
+    private readonly segments: readonly InputSegment[],
     private readonly cache: CallCache,
     private readonly deps: ScanDeps,
   ) {}
@@ -94,8 +96,12 @@ export class ScanRun {
     return `${check.id}\u0000${this.keyOf(segmentIndex)}`;
   }
 
-  /** What this call or an earlier one already found for a segment, if anything. */
-  private lookup(key: string): readonly Span[] | undefined {
+  /**
+   * What this call or an earlier one already found for a segment, if anything. A check that is given
+   * the call is never answered from here: what it finds depends on more than the text.
+   */
+  private lookup(check: CompiledCheck, key: string): readonly Span[] | undefined {
+    if (check.callView) return undefined;
     const known = this.cache.get(key);
     const { memo } = this.deps;
     if (known !== undefined || memo === undefined) return known;
@@ -109,7 +115,10 @@ export class ScanRun {
   private plan(check: CompiledCheck): Pending | undefined {
     const positions: number[] = [];
     this.segments.forEach((segment, index) => {
-      if (check.sources.has(segment.source)) positions.push(index);
+      // An image goes only to a detector that asked for images.
+      if (check.sources.has(segment.source) && (check.images || !isImage(segment))) {
+        positions.push(index);
+      }
     });
     if (positions.length === 0) return undefined;
 
@@ -122,7 +131,7 @@ export class ScanRun {
       started: performance.now(),
     };
     positions.forEach((segmentIndex, position) => {
-      const known = this.lookup(this.cacheKey(check, segmentIndex));
+      const known = this.lookup(check, this.cacheKey(check, segmentIndex));
       if (known === undefined) {
         pending.todo.push(position);
       } else {
@@ -146,7 +155,7 @@ export class ScanRun {
     this.detect(pending);
   }
 
-  private batchOf(pending: Pending): Segment[] {
+  private batchOf(pending: Pending): InputSegment[] {
     return pending.todo.map((position) => this.segments[pending.positions[position]!]!);
   }
 
@@ -161,7 +170,11 @@ export class ScanRun {
 
     let answer: Finding[] | PromiseLike<Finding[]>;
     try {
-      answer = check.detect(this.batchOf(pending), signal);
+      // Images are in the batch only when the detector takes them, which its types do not say.
+      const batch = this.batchOf(pending) as Segment[];
+      answer = check.callView
+        ? check.detect(batch, signal, this.deps.call)
+        : check.detect(batch, signal);
     } catch (error) {
       this.fail(check, error);
       return;
@@ -225,12 +238,16 @@ export class ScanRun {
 
   /** Stores what the detector found, so the same text is a lookup next time. */
   private remember(pending: Pending, found: unknown): void {
-    const texts = this.batchOf(pending).map((segment) => segment.text);
+    const texts = this.batchOf(pending).map((segment) =>
+      isImage(segment) ? undefined : segment.text,
+    );
     const grouped = toSpans(found, texts);
 
     pending.todo.forEach((position, index) => {
       const spans = grouped[index]!;
       pending.spans[position] = spans;
+      // What a call dependent check finds is not a function of the text, so none of it is kept.
+      if (pending.check.callView) return;
       const key = this.cacheKey(pending.check, pending.positions[position]!);
       this.cache.set(key, spans);
       if (!this.deps.memoReadOnly) {
@@ -254,6 +271,8 @@ export class ScanRun {
       this.deps.skip,
     );
 
+    this.cover(pending);
+
     const redacts = check.action === 'redact' && !check.audit;
     this.reports.set(check.id, {
       found,
@@ -274,6 +293,18 @@ export class ScanRun {
 
     // A value that cannot be located cannot be replaced, so the call is refused instead.
     if (check.action === 'block' || (redacts && unredactable > 0)) this.block(check);
+  }
+
+  /** Notes the images this check read, so the caller can count the ones nobody did. */
+  private cover(pending: Pending): void {
+    const { covered } = this.deps;
+    if (covered === undefined || !pending.check.images) return;
+
+    pending.positions.forEach((segmentIndex, position) => {
+      if (!isImage(this.segments[segmentIndex]!)) return;
+      if (pending.spans[position]?.some((span) => span.unscanned === true)) return;
+      covered.add(segmentIndex);
+    });
   }
 
   private fail(check: CompiledCheck, error: unknown): void {

@@ -15,12 +15,14 @@ export interface PromptConfig {
   categories: readonly (readonly [name: string, description: string])[];
   instructions: string | undefined;
   quotes: boolean;
+  /** Ask for a level per category. Default `false`. */
+  levels?: boolean;
   boundary: string;
 }
 
 /** The system prompt. The caller's `instructions` come first. */
 export function buildPrompt(config: PromptConfig): string {
-  const { categories, instructions, quotes, boundary } = config;
+  const { categories, instructions, quotes, levels = false, boundary } = config;
 
   return [
     ...(instructions === undefined ? [] : [instructions, '']),
@@ -33,12 +35,25 @@ export function buildPrompt(config: PromptConfig): string {
     'Categories:',
     ...categories.map(([name, description]) => `- ${name}: ${description}`),
     '',
-    'For every text, list the categories that apply to it, using only the names above. A text can ' +
-      'have several, or none.',
+    ...(levels
+      ? [
+          'For every text, give every category a level, using only the names above: 0 does not ' +
+            'apply, 1 low (a faint or indirect trace), 2 medium (clearly there, but not the main ' +
+            'point), 3 high (explicit, central or severe).',
+        ]
+      : [
+          'For every text, list the categories that apply to it, using only the names above. A ' +
+            'text can have several, or none.',
+        ]),
     ...(quotes
       ? [
-          'For every category you list, give the exact text from that text that makes it apply, ' +
-            'copied character for character. Use an empty list for a category you did not list.',
+          levels
+            ? 'For every category at level 1 or above, give the exact text from that text that ' +
+              'makes it apply, copied character for character. Use an empty list for a category at ' +
+              'level 0.'
+            : 'For every category you list, give the exact text from that text that makes it ' +
+              'apply, copied character for character. Use an empty list for a category you did ' +
+              'not list.',
         ]
       : []),
     'Answer with JSON only, with one entry for every id, once each.',

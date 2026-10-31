@@ -32,11 +32,17 @@ export interface ModerationResult {
   category_scores?: { [K in ModerationCategory]?: number | null };
 }
 
+/** One image as the Moderation API takes it: a data URL of the bytes. */
+export interface ModerationImagePart {
+  type: 'image_url';
+  image_url: { url: string };
+}
+
 /** Just what the detector needs of a client. An `OpenAI` instance fits. */
 export interface ModerationClient {
   moderations: {
     create(
-      body: { model: string; input: string[] },
+      body: { model: string; input: string[] | ModerationImagePart[] },
       options?: { signal?: AbortSignal },
     ): PromiseLike<{ results: readonly ModerationResult[] }>;
   };
@@ -45,8 +51,10 @@ export interface ModerationClient {
 /** What one request to the Moderation API cost. The API itself is free. */
 export interface ModerationUsage {
   model: string;
-  /** Texts in the request. */
+  /** Texts in the request. Zero for an image. */
   texts: number;
+  /** Images in the request, which is always one. Absent for texts. */
+  images?: number;
   /** Milliseconds the request took. */
   ms: number;
 }
@@ -62,5 +70,11 @@ export interface OpenAIModerationOptions extends HostedOptions {
   thresholds?: { [K in ModerationCategory]?: number };
   /** Texts per request, 1 to 256. Default 32. */
   batchSize?: number;
+  /**
+   * What an image the API cannot take means: a format other than PNG, JPEG, WebP or GIF, or more
+   * than 20 MB. `'error'` (default) fails the check, so `onError` decides and `closed` blocks the
+   * call. `'skip'` leaves the image unread and counts it as unscanned.
+   */
+  unsupportedImages?: 'error' | 'skip';
   onUsage?: (info: ModerationUsage) => void;
 }

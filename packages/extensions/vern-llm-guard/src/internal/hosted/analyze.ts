@@ -19,19 +19,17 @@ interface TextInput {
   offset: number;
 }
 
-function inputsOf(
-  segments: readonly Segment[],
+function textInputs(
+  segment: Segment,
+  index: number,
   chunkChars: number,
   overlapChars: number,
 ): TextInput[] {
-  return segments.flatMap((segment, index) =>
-    segment.text.trim() === ''
-      ? []
-      : splitText(segment.text, chunkChars, overlapChars).map((chunk) => ({
-          segment: index,
-          ...chunk,
-        })),
-  );
+  if (segment.text.trim() === '') return [];
+  return splitText(segment.text, chunkChars, overlapChars).map((chunk) => ({
+    segment: index,
+    ...chunk,
+  }));
 }
 
 function batchesOf<T>(inputs: readonly T[], size: number): T[][] {
@@ -46,8 +44,11 @@ function batchesOf<T>(inputs: readonly T[], size: number): T[][] {
 export function createAnalyze<Result>(config: AnalyzeConfig<Result>): Analyze {
   const { batchSize, chunkChars, overlapChars, request, hitsOf } = config;
 
-  return async (segments, signal, limit) => {
-    const inputs = inputsOf(segments, chunkChars, overlapChars);
+  return async (segments: readonly Segment[], signal, limit) => {
+    // The guard gives an image only to a detector that asked for images, so these are all text.
+    const inputs = segments.flatMap((segment, index) =>
+      textInputs(segment, index, chunkChars, overlapChars),
+    );
     const batches = batchesOf(inputs, batchSize);
 
     const answered = await Promise.all(

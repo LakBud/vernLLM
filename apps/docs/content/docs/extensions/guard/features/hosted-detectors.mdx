@@ -102,6 +102,16 @@ guardMiddleware({
   Several checks over one text cost one request
 - A long text is checked in chunks, and a category counts if it counts in any of them
 
+### Images
+
+A check with `on: ['user']` or `'input'` also sends the images in the request. Text goes the way it
+always did, and each image is its own request.
+
+- PNG, JPEG, WebP and GIF, up to 20 MB each. `unsupportedImages: 'error'` (default) throws for any
+  other image, so `onError` decides. `'skip'` leaves it unread and counts it as unscanned
+- Findings on an image have no offsets, so a `redact` check on them blocks
+- Images are sent to OpenAI. Leave the check off for requests that must not leave your systems
+
 ### Errors and cost
 
 - Any error or malformed answer is thrown. The check's `onError` decides, and `closed` is the default
@@ -211,6 +221,20 @@ guardMiddleware({
   blocks rather than miss it
 - Without `quotes`, findings cover the whole text. These checks label and block
 - `only(...)` takes your category names and gives a detector over the same calls and cache
+
+### Risk levels
+
+With `levels: true` the model gives each category a level from 0 to 3 instead of a yes or no.
+Findings are labeled `classifier.<category>:<level>` for level 1 and up. `only` takes a minimum, so
+a check can block only the serious ones.
+
+```ts title="guard-levels.ts"
+const classifier = llmClassifier({ llm, categories, levels: true });
+classifier.only('competitor', { minLevel: 2 }); // levels 2 and 3
+```
+
+- `minLevel` is 1 to 3 and needs `levels: true`
+- Turning `levels` on changes what is found, so give the guard a new `version`
 
 ### Its own VernLLM
 

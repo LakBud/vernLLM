@@ -51,6 +51,13 @@ function timeoutOf(value: unknown, at: string): number {
   return timeoutMs;
 }
 
+/** A property of the detector that says it takes more: absent, or `true`. */
+function capability(detect: object, name: 'images' | 'callView', at: string): boolean {
+  const value = (detect as Record<string, unknown>)[name];
+  if (value !== undefined && value !== true) invalid(`${at}.detect.${name} must be true`);
+  return value === true;
+}
+
 export function compileCheck(raw: unknown, index: number, instanceClosed: boolean): CompiledCheck {
   const at = `checks[${index}]`;
   if (!isRecord(raw)) invalid(`${at} must be an object`);
@@ -80,6 +87,8 @@ export function compileCheck(raw: unknown, index: number, instanceClosed: boolea
     invalid(`${at}.parallel is only for input checks with action 'block'`);
   }
   const timeoutMs = timeoutOf(check.timeoutMs, at);
+  const images = capability(check.detect, 'images', at);
+  const callView = capability(check.detect, 'callView', at);
 
   return Object.freeze({
     id,
@@ -94,5 +103,7 @@ export function compileCheck(raw: unknown, index: number, instanceClosed: boolea
     audit: mode === 'audit',
     timeoutMs,
     failClosed: onError === 'closed',
+    images,
+    callView,
   });
 }

@@ -2,6 +2,8 @@ export { keywords, type KeywordsOptions } from './detectors/keywords.js';
 export {
   llmClassifier,
   type ClassifierAnswer,
+  type ClassifierDetector,
+  type ClassifierOnlyOptions,
   type ClassifierLLM,
   type ClassifierUsage,
   type LLMClassifierOptions,
@@ -10,6 +12,7 @@ export {
   openaiModeration,
   type ModerationCategory,
   type ModerationClient,
+  type ModerationImagePart,
   type ModerationResult,
   type ModerationUsage,
   type OpenAIModerationOptions,

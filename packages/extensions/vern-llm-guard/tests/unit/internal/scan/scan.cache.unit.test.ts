@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { compile } from '../../../../src/internal/options/compile.utils.js';
 import { createMemo } from '../../../../src/internal/scan/memo.utils.js';
 import { scan } from '../../../../src/internal/scan/scan.js';
-import { finds, later, setup, tool, user } from './scanHelpers.js';
+import { finds, image, later, readsImages, setup, tool, user } from './scanHelpers.js';
 
 import type { Detector } from '../../../../src/index.js';
 import type { CallCache, Memo, Span } from '../../../../src/internal/scan/types.js';
@@ -123,5 +123,69 @@ describe('the call cache and the memo', () => {
     );
     expect(detector.calls).toHaveLength(1);
     expect(next.report.checks.slow).toMatchObject({ found: 1, memo: 1 });
+  });
+});
+
+describe('images in the memo', () => {
+  const deps = (memo: Memo | undefined) => ({
+    memo,
+    ctx: { context: undefined, streaming: false },
+  });
+
+  it('are remembered by a hash of their data, so one that comes back is read once', async () => {
+    const pictures = readsImages();
+    const { compiled, memo } = setup([{ id: 'pic', detect: pictures.detect }]);
+
+    await scan(compiled, [image('AAAA')], new Map(), deps(memo));
+    const again = await scan(compiled, [image('AAAA'), image('BBBB')], new Map(), deps(memo));
+
+    expect(pictures.calls).toHaveLength(2);
+    expect(pictures.calls[1]).toEqual([image('BBBB')]);
+    expect(again.report.checks.pic).toMatchObject({ found: 2, memo: 1 });
+  });
+
+  it('are told apart by source, and from a text that happens to match', async () => {
+    const pictures = readsImages();
+    const { compiled, memo } = setup([
+      { id: 'pic', detect: pictures.detect, on: ['user', 'tool'] },
+    ]);
+
+    await scan(compiled, [image('AAAA', 'user')], new Map(), deps(memo));
+    await scan(compiled, [image('AAAA', 'tool')], new Map(), deps(memo));
+    await scan(compiled, [user('AAAA')], new Map(), deps(memo));
+
+    expect(pictures.calls).toHaveLength(3);
+  });
+
+  it('keep what an unreadable image said, so asking again does not change the count', async () => {
+    const refusing = Object.assign(() => [{ segment: 0, unscanned: true as const }], {
+      images: true as const,
+    });
+    const { compiled, memo } = setup([{ id: 'pic', detect: refusing }]);
+    const covered = new Set<number>();
+
+    await scan(compiled, [image('AAAA')], new Map(), { ...deps(memo), covered });
+    await scan(compiled, [image('AAAA')], new Map(), { ...deps(memo), covered });
+
+    expect(covered.size).toBe(0);
+  });
+});
+
+describe('detectors that are given the call', () => {
+  it('are never answered from the call cache or the memo, and write to neither', async () => {
+    const detector = finds('x');
+    Object.assign(detector.detect, { callView: true as const });
+    const { compiled, memo } = setup([{ id: 'a', detect: detector.detect }]);
+    const cache: CallCache = new Map();
+    const deps = { memo, ctx: { context: undefined, streaming: false } };
+
+    const first = await scan(compiled, [user('x')], cache, deps);
+    const second = await scan(compiled, [user('x')], cache, deps);
+
+    expect(detector.calls).toHaveLength(2);
+    expect(cache.size).toBe(0);
+    expect(memo!.size).toBe(0);
+    expect(first.report.checks.a).not.toHaveProperty('memo');
+    expect(second.report.checks.a).toMatchObject({ found: 1 });
   });
 });

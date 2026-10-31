@@ -1,16 +1,12 @@
 import { scan } from '../scan/scan.js';
+import { isImage } from '../segments/isImage.utils.js';
 import { outputSegments } from '../segments/outputSegments.utils.js';
 import { requestSegments } from '../segments/requestSegments.utils.js';
 
-import type {
-  EvaluateInput,
-  GuardOutcome,
-  GuardResult,
-  PhaseReport,
-  Segment,
-} from '../../types/index.js';
+import type { EvaluateInput, GuardOutcome, GuardResult, PhaseReport } from '../../types/index.js';
 import type { CompiledChecks } from '../../types/resolvedConfig.js';
 import type { Memo, ScanResult } from '../scan/types.js';
+import type { InputSegment } from '../segments/types.js';
 
 const fail = (message: string): never => {
   throw new TypeError(`guardMiddleware: ${message}`);
@@ -28,8 +24,9 @@ const emptyInput = (): PhaseReport => ({
 function segmentsOf(
   input: EvaluateInput,
   phase: 'input' | 'output',
-): { segments: Segment[]; unscanned: number } {
-  if (input.messages !== undefined) return requestSegments(input.messages);
+  images: boolean,
+): { segments: InputSegment[]; unscanned: number } {
+  if (input.messages !== undefined) return requestSegments(input.messages, { images });
   if (phase === 'output') return { segments: outputSegments(input.text).segments, unscanned: 0 };
   return { segments: [{ text: input.text!, source: 'user' }], unscanned: 0 };
 }
@@ -66,11 +63,13 @@ export async function evaluate(
   input: EvaluateInput,
 ): Promise<GuardResult> {
   const phase = phaseOf(input);
-  const { segments, unscanned } = segmentsOf(input, phase);
+  const { segments, unscanned } = segmentsOf(input, phase, compiled.images);
 
+  const covered = new Set<number>();
   const scanned = await scan(compiled, segments, new Map(), {
     memo,
     ctx: { context: input.context, streaming: false },
+    covered,
   });
 
   const head = {
@@ -79,7 +78,11 @@ export async function evaluate(
     outcome: outcomeOf(scanned),
     ...(!scanned.unknown && { labels: scanned.labels }),
   };
-  if (phase === 'input') return { ...head, input: { ...scanned.report, unscanned } };
+  if (phase === 'input') {
+    // An image that no check read is as unscanned as one that was never cut out.
+    const unread = segments.filter(isImage).length - covered.size;
+    return { ...head, input: { ...scanned.report, unscanned: unscanned + unread } };
+  }
 
   const { unscanned: _unscanned, ...report } = scanned.report;
   return { ...head, input: emptyInput(), output: { ...report, restored: 0, unrestored: 0 } };

@@ -11,9 +11,11 @@ import {
   llmClassifier,
   openaiModeration,
   patterns,
+  type GuardResult,
 } from '../../src/index.js';
 import {
   captureLogger,
+  classifierAnswer,
   classifierResponder,
   createClassifierLLM,
   createGuardrailClient,
@@ -26,6 +28,7 @@ import {
   tokenIn,
   type Assessments,
   type Found,
+  type Levels,
   type Scores,
 } from '../helpers.js';
 
@@ -796,5 +799,162 @@ describe('with bedrockGuardrail', () => {
 
     expect(primary.calls).toHaveLength(0);
     expect(guardrail.calls[0]!.signal!.aborted).toBe(true);
+  });
+});
+
+describe('with openaiModeration and an image', () => {
+  const fight = { type: 'image' as const, data: 'FIGHT', mimeType: 'image/png' };
+  const calm = { type: 'image' as const, data: 'calm', mimeType: 'image/png' };
+  const asking = (...blocks: (typeof fight)[]) => ({
+    ...call,
+    userContent: [{ type: 'text' as const, text: 'is this ok' }, ...blocks],
+  });
+  const flagged = (url: string): Scores => (url.includes('FIGHT') ? { violence: 0.8 } : {});
+
+  function checked(options: Partial<Parameters<typeof openaiModeration>[0]> = {}) {
+    const moderation = createModerationClient(() => ({}), { image: flagged });
+    const detect = openaiModeration({ client: moderation.client, model: 'pinned', ...options });
+    const built = harness({
+      checks: [{ id: 'violence', detect: detect.only('violence'), action: 'block', on: 'user' }],
+    });
+    const result = () =>
+      built.events.filter((event) => event.name === 'guard.result').at(-1)!.data as GuardResult;
+    return { ...built, moderation, result };
+  }
+
+  it('blocks a call whose image has violence, before any provider is contacted', async () => {
+    const { llm, primary, moderation } = checked();
+
+    await expect(llm.call(asking(calm, fight))).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    // The text and each image are separate requests: the API answers once for all parts of one.
+    expect(moderation.calls).toHaveLength(1);
+    expect(moderation.images.map((request) => request.url)).toEqual([
+      'data:image/png;base64,calm',
+      'data:image/png;base64,FIGHT',
+    ]);
+  });
+
+  it('sends a harmless image on to the provider', async () => {
+    const { llm, primary, result } = checked();
+
+    await expect(llm.call(asking(calm))).resolves.toBe('primary');
+
+    expect(JSON.stringify(primary.calls[0]!.messages)).toContain('calm');
+    expect(result().input.unscanned).toBe(0);
+  });
+
+  it('refuses the call for an image the API cannot take, since the check fails closed', async () => {
+    const { llm, primary, moderation } = checked();
+    const tiff = { ...calm, mimeType: 'image/tiff' };
+
+    await expect(llm.call(asking(tiff))).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(moderation.images).toHaveLength(0);
+  });
+
+  it('counts it as unscanned instead with unsupportedImages: skip', async () => {
+    const { llm, primary, result } = checked({ unsupportedImages: 'skip' });
+    const tiff = { ...calm, mimeType: 'image/tiff' };
+
+    await expect(llm.call(asking(tiff))).resolves.toBe('primary');
+
+    expect(primary.calls).toHaveLength(1);
+    expect(result().input.unscanned).toBe(1);
+  });
+
+  it('reads an image once across calls', async () => {
+    const { llm, moderation } = checked();
+
+    await llm.call(asking(calm));
+    await llm.call(asking(calm));
+
+    expect(moderation.images).toHaveLength(1);
+  });
+});
+
+describe('with llmClassifier and levels', () => {
+  const categories = { investment_advice: 'Recommends buying or selling a specific security' };
+  const names = Object.keys(categories);
+  /** A faint hint is low, a plain recommendation is medium. */
+  const graded = (text: string): Levels => ({
+    ...(text.includes('maybe') && { investment_advice: 1 }),
+    ...(text.includes('buy NVDA') && { investment_advice: 2 }),
+  });
+
+  function levelled(answer: string) {
+    const stub = createResponderClient((params) =>
+      JSON.stringify(classifierAnswer(() => ({}), lastUserText(params), { names, of: graded })),
+    );
+    const model = new VernLLM({
+      client: stub.client,
+      model: 'judge',
+      maxRetries: 0,
+      logger: 'silent',
+    });
+    const classifier = llmClassifier({ llm: model, categories, levels: true });
+    const built = harness(
+      {
+        version: '2026-11-02.1',
+        checks: [
+          {
+            id: 'advice',
+            detect: classifier.only('investment_advice', { minLevel: 2 }),
+            action: 'block',
+            on: 'output',
+          },
+          {
+            id: 'advice-watch',
+            detect: classifier.only('investment_advice', { minLevel: 1 }),
+            on: 'output',
+            mode: 'audit',
+          },
+        ],
+      },
+      {},
+      { primary: () => answer },
+    );
+    const result = () =>
+      built.events.filter((event) => event.name === 'guard.result').at(-1)!.data as GuardResult;
+    return { ...built, judge: stub, result };
+  }
+
+  it('audits a low finding and lets the answer through', async () => {
+    const { llm, result, judge } = levelled('You could maybe look at it');
+
+    await expect(llm.call(call)).resolves.toBe('You could maybe look at it');
+
+    // Both checks read one classification of the answer.
+    expect(judge.calls).toHaveLength(1);
+    expect(result().output).toMatchObject({
+      audit: { 'advice-watch': 'label' },
+      checks: {
+        advice: { found: 0 },
+        'advice-watch': { found: 1, kinds: ['classifier.investment_advice:1'] },
+      },
+    });
+  });
+
+  it('blocks a medium finding, which both checks see', async () => {
+    const { llm, result, judge } = levelled('You should buy NVDA today');
+
+    await expect(llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(judge.calls).toHaveLength(1);
+    expect(result()).toMatchObject({ outcome: 'blocked' });
+    expect(result().output!.checks.advice).toMatchObject({
+      found: 1,
+      kinds: ['classifier.investment_advice:2'],
+    });
+  });
+
+  it('passes an answer with no advice at all', async () => {
+    const { llm, result } = levelled('Happy to help with your account');
+
+    await expect(llm.call(call)).resolves.toBe('Happy to help with your account');
+
+    expect(result()).toMatchObject({ outcome: 'passed' });
   });
 });

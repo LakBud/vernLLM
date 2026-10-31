@@ -7,7 +7,11 @@ import {
   patterns,
   type Check,
   type Detector,
+  type Finding,
   type GuardResult,
+  type ImageDetector,
+  type ImageSegment,
+  type Segment,
 } from '../../src/index.js';
 import { captureLogger, harness } from '../helpers.js';
 
@@ -391,5 +395,129 @@ describe('images', () => {
     });
 
     expect(resultOf(events).input.unscanned).toBe(1);
+  });
+});
+
+describe('images a check reads', () => {
+  const violent = { type: 'image' as const, data: 'VIOLENT', mimeType: 'image/png' };
+  const calm = { type: 'image' as const, data: 'calm', mimeType: 'image/png' };
+  const withImage = (...blocks: (typeof violent)[]) => ({
+    ...call,
+    userContent: [{ type: 'text' as const, text: 'what is this' }, ...blocks],
+  });
+
+  /** An image detector that flags `VIOLENT`, and remembers every image it was given. */
+  function looks(skip = false) {
+    const seen: ImageSegment[] = [];
+    const detect: ImageDetector = Object.assign(
+      (segments: readonly (Segment | ImageSegment)[]) =>
+        segments.flatMap((segment, index): Finding[] => {
+          if (!('image' in segment)) return [];
+          seen.push(segment);
+          if (skip) return [{ segment: index, unscanned: true as const }];
+          return segment.image.data === 'VIOLENT' ? [{ segment: index, label: 'violent' }] : [];
+        }),
+      { images: true as const },
+    );
+    return { detect, seen };
+  }
+
+  it('blocks the call before any provider is contacted', async () => {
+    const { detect } = looks();
+    const { llm, primary, events } = harness({
+      checks: [{ id: 'pic', detect, action: 'block' }],
+    });
+
+    const error = await llm.call(withImage(calm, violent)).catch((e: unknown) => e);
+
+    expect(isLLMError(error) && error.code).toBe('content_blocked');
+    expect(primary.calls).toHaveLength(0);
+    expect(resultOf(events)).toMatchObject({
+      outcome: 'blocked',
+      input: { checks: { pic: { found: 1, kinds: ['violent'] } }, unscanned: 0 },
+    });
+  });
+
+  it('lets a call with a harmless image through, and the image reaches the provider intact', async () => {
+    const { detect, seen } = looks();
+    const { llm, primary, events } = harness({ checks: [{ id: 'pic', detect, action: 'block' }] });
+
+    await llm.call(withImage(calm));
+
+    expect(seen).toHaveLength(1);
+    expect(JSON.stringify(primary.calls[0]!.messages)).toContain('calm');
+    expect(resultOf(events).input.unscanned).toBe(0);
+  });
+
+  it('never gives an image to a text check beside it, which keeps reading the text', async () => {
+    const { detect } = looks();
+    const { llm, labels } = harness({ checks: [email, { id: 'pic', detect }] });
+
+    await llm.call({
+      ...call,
+      userContent: [{ type: 'text', text: 'jane@acme.com' }, violent],
+    });
+
+    expect(labels).toEqual([['pii', 'pic']]);
+  });
+
+  it('counts an image as unscanned when the only image check is on another role', async () => {
+    const { detect, seen } = looks();
+    const { llm, events } = harness({ checks: [{ id: 'pic', detect, on: 'tool' }] });
+
+    await llm.call(withImage(violent));
+
+    expect(seen).toHaveLength(0);
+    expect(resultOf(events).input.unscanned).toBe(1);
+  });
+
+  it('counts an image as unscanned when the detector says it could not read it', async () => {
+    const { detect } = looks(true);
+    const { llm, events } = harness({ checks: [{ id: 'pic', detect, action: 'block' }] });
+
+    await llm.call(withImage(violent, calm));
+
+    expect(resultOf(events).input.unscanned).toBe(2);
+  });
+
+  it('blocks a redact check that finds something in an image, since it has no span to mask', async () => {
+    const { detect } = looks();
+    const { llm, primary, events } = harness({
+      checks: [{ id: 'pic', detect, action: 'redact' }],
+    });
+
+    await expect(llm.call(withImage(violent))).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(resultOf(events).input.checks.pic).toMatchObject({ found: 1, unredactable: 1 });
+  });
+
+  it('reads the image of a check that runs alongside the call, and counts it as read', async () => {
+    const { detect } = looks();
+    const { llm, primary, events } = harness({
+      checks: [{ id: 'pic', detect, action: 'block', parallel: true }],
+    });
+
+    await expect(llm.call(withImage(violent))).rejects.toMatchObject({ code: 'content_blocked' });
+    await llm.call(withImage(calm));
+
+    // A check that answers at once is joined before the call, so the block costs no provider call.
+    expect(primary.calls).toHaveLength(1);
+    const [blocked, passed] = events
+      .filter((event) => event.name === 'guard.result')
+      .map((event) => event.data as GuardResult);
+    expect(blocked!.input.unscanned).toBe(0);
+    expect(passed!.input.unscanned).toBe(0);
+  });
+
+  it('reads an image that comes back in the next call once, since it is in the memo', async () => {
+    const { detect, seen } = looks();
+    const { llm } = harness({ checks: [{ id: 'pic', detect }] });
+
+    await llm.call(withImage(calm));
+    await llm.call(withImage(calm));
+    await llm.call(withImage(violent));
+
+    expect(seen.map((segment) => segment.image.data)).toEqual(['calm', 'VIOLENT']);
   });
 });

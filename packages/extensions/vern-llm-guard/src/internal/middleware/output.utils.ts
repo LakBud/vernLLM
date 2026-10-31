@@ -10,6 +10,7 @@ import { errorName } from '../errors.utils.js';
 import { gateOutput } from '../output/gate.js';
 import { restoreOnly } from '../output/restoreOnly.utils.js';
 import { gateStream } from '../output/streamGate.js';
+import { callViewOf } from './callView.utils.js';
 import { hasOutputWork, type CallState } from './state.js';
 
 import type { Live } from './live.js';
@@ -34,14 +35,17 @@ export async function readOutput(
     return result;
   }
 
-  // A stream is checked as it arrives, and its one result is emitted when it settles.
+  // A stream is checked as it arrives, and its one result is emitted when it settles. Its meta is
+  // read then, since it is only known once the whole answer is.
   if (isStreamResult(result.value)) {
+    const call = callViewOf(state, undefined);
     const gated = gateStream({
       compiled,
       source: result.value,
       tokens: state.tokens,
       cache: state.cache,
-      deps: { memo, ctx, signal: ctx.signal, deadlineAt: ctx.deadlineAt },
+      deps: { memo, ctx, signal: ctx.signal, deadlineAt: ctx.deadlineAt, call },
+      meta: () => result.meta,
       json: request.response_format !== undefined,
       marker: state.marker,
       onDone: (done) => {
@@ -61,7 +65,13 @@ export async function readOutput(
       value: result.value,
       tokens: state.tokens,
       cache: state.cache,
-      deps: { memo, ctx, signal: ctx.signal, deadlineAt: ctx.deadlineAt },
+      deps: {
+        memo,
+        ctx,
+        signal: ctx.signal,
+        deadlineAt: ctx.deadlineAt,
+        call: callViewOf(state, result.meta),
+      },
       marker: state.marker,
     });
   } catch (error) {

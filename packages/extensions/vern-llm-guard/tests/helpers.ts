@@ -20,6 +20,7 @@ import {
   type GuardOptions,
   type ModerationCategory,
   type ModerationClient,
+  type ModerationImagePart,
   type ModerationResult,
 } from '../src/index.js';
 
@@ -263,26 +264,49 @@ const pause = (ms: number, signal: AbortSignal | undefined): Promise<void> =>
 /**
  * A moderation client that scores each text with `score`, and records every request. With
  * `delayMs` it answers late and stops when its signal aborts, and `peak` says how many requests
- * were in flight at once. An `error` is thrown instead of an answer.
+ * were in flight at once. An `error` is thrown instead of an answer. A request of images is kept
+ * apart in `images`, one entry for each, and scored with `behavior.image` from the data URL; like
+ * the real API, it answers once for all the parts of one request.
  */
 export function createModerationClient(
   score: (text: string) => Scores = () => ({}),
-  behavior: { delayMs?: number; error?: Error } = {},
+  behavior: { delayMs?: number; error?: Error; image?: (url: string) => Scores } = {},
 ) {
   const calls: { model: string; input: string[]; signal: AbortSignal | undefined }[] = [];
+  const images: { model: string; url: string; parts: number; signal: AbortSignal | undefined }[] =
+    [];
   let active = 0;
   let peak = 0;
 
   const client: ModerationClient = {
     moderations: {
       create: async (body, options) => {
-        calls.push({ model: body.model, input: [...body.input], signal: options?.signal });
+        const input = body.input as (string | ModerationImagePart)[];
+        const parts = input.filter((part): part is ModerationImagePart => typeof part !== 'string');
+        if (parts.length > 0) {
+          images.push({
+            model: body.model,
+            url: parts[0]!.image_url.url,
+            parts: parts.length,
+            signal: options?.signal,
+          });
+        } else {
+          calls.push({
+            model: body.model,
+            input: [...(input as string[])],
+            signal: options?.signal,
+          });
+        }
         active += 1;
         peak = Math.max(peak, active);
         try {
           if (behavior.delayMs !== undefined) await pause(behavior.delayMs, options?.signal);
           if (behavior.error) throw behavior.error;
-          return { results: body.input.map((text) => moderationResult(score(text))) };
+          if (parts.length > 0) {
+            const scores = parts.map((part) => behavior.image?.(part.image_url.url));
+            return { results: [moderationResult(Object.assign({}, ...scores))] };
+          }
+          return { results: (input as string[]).map((text) => moderationResult(score(text))) };
         } finally {
           active -= 1;
         }
@@ -290,7 +314,7 @@ export function createModerationClient(
     },
   };
 
-  return { client, calls, peak: () => peak };
+  return { client, calls, images, peak: () => peak };
 }
 
 /** What a stub classifier finds in a text: each category that applies, with its quotes. */
@@ -306,16 +330,29 @@ export function classifierInput(userContent: string): { boundary: string; texts:
   return { boundary: matches[0]?.[1] ?? '', texts };
 }
 
-/** The answer a model would give: what `decide` finds in each text, by id. */
+/** A level for each category, 0 none to 3 high, by name. */
+export type Levels = Record<string, number>;
+
+/**
+ * The answer a model would give: what `decide` finds in each text, by id. With `levels` it grades
+ * every category, as a model asked for levels does, and quotes the ones it graded above zero.
+ */
 export function classifierAnswer(
   decide: (text: string) => Found,
   userContent: string,
+  levels?: { names: readonly string[]; of: (text: string) => Levels },
 ): ClassifierAnswer {
   const { texts } = classifierInput(userContent);
   return {
     results: texts.map((text, id) => {
       const found = decide(text);
-      return { id, categories: Object.keys(found), quotes: found };
+      if (levels === undefined) return { id, categories: Object.keys(found), quotes: found };
+
+      const graded = Object.fromEntries(levels.names.map((name) => [name, 0]));
+      Object.assign(graded, levels.of(text));
+      const quotes = Object.fromEntries(levels.names.map((name) => [name, found[name] ?? []]));
+      // A model asked for levels answers with them alone, and the validator derives the rest.
+      return { id, levels: graded, quotes } as ClassifierAnswer['results'][number];
     }),
   };
 }
@@ -337,6 +374,8 @@ export function createClassifierLLM(
     delayMs?: number;
     error?: Error;
     answer?: (answer: ClassifierAnswer) => unknown;
+    /** Answer with a level for every category, as a classifier with `levels: true` is asked to. */
+    levels?: { names: readonly string[]; of: (text: string) => Levels };
   } = {},
 ) {
   const calls: (ReturnType<typeof classifierInput> & { params: CallParams<ClassifierAnswer> })[] =
@@ -353,7 +392,7 @@ export function createClassifierLLM(
       try {
         if (behavior.delayMs !== undefined) await pause(behavior.delayMs, params.signal);
         if (behavior.error) throw behavior.error;
-        const answer = classifierAnswer(decide, content);
+        const answer = classifierAnswer(decide, content, behavior.levels);
         return behavior.answer ? behavior.answer(answer) : answer;
       } finally {
         active -= 1;

@@ -123,6 +123,29 @@ type Detector = (
 `openaiModeration`, `llmClassifier` and `bedrockGuardrail` ask a provider instead of matching text. See
 [Hosted detectors](/docs/extensions/guard/features/hosted-detectors).
 
+### Reading more than text
+
+A detector can say what else it takes with two optional properties.
+
+```ts title="guard-capabilities.ts"
+import type { CallView, ImageDetector } from 'vern-llm-guard';
+
+const reads: ImageDetector = Object.assign(
+  (segments, signal) => findings, // segments may include { image, source }
+  { images: true as const },
+);
+```
+
+- `images: true` gives the detector image segments as well as text. An image has no text, so a
+  finding on one has no offsets. Return `{ segment, unscanned: true }` for an image you could not
+  read, and it counts as unscanned instead of clean
+- `callView: true` gives the detector a third argument, a `CallView` with the request's `input`
+  segments and, once the answer exists, its `meta`. It is for output checks that depend on the call
+- A `callView` detector is never memoized, since its findings depend on more than the text. It runs
+  again for each attempt, so cache inside it if it is slow
+- Image segments reach only detectors with `images: true`. Other detectors see the same segments as
+  before
+
 ## When a detector fails
 
 A detector that throws, times out or returns something invalid follows `onError`. With `closed`, a

@@ -1,4 +1,4 @@
-import type { CheckContext, PhaseReport } from '../../types/index.js';
+import type { CallView, CheckContext, PhaseReport } from '../../types/index.js';
 import type { CompiledCheck } from '../../types/resolvedConfig.js';
 
 /** One finding as it is remembered: offsets and a kind, never the text. */
@@ -6,6 +6,8 @@ export interface Span {
   readonly label?: string;
   readonly start?: number;
   readonly end?: number;
+  /** The detector did not read this segment. It is remembered, since asking again gives the same. */
+  readonly unscanned?: true;
 }
 
 /** What one call already knows, keyed by check and text. It lives in `ctx.own`. */
@@ -32,6 +34,13 @@ export interface ScanDeps {
   skip?: ((segment: number, span: Span, check: CompiledCheck) => boolean) | undefined;
   /** Run only these checks, by id. A stream uses it to leave out checks that wait for a window. */
   only?: ReadonlySet<string> | undefined;
+  /** What a check with `callView: true` is given, as its third argument. Output scans only. */
+  call?: CallView | undefined;
+  /**
+   * Image segments, by index, that some check took and read. The caller counts the rest as
+   * unscanned. Shared between scans, since the checks of one call can run in two.
+   */
+  covered?: Set<number> | undefined;
 }
 
 /** One finding of an enforced check, in the numbering of the segments that were scanned. */

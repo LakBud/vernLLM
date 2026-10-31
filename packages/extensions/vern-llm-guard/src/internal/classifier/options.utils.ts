@@ -14,6 +14,7 @@ export interface ClassifierSettings {
   categories: readonly (readonly [name: string, description: string])[];
   instructions: string | undefined;
   quotes: boolean;
+  levels: boolean;
   batchSize: number;
   maxTokens: number;
   settings: HostedSettings;
@@ -23,12 +24,14 @@ export interface ClassifierSettings {
 export function resolveClassifierOptions(options: LLMClassifierOptions): ClassifierSettings {
   validate(options);
 
-  const { llm, instructions, quotes = false, batchSize = 1, maxTokens = 300 } = options;
+  const { llm, instructions, quotes = false, levels = false } = options;
+  const { batchSize = 1, maxTokens = 300 } = options;
   return {
     llm,
     categories: Object.entries(options.categories),
     instructions: instructions === '' ? undefined : instructions,
     quotes,
+    levels,
     batchSize,
     maxTokens,
     settings: hostedSettings(CLASSIFIER_NAME, options, { chunkChars: 16_000, overlapChars: 200 }),
@@ -37,7 +40,7 @@ export function resolveClassifierOptions(options: LLMClassifierOptions): Classif
 }
 
 function validate(options: LLMClassifierOptions): void {
-  const { llm, categories, instructions, quotes, batchSize, maxTokens } = options;
+  const { llm, categories, instructions, quotes, levels, batchSize, maxTokens } = options;
 
   if (typeof llm?.call !== 'function') {
     throw new TypeError(`${CLASSIFIER_NAME}: llm.call must be a function`);
@@ -49,6 +52,9 @@ function validate(options: LLMClassifierOptions): void {
   }
   if (quotes !== undefined && typeof quotes !== 'boolean') {
     throw new TypeError(`${CLASSIFIER_NAME}: quotes must be a boolean`);
+  }
+  if (levels !== undefined && typeof levels !== 'boolean') {
+    throw new TypeError(`${CLASSIFIER_NAME}: levels must be a boolean`);
   }
   if (
     batchSize !== undefined &&

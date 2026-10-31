@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { finds, isPromise, later, setup, tool, user } from './scanHelpers.js';
+import { finds, image, isPromise, later, readsImages, setup, tool, user } from './scanHelpers.js';
 
 import type { Detector, Segment } from '../../../../src/index.js';
 import type { ScanResult } from '../../../../src/internal/scan/types.js';
@@ -276,5 +276,106 @@ describe('findings for redaction', () => {
 
     expect((await closed.run([user('a')])).blocked).toBeDefined();
     expect((await open.run([user('a')])).blocked).toBeUndefined();
+  });
+});
+
+describe('images', () => {
+  it('go only to a detector that asked for them', async () => {
+    const text = finds('x');
+    const pictures = readsImages();
+    const { run } = setup([
+      { id: 'text', detect: text.detect },
+      { id: 'pic', detect: pictures.detect },
+    ]);
+
+    const result = await run([user('x'), image('AAAA'), user('y')]);
+
+    expect(text.calls).toEqual([[user('x'), user('y')]]);
+    expect(pictures.calls[0]).toEqual([user('x'), image('AAAA'), user('y')]);
+    // Indexes are into the batch each detector got, so the image is second for one and first for none.
+    expect(result.report.checks.pic).toMatchObject({ found: 1, kinds: ['pic'] });
+  });
+
+  it('count as read only when a check that takes images covered them', async () => {
+    const covered = new Set<number>();
+    const { run } = setup([{ id: 'pic', detect: readsImages().detect, on: 'tool' }]);
+    await run([user('x'), image('AAAA')], { covered });
+    expect(covered.size).toBe(0);
+
+    const { run: runUser } = setup([{ id: 'pic', detect: readsImages().detect, on: 'user' }]);
+    await runUser([user('x'), image('AAAA'), image('BBBB')], { covered });
+    expect([...covered]).toEqual([1, 2]);
+  });
+
+  it('have no span, so a redact check on one blocks the call', async () => {
+    const { run } = setup([{ id: 'pic', detect: readsImages().detect, action: 'redact' }]);
+
+    const result = await run([image('AAAA')]);
+
+    expect(result.blocked).toEqual({ check: 'pic', label: 'pic', failed: false });
+    expect(result.report.checks.pic).toMatchObject({ found: 1, unredactable: 1 });
+  });
+
+  it('cannot have offsets: a detector that gives one is an error', async () => {
+    const lying = Object.assign(() => [{ segment: 0, label: 'pic', start: 0, end: 2 }], {
+      images: true as const,
+    });
+    const { run } = setup([{ id: 'pic', detect: lying, action: 'block' }]);
+
+    const result = await run([image('AAAA')]);
+
+    expect(result.blocked).toMatchObject({ check: 'pic', failed: true });
+    expect(result.report.errors).toEqual([{ check: 'pic', name: 'TypeError' }]);
+  });
+
+  it('are left unread when the detector says so, and that finds nothing', async () => {
+    const covered = new Set<number>();
+    const refusing = Object.assign(() => [{ segment: 0, unscanned: true as const }], {
+      images: true as const,
+    });
+    const { run } = setup([{ id: 'pic', detect: refusing, action: 'block' }]);
+
+    const result = await run([image('AAAA')], { covered });
+
+    expect(result.blocked).toBeUndefined();
+    expect(result.report.checks.pic).toMatchObject({ found: 0 });
+    expect(covered.size).toBe(0);
+  });
+
+  it('are rejected as a detector config that is not a capability', async () => {
+    const { compile } = await import('../../../../src/internal/options/compile.utils.js');
+    const detect = Object.assign(() => [], { images: 'yes' });
+    expect(() => compile({ version: 'v', checks: [{ id: 'a', detect: detect as never }] })).toThrow(
+      /checks\[0\]\.detect\.images must be true/,
+    );
+  });
+});
+
+describe('detectors that are given the call', () => {
+  const view = { input: [user('what is the balance')], meta: undefined };
+
+  it('get it as the third argument, and others get none', async () => {
+    const withCall = vi.fn<Detector>(() => []);
+    Object.assign(withCall, { callView: true as const });
+    const plain = vi.fn<Detector>(() => []);
+    const { run } = setup([
+      { id: 'a', detect: withCall },
+      { id: 'b', detect: plain },
+    ]);
+
+    await run([user('x')], { call: view });
+
+    expect(withCall.mock.calls[0]![2]).toBe(view);
+    expect(plain.mock.calls[0]).toHaveLength(2);
+  });
+
+  it('are given nothing when the scan has no call, as for a request', async () => {
+    const withCall = vi.fn<Detector>(() => []);
+    Object.assign(withCall, { callView: true as const });
+    const { run } = setup([{ id: 'a', detect: withCall }]);
+
+    await run([user('x')]);
+
+    expect(withCall.mock.calls[0]![2]).toBeUndefined();
   });
 });

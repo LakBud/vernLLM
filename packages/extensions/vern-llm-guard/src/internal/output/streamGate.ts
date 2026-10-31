@@ -302,6 +302,14 @@ class StreamGate {
     if (this.closed) return value;
 
     const { input } = this;
+    // The meta is known now, so a check given the call sees it only for the whole answer.
+    const meta = input.meta?.();
+    const { call } = input.deps;
+    const deps =
+      call === undefined || meta === undefined
+        ? input.deps
+        : { ...input.deps, call: { ...call, meta } };
+
     let answer: Awaited<ReturnType<typeof gateOutput>>;
     try {
       answer = await gateOutput({
@@ -309,7 +317,7 @@ class StreamGate {
         value,
         tokens: input.tokens,
         cache: input.cache,
-        deps: input.deps,
+        deps,
         marker: input.marker,
       });
     } catch (error) {
