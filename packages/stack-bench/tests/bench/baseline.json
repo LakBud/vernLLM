@@ -1,0 +1,9 @@
+{
+  "unit": "microseconds per call",
+  "overhead": {
+    "light stack": 154.5,
+    "typical stack": 219,
+    "heavy stack": 440.4,
+    "all middleware": 610.1
+  }
+}

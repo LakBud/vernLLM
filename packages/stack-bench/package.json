@@ -1,0 +1,47 @@
+{
+  "name": "vern-llm-stack-bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Per call overhead of guard, usage, router, logger and otel stacked on one VernLLM, on the pre-dispatch path",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "bench:check": "node scripts/bench-check.ts",
+    "bench:update": "node scripts/bench-check.ts --update"
+  },
+  "nx": {
+    "targets": {
+      "bench:check": {
+        "dependsOn": [
+          "^build"
+        ],
+        "cache": false
+      },
+      "bench:update": {
+        "dependsOn": [
+          "^build"
+        ],
+        "cache": false
+      }
+    }
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/sdk-metrics": "^3.0.0",
+    "@opentelemetry/sdk-trace": "^3.0.0",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vern-llm": "workspace:^",
+    "vern-llm-guard": "workspace:^",
+    "vern-llm-hedge": "workspace:^",
+    "vern-llm-logger": "workspace:^",
+    "vern-llm-otel": "workspace:^",
+    "vern-llm-policy": "workspace:^",
+    "vern-llm-router": "workspace:^",
+    "vern-llm-usage": "workspace:^"
+  },
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "packageManager": "pnpm@11.27.0"
+}

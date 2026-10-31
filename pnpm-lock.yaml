@@ -552,6 +552,48 @@ importers:
         specifier: ^5.0.5
         version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.0.5)(vite@8.1.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.16.9)(yaml@2.9.1))
 
+  packages/stack-bench:
+    devDependencies:
+      '@opentelemetry/api':
+        specifier: ^1.10.0
+        version: 1.10.0
+      '@opentelemetry/sdk-metrics':
+        specifier: ^3.0.0
+        version: 3.0.0(@opentelemetry/api@1.10.0)
+      '@opentelemetry/sdk-trace':
+        specifier: ^3.0.0
+        version: 3.0.0(@opentelemetry/api@1.10.0)
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vern-llm:
+        specifier: workspace:^
+        version: link:../vern-llm
+      vern-llm-guard:
+        specifier: workspace:^
+        version: link:../extensions/vern-llm-guard
+      vern-llm-hedge:
+        specifier: workspace:^
+        version: link:../extensions/vern-llm-hedge
+      vern-llm-logger:
+        specifier: workspace:^
+        version: link:../extensions/vern-llm-logger
+      vern-llm-otel:
+        specifier: workspace:^
+        version: link:../integrations/vern-llm-otel
+      vern-llm-policy:
+        specifier: workspace:^
+        version: link:../extensions/vern-llm-policy
+      vern-llm-router:
+        specifier: workspace:^
+        version: link:../extensions/vern-llm-router
+      vern-llm-usage:
+        specifier: workspace:^
+        version: link:../extensions/vern-llm-usage
+
   packages/vern-llm:
     devDependencies:
       '@anthropic-ai/sdk':
