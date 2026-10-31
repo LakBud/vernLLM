@@ -17,7 +17,7 @@ on:
         type: string
 
       package:
-        description: 'Canary only: which workspace package to publish (package.json name)'
+        description: 'Canary only: workspace packages to publish (package.json names, comma or space separated). All get the same canary version, so include vern-llm when the others need unreleased core changes'
         required: false
         type: string
         default: vern-llm
@@ -249,50 +249,68 @@ jobs:
 
       - run: pnpm run test:unit
 
-      - name: Resolve canary package's directory
+      # Resolves every requested package to its directory. A package whose
+      # workspace dependency is not in the same run gets a warning: its
+      # published range points at the last real release, not this canary.
+      - name: Resolve canary packages
         id: pkg
         env:
-          NAME: ${{ inputs.package || 'vern-llm' }}
+          NAMES: ${{ inputs.package || 'vern-llm' }}
         run: |
-          DIR="$(node -e '
+          node -e '
             const fs = require("fs");
             const path = require("path");
-            const name = process.env.NAME;
+            const names = process.env.NAMES.split(/[\s,]+/).filter(Boolean);
+            const found = new Map();
             for (const root of ["packages", "packages/integrations", "packages/extensions", "apps"]) {
               if (!fs.existsSync(root)) continue;
               for (const entry of fs.readdirSync(root)) {
                 const pkgPath = path.join(root, entry, "package.json");
                 if (!fs.existsSync(pkgPath)) continue;
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-                if (pkg.name === name) {
-                  process.stdout.write(path.join(root, entry));
-                  process.exit(0);
+                if (names.includes(pkg.name)) found.set(pkg.name, { dir: path.join(root, entry), pkg });
+              }
+            }
+            const missing = names.filter((n) => !found.has(n));
+            if (missing.length) {
+              console.log(`ERROR: no workspace package named ${missing.join(", ")} was found`);
+              process.exit(1);
+            }
+            for (const [name, { pkg }] of found) {
+              const deps = { ...pkg.dependencies, ...pkg.peerDependencies };
+              for (const [dep, range] of Object.entries(deps)) {
+                if (String(range).startsWith("workspace:") && !found.has(dep)) {
+                  console.log(`::warning::${name} depends on ${dep}, which is not in this canary, so it will resolve to the last ${dep} release`);
                 }
               }
             }
-          ')"
+            const out = process.env.GITHUB_OUTPUT;
+            fs.appendFileSync(out, `dirs=${[...found.values()].map((v) => v.dir).join(" ")}\n`);
+            fs.appendFileSync(out, `filters=${[...found.keys()].map((n) => `--filter=${n}`).join(" ")}\n`);
+            fs.appendFileSync(out, `names=${[...found.keys()].join(" ")}\n`);
+          '
 
-          if [ -z "$DIR" ]; then
-            echo "ERROR: no workspace package named '$NAME' was found under packages/, packages/integrations/, packages/extensions/ or apps/"
-            exit 1
-          fi
+      - run: pnpm ${{ steps.pkg.outputs.filters }} run build
 
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-
-      - run: pnpm --filter "${{ steps.pkg.outputs.name }}" run build
-
+      # Every package gets the same version, so a workspace:^ range between
+      # two of them is rewritten by pnpm publish to this exact canary.
       - name: Set canary version
-        working-directory: ${{ steps.pkg.outputs.dir }}
-        run: npm pkg set version="0.0.0-canary-${GITHUB_SHA::7}"
+        env:
+          DIRS: ${{ steps.pkg.outputs.dirs }}
+        run: |
+          for DIR in $DIRS; do
+            (cd "$DIR" && npm pkg set version="0.0.0-canary-${GITHUB_SHA::7}")
+          done
 
       # pnpm publish, not npm publish: see the production job's comment
       # on the same substitution, same reasoning applies here too.
       - name: Publish canary to npm
-        working-directory: ${{ steps.pkg.outputs.dir }}
-        run: pnpm publish --tag next --no-git-checks
+        run: pnpm -r ${{ steps.pkg.outputs.filters }} publish --tag next --no-git-checks
 
       - name: Summary
+        env:
+          NAMES: ${{ steps.pkg.outputs.names }}
         run: |
-          echo "Published ${{ steps.pkg.outputs.name }}@0.0.0-canary-${GITHUB_SHA::7} to the next tag on npm" \
-            >> "$GITHUB_STEP_SUMMARY"
+          for NAME in $NAMES; do
+            echo "Published $NAME@0.0.0-canary-${GITHUB_SHA::7} to the next tag on npm" >> "$GITHUB_STEP_SUMMARY"
+          done
