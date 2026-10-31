@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   bedrockGuardrail,
   type BedrockGuardrailOptions,
+  type CallView,
   type Segment,
 } from '../../src/guardrail/index.js';
-import { at, stubbedClient, type ApplyGuardrailHandler } from '../helpers.js';
+import { at, jpegImage, pngImage, stubbedClient, type ApplyGuardrailHandler } from '../helpers.js';
 
 import type { Logger } from 'vern-llm';
 
@@ -286,6 +287,481 @@ describe('bedrockGuardrail', () => {
     });
   });
 
+  describe('images', () => {
+    const violent = {
+      contentPolicy: { filters: [{ type: 'VIOLENCE', action: 'BLOCKED', detected: true }] },
+    };
+    const picture = (
+      image: { data: string; mimeType: string },
+      source: Segment['source'] = 'user',
+    ) => ({ image: { data: image.data, mimeType: image.mimeType }, source }) as unknown as Segment;
+    const formatOf = (input: Parameters<ApplyGuardrailHandler>[0]) =>
+      at(input.content ?? [], 0).image?.format;
+    /** A guardrail that finds violence in every PNG and nothing in anything else. */
+    const imageHandler: ApplyGuardrailHandler = async (input) =>
+      at(input.content ?? [], 0).image
+        ? { assessments: formatOf(input) === 'png' ? [violent] : [] }
+        : answer(textOf(input));
+    const withImages = (options: Partial<BedrockGuardrailOptions> = {}) =>
+      setup({ images: true, ...options }, imageHandler);
+
+    it('are off unless asked: the detector says nothing about images, and refuses one', async () => {
+      const { detect, requests, signal } = setup();
+
+      expect(detect.images).toBeUndefined();
+      expect(detect.only('content').images).toBeUndefined();
+      await expect(detect([picture(pngImage())], signal)).rejects.toThrow(
+        'bedrockGuardrail: images are off, set images: true',
+      );
+      expect(requests).toHaveLength(0);
+    });
+
+    it('say they are taken, for the detector and every view of it', () => {
+      const { detect } = withImages();
+
+      expect(detect.images).toBe(true);
+      expect(detect.only('content').images).toBe(true);
+      expect(detect.grounding().images).toBeUndefined();
+    });
+
+    it('go as one request each, with the format and the bytes, next to the texts', async () => {
+      const { detect, requests, signal } = withImages();
+      const png = pngImage();
+      const jpeg = jpegImage();
+
+      const found = await detect(
+        [user('hello'), picture(png), picture(jpeg, 'assistant'), picture(png, 'output')],
+        signal,
+      );
+
+      expect(requests.map(({ source, content }) => [source, Object.keys(at(content!, 0))])).toEqual(
+        [
+          ['INPUT', ['text']],
+          ['INPUT', ['image']],
+          ['INPUT', ['image']],
+          ['OUTPUT', ['image']],
+        ],
+      );
+      expect(at(requests, 1).content).toEqual([
+        { image: { format: 'png', source: { bytes: png.bytes } } },
+      ]);
+      expect(formatOf(at(requests, 2))).toBe('jpeg');
+      // The same image from the same source is asked once. The jpeg finds nothing.
+      expect(found).toEqual([
+        { segment: 1, label: 'content.VIOLENCE' },
+        { segment: 3, label: 'content.VIOLENCE' },
+      ]);
+    });
+
+    it('have no span, and a view of other kinds does not see their findings', async () => {
+      const { detect, signal } = withImages();
+
+      expect(await detect.only('pii')([picture(pngImage())], signal)).toEqual([]);
+      expect(await detect.only('content')([picture(pngImage())], signal)).toEqual([
+        { segment: 0, label: 'content.VIOLENCE' },
+      ]);
+    });
+
+    it('are asked once however often they come back, since they are keyed by their data', async () => {
+      const { detect, requests, signal } = withImages();
+      const png = pngImage();
+
+      await detect([picture(png), picture(png)], signal);
+      await detect([picture(png)], signal);
+      await detect([picture(pngImage(65, 64))], signal);
+
+      expect(requests).toHaveLength(2);
+    });
+
+    it('are capped apart from text by imageConcurrency, within concurrency', async () => {
+      let active = 0;
+      let peakImages = 0;
+      let peak = 0;
+      let images = 0;
+      const { detect, signal } = setup(
+        { images: true, concurrency: 3, imageConcurrency: 1 },
+        async (input) => {
+          const isImage = at(input.content ?? [], 0).image !== undefined;
+          active += 1;
+          images += isImage ? 1 : 0;
+          peak = Math.max(peak, active);
+          peakImages = Math.max(peakImages, images);
+          await later(10);
+          active -= 1;
+          images -= isImage ? 1 : 0;
+          return { assessments: [] };
+        },
+      );
+
+      await detect(
+        [1, 2, 3, 4].map((width) => picture(pngImage(width, 8))).concat(['a', 'b'].map(user)),
+        signal,
+      );
+
+      expect(peakImages).toBe(1);
+      expect(peak).toBe(3);
+    });
+
+    describe('that Bedrock cannot take', () => {
+      const tooBig = pngImage(64, 64, 4 * 1024 * 1024);
+      const refused: [string, Segment, string][] = [
+        [
+          'a format other than PNG or JPEG',
+          picture({ data: 'AAAA', mimeType: 'image/webp' }),
+          'takes PNG and JPEG images only',
+        ],
+        [
+          'data that is not base64',
+          picture({ data: '!!!', mimeType: 'image/png' }),
+          'the image is not valid base64',
+        ],
+        ['more than 4 MB', picture(tooBig), 'takes images up to 4 MB'],
+        ['a PNG wider than 8000', picture(pngImage(8001, 10)), 'up to 8000 by 8000 pixels'],
+        ['a PNG taller than 8000', picture(pngImage(10, 8001)), 'up to 8000 by 8000 pixels'],
+        ['a JPEG taller than 8000', picture(jpegImage(10, 8001)), 'up to 8000 by 8000 pixels'],
+        [
+          'a PNG without its signature',
+          picture({ data: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAA', mimeType: 'image/png' }),
+          'not a readable PNG',
+        ],
+        [
+          'a PNG that stops early',
+          picture({ data: pngImage().data.slice(0, 20), mimeType: 'image/png' }),
+          'not a readable PNG',
+        ],
+        [
+          'a JPEG without its start',
+          picture({ data: 'AAAAAAAAAAAAAAAAAAAAAAAA', mimeType: 'image/jpeg' }),
+          'not a readable JPEG',
+        ],
+        [
+          'a JPEG with a stray byte where a marker belongs',
+          picture({
+            data: Buffer.from([0xff, 0xd8, 0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0]).toString('base64'),
+            mimeType: 'image/jpeg',
+          }),
+          'not a readable JPEG',
+        ],
+      ];
+
+      it.each(refused)(
+        'fails the check for %s, before any request, and never quotes the data',
+        async (_name, segment, why) => {
+          const { detect, requests, signal } = withImages();
+
+          const error = await Promise.resolve(detect([segment], signal)).catch(
+            (caught: Error) => caught,
+          );
+
+          expect(error).toBeInstanceOf(Error);
+          expect((error as Error).message).toContain(`bedrockGuardrail: `);
+          expect((error as Error).message).toContain(why);
+          expect((error as Error).message).not.toContain('AAAA');
+          expect(requests).toHaveLength(0);
+        },
+      );
+
+      it.each(refused)(
+        'counts %s as unscanned with unsupportedImages: skip',
+        async (_name, segment) => {
+          const { detect, requests, signal } = withImages({ unsupportedImages: 'skip' });
+
+          const found = await detect([segment], signal);
+
+          expect(found).toEqual([{ segment: 0, unscanned: true }]);
+          // A view of some kinds still says an image was not read.
+          expect(await detect.only('pii')([segment], signal)).toEqual([
+            { segment: 0, unscanned: true },
+          ]);
+          expect(requests).toHaveLength(0);
+        },
+      );
+
+      it('takes a JPEG that has tables before its frame, and an uppercase type', async () => {
+        const { detect, requests, signal } = withImages();
+        // SOI, a DHT segment of 4 bytes (C4), then the frame (C0) of 20 by 30.
+        const bytes = [
+          0xff, 0xd8, 0xff, 0xc4, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 0, 30, 0, 20, 0, 0, 0, 0,
+        ];
+        const data = Buffer.from(bytes).toString('base64');
+
+        await detect([picture({ data, mimeType: 'IMAGE/JPG' })], signal);
+
+        expect(formatOf(at(requests, 0))).toBe('jpeg');
+      });
+
+      it('fails the check for a JPEG whose segments run past its end', async () => {
+        const { detect, signal } = withImages();
+        const data = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 2, 0xff, 0xe1, 0, 2, 0, 0]).toString(
+          'base64',
+        );
+
+        await expect(detect([picture({ data, mimeType: 'image/jpeg' })], signal)).rejects.toThrow(
+          'not a readable JPEG',
+        );
+      });
+
+      it('stops the requests still waiting for a slot', async () => {
+        const { detect, requests, signal } = withImages({ concurrency: 1 });
+        const tiff = picture({ data: 'AAAA', mimeType: 'image/tiff' });
+
+        await expect(detect([user('a'), user('b'), tiff], signal)).rejects.toThrow('PNG and JPEG');
+
+        expect(requests).toHaveLength(1);
+      });
+    });
+  });
+
+  describe('grounding', () => {
+    const answer = (text: string, source: Segment['source'] = 'output'): Segment => ({
+      text,
+      source,
+    });
+    const verdict = (...types: string[]) => ({
+      assessments: [
+        {
+          contextualGroundingPolicy: {
+            filters: types.map((type) => ({ type, action: 'BLOCKED', detected: true })),
+          },
+          sensitiveInformationPolicy: email.sensitiveInformationPolicy,
+        },
+      ],
+    });
+    const callOf = (input: Segment[]): CallView => ({ input });
+    const ctx = callOf([
+      { text: 'Paris is the capital of France.', source: 'tool' },
+      { text: 'Madrid is the capital of Spain.', source: 'tool' },
+      { text: 'earlier question', source: 'user' },
+      { text: 'What is the capital of France?', source: 'user' },
+      { text: 'a system rule', source: 'system' },
+    ]);
+    /** Ungrounded when the answer says "Lyon". */
+    const judge: ApplyGuardrailHandler = async (input) => {
+      const guarded = at(input.content ?? [], (input.content ?? []).length - 1);
+      return guarded.text?.text?.includes('Lyon') ? verdict('GROUNDING') : { assessments: [] };
+    };
+
+    it('says it reads the call, and a plain view does not', () => {
+      const { detect } = setup();
+
+      expect(detect.grounding().callView).toBe(true);
+      expect(detect.callView).toBeUndefined();
+      expect(detect.only('topic').callView).toBeUndefined();
+    });
+
+    it('sends each tool result as a source, the last question, and the answer unqualified', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+
+      await detect.grounding()([answer('It is Paris.')], signal, ctx);
+
+      expect(requests).toEqual([
+        {
+          guardrailIdentifier: 'gr-abc',
+          guardrailVersion: '3',
+          source: 'OUTPUT',
+          content: [
+            { text: { text: 'Paris is the capital of France.', qualifiers: ['grounding_source'] } },
+            { text: { text: 'Madrid is the capital of Spain.', qualifiers: ['grounding_source'] } },
+            { text: { text: 'What is the capital of France?', qualifiers: ['query'] } },
+            { text: { text: 'It is Paris.' } },
+          ],
+        },
+      ]);
+    });
+
+    it('finds the answer ungrounded over the whole answer, and nothing when it is grounded', async () => {
+      const { detect, signal } = setup({}, judge);
+      const grounding = detect.grounding();
+
+      expect(await grounding([answer('It is Lyon.')], signal, ctx)).toEqual([
+        { segment: 0, label: 'grounding.GROUNDING', start: 0, end: 11 },
+      ]);
+      expect(await grounding([answer('It is Paris.')], signal, ctx)).toEqual([]);
+    });
+
+    it('labels relevance as well, and reads no other policy of the same response', async () => {
+      const { detect, signal } = setup({}, async () => verdict('GROUNDING', 'RELEVANCE'));
+
+      const found = await detect.grounding()([answer(`Mail ${EMAIL}`)], signal, ctx);
+
+      expect(found.map(({ label }) => label)).toEqual([
+        'grounding.GROUNDING',
+        'grounding.RELEVANCE',
+      ]);
+    });
+
+    it('judges a long answer in chunks of 5000, each against the same context, with its own span', async () => {
+      const { detect, requests, signal } = setup({}, async (input) => {
+        const guarded = at(input.content ?? [], (input.content ?? []).length - 1).text?.text ?? '';
+        return guarded.startsWith('x') ? verdict('GROUNDING') : { assessments: [] };
+      });
+      const text = `${'x'.repeat(5000)}${'y'.repeat(5000)}${'x'.repeat(2000)}`;
+
+      const found = await detect.grounding()([answer(text)], signal, ctx);
+
+      expect(requests).toHaveLength(3);
+      expect(requests.map((request) => at(request.content ?? [], 3).text?.text?.length)).toEqual([
+        5000, 5000, 2000,
+      ]);
+      expect(found).toEqual([
+        { segment: 0, label: 'grounding.GROUNDING', start: 0, end: 5000 },
+        { segment: 0, label: 'grounding.GROUNDING', start: 10_000, end: 12_000 },
+      ]);
+    });
+
+    it('takes the sources it is told to, and the last non blank question', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+      const call = callOf([
+        { text: 'a rule', source: 'system' },
+        { text: 'tool result', source: 'tool' },
+        { text: 'the question', source: 'user' },
+        { text: '  ', source: 'user' },
+      ]);
+
+      await detect.grounding({ sources: ['system', 'user'] })([answer('ok')], signal, call);
+
+      expect(at(requests, 0).content).toEqual([
+        { text: { text: 'a rule', qualifiers: ['grounding_source'] } },
+        { text: { text: 'the question', qualifiers: ['grounding_source'] } },
+        { text: { text: 'the question', qualifiers: ['query'] } },
+        { text: { text: 'ok' } },
+      ]);
+    });
+
+    it('sends no question when the user asked none', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+
+      await detect.grounding()([answer('ok')], signal, callOf([{ text: 'fact', source: 'tool' }]));
+
+      expect(at(requests, 0).content).toEqual([
+        { text: { text: 'fact', qualifiers: ['grounding_source'] } },
+        { text: { text: 'ok' } },
+      ]);
+    });
+
+    it('checks nothing without a source: no request and no finding', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+      const grounding = detect.grounding();
+
+      expect(await grounding([answer('It is Lyon.')], signal, callOf([]))).toEqual([]);
+      expect(
+        await grounding([answer('It is Lyon.')], signal, callOf([{ text: ' ', source: 'tool' }])),
+      ).toEqual([]);
+      expect(requests).toHaveLength(0);
+    });
+
+    it('sends the last 1000 characters of a longer question, or fails the check', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+      const question = `${'a'.repeat(50)}${'b'.repeat(1000)}`;
+      const call = callOf([
+        { text: 'fact', source: 'tool' },
+        { text: question, source: 'user' },
+      ]);
+
+      await detect.grounding()([answer('ok')], signal, call);
+      expect(at(at(requests, 0).content ?? [], 1).text?.text).toBe('b'.repeat(1000));
+
+      await detect.grounding()(
+        [answer('ok')],
+        signal,
+        callOf([
+          { text: 'fact', source: 'tool' },
+          { text: 'c'.repeat(1000), source: 'user' },
+        ]),
+      );
+      expect(at(at(requests, 1).content ?? [], 1).text?.text).toHaveLength(1000);
+
+      await expect(
+        detect.grounding({ queryOverflow: 'error' })([answer('ok')], signal, call),
+      ).rejects.toThrow('bedrockGuardrail: the question is over 1000 characters');
+    });
+
+    it('fails the check when the sources are over 100000 characters', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+      const call = callOf([
+        { text: 'x'.repeat(60_000), source: 'tool' },
+        { text: 'y'.repeat(40_001), source: 'tool' },
+      ]);
+
+      await expect(detect.grounding()([answer('ok')], signal, call)).rejects.toThrow(
+        'bedrockGuardrail: the grounding sources are over 100000 characters',
+      );
+      expect(requests).toHaveLength(0);
+    });
+
+    it('is an error without the call, since only an output check is given one', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+
+      await expect(detect.grounding()([answer('ok')], signal)).rejects.toThrow(
+        'bedrockGuardrail: grounding reads the call, so it only runs as an output check',
+      );
+      expect(requests).toHaveLength(0);
+    });
+
+    it('asks once for the same sources, question and answer, and again when any of them changes', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+      const grounding = detect.grounding();
+
+      await grounding([answer('It is Lyon.')], signal, ctx);
+      await grounding([answer('It is Lyon.')], signal, callOf([...ctx.input]));
+      expect(requests).toHaveLength(1);
+
+      await grounding([answer('It is Lyon.')], signal, callOf([...ctx.input.slice(1)]));
+      await grounding([answer('It is Lyon!')], signal, ctx);
+      await grounding(
+        [answer('It is Lyon.')],
+        signal,
+        callOf([...ctx.input, { text: 'more', source: 'user' }]),
+      );
+      expect(requests).toHaveLength(4);
+    });
+
+    it('never mixes up with a plain check of the same text', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+
+      await detect([answer('It is Lyon.')], signal);
+      await detect.grounding()([answer('It is Lyon.')], signal, ctx);
+
+      expect(requests).toHaveLength(2);
+    });
+
+    it('is not cached for a DRAFT guardrail', async () => {
+      const { detect, requests, signal } = setup({ guardrailVersion: 'DRAFT' }, judge);
+
+      await detect.grounding()([answer('ok')], signal, ctx);
+      await detect.grounding()([answer('ok')], signal, ctx);
+
+      expect(requests).toHaveLength(2);
+    });
+
+    it('does not ask about a blank answer', async () => {
+      const { detect, requests, signal } = setup({}, judge);
+
+      expect(await detect.grounding()([answer('  ')], signal, ctx)).toEqual([]);
+      expect(requests).toHaveLength(0);
+    });
+
+    it.each([
+      [
+        { sources: [] },
+        'grounding sources must be a non empty list of user, tool, system or assistant',
+      ],
+      [
+        { sources: ['output'] },
+        'grounding sources must be a non empty list of user, tool, system or assistant',
+      ],
+      [
+        { sources: 'tool' },
+        'grounding sources must be a non empty list of user, tool, system or assistant',
+      ],
+      [{ queryOverflow: 'cut' }, "queryOverflow must be 'tail' or 'error'"],
+    ])('refuses %j', (bad, message) => {
+      const { detect } = setup();
+
+      expect(() => detect.grounding(bad as never)).toThrow(`bedrockGuardrail: ${message}`);
+    });
+  });
+
   describe('long texts', () => {
     const filler = (size: number): string =>
       'calm words '.repeat(Math.ceil(size / 11)).slice(0, size);
@@ -448,6 +924,15 @@ describe('bedrockGuardrail', () => {
       [{ cache: null }, 'bedrockGuardrail: cache must be false or an object with max'],
       [{ cache: { max: 0 } }, 'bedrockGuardrail: cache.max must be an integer of at least 1'],
       [{ onUsage: 'no' }, 'bedrockGuardrail: onUsage must be a function'],
+      [{ images: 'yes' }, 'bedrockGuardrail: images must be a boolean'],
+      [
+        { unsupportedImages: 'maybe' },
+        "bedrockGuardrail: unsupportedImages must be 'error' or 'skip'",
+      ],
+      [
+        { imageConcurrency: 0 },
+        'bedrockGuardrail: imageConcurrency must be an integer of at least 1',
+      ],
     ])('refuses %j', (bad, message) => {
       expect(() => bedrockGuardrail({ ...base, ...bad } as never)).toThrow(message);
     });
@@ -460,6 +945,9 @@ describe('bedrockGuardrail', () => {
           chunkChars: 1000,
           overlapChars: 0,
           cache: { max: 5 },
+          images: true,
+          unsupportedImages: 'skip',
+          imageConcurrency: 2,
         } as never),
       ).not.toThrow();
     });

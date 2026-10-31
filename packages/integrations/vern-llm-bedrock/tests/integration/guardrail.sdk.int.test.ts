@@ -3,7 +3,7 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { bedrockGuardrail } from '../../src/guardrail/index.js';
-import { at } from '../helpers.js';
+import { at, pngImage } from '../helpers.js';
 import { startRealSdkServer, type RealSdkServer } from '../realSdkServer.js';
 
 const EMAIL = 'jane@acme.com';
@@ -128,6 +128,95 @@ describe('bedrockGuardrail with the real @aws-sdk/client-bedrock-runtime client'
     await expect(
       detector()([{ text: 'hi', source: 'user' }], new AbortController().signal),
     ).rejects.toMatchObject({ name: 'AccessDeniedException', $metadata: { httpStatusCode: 403 } });
+  });
+
+  it('sends an image as raw bytes in a real ApplyGuardrail request, and reads what it finds', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          usage,
+          action: 'GUARDRAIL_INTERVENED',
+          outputs: [],
+          assessments: [
+            {
+              contentPolicy: { filters: [{ type: 'VIOLENCE', action: 'BLOCKED', detected: true }] },
+            },
+          ],
+        },
+      },
+    ]);
+    const png = pngImage();
+    const detect = detector(1, { images: true });
+
+    const found = await detect(
+      [{ image: { data: png.data, mimeType: png.mimeType }, source: 'user' } as never],
+      new AbortController().signal,
+    );
+
+    // The SDK puts the bytes on the wire as base64.
+    expect(at(server.requests, 0).body).toEqual({
+      source: 'INPUT',
+      content: [{ image: { format: 'png', source: { bytes: png.data } } }],
+    });
+    expect(found).toEqual([{ segment: 0, label: 'content.VIOLENCE' }]);
+  });
+
+  it('sends the sources, the question and the answer of a grounding check, and reads the verdict', async () => {
+    server = await startRealSdkServer([
+      {
+        body: {
+          usage,
+          action: 'GUARDRAIL_INTERVENED',
+          outputs: [],
+          assessments: [
+            {
+              contextualGroundingPolicy: {
+                filters: [
+                  {
+                    type: 'GROUNDING',
+                    score: 0.1,
+                    threshold: 0.7,
+                    action: 'BLOCKED',
+                    detected: true,
+                  },
+                  {
+                    type: 'RELEVANCE',
+                    score: 0.9,
+                    threshold: 0.7,
+                    action: 'NONE',
+                    detected: false,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    const answer = 'It is Lyon.';
+
+    const found = await detector().grounding()(
+      [{ text: answer, source: 'output' }],
+      new AbortController().signal,
+      {
+        input: [
+          { text: 'Paris is the capital of France.', source: 'tool' },
+          { text: 'What is the capital of France?', source: 'user' },
+        ],
+      },
+    );
+
+    expect(at(server.requests, 0).body).toEqual({
+      source: 'OUTPUT',
+      content: [
+        { text: { text: 'Paris is the capital of France.', qualifiers: ['grounding_source'] } },
+        { text: { text: 'What is the capital of France?', qualifiers: ['query'] } },
+        { text: { text: answer } },
+      ],
+    });
+    expect(found).toEqual([
+      { segment: 0, label: 'grounding.GROUNDING', start: 0, end: answer.length },
+    ]);
   });
 
   it('stops waiting on a request mid flight when the call is aborted', async () => {

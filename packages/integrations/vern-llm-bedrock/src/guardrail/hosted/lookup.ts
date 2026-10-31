@@ -6,14 +6,13 @@ import {
   type FreshText,
 } from './flights.js';
 import { createLimit } from './limit.js';
-import { createMemo, segmentKey } from './memo.js';
+import { createMemo, inputKey } from './memo.js';
 
-import type { Segment } from '../types.js';
-import type { Analyze, Hit, Memo, Span } from './types.js';
+import type { Analyze, Input, Memo, Span } from './types.js';
 
 /** Answers with the findings for each segment, in order, asking the provider only about new texts. */
 export type Lookup = (
-  segments: readonly Segment[],
+  segments: readonly Input[],
   signal: AbortSignal,
 ) => Promise<(readonly Span[])[]>;
 
@@ -75,7 +74,7 @@ export function createLookup(config: LookupConfig): Lookup {
   const flights = createFlights(name, analyze, createLimit(concurrency), remember);
 
   /** Sorts each distinct text into remembered, in flight, or new. */
-  const sort = (keys: readonly string[], segments: readonly Segment[]) => {
+  const sort = (keys: readonly string[], segments: readonly Input[]) => {
     const known = new Map<string, readonly Span[]>();
     const joined = new Map<string, FlightEntry>();
     const fresh: FreshText[] = [];
@@ -96,7 +95,7 @@ export function createLookup(config: LookupConfig): Lookup {
   };
 
   return async (segments, signal) => {
-    const keys = await Promise.all(segments.map(({ source, text }) => segmentKey(source, text)));
+    const keys = await Promise.all(segments.map(inputKey));
     const { known, joined, fresh } = sort(keys, segments);
 
     // A call that has stopped asks for nothing. What is already remembered still answers it.
@@ -111,7 +110,7 @@ export function createLookup(config: LookupConfig): Lookup {
     const waiting = follow(flights, waitingOn, signal);
 
     try {
-      const answers = new Map<Flight, Hit[][]>();
+      const answers = new Map<Flight, Span[][]>();
       await Promise.race([
         waiting.stopped,
         Promise.all([...waitingOn].map(async (flight) => answers.set(flight, await flight.answer))),

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { mergeSpans, splitText } from '../../src/guardrail/hosted/chunks.js';
 import { createLookup } from '../../src/guardrail/hosted/lookup.js';
-import { createMemo, segmentKey } from '../../src/guardrail/hosted/memo.js';
+import { createMemo, inputKey, segmentKey } from '../../src/guardrail/hosted/memo.js';
 import { locate, matchSpans } from '../../src/guardrail/hosted/spans.js';
 
 // The shared part of a hosted detector, in the cases a detector's own tests don't reach.
@@ -107,6 +107,38 @@ describe('the cache', () => {
   });
 });
 
+describe('inputKey', () => {
+  const ground = { sources: ['a'], query: 'q' };
+
+  it('keys a text as segmentKey does, and an image by its data', async () => {
+    expect(await inputKey({ text: 'x', source: 'user' })).toBe(await segmentKey('user', 'x'));
+
+    const image = { data: 'AAAA', mimeType: 'image/png' };
+    const key = await inputKey({ image, source: 'user' });
+    expect(key).toBe(await inputKey({ image: { ...image }, source: 'user' }));
+    expect(key).not.toBe(await inputKey({ image: { ...image, data: 'BBBB' }, source: 'user' }));
+    expect(key).not.toBe(
+      await inputKey({ image: { ...image, mimeType: 'image/jpeg' }, source: 'user' }),
+    );
+    expect(key).not.toBe(await inputKey({ image, source: 'tool' }));
+    expect(key).not.toContain('AAAA');
+  });
+
+  it('keys an answer by its sources, its question and its text together', async () => {
+    const answer = { text: 'x', source: 'output' as const };
+    const key = await inputKey({ ...answer, ground });
+
+    expect(key).toBe(await inputKey({ ...answer, ground: { ...ground } }));
+    expect(key).not.toBe(await segmentKey('output', 'x'));
+    expect(key).not.toBe(await inputKey({ ...answer, ground: { ...ground, query: 'other' } }));
+    expect(key).not.toBe(
+      await inputKey({ ...answer, ground: { sources: ['a', 'b'], query: 'q' } }),
+    );
+    expect(key).not.toBe(await inputKey({ ...answer, ground: { sources: ['a'] } }));
+    expect(key).not.toBe(await inputKey({ ...answer, text: 'y', ground }));
+  });
+});
+
 describe('createLookup', () => {
   const signal = new AbortController().signal;
 
@@ -117,7 +149,7 @@ describe('createLookup', () => {
       concurrency: 1,
       cache: { max: 10 },
       analyze: async (segments) => {
-        asked.push(segments.map((segment) => segment.text));
+        asked.push(segments.map((segment) => (segment as { text: string }).text));
         return segments.map(() => [{ label: 'kind.a' }]);
       },
     });

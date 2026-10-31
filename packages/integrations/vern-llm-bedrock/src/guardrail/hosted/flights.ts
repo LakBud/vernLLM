@@ -1,5 +1,4 @@
-import type { Segment } from '../types.js';
-import type { Analyze, Hit, Limit } from './types.js';
+import type { Analyze, Input, Limit, Span } from './types.js';
 
 /** One request to the provider, shared by every call that needs one of its texts. */
 export interface Flight {
@@ -9,7 +8,7 @@ export interface Flight {
   waiters: number;
   /** Whether it has finished, one way or the other, and is no longer worth aborting. */
   settled: boolean;
-  answer: Promise<Hit[][]>;
+  answer: Promise<Span[][]>;
 }
 
 /** Where one text's answer sits in a flight. */
@@ -21,7 +20,7 @@ export interface FlightEntry {
 /** A text nobody has asked about yet, and the key it is remembered by. */
 export interface FreshText {
   key: string;
-  segment: Segment;
+  segment: Input;
 }
 
 export interface Flights {
@@ -38,7 +37,7 @@ export function createFlights(
   name: string,
   analyze: Analyze,
   limit: Limit,
-  remember: ((key: string, hits: Hit[]) => void) | undefined,
+  remember: ((key: string, hits: Span[]) => void) | undefined,
 ): Flights {
   const entries = new Map<string, FlightEntry>();
 
@@ -53,7 +52,7 @@ export function createFlights(
   const ask = async (
     fresh: readonly FreshText[],
     controller: AbortController,
-  ): Promise<Hit[][]> => {
+  ): Promise<Span[][]> => {
     try {
       const hits = await analyze(
         fresh.map((entry) => entry.segment),
