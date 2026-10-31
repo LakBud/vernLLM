@@ -60,9 +60,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "publint": "^0.3.24",
-    "tsdown": "^0.23.1",
+    "tsdown": "^0.23.4",
     "typescript": "^5.9.3",
     "unplugin-unused": "^0.6.0",
     "vern-llm": "workspace:^",
@@ -70,7 +70,7 @@
     "vern-llm-logger": "workspace:^",
     "vern-llm-policy": "workspace:^",
     "vern-llm-usage": "workspace:^",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "license": "MIT",
   "packageManager": "pnpm@11.27.0",
