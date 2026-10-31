@@ -1,5 +1,8 @@
 import type { RedisClient, RedisSubscriber } from '../types.js';
 
+type ScanOptions = { MATCH: string; COUNT: number };
+type ScanReply<Cursor> = { cursor: Cursor; keys: string[] };
+
 /** The node-redis (v4+) shape this package calls. */
 export interface NodeRedisLike {
   get(key: string): Promise<string | null>;
@@ -8,11 +11,13 @@ export interface NodeRedisLike {
   eval(script: string, options: { keys?: string[]; arguments?: string[] }): Promise<unknown>;
   /** Optional, as RedisClient.evalsha. */
   evalSha?(sha: string, options: { keys?: string[]; arguments?: string[] }): Promise<unknown>;
-  /** Optional, as RedisClient.scan. */
-  scan?(
-    cursor: number,
-    options: { MATCH: string; COUNT: number },
-  ): Promise<{ cursor: number; keys: string[] }>;
+  /**
+   * Optional, as RedisClient.scan. node-redis 4 types the cursor as a number,
+   * 5 and later as a string, so both shapes are accepted.
+   */
+  scan?:
+    | ((cursor: number, options: ScanOptions) => Promise<ScanReply<number>>)
+    | ((cursor: string, options: ScanOptions) => Promise<ScanReply<string>>);
 }
 
 /** Adapts a connected node-redis client to RedisClient. */
@@ -37,10 +42,17 @@ export function fromNodeRedis(client: NodeRedisLike): RedisClient {
 
   if (!client.scan) return base;
 
+  // SCAN sends its cursor as text. node-redis 5 and later reject a number, and 4
+  // accepts a string even though it types the cursor as a number. Both reply with
+  // their own cursor type, so it is normalized to a string below.
+  const scanner = client as {
+    scan: (cursor: string, options: ScanOptions) => Promise<ScanReply<number | string>>;
+  };
+
   return {
     ...base,
     scan: async (cursor: string, _match: 'MATCH', pattern: string, _count: 'COUNT', count) => {
-      const result = await client.scan!(Number(cursor), { MATCH: pattern, COUNT: count });
+      const result = await scanner.scan(cursor, { MATCH: pattern, COUNT: count });
       return [String(result.cursor), result.keys];
     },
   };

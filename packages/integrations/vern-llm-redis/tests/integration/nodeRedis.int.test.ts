@@ -73,6 +73,32 @@ describe('fromNodeRedis, real Redis', () => {
     expect(() => breaker.assertClosed('m')).toThrow();
   });
 
+  it('redisCircuitBreaker seeds a new process with circuits already open through the translated scan call', async () => {
+    const keyPrefix = uniquePrefix('cb');
+    const first = redisCircuitBreaker(fromNodeRedis(client), {
+      threshold: 1,
+      cooldownMs: 30_000,
+      keyPrefix,
+    });
+    first.recordFailure('m');
+    await waitUntil(async () => (await first.readState?.('m')) === 'open');
+
+    const otherClient = await connectNodeRedis();
+    try {
+      // No prepare or readState here, so only the startup scan can tell it.
+      const fresh = redisCircuitBreaker(fromNodeRedis(otherClient), {
+        threshold: 1,
+        cooldownMs: 30_000,
+        keyPrefix,
+      });
+      await waitUntil(() => fresh.getState?.('m') === 'open');
+      fresh.dispose?.();
+    } finally {
+      await otherClient.quit();
+    }
+    first.dispose?.();
+  });
+
   it('redisRateLimit enforces a requests-per-minute ceiling through the translated eval calls', async () => {
     const keyPrefix = uniquePrefix('rl');
     const limiter = redisRateLimit(fromNodeRedis(client), {

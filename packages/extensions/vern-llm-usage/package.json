@@ -59,15 +59,15 @@
     "vern-llm": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^26.4.1",
-    "@vitest/coverage-v8": "^4.1.11",
-    "publint": "^0.3.24",
-    "tsdown": "^0.23.1",
-    "typescript": "^5.9.3",
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.0.5",
+    "publint": "^0.3.25",
+    "tsdown": "^0.23.4",
+    "typescript": "^7.0.2",
     "unplugin-unused": "^0.6.0",
     "vern-llm": "workspace:^",
     "vern-llm-logger": "workspace:^",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.5"
   },
   "license": "MIT",
   "packageManager": "pnpm@11.27.0",

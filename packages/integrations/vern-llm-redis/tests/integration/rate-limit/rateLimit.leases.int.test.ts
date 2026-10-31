@@ -54,7 +54,7 @@ describe.concurrent('redisRateLimit leases, real Redis', () => {
     });
 
     const held = await holder.acquire(1);
-    const initialLease = await redis.zrange(`${prefix}:concurrency`, 0, -1, 'WITHSCORES');
+    const initialLease = await redis.zrange(`${prefix}:concurrency`, 0, '-1', 'WITHSCORES');
     expect(initialLease).toHaveLength(2);
     const initialExpiry = Number(initialLease[1]);
 
@@ -62,7 +62,7 @@ describe.concurrent('redisRateLimit leases, real Redis', () => {
       async () => {
         const [seconds, micros] = await redis.time();
         const now = Number(seconds) * 1000 + Math.floor(Number(micros) / 1000);
-        const currentLease = await redis.zrange(`${prefix}:concurrency`, 0, -1, 'WITHSCORES');
+        const currentLease = await redis.zrange(`${prefix}:concurrency`, 0, '-1', 'WITHSCORES');
         return (
           now >= initialExpiry &&
           currentLease.length === 2 &&

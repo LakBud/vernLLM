@@ -62,7 +62,7 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
     const sent = at(server.requests, 0);
     expect(sent.method).toBe('POST');
     expect(sent.url).toBe('/v1/messages');
-    expect(sent.headers['x-api-key']).toBe('test-key');
+    expect(sent.headers['authorization']).toBe('Bearer test-key');
     expect(sent.body).toMatchObject({
       model: 'claude-test',
       system: 'You are a helpful geography assistant.',
