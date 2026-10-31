@@ -6,6 +6,7 @@ import {
   classifierInput,
   classifierResponder,
   createClassifierLLM,
+  createGuardrailClient,
   createModerationClient,
   createStreamClient,
   lastUserText,
@@ -161,6 +162,47 @@ describe('test helpers', () => {
 
       const failing = createClassifierLLM(() => ({}), { error: new Error('down') });
       await expect(failing.llm.call(call)).rejects.toThrow('down');
+    });
+  });
+
+  describe('the guardrail stub', () => {
+    const request = (text: string, source = 'INPUT') =>
+      ({ input: { source, content: [{ text: { text } }] } }) as never;
+    const topic = [{ topicPolicy: { topics: [{ name: 'T', action: 'BLOCKED' }] } }];
+
+    it('assesses each text and records the request with its source and signal', async () => {
+      const { client, calls, peak } = createGuardrailClient((text) =>
+        text === 'bad' ? topic : [],
+      );
+      const controller = new AbortController();
+
+      await expect(
+        client.send(request('bad', 'OUTPUT'), { abortSignal: controller.signal }),
+      ).resolves.toEqual({ assessments: topic });
+      await expect(client.send(request('fine'))).resolves.toEqual({ assessments: [] });
+
+      expect(calls).toEqual([
+        { text: 'bad', source: 'OUTPUT', signal: controller.signal },
+        { text: 'fine', source: 'INPUT', signal: undefined },
+      ]);
+      expect(peak()).toBe(1);
+    });
+
+    it('finds nothing by default, and can answer late, stop on abort or fail', async () => {
+      await expect(createGuardrailClient().client.send(request('x'))).resolves.toEqual({
+        assessments: [],
+      });
+
+      const slow = createGuardrailClient(undefined, { delayMs: 5 });
+      await expect(slow.client.send(request('x'))).resolves.toBeTruthy();
+
+      const controller = new AbortController();
+      const aborted = slow.client.send(request('x'), { abortSignal: controller.signal });
+      controller.abort(new Error('stop'));
+      await expect(aborted).rejects.toThrow('stop');
+
+      const failing = createGuardrailClient(undefined, { error: new Error('down') });
+      await expect(failing.client.send(request('x'))).rejects.toThrow('down');
     });
   });
 });

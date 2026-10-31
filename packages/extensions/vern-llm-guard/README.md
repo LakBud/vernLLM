@@ -144,6 +144,8 @@ For harmful content there is `openaiModeration({ client })`, backed by OpenAI's 
 
 For rules only you can describe, such as "recommends a specific investment" or "names a competitor", there is `llmClassifier({ llm, categories })`. A model judges each text against your categories, and a finding is a category labeled `classifier.<category>`. With `quotes: true` each finding gets a span from the text the model quoted, so a `redact` check can mask it. A category with no quote, or a quote that is not found in the text, gives a finding without a span, and a `redact` check then blocks the call instead of masking. Give it its own `VernLLM`: a guard on the one it uses refuses its calls. The model sees the checked text.
 
+For guardrails your team already manages in Amazon Bedrock there is `bedrockGuardrail({ client, guardrailIdentifier, guardrailVersion })`, from `vern-llm-bedrock/guardrail`. A finding is labeled `pii.<type>`, `regex.<name>`, `word.<type>`, `topic.<name>` or `content.<type>`. Matches in sensitive information, regexes and words are located in the text and become spans, so a `redact` check can mask them. Topics and content filters cover the whole text. The check's `action` decides, never Bedrock's own. It sends the checked text to Bedrock.
+
 ## Labels for policy
 
 ```ts

@@ -1,6 +1,6 @@
 ---
 title: Hosted detectors
-description: Detectors backed by a provider's classifier or a model of your own, so a check can catch harmful content and rules that no pattern describes
+description: Detectors backed by a provider's classifier, a model of your own or a Bedrock guardrail, to catch harmful content and rules no pattern describes
 ---
 
 `patterns` and `keywords` match text. A hosted detector asks a provider's classifier instead. It is
@@ -234,7 +234,83 @@ guardMiddleware({
   an error. By default (`onError: 'closed'`) that blocks the call. With `onError: 'open'` the call
   goes on without this check's findings
 
+## bedrockGuardrail
+
+The guardrails your team already manages in Amazon Bedrock: denied topics, content filters, sensitive
+information, regexes and word lists. It lives in `vern-llm-bedrock`, so the guard itself takes no
+AWS dependency. Its options are on the [Guardrails page](/docs/integrations/bedrock/guardrails).
+
+```ts title="guard-bedrock.ts"
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { bedrockGuardrail } from 'vern-llm-bedrock/guardrail';
+import { guardMiddleware } from 'vern-llm-guard';
+
+const aws = bedrockGuardrail({
+  client: new BedrockRuntimeClient({ region: 'eu-west-1' }),
+  guardrailIdentifier: 'gr-abc123',
+  guardrailVersion: '3',
+});
+
+guardMiddleware({
+  version: '2026-10-29.1',
+  checks: [
+    { id: 'pii', detect: aws.only('pii', 'regex'), action: 'redact', on: ['user', 'output'] },
+    { id: 'topics', detect: aws.only('topic'), action: 'block', on: ['user', 'tool'] },
+    { id: 'harmful', detect: aws.only('content'), action: 'block', parallel: true },
+  ],
+});
+```
+
+<Callout type="warn">
+  The text a check reads is sent to Bedrock. Use a published guardrail version: `DRAFT` can change
+  at any time, so it warns once and turns the detector's cache off.
+</Callout>
+
+### Findings
+
+- Labeled `pii.<type>`, `regex.<name>`, `word.<type>`, `topic.<name>` or `content.<type>`
+- Matches in sensitive information, regexes and words are located in the text and become spans,
+  so a `redact` check can mask them. A match that cannot be found gives a finding over the whole
+  text, and a `redact` check blocks rather than miss it
+- Topics and content filters return no match, so they cover the whole text. These checks label and
+  block
+- The check's `action` decides what happens. Bedrock's own action is ignored
+- `only(...)` takes `pii`, `regex`, `word`, `topic` and `content`, and gives a detector over the same
+  requests and cache. Three checks on one guardrail cost one request per text
+
+## Choosing between them
+
+|            | `openaiModeration` | `llmClassifier`                   | `bedrockGuardrail`                    |
+| ---------- | ------------------ | --------------------------------- | ------------------------------------- |
+| Cost       | Free               | One small model call per new text | Per text unit and policy, per request |
+| Categories | OpenAI's thirteen  | Yours, in plain language          | Yours, configured in AWS              |
+| Spans      | No                 | With `quotes`                     | For PII, regexes and words            |
+| Setup      | An OpenAI key      | A second `VernLLM`                | A guardrail and IAM                   |
+| Best for   | Harm, cheaply      | Business rules no service has     | Teams already governed in AWS         |
+
+They combine: `openaiModeration` for harm on every call, `llmClassifier` for one business rule on
+the answer, `patterns` for secrets.
+
+## Cost
+
+- The memo and each detector's cache send a text once, so a long history is not checked again every
+  turn. A text is remembered per source: an earlier answer that comes back in the history is read
+  as input, where it was first read as output, so a provider can see it once more
+- Point checks at the sources that need them. `on: ['user', 'tool']` leaves out the system prompt
+  that every call repeats
+- Bedrock bills per text unit, rounded up for each request, and a request carries one text
+- The classifier costs one model call per new text. Use a small model, raise `batchSize` for volume,
+  and use `parallel: true` on a block check to hide the latency
+- Every detector takes `onUsage`, which reports what each request cost
+
+## When a hosted detector fails
+
+A network error, a throttled request, a malformed answer or a result for the wrong number of texts
+is thrown as it is, and the check's `onError` decides. `closed`, the default, blocks the call, which
+is right for a check you rely on. Use `open` for a check that is a convenience, so an outage at the
+provider does not become an outage of your app. The check's `timeoutMs` cancels the request.
+
 ## Measure before you enforce
 
-A classifier is a heuristic too. Run a new check in `mode: 'audit'`, then measure it with
+A hosted detector is a heuristic too. Run a new check in `mode: 'audit'`, then measure it with
 [`evaluate`](/docs/extensions/guard/features/rollout) over a labeled set before it blocks a call.

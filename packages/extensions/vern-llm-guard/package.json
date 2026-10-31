@@ -66,6 +66,7 @@
     "typescript": "^5.9.3",
     "unplugin-unused": "^0.6.0",
     "vern-llm": "workspace:^",
+    "vern-llm-bedrock": "workspace:^",
     "vern-llm-logger": "workspace:^",
     "vern-llm-policy": "workspace:^",
     "vern-llm-usage": "workspace:^",

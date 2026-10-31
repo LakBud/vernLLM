@@ -47,4 +47,24 @@ Pass `maxAttempts: 1` to `BedrockRuntimeClient` so vern-llm's retries are the on
 | Streaming         | `ConverseStreamCommand` events become vern-llm chunks, and in-band stream exceptions become `LLMError`s the retry loop understands. |
 | Telemetry         | The adapter names itself `bedrock` with provider `aws.bedrock`, so middleware such as `vern-llm-otel` reports the right provider.   |
 
+## Guardrails
+
+`vern-llm-bedrock/guardrail` adds `bedrockGuardrail`, a detector: a function from text segments to findings, run through an Amazon Bedrock guardrail with `ApplyGuardrail`. It finds topics, content filter hits, sensitive information, regex matches and words, and leaves what to do about them to the caller.
+
+```ts
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { bedrockGuardrail } from 'vern-llm-bedrock/guardrail';
+
+const aws = bedrockGuardrail({
+  client: new BedrockRuntimeClient({ region: 'eu-west-1' }),
+  guardrailIdentifier: 'gr-abc123',
+  guardrailVersion: '3',
+});
+
+const found = await aws([{ text: 'Mail jane@acme.com', source: 'user' }], signal);
+// [{ segment: 0, label: 'pii.EMAIL', start: 5, end: 18 }]
+```
+
+A finding is labeled `pii.<type>`, `regex.<name>`, `word.<type>`, `topic.<name>` or `content.<type>`. Matches in sensitive information, regexes and words become spans. Topics and content filters cover the whole text. `.only('pii', 'topic')` gives a detector for some kinds that shares one request per text and one cache. The text you check is sent to Bedrock, and a `DRAFT` version warns once and is never cached.
+
 See the [documentation](https://vernllm.dev/docs/integrations/bedrock) for every option.

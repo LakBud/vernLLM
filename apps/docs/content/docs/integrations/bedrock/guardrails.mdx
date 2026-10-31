@@ -1,0 +1,124 @@
+---
+title: Guardrails
+description: bedrockGuardrail, a detector that runs text through an Amazon Bedrock guardrail with ApplyGuardrail and returns what it found
+icon: ShieldCheck
+---
+
+`bedrockGuardrail` is a detector: a function from text segments to findings, run through a guardrail
+you manage in Amazon Bedrock. It reads topics, content filters, sensitive information, regexes and
+word lists, and returns what they found. What to do about a finding is up to the caller.
+
+It comes from its own entry point, `vern-llm-bedrock/guardrail`, so `fromBedrock` and its size are
+unchanged. It uses the same `@aws-sdk/client-bedrock-runtime` peer as the adapter.
+
+## Usage
+
+```ts title="bedrock-guardrail.ts"
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { bedrockGuardrail } from 'vern-llm-bedrock/guardrail';
+
+const aws = bedrockGuardrail({
+  client: new BedrockRuntimeClient({ region: 'eu-west-1' }),
+  guardrailIdentifier: 'gr-abc123',
+  guardrailVersion: '3',
+});
+
+const found = await aws([{ text: 'Mail jane@acme.com', source: 'user' }], signal);
+// [{ segment: 0, label: 'pii.EMAIL', start: 5, end: 18 }]
+
+const topics = aws.only('topic'); // a detector for some kinds, over the same requests and cache
+```
+
+A segment is `{ text, source }`, with `source` one of `user`, `tool`, `system`, `assistant` or
+`output`. `output` is read as Bedrock's `OUTPUT`, every other source as `INPUT`. A finding names its
+segment by index, and carries offsets when it can locate the text.
+
+<Callout>
+  To run it as a check on every call, with labels for policy, redaction and blocking, give it to
+  `vern-llm-guard`. See [Hosted
+  detectors](/docs/extensions/guard/features/hosted-detectors#bedrockguardrail).
+</Callout>
+
+The text you check is sent to Bedrock, and the identity behind the client needs
+`bedrock:ApplyGuardrail` on the guardrail.
+
+<TypeTable
+  type={{
+    client: {
+      description: 'Anything with send. A BedrockRuntimeClient fits.',
+      type: '{ send(command, { abortSignal }) }',
+      required: true,
+    },
+    guardrailIdentifier: {
+      description: 'The guardrail id or ARN.',
+      type: 'string',
+      required: true,
+    },
+    guardrailVersion: {
+      description:
+        'A published version. DRAFT warns once and turns the cache off, since it can change.',
+      type: 'string',
+      required: true,
+    },
+    chunkChars: {
+      description:
+        'Longer texts are split in chunks of this size, at least 1000. About 12 text units, as AWS recommends.',
+      type: 'number',
+      default: '12000',
+    },
+    overlapChars: {
+      description: 'How much of the last chunk the next one starts with.',
+      type: 'number',
+      default: '200',
+    },
+    concurrency: { description: 'Requests in flight at once.', type: 'number', default: '4' },
+    cache: {
+      description: 'Findings kept per source and text. false turns it off.',
+      type: 'false | { max?: number }',
+      default: '{ max: 10_000 }',
+    },
+    onUsage: {
+      description:
+        'Called for each request with the guardrail, the policy units it billed and the milliseconds.',
+      type: '(info) => void',
+    },
+    logger: {
+      description: 'Where the DRAFT warning goes.',
+      type: "Logger | 'silent'",
+      default: 'a console logger',
+    },
+  }}
+/>
+
+## Findings
+
+| Assessment item                          | Label                     | Span                          |
+| ---------------------------------------- | ------------------------- | ----------------------------- |
+| `sensitiveInformationPolicy.piiEntities` | `pii.<type>`, `pii.EMAIL` | Every occurrence of the match |
+| `sensitiveInformationPolicy.regexes`     | `regex.<name>`            | Every occurrence of the match |
+| `wordPolicy.customWords`                 | `word.custom`             | Every whole word occurrence   |
+| `wordPolicy.managedWordLists`            | `word.<type>`             | Every occurrence of the match |
+| `topicPolicy.topics`                     | `topic.<name>`            | The whole text                |
+| `contentPolicy.filters`                  | `content.<type>`          | The whole text                |
+
+- Bedrock returns the matched string for sensitive information and words, so it is located in the
+  text. A match that cannot be found gives a finding over the whole text, so a caller that needs
+  positions can refuse it rather than miss a value
+- An item counts when `detected` is `true`, or when `detected` is absent and its action is not `NONE`.
+  A guardrail in detect mode works too
+- Bedrock's own action is ignored. Guardrails enforced for the account or organization arrive in the
+  same assessments and count the same
+- `only(...)` takes `pii`, `regex`, `word`, `topic` and `content`. An unknown kind is an error
+
+## How it runs
+
+- One request per text, whatever the views and calls that read it. A request that nobody waits for
+  any more is cancelled
+- A request carries one text, since Bedrock returns assessments per guardrail and not per content
+  block. Bedrock bills per text unit, rounded up for each request
+- The cache holds labels and offsets, never text. A published version can be cached, a `DRAFT`
+  cannot
+- Any error is thrown as it is: throttling, access denied, a response without assessments. The
+  caller decides what a failure means
+- The SDK's own retries apply. Pass `maxAttempts: 1` to the client if another layer should own them,
+  and keep the caller's timeout in mind, since a retried request takes longer

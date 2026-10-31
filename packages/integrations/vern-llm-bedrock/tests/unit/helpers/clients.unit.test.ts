@@ -2,6 +2,7 @@ import {
   ApplyGuardrailCommand,
   ConverseCommand,
   ConverseStreamCommand,
+  InvokeModelCommand,
 } from '@aws-sdk/client-bedrock-runtime';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -56,6 +57,25 @@ describe('stubbedClient', () => {
     expect(converse).not.toHaveBeenCalled();
   });
 
+  it('sends an ApplyGuardrailCommand input and the abort signal to the guardrail handler', async () => {
+    const applyGuardrail = vi.fn(async () => ({ assessments: [] }));
+    const converse = vi.fn(async () => ({}));
+    const client = stubbedClient({ applyGuardrail, converse });
+    const abortSignal = new AbortController().signal;
+    const input = {
+      guardrailIdentifier: 'gr',
+      guardrailVersion: '1',
+      source: 'INPUT' as const,
+      content: [{ text: { text: 'hi' } }],
+    };
+
+    const response = await client.send(new ApplyGuardrailCommand(input), { abortSignal });
+
+    expect(response).toEqual({ assessments: [] });
+    expect(applyGuardrail).toHaveBeenCalledExactlyOnceWith(input, { signal: abortSignal });
+    expect(converse).not.toHaveBeenCalled();
+  });
+
   it('records each send on the client, so a test can inspect what was dispatched', async () => {
     const client = stubbedClient({ converse: async () => ({}) });
     const command = new ConverseCommand(converseInput);
@@ -77,9 +97,18 @@ describe('stubbedClient', () => {
       handlers: { converse: async () => ({}) },
     },
     {
-      name: 'a command that is neither Converse nor ConverseStream',
+      name: 'an ApplyGuardrailCommand when only converse handlers are set',
       command: () => new ApplyGuardrailCommand({} as never),
       handlers: { converse: async () => ({}), converseStream: async () => ({}) },
+    },
+    {
+      name: 'a command with no handler of its own',
+      command: () => new InvokeModelCommand({} as never),
+      handlers: {
+        converse: async () => ({}),
+        converseStream: async () => ({}),
+        applyGuardrail: async () => ({}),
+      },
     },
     {
       name: 'any command when no handler is set',

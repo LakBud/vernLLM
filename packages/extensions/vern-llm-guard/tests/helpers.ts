@@ -23,6 +23,8 @@ import {
   type ModerationResult,
 } from '../src/index.js';
 
+import type { GuardrailClient } from 'vern-llm-bedrock/guardrail';
+
 // Copied from the other extension packages on purpose, so the packages stay independent of each
 // other and of the core's own test files.
 
@@ -360,4 +362,40 @@ export function createClassifierLLM(
   };
 
   return { llm, calls, peak: () => peak };
+}
+
+/** What a guardrail answers for a text: its assessments, as the API returns them. */
+export type Assessments = Record<string, unknown>[];
+
+/**
+ * A client for `bedrockGuardrail` that assesses each text with `assess`, and records every request
+ * with the signal it carried. With `delayMs` it answers late and stops when its signal aborts, and
+ * `peak` says how many requests were in flight at once. An `error` is thrown instead of an answer.
+ */
+export function createGuardrailClient(
+  assess: (text: string) => Assessments = () => [],
+  behavior: { delayMs?: number; error?: Error } = {},
+) {
+  const calls: { text: string; source: string | undefined; signal: AbortSignal | undefined }[] = [];
+  let active = 0;
+  let peak = 0;
+
+  const client: GuardrailClient = {
+    send: async (command, options) => {
+      const { source, content } = command.input;
+      const text = (content![0] as { text: { text: string } }).text.text;
+      calls.push({ text, source, signal: options?.abortSignal });
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        if (behavior.delayMs !== undefined) await pause(behavior.delayMs, options?.abortSignal);
+        if (behavior.error) throw behavior.error;
+        return { assessments: assess(text) as never };
+      } finally {
+        active -= 1;
+      }
+    },
+  };
+
+  return { client, calls, peak: () => peak };
 }

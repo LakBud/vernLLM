@@ -107,6 +107,11 @@ can't be checked and gets no warning, even if it still retries.
 
 Each model option takes a list of model ids or a `(model) => boolean` predicate.
 
+## Guardrails
+
+`vern-llm-bedrock/guardrail` adds `bedrockGuardrail`, a detector that runs text through an Amazon
+Bedrock guardrail. It is separate from `fromBedrock`, see [Guardrails](/docs/integrations/bedrock/guardrails).
+
 ## Telemetry and rate limits
 
 The adapter names itself `bedrock` with provider `aws.bedrock` on `AttemptContext.adapter`, so

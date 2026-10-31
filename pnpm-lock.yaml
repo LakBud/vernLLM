@@ -206,6 +206,9 @@ importers:
       vern-llm:
         specifier: workspace:^
         version: link:../../vern-llm
+      vern-llm-bedrock:
+        specifier: workspace:^
+        version: link:../../integrations/vern-llm-bedrock
       vern-llm-logger:
         specifier: workspace:^
         version: link:../vern-llm-logger

@@ -117,6 +117,38 @@ try {
   `;
 
   const expectedExports = ['fromBedrock'];
+  const expectedGuardrailExports = ['GUARDRAIL_KINDS', 'bedrockGuardrail'];
+
+  // The guardrail detector, from its own entry point. Its ApplyGuardrailCommand must be the
+  // consumer's, for the same reason as above.
+  const guardrailCheck = (label: string) => `
+    assert.deepEqual(Object.keys(guardrail).sort(), ${JSON.stringify(expectedGuardrailExports)}, '${label}: unexpected guardrail export surface');
+    const guardClient = new sdk.BedrockRuntimeClient({
+      region: 'us-east-1',
+      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+    });
+    const guardSent = [];
+    guardClient.send = async (command) => {
+      guardSent.push(command);
+      return {
+        assessments: [
+          { topicPolicy: { topics: [{ name: 'T', type: 'DENY', action: 'BLOCKED', detected: true }] } },
+        ],
+      };
+    };
+
+    const detect = guardrail.bedrockGuardrail({
+      client: guardClient,
+      guardrailIdentifier: 'gr',
+      guardrailVersion: '1',
+      logger: 'silent',
+    });
+    const found = await detect([{ text: 'hi', source: 'user' }], new AbortController().signal);
+
+    assert.deepEqual(found, [{ segment: 0, label: 'topic.T' }], '${label}: the guardrail findings changed');
+    assert.ok(guardSent[0] instanceof sdk.ApplyGuardrailCommand, '${label}: expected an ApplyGuardrailCommand from the consumer SDK');
+    console.log('${label}: one guardrail check through the installed package ok');
+  `;
 
   const esmFile = path.join(consumerDir, 'esm-check.mjs');
   writeFileSync(
@@ -126,10 +158,12 @@ try {
 
     const bedrock = await import('vern-llm-bedrock');
     const vern = await import('vern-llm');
+    const guardrail = await import('vern-llm-bedrock/guardrail');
     const sdk = await import('@aws-sdk/client-bedrock-runtime');
 
     assert.deepEqual(Object.keys(bedrock).sort(), ${JSON.stringify(expectedExports)}, 'ESM: unexpected export surface');
     ${callAndCheck('ESM')}
+    ${guardrailCheck('ESM')}
   `,
   );
   execFileSync('node', [esmFile], { cwd: consumerDir, stdio: 'inherit' });
@@ -143,10 +177,12 @@ try {
 
       const bedrock = require('vern-llm-bedrock');
       const vern = require('vern-llm');
+      const guardrail = require('vern-llm-bedrock/guardrail');
       const sdk = require('@aws-sdk/client-bedrock-runtime');
 
       assert.deepEqual(Object.keys(bedrock).sort(), ${JSON.stringify(expectedExports)}, 'CJS: unexpected export surface');
       ${callAndCheck('CJS')}
+      ${guardrailCheck('CJS')}
     })().catch((error) => {
       console.error(error);
       process.exit(1);
@@ -155,9 +191,13 @@ try {
   );
   execFileSync('node', [cjsFile], { cwd: consumerDir, stdio: 'inherit' });
 
-  const shipped = readdirSync(path.join(consumerDir, 'node_modules', 'vern-llm-bedrock', 'dist'));
-  for (const file of ['index.mjs', 'index.cjs', 'index.d.mts', 'index.d.cts']) {
-    assert.ok(shipped.includes(file), `${file} missing from the installed package`);
+  const dist = path.join(consumerDir, 'node_modules', 'vern-llm-bedrock', 'dist');
+  const files = ['index.mjs', 'index.cjs', 'index.d.mts', 'index.d.cts'];
+  for (const folder of ['.', 'guardrail']) {
+    const shipped = readdirSync(path.join(dist, folder));
+    for (const file of files) {
+      assert.ok(shipped.includes(file), `${folder}/${file} missing from the installed package`);
+    }
   }
 
   console.log('smoke test passed: installed ESM and CJS entry points, types, and a call all work');

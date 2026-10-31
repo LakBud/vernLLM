@@ -1,4 +1,5 @@
 import { VernLLM, type StreamChunk, type VernLLMMiddleware, type VernLLMOptions } from 'vern-llm';
+import { bedrockGuardrail } from 'vern-llm-bedrock/guardrail';
 import { loggerMiddleware, memorySink } from 'vern-llm-logger';
 import { policyMiddleware } from 'vern-llm-policy';
 import { usageBudgetShare, usageMiddleware } from 'vern-llm-usage';
@@ -15,6 +16,7 @@ import {
   captureLogger,
   classifierResponder,
   createClassifierLLM,
+  createGuardrailClient,
   createModerationClient,
   createResponderClient,
   createStreamClient,
@@ -22,12 +24,14 @@ import {
   lastUserText,
   textDeltas,
   tokenIn,
+  type Assessments,
   type Found,
   type Scores,
 } from '../helpers.js';
 
 // The real logger, usage and policy around the guard, as a service would run them. The guard
-// imports none of them: they are dev dependencies of this test only.
+// imports none of them: they are dev dependencies of this test only. The same goes for
+// vern-llm-bedrock's guardrail detector.
 
 const call = { userContent: 'hi', jsonMode: false as const, context: { tenantId: 'acme' } };
 const withEmail = { ...call, userContent: 'Write to jane@acme.com please' };
@@ -635,5 +639,162 @@ describe('with llmClassifier', () => {
     expect(log.warnings().some((line) => line.includes('Give llmClassifier its own VernLLM'))).toBe(
       true,
     );
+  });
+});
+
+describe('with bedrockGuardrail', () => {
+  const EMAIL = 'jane@acme.com';
+  const assess = (text: string): Assessments => [
+    ...(text.includes(EMAIL)
+      ? [
+          {
+            sensitiveInformationPolicy: {
+              piiEntities: [{ type: 'EMAIL', match: EMAIL, action: 'ANONYMIZED', detected: true }],
+            },
+          },
+        ]
+      : []),
+    ...(text.includes('stocks')
+      ? [{ topicPolicy: { topics: [{ name: 'Investing', action: 'BLOCKED', detected: true }] } }]
+      : []),
+  ];
+  const mail = { ...call, userContent: `Write to ${EMAIL} please` };
+  const stocks = { ...call, userContent: 'Which stocks should I buy?' };
+
+  function guarded(
+    behavior: Parameters<typeof createGuardrailClient>[1] = {},
+    guard: Partial<Parameters<typeof harness>[0]> = {},
+    answers: Parameters<typeof harness>[2] = {},
+  ) {
+    const guardrail = createGuardrailClient(assess, behavior);
+    const aws = bedrockGuardrail({
+      client: guardrail.client,
+      guardrailIdentifier: 'gr-abc',
+      guardrailVersion: '3',
+      logger: 'silent',
+    });
+    const built = harness(
+      {
+        checks: [
+          {
+            id: 'pii',
+            detect: aws.only('pii', 'regex'),
+            action: 'redact',
+            on: ['input', 'output'],
+          },
+          { id: 'topics', detect: aws.only('topic'), action: 'block', on: ['user', 'tool'] },
+        ],
+        ...guard,
+      },
+      {},
+      answers,
+    );
+    return { ...built, guardrail };
+  }
+
+  it('redacts an email for the provider and puts it back in the answer', async () => {
+    const { llm, primary } = guarded({}, {}, { primary: (params) => `Noted: ${tokenIn(params)}` });
+
+    const answer = await llm.call(mail);
+
+    expect(lastUserText(primary.calls[0]!)).not.toContain(EMAIL);
+    expect(answer).toBe(`Noted: ${EMAIL}`);
+  });
+
+  it('blocks a denied topic before any provider is contacted', async () => {
+    const { llm, primary, b, guardrail } = guarded();
+
+    await expect(llm.call(stocks)).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(b.calls).toHaveLength(0);
+    expect(guardrail.calls.map((request) => request.text)).toEqual([stocks.userContent]);
+  });
+
+  it('leaves a call with nothing found on the first target', async () => {
+    const { llm, primary } = guarded();
+
+    await expect(llm.call(call)).resolves.toBe('primary');
+
+    expect(primary.calls).toHaveLength(1);
+  });
+
+  it('asks once for a text however many checks read it, and sends the answer as OUTPUT', async () => {
+    const { llm, guardrail } = guarded();
+
+    await llm.call(call);
+
+    // Both checks read 'hi' and cost one request. The answer is read by the pii check only.
+    expect(guardrail.calls.map(({ text, source }) => [text, source])).toEqual([
+      ['hi', 'INPUT'],
+      ['primary', 'OUTPUT'],
+    ]);
+  });
+
+  it('does not ask again for the history of a conversation', async () => {
+    const { llm, guardrail } = guarded();
+
+    await llm.call({ ...call, userContent: 'hello' });
+    await llm.call({
+      ...call,
+      history: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'primary' },
+      ],
+      userContent: 'and then?',
+    });
+
+    // The history's user message is not asked again. Its assistant message is read as input now,
+    // where the first turn read it as the model's output, so the guardrail sees it once more. The
+    // second answer is the same text as the first, from the same source, and is not asked again.
+    expect(guardrail.calls.map(({ text, source }) => `${source} ${text}`)).toEqual([
+      'INPUT hello',
+      'OUTPUT primary',
+      'INPUT primary',
+      'INPUT and then?',
+    ]);
+  });
+
+  it('blocks rather than redact a topic, which has no position', async () => {
+    const aws = bedrockGuardrail({
+      client: createGuardrailClient(assess).client,
+      guardrailIdentifier: 'gr-abc',
+      guardrailVersion: '3',
+      logger: 'silent',
+    });
+    const { llm, primary } = harness({
+      checks: [{ id: 'topics', detect: aws.only('topic'), action: 'redact' }],
+    });
+
+    await expect(llm.call(stocks)).rejects.toMatchObject({ code: 'content_blocked' });
+    expect(primary.calls).toHaveLength(0);
+  });
+
+  it('refuses the call when the guardrail is down, unless the check fails open', async () => {
+    const down = new Error('guardrail down');
+    const closed = guarded({ error: down });
+    await expect(closed.llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+    expect(closed.primary.calls).toHaveLength(0);
+
+    const open = guarded({ error: down }, { onError: 'open' });
+    await expect(open.llm.call(call)).resolves.toBe('primary');
+  });
+
+  it('cancels the request when the check runs out of time, and then follows onError', async () => {
+    const guardrail = createGuardrailClient(assess, { delayMs: 500 });
+    const aws = bedrockGuardrail({
+      client: guardrail.client,
+      guardrailIdentifier: 'gr-abc',
+      guardrailVersion: '3',
+      logger: 'silent',
+    });
+    const { llm, primary } = harness({
+      checks: [{ id: 'slow', detect: aws, action: 'block', timeoutMs: 30 }],
+    });
+
+    await expect(llm.call(call)).rejects.toMatchObject({ code: 'content_blocked' });
+
+    expect(primary.calls).toHaveLength(0);
+    expect(guardrail.calls[0]!.signal!.aborted).toBe(true);
   });
 });
