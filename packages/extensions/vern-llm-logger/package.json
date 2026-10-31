@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-logger",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Structured call logs, rolling latency percentiles, and slow call and error detection for vern-llm",
   "keywords": [
     "vern-llm",

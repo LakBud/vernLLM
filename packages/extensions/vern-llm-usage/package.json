@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-usage",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Estimated cost, wasted spend and budgets for vern-llm calls",
   "keywords": [
     "vern-llm",
