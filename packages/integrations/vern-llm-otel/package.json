@@ -59,7 +59,7 @@
     "size": "size-limit"
   },
   "peerDependencies": {
-    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/api": "^1.10.0",
     "vern-llm": "workspace:^"
   },
   "devDependencies": {
