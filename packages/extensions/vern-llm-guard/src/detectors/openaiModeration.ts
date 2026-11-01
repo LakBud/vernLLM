@@ -59,7 +59,7 @@ export function openaiModeration(
 
   if (model.endsWith('-latest')) {
     createGuard(options.logger).warn(
-      `${MODERATION_NAME}: model "${model}" is an alias, so its results can change under the memo. Pin a dated model`,
+      `${MODERATION_NAME}: model "${model}" is an alias, so its results can change under the memo. To pin it, set model to a dated snapshot from the OpenAI models docs`,
     );
   }
 

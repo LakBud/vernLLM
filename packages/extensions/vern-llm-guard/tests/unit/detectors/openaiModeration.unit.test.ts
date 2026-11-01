@@ -374,7 +374,7 @@ describe('openaiModeration', () => {
 
       expect(log.warnings()).toHaveLength(1);
       expect(log.warnings()[0]).toContain('"omni-moderation-latest" is an alias');
-      expect(log.warnings()[0]).toContain('Pin a dated model');
+      expect(log.warnings()[0]).toContain('set model to a dated snapshot');
     });
 
     it('does not warn for a pinned model', () => {
