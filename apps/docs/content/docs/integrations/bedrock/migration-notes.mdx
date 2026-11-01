@@ -14,11 +14,15 @@ Bedrock rejects `temperature` on Claude 4.7 and later, so a default config call 
 region prefixed inference profiles, and ARNs containing one. Other models, such as Nova and Llama,
 still get it. The model then samples at Bedrock's default.
 
-If the rule is wrong for a model, replace it with your own list or predicate. An application
-inference profile ARN that doesn't contain `claude` isn't matched, so list it:
+An application inference profile ARN has no model id to read, so it isn't matched. Pass
+`temperatureUnsupportedModels` to add it. The option replaces the built in rule, so the predicate
+also has to cover Claude 4.7 and later itself:
 
 ```ts
+const appProfile = 'arn:aws:bedrock:eu-west-1:123456789012:application-inference-profile/abc123';
+
 fromBedrock(client, {
-  temperatureUnsupportedModels: (model) => model.includes('claude-opus-4-7'),
+  temperatureUnsupportedModels: (model) =>
+    model === appProfile || /claude-(?:[a-z]+-)?(?:4-[7-9]|[5-9])/.test(model),
 });
 ```

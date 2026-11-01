@@ -2,7 +2,13 @@ import { VernLLM } from 'vern-llm';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fromBedrock } from '../../src/index.js';
-import { stubbedClient, type ConverseHandler } from '../helpers.js';
+import {
+  collect,
+  fakeStream,
+  stubbedClient,
+  type ConverseHandler,
+  type ConverseStreamHandler,
+} from '../helpers.js';
 
 describe('Bedrock adapter integration', () => {
   it('maps the Converse API into LLMClient format', async () => {
@@ -356,6 +362,34 @@ describe('Bedrock adapter integration', () => {
       return converse.mock.calls[0]?.[0]?.inferenceConfig?.temperature;
     }
 
+    // The same call over ConverseStreamCommand, which builds its request the same way.
+    async function sentStreamTemperature(model: string): Promise<number | undefined> {
+      const converseStream = vi.fn<ConverseStreamHandler>(async () => ({
+        stream: fakeStream([
+          { messageStart: { role: 'assistant' } },
+          { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'ok' } } },
+          { contentBlockStop: { contentBlockIndex: 0 } },
+          { messageStop: { stopReason: 'end_turn' } },
+          { metadata: { usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } } },
+        ]),
+      }));
+
+      const llm = new VernLLM({
+        client: fromBedrock(stubbedClient({ converseStream })),
+        model,
+      });
+
+      const { chunks, finalResult } = await llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+      });
+      await collect(chunks);
+      await finalResult;
+
+      return converseStream.mock.calls[0]?.[0]?.inferenceConfig?.temperature;
+    }
+
     it.each([
       ['anthropic.claude-haiku-4-5-20251001-v1:0', 0.2],
       ['anthropic.claude-test', 0.2],
@@ -368,6 +402,13 @@ describe('Bedrock adapter integration', () => {
       ],
     ])('%s sends temperature %s by default', async (model, expected) => {
       expect(await sentTemperature(model)).toBe(expected);
+    });
+
+    it.each([
+      ['anthropic.claude-haiku-4-5-20251001-v1:0', 0.2],
+      ['anthropic.claude-opus-4-7-v1:0', undefined],
+    ])('%s streams with temperature %s by default', async (model, expected) => {
+      expect(await sentStreamTemperature(model)).toBe(expected);
     });
 
     it('temperatureUnsupportedModels as a list replaces the built in rule', async () => {
