@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { fromAnthropic } from '../../../src/adapters/claude/index.js';
 import { fromGemini } from '../../../src/adapters/gemini/index.js';
 import { fromOpenAICompatible } from '../../../src/adapters/openai/index.js';
+import { defaultFallbackOn } from '../../../src/types/index.js';
 import { VernLLM } from '../../../src/vernLLM.js';
 import { drain } from '../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../realSdkServer.js';
@@ -299,5 +300,88 @@ describe('VernLLM fallback, real SDK clients across providers', () => {
     const exhausted = caught as InstanceType<typeof FallbackExhaustedError>;
     expect(exhausted.attempts.map((a) => a.provider)).toEqual(['openai', 'anthropic', 'gemini']);
     expect(exhausted.attempts.every((a) => a.error.type === 'api')).toBe(true);
+  });
+
+  describe('when the primary provider refuses', () => {
+    const refusal = {
+      id: 'chatcmpl-refusal',
+      object: 'chat.completion',
+      model: 'gpt-test',
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: null, refusal: "I can't help with that." },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
+    };
+
+    async function refusingPrimary() {
+      const openaiServer = await mockServer({ body: refusal });
+      const anthropicServer = await mockServer({
+        body: {
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-test',
+          content: [{ type: 'text', text: 'answer from Anthropic' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 10, output_tokens: 4 },
+        },
+      });
+
+      return {
+        openaiServer,
+        anthropicServer,
+        primary: {
+          client: fromOpenAICompatible(
+            new OpenAI({ apiKey: 'test-key', baseURL: `${openaiServer.url}/v1`, maxRetries: 0 }),
+          ),
+          model: 'gpt-test',
+          name: 'openai',
+        },
+        secondary: {
+          client: fromAnthropic(
+            new Anthropic({ apiKey: 'test-key', baseURL: anthropicServer.url, maxRetries: 0 }),
+          ),
+          model: 'claude-test',
+          name: 'anthropic',
+        },
+      };
+    }
+
+    it('stops after one request and never contacts the fallback target', async () => {
+      const { openaiServer, anthropicServer, primary, secondary } = await refusingPrimary();
+
+      const llm = new VernLLM({ ...primary, maxRetries: 3, fallback: [secondary] });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'model_refused',
+      });
+
+      expect(openaiServer.requests).toHaveLength(1);
+      expect(anthropicServer.requests).toHaveLength(0);
+    });
+
+    it('fails over once when fallbackOn asks for the next target on model_refused', async () => {
+      const { openaiServer, anthropicServer, primary, secondary } = await refusingPrimary();
+
+      const llm = new VernLLM({
+        ...primary,
+        maxRetries: 3,
+        fallback: [secondary],
+        fallbackOn: (error, context) =>
+          error.code === 'model_refused' ? 'next' : defaultFallbackOn(error, context),
+      });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
+        'answer from Anthropic',
+      );
+
+      expect(openaiServer.requests).toHaveLength(1);
+      expect(anthropicServer.requests).toHaveLength(1);
+    });
   });
 });

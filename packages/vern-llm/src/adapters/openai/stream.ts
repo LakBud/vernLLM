@@ -14,6 +14,10 @@ export function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStr
     yield { type: 'text-delta', delta: delta.content };
   }
 
+  if (delta?.refusal) {
+    yield { type: 'refusal', delta: delta.refusal };
+  }
+
   if (delta?.tool_calls?.length) {
     for (const toolCall of delta.tool_calls) {
       yield {

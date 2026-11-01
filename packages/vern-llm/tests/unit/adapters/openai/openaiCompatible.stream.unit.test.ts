@@ -33,6 +33,25 @@ function fakeOpenAIStream(
 }
 
 describe('fromOpenAICompatible().chat.completions.createStream', () => {
+  it('translates a refusal delta into a refusal WireStreamChunk', async () => {
+    const create = vi.fn(async (_params: unknown, _options: unknown) =>
+      fakeOpenAIStream([
+        { choices: [{ delta: { refusal: "I can't help with that." } }] },
+        { choices: [{ delta: { content: null, refusal: null } }] },
+      ]),
+    );
+    const adapted = fromOpenAICompatible({ chat: { completions: { create } } });
+
+    const chunks = await collect(
+      adapted.chat.completions.createStream!(
+        { model: 'test-model', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([{ type: 'refusal', delta: "I can't help with that." }]);
+  });
+
   it('translates content deltas into text-delta WireStreamChunks', async () => {
     const create = vi.fn(async (_params: unknown, _options: unknown) =>
       fakeOpenAIStream([

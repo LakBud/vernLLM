@@ -1,4 +1,5 @@
 import { finishReason } from '../internal/finishReason.js';
+import { refusalReason } from '../internal/refusalReason.js';
 
 import type { WireToolCall } from '../../types/index.js';
 import type { GeminiResponse, GeminiUsage } from './types.js';
@@ -22,6 +23,35 @@ export function toWireUsage(usage: GeminiUsage | undefined) {
       ? { completion_tokens_details: { reasoning_tokens: usage.thoughtsTokenCount } }
       : {}),
   };
+}
+
+/**
+ * `finishReason`s where Gemini declined. `RECITATION`, `LANGUAGE` and `OTHER` stay `empty_response`,
+ * since they depend on what was generated and a retry or another provider can succeed. A finish
+ * reason added to the API later also falls through to `empty_response`, which retries, until it is
+ * added here.
+ */
+const REFUSAL_FINISH_REASONS: ReadonlySet<string> = new Set([
+  'SAFETY',
+  'BLOCKLIST',
+  'PROHIBITED_CONTENT',
+  'SPII',
+]);
+
+/**
+ * The wire `refusal` for a response or chunk. Any `promptFeedback.blockReason` counts as one,
+ * `OTHER` included, unlike a candidate `finishReason` of `OTHER`: the block is on the prompt, so
+ * every retry is blocked the same way.
+ */
+export function geminiRefusal(
+  candidate: { finishReason?: string } | undefined,
+  promptFeedback: { blockReason?: string } | undefined,
+): { refusal?: string } {
+  const blockReason = promptFeedback?.blockReason;
+
+  if (blockReason && blockReason !== 'BLOCKED_REASON_UNSPECIFIED') return { refusal: blockReason };
+
+  return refusalReason(candidate?.finishReason, REFUSAL_FINISH_REASONS);
 }
 
 /** Maps a Gemini response onto the wire response, naming each function call. */
@@ -59,7 +89,11 @@ export function toWireResponse(response: GeminiResponse) {
   return {
     choices: [
       {
-        message: { content: text, ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}) },
+        message: {
+          content: text,
+          ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
+          ...geminiRefusal(response.candidates?.[0], response.promptFeedback),
+        },
         ...finishReason(response.candidates?.[0]?.finishReason, 'MAX_TOKENS'),
       },
     ],

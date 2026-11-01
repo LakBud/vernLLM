@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 
-import { fromFetch } from '../../../../src/adapters/index.js';
+import { fromFetch, type StreamRequestLike } from '../../../../src/adapters/index.js';
 import { type StreamChunk, type WireStreamChunk } from '../../../../src/types/index.js';
 import { VernLLM } from '../../../../src/vernLLM.js';
 import { fakeReadableStream } from '../../../helpers.js';
@@ -15,6 +15,7 @@ interface FakeSseEvent {
   delta?: string;
   toolCall?: { index: number; id?: string; name?: string; argsDelta?: string };
   usage?: { prompt: number; completion: number; total: number };
+  refusal?: boolean;
 }
 
 function mapEvent(event: unknown): WireStreamChunk | undefined {
@@ -30,6 +31,7 @@ function mapEvent(event: unknown): WireStreamChunk | undefined {
       argumentsDelta: e.toolCall.argsDelta,
     };
   }
+  if (e.refusal) return { type: 'refusal' };
   if (e.usage) {
     return {
       type: 'usage',
@@ -168,5 +170,94 @@ describe('VernLLM.call(stream: true) through fromFetch, end to end', () => {
     await expect(
       llm.call({ userContent: 'hi', jsonMode: false, stream: true }),
     ).rejects.toMatchObject({ type: 'invalid_params' });
+  });
+
+  describe('provider refusals', () => {
+    const refusingLlm = (
+      requestStream: StreamRequestLike | undefined,
+      fetchCalls: { count: number },
+    ) =>
+      new VernLLM({
+        client: fromFetch({
+          url: 'https://api.example.com',
+          requestStream,
+          mapRequest: () => ({}),
+          mapResponse: () => {
+            fetchCalls.count += 1;
+            return { refusal: 'declined', usage: { promptTokens: 4, totalTokens: 4 } };
+          },
+          mapStreamEvent: mapEvent,
+        }),
+        model: 'test-model',
+        maxRetries: 2,
+        baseDelayMs: 1,
+      });
+
+    it('fails a streamed refusal once as model_refused, with the usage chunk still reported', async () => {
+      const requestStream = vi.fn<StreamRequestLike>(async () =>
+        fakeReadableStream([
+          'data: {"refusal":true}\n\n',
+          'data: {"usage":{"prompt":4,"completion":0,"total":4}}\n\n',
+        ]),
+      );
+      const calls = { count: 0 };
+      const llm = refusingLlm(requestStream, calls);
+
+      const { chunks, finalResult } = await llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+      });
+
+      await expect(drain(chunks)).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'model_refused',
+      });
+      await expect(finalResult).rejects.toMatchObject({ code: 'model_refused' });
+      expect(requestStream).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails a non streaming refusal once as model_refused, with no retry', async () => {
+      const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({}),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+      const calls = { count: 0 };
+      const llm = refusingLlm(undefined, calls);
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'model_refused',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(calls.count).toBe(1);
+    });
+
+    it('returns the content when mapResponse carries both content and a refusal', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({}),
+        })),
+      );
+      const llm = new VernLLM({
+        client: fromFetch({
+          url: 'https://api.example.com',
+          mapRequest: () => ({}),
+          mapResponse: () => ({ content: 'Partial answer.', refusal: 'declined' }),
+        }),
+        model: 'test-model',
+      });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
+        'Partial answer.',
+      );
+    });
   });
 });

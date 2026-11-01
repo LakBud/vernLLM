@@ -69,6 +69,8 @@ export interface FetchAdapterConfig {
    */
   mapResponse: (json: unknown) => {
     content?: string;
+    /** The provider declined the call. Fails as `model_refused` when there is no content or tool call. */
+    refusal?: string;
     usage?: {
       /** Every input token, cache reads and writes included. */
       promptTokens?: number;

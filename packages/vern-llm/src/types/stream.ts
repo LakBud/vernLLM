@@ -150,6 +150,11 @@ export type WireStreamChunk =
       hint: ProviderRateLimitHint;
     }
   | {
+      /** The provider declined. Never reaches callers: with no content, the call fails as `model_refused`. */
+      type: 'refusal';
+      delta?: string;
+    }
+  | {
       /**
        * One complete reasoning block, yielded once it has fully arrived.
        * Collected onto `ToolCallResult.thinking`, never surfaced to

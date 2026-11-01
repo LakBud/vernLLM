@@ -201,6 +201,12 @@ for await (const chunk of chunks) {
 See [Streaming](/docs/core/streaming) for the full `stream: true` contract, none of
 which changes per-provider beyond how each adapter maps its own streaming events.
 
+## Refusals
+
+A response with `stop_reason: 'refusal'` and no content or tool calls fails once as `model_refused`,
+with no retry and no fallback by default. A partial answer that ends in a refusal is returned as
+it is. See [Error Handling](/docs/core/error-handling).
+
 ## Multimodal input
 
 `fromAnthropic` supports VernLLM's provider-independent `ContentBlock[]` format for image input.

@@ -91,6 +91,7 @@ is in audit.
 ## Handle a blocked call
 
 A block is an `LLMError` with the code `content_blocked`. It is never retried and never falls back.
+A refusal from the provider itself is a different error, `model_refused`, raised by the core.
 
 ```ts title="guard-handle-block.ts"
 import { LLMError } from 'vern-llm';

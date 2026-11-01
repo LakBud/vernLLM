@@ -359,6 +359,157 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
         .adapter,
     ).toEqual({ name: 'gemini', provider: 'gcp.vertex_ai' });
   });
+
+  describe('provider refusals', () => {
+    const usageMetadata = { promptTokenCount: 12, candidatesTokenCount: 0, totalTokenCount: 12 };
+    const answer = {
+      candidates: [{ content: { role: 'model', parts: [{ text: 'from fallback' }] } }],
+      usageMetadata,
+    };
+    const blockedPrompt = { promptFeedback: { blockReason: 'SAFETY' }, usageMetadata };
+    const finishedWith = (finishReason: string, text?: string) => ({
+      candidates: [
+        {
+          content: { role: 'model', parts: text ? [{ text }] : [] },
+          finishReason,
+        },
+      ],
+      usageMetadata,
+    });
+
+    /** A primary that answers with `response`, and a fallback that must not be asked. */
+    async function withFallback(response: Parameters<typeof startRealSdkServer>[0][number]) {
+      server = await startRealSdkServer([response]);
+      const fallbackServer = await startRealSdkServer([{ body: answer }]);
+
+      const llm = new VernLLM({
+        client: fromGemini(
+          new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } }),
+        ),
+        model: 'gemini-test',
+        maxRetries: 3,
+        baseDelayMs: 0,
+        fallback: {
+          client: fromGemini(
+            new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: fallbackServer.url } }),
+          ),
+          model: 'gemini-fallback',
+        },
+      });
+
+      return { llm, fallbackServer };
+    }
+
+    async function single(response: Parameters<typeof startRealSdkServer>[0][number]) {
+      server = await startRealSdkServer([response]);
+
+      return new VernLLM({
+        client: fromGemini(
+          new GoogleGenAI({ apiKey: 'test-key', httpOptions: { baseUrl: server.url } }),
+        ),
+        model: 'gemini-test',
+        maxRetries: 0,
+      });
+    }
+
+    it.each([
+      ['a SAFETY finish with no content', finishedWith('SAFETY')],
+      ['a BLOCKLIST finish with no content', finishedWith('BLOCKLIST')],
+      ['a PROHIBITED_CONTENT finish with no content', finishedWith('PROHIBITED_CONTENT')],
+      ['a SPII finish with no content', finishedWith('SPII')],
+      ['a blocked prompt, which has no candidates', blockedPrompt],
+      ['a prompt blocked as OTHER', { promptFeedback: { blockReason: 'OTHER' }, usageMetadata }],
+    ])('fails once as model_refused on %s', async (_name, body) => {
+      const { llm, fallbackServer } = await withFallback({ body });
+
+      try {
+        await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+          type: 'invalid_params',
+          code: 'model_refused',
+        });
+        expect(server?.requests).toHaveLength(1);
+        expect(fallbackServer.requests).toHaveLength(0);
+      } finally {
+        await fallbackServer.close();
+      }
+    });
+
+    it('fails once as model_refused on a stream that ends in a refusal with no content', async () => {
+      const { llm, fallbackServer } = await withFallback({
+        raw: sseRaw([{ data: finishedWith('SAFETY') }]),
+      });
+
+      try {
+        const { chunks, finalResult } = await llm.call({
+          userContent: 'hi',
+          jsonMode: false,
+          stream: true,
+        });
+
+        await expect(drain(chunks)).rejects.toMatchObject({ code: 'model_refused' });
+        await expect(finalResult).rejects.toMatchObject({ code: 'model_refused' });
+        expect(server?.requests).toHaveLength(1);
+        expect(fallbackServer.requests).toHaveLength(0);
+      } finally {
+        await fallbackServer.close();
+      }
+    });
+
+    it('fails once as model_refused on a stream whose prompt was blocked', async () => {
+      const { llm, fallbackServer } = await withFallback({
+        raw: sseRaw([{ data: blockedPrompt }]),
+      });
+
+      try {
+        const { chunks } = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+
+        await expect(drain(chunks)).rejects.toMatchObject({ code: 'model_refused' });
+        expect(server?.requests).toHaveLength(1);
+        expect(fallbackServer.requests).toHaveLength(0);
+      } finally {
+        await fallbackServer.close();
+      }
+    });
+
+    it('returns a partial answer that ends in a SAFETY finish', async () => {
+      const llm = await single({ body: finishedWith('SAFETY', 'Partial answer.') });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
+        'Partial answer.',
+      );
+    });
+
+    it('returns streamed text that ends in a SAFETY finish', async () => {
+      const llm = await single({
+        raw: sseRaw([{ data: finishedWith('SAFETY', 'Partial answer.') }]),
+      });
+
+      const { chunks, finalResult } = await llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+      });
+      await drain(chunks);
+
+      await expect(finalResult).resolves.toBe('Partial answer.');
+    });
+
+    it.each([
+      ['RECITATION', finishedWith('RECITATION')],
+      ['LANGUAGE', finishedWith('LANGUAGE')],
+      ['OTHER', finishedWith('OTHER')],
+      [
+        'an unspecified block reason',
+        { promptFeedback: { blockReason: 'BLOCKED_REASON_UNSPECIFIED' }, usageMetadata },
+      ],
+    ])('keeps failing as empty_response for %s with no content', async (_name, body) => {
+      const llm = await single({ body });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+        code: 'empty_response',
+      });
+    });
+  });
 });
 
 describe('Gemini adapter, SDK retry warning (real @google/genai client)', () => {

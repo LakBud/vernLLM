@@ -140,6 +140,44 @@ describe('fromAnthropic().chat.completions.createStream', () => {
     });
   });
 
+  describe('refusals', () => {
+    const run = async (events: unknown[]) => {
+      const { client } = makeFakeStreamingAnthropicClient(events);
+      return collect(
+        fromAnthropic(client).chat.completions.createStream!(
+          { model: 'claude-test', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] },
+          { signal: new AbortController().signal },
+        ),
+      );
+    };
+
+    it('yields a refusal chunk, then usage, when message_delta stops with refusal', async () => {
+      const chunks = await run([
+        { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+        { type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { output_tokens: 2 } },
+        { type: 'message_stop' },
+      ]);
+
+      expect(chunks.map((chunk) => chunk.type)).toEqual(['refusal', 'usage']);
+    });
+
+    it.each([['end_turn'], [null], [undefined]])(
+      'yields no refusal chunk for stop_reason %s',
+      async (stopReason) => {
+        const chunks = await run([
+          { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+          {
+            type: 'message_delta',
+            delta: { stop_reason: stopReason },
+            usage: { output_tokens: 2 },
+          },
+        ]);
+
+        expect(chunks.map((chunk) => chunk.type)).toEqual(['usage']);
+      },
+    );
+  });
+
   describe('cumulative input counts on message_delta', () => {
     const run = async (start: unknown, delta: unknown) => {
       const events = [

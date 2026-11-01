@@ -99,10 +99,19 @@ export function validateToolCallArguments<
   });
 }
 
+/** A refusal with no content. Never retried. The refusal text is left out, as it can echo the prompt. */
+export function refusalError(): LLMError {
+  return new LLMError('The model refused the request', 'invalid_params', {
+    code: 'model_refused',
+  });
+}
+
 /** Everything `shapeResponse` needs beyond the raw response itself. */
 export interface ShapeResponseParams<T> {
   rawContent: string | null | undefined;
   wireToolCalls: WireToolCall[] | undefined;
+  /** The provider's refusal. Only read when there is no content and no tool call. */
+  refusal?: string | null;
   params: CallParams<T>;
   useJson: boolean;
   parseJson: (content: string) => unknown;
@@ -120,6 +129,7 @@ export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithTo
   const {
     rawContent,
     wireToolCalls,
+    refusal,
     params: callParams,
     useJson,
     parseJson,
@@ -134,6 +144,8 @@ export function shapeResponse<T>(params: ShapeResponseParams<T>): T | CallWithTo
   const content = rawContent?.trim();
 
   if (!content && !wireToolCalls?.length) {
+    if (refusal) throw refusalError();
+
     throw new LLMError('Empty LLM response', 'api', { code: 'empty_response' });
   }
 

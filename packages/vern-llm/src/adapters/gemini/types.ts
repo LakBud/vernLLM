@@ -60,6 +60,7 @@ export interface GeminiModels {
       };
       finishReason?: string;
     }>;
+    promptFeedback?: { blockReason?: string };
     usageMetadata?: {
       promptTokenCount?: number;
       candidatesTokenCount?: number;
@@ -79,7 +80,9 @@ export interface GeminiModels {
             functionCall?: { id?: string; name?: string; args?: unknown };
           }>;
         };
+        finishReason?: string;
       }>;
+      promptFeedback?: { blockReason?: string };
       usageMetadata?: {
         promptTokenCount?: number;
         candidatesTokenCount?: number;

@@ -2,6 +2,7 @@ import { LLMError } from '../../../types/errors.js';
 import { finalizeResponse } from '../responseFinalizer.js';
 import { buildStreamResult } from '../streamAccumulator.js';
 import { normalizeError } from '../utils/errors.utils.js';
+import { refusalError } from '../utils/response/responseShape.utils.js';
 import { toTokenUsage } from '../utils/response/usage.utils.js';
 import { withChunkIdleTimeout, withTimeout } from '../utils/retry/retry.utils.js';
 import {
@@ -252,6 +253,7 @@ async function readUntilContent(
 ): Promise<{ head: IteratorResult<WireStreamChunk>; rest: AsyncIterator<WireStreamChunk> }> {
   const held: WireStreamChunk[] = [];
   let current = first;
+  let refused = false;
 
   try {
     while (!current.done && !isContentChunk(current.value)) {
@@ -259,6 +261,8 @@ async function readUntilContent(
 
       if (chunk.type === 'rate_limit_hint') {
         limiter?.reactToRateLimitHint(chunk.hint);
+      } else if (chunk.type === 'refusal') {
+        refused = true;
       } else if (chunk.type !== 'ping') {
         held.push(chunk);
       }
@@ -270,6 +274,9 @@ async function readUntilContent(
         logger,
       );
     }
+
+    // Read to the end first so the usage chunk after a refusal is reported. Content wins.
+    if (current.done && refused) throw refusalError();
   } catch (error) {
     // Not awaited: after an idle timeout the generator can still be stuck in
     // its own await, and `return()` would wait for it. The abort is what
@@ -300,7 +307,7 @@ async function readUntilContent(
   return { head: { done: false, value: held[0]! }, rest };
 }
 
-/** Text or a tool call delta: the first chunk that reaches the caller as content. */
+/** A non empty text delta or a tool call delta. An empty text delta is not content. */
 function isContentChunk(chunk: WireStreamChunk): boolean {
-  return chunk.type === 'text-delta' || chunk.type === 'tool_call_delta';
+  return (chunk.type === 'text-delta' && chunk.delta !== '') || chunk.type === 'tool_call_delta';
 }

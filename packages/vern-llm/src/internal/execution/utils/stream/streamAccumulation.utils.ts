@@ -25,7 +25,7 @@ export interface StreamAccumulation {
 
 /**
  * Collects text, tool calls, usage and thinking from wire chunks and forwards
- * caller visible chunks through `push`. Pings and hints push nothing, and
+ * caller visible chunks through `push`. Pings, hints and refusal chunks push nothing, and
  * thinking stays in the result only.
  */
 export function createStreamAccumulation(

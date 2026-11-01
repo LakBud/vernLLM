@@ -113,6 +113,7 @@ export type AnthropicStreamEvent =
   | { type: 'content_block_stop'; index: number }
   | {
       type: 'message_delta';
+      delta?: { stop_reason?: string | null };
       // Input counts here are cumulative whole message totals, sent only when they apply.
       usage?: Pick<
         AnthropicUsage,

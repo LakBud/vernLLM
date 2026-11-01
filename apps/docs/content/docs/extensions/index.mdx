@@ -53,16 +53,21 @@ See [Integrations](/docs/integrations) for the packages that reach outside your 
 ## Shared rejection codes
 
 An extension that denies a call does it with a typed `LLMError`, so callers and fallback policies
-branch on one code whoever raised it. The core defines the codes and throws neither itself:
+branch on one code whoever raised it. The core defines the codes. Extensions throw all but
+`model_refused`, which the core throws when a provider declines a call:
 
-| Code              | Type             | Raised by         | Meaning                                    |
-| ----------------- | ---------------- | ----------------- | ------------------------------------------ |
-| `budget_exceeded` | `quota_exceeded` | `vern-llm-usage`  | A budget has no room for the call          |
-| `policy_denied`   | `invalid_params` | `vern-llm-policy` | A policy removed every target or denied it |
-| `content_blocked` | `invalid_params` | `vern-llm-guard`  | A check refused the call or its answer     |
+| Code              | Type             | Raised by         | Meaning                                        |
+| ----------------- | ---------------- | ----------------- | ---------------------------------------------- |
+| `budget_exceeded` | `quota_exceeded` | `vern-llm-usage`  | A budget has no room for the call              |
+| `policy_denied`   | `invalid_params` | `vern-llm-policy` | A policy removed every target or denied it     |
+| `content_blocked` | `invalid_params` | `vern-llm-guard`  | A check refused the call or its answer         |
+| `model_refused`   | `invalid_params` | `vern-llm`        | The provider declined the call, with no answer |
 
-A rejection happens before any provider is contacted, so it never counts toward the circuit breaker,
-and the logger records it at `warn` as `rejected`. See
+`budget_exceeded` and `policy_denied` reject a call before any provider is contacted.
+`content_blocked` does too when a check refuses the call, but comes after the provider answered when
+a check refuses the answer. `model_refused` always comes after the provider answered, so the refused
+attempt can use tokens. None of them count toward the circuit breaker, and the logger records them
+at `warn` as `rejected`. See
 [Error Handling](/docs/core/error-handling) for the full list.
 
 ## What every extension follows

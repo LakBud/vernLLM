@@ -50,6 +50,7 @@ export function finalizeResponse<T>(
   deps: FinalizeResponseDeps,
   truncated = false,
   thinking?: ThinkingBlock[],
+  refusal?: string | null,
 ): T | CallWithToolsResult<T> {
   const { gateway, usageReporter, logger, redactText, parseJson, detectSoftFailure } = deps;
 
@@ -58,6 +59,7 @@ export function finalizeResponse<T>(
       shapeResponse<T>({
         rawContent,
         wireToolCalls,
+        refusal,
         params,
         useJson,
         parseJson,

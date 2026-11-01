@@ -29,6 +29,7 @@ export interface OpenAIStreamChunk {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      refusal?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;

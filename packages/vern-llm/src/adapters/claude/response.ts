@@ -3,9 +3,13 @@ import {
   assertForcedJsonSchemaToolInputIsObject,
   throwMissingForcedJsonSchemaTool,
 } from '../internal/forcedJsonSchemaTool.js';
+import { refusalReason } from '../internal/refusalReason.js';
 
 import type { ThinkingBlock, WireToolCall } from '../../types/index.js';
 import type { AnthropicResponse, AnthropicUsage } from './types.js';
+
+/** `stop_reason` values that mean the model declined. */
+export const REFUSAL_STOP_REASONS: ReadonlySet<string> = new Set(['refusal']);
 
 const finite = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -70,17 +74,23 @@ export function toWireResponse(response: AnthropicResponse, toolName: string | u
   let text: string;
   let wireToolCalls: WireToolCall[] | undefined;
   const thinking = toThinkingBlocks(response.content);
+  const refusal = refusalReason(response.stop_reason, REFUSAL_STOP_REASONS);
 
   if (toolName) {
     const toolUse = response.content.find(
       (block) => block.type === 'tool_use' && block.name === toolName,
     );
 
-    if (!toolUse) throwMissingForcedJsonSchemaTool('Anthropic', toolName);
+    if (toolUse) {
+      assertForcedJsonSchemaToolInputIsObject('Anthropic', toolName, toolUse.input);
 
-    assertForcedJsonSchemaToolInputIsObject('Anthropic', toolName, toolUse.input);
-
-    text = JSON.stringify(toolUse.input);
+      text = JSON.stringify(toolUse.input);
+    } else if (refusal.refusal) {
+      // A refusal never calls the tool; core fails it as model_refused.
+      text = '';
+    } else {
+      throwMissingForcedJsonSchemaTool('Anthropic', toolName);
+    }
   } else {
     text = response.content
       .filter((block) => block.type === 'text')
@@ -105,6 +115,7 @@ export function toWireResponse(response: AnthropicResponse, toolName: string | u
           content: text,
           ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
           ...(thinking.length ? { thinking } : {}),
+          ...refusal,
         },
         ...finishReason(response.stop_reason, 'max_tokens'),
       },

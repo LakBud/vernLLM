@@ -12,6 +12,17 @@ import type {
   ConverseResponse,
 } from '@aws-sdk/client-bedrock-runtime';
 
+/** `stopReason` values where the model or a guardrail declined. `refusal` is not in every SDK version. */
+const REFUSAL_STOP_REASONS: ReadonlySet<string> = new Set([
+  'guardrail_intervened',
+  'content_filtered',
+  'refusal',
+]);
+
+export function isRefusalStop(stopReason: string | undefined): boolean {
+  return stopReason !== undefined && REFUSAL_STOP_REASONS.has(stopReason);
+}
+
 /** The reasoning blocks of a Converse response, in order, in VernLLM's shape. */
 function toThinkingBlocks(content: BedrockContentBlock[]): ThinkingBlock[] {
   return content.flatMap((block): ThinkingBlock[] => {
@@ -43,11 +54,16 @@ export function toWireResponse(response: ConverseResponse, toolName: string | un
     // back to text so it follows every other adapter's string contract.
     const toolUse = blocks.find((block) => block.toolUse?.name === toolName)?.toolUse;
 
-    if (!toolUse) throwMissingForcedJsonSchemaTool(toolName);
-
-    const { input } = toolUse;
-    assertForcedJsonSchemaToolInputIsObject(toolName, input);
-    text = JSON.stringify(input);
+    if (toolUse) {
+      const { input } = toolUse;
+      assertForcedJsonSchemaToolInputIsObject(toolName, input);
+      text = JSON.stringify(input);
+    } else if (isRefusalStop(response.stopReason)) {
+      // A refusal never calls the tool; core fails it as model_refused.
+      text = '';
+    } else {
+      throwMissingForcedJsonSchemaTool(toolName);
+    }
   } else {
     text = blocks.map((c) => c.text ?? '').join('');
 
@@ -78,6 +94,7 @@ export function toWireResponse(response: ConverseResponse, toolName: string | un
           content: text,
           ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
           ...(thinking.length ? { thinking } : {}),
+          ...(isRefusalStop(response.stopReason) ? { refusal: response.stopReason } : {}),
         },
         ...(response.stopReason === 'max_tokens' ? { finish_reason: 'length' as const } : {}),
       },

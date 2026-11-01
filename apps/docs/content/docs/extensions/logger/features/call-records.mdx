@@ -56,12 +56,12 @@ a keep alive ping before content does not count.
 
 One function decides the outcome, so every rule lives in one place:
 
-| Outcome    | When                                                                                               | Level                            | Grouped | Timed |
-| ---------- | -------------------------------------------------------------------------------------------------- | -------------------------------- | ------- | ----- |
-| `ok`       | The call resolved. For a stream, `finalResult` resolved                                            | `info`, raised to `warn` if slow | no      | yes   |
-| `error`    | Any other `LLMError`, or a thrown value that is not one                                            | `error`                          | yes     | no    |
-| `aborted`  | The caller cancelled (`error.type` is `aborted`)                                                   | `info`                           | no      | no    |
-| `rejected` | A middleware said no on purpose: `quota_exceeded`, or the codes `policy_denied`, `content_blocked` | `warn`                           | no      | no    |
+| Outcome    | When                                                                                                                                | Level                            | Grouped | Timed |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------- | ----- |
+| `ok`       | The call resolved. For a stream, `finalResult` resolved                                                                             | `info`, raised to `warn` if slow | no      | yes   |
+| `error`    | Any other `LLMError`, or a thrown value that is not one                                                                             | `error`                          | yes     | no    |
+| `aborted`  | The caller cancelled (`error.type` is `aborted`)                                                                                    | `info`                           | no      | no    |
+| `rejected` | A middleware or the provider said no on purpose: `quota_exceeded`, or the codes `policy_denied`, `content_blocked`, `model_refused` | `warn`                           | no      | no    |
 
 <Callout type="info">
   `rejected` exists because a denial is the system working, not a fault. Logging it as `error` would

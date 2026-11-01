@@ -7,6 +7,38 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 3.1.0: Provider refusals no longer retry or fall back
+
+A response where the provider declined and returned no content used to throw `empty_response`.
+OpenAI returns this as `message.refusal` with `content: null`, Claude as `stop_reason: 'refusal'`,
+Gemini as a `SAFETY`, `BLOCKLIST`, `PROHIBITED_CONTENT` or `SPII` finish or a blocked prompt, and
+Bedrock as a `guardrail_intervened`, `content_filtered` or `refusal` stop reason. That error is retryable, so the call was sent and
+billed again, then fell back to another provider that answered the refused prompt, and the logger
+recorded `ok`.
+
+It now fails once as `LLMError('invalid_params')` with the code `model_refused`. It is not retried,
+does not fall back and never counts toward the breaker. Its tokens are reported as a usage failure,
+and `vern-llm-logger` records it as `rejected`. Text refusals and empty responses with no `refusal`
+are unchanged.
+
+If you relied on the silent failover, opt back in:
+
+```ts
+import { defaultFallbackOn } from 'vern-llm';
+
+new VernLLM({
+  client,
+  model,
+  fallback,
+  fallbackOn: (error, context) =>
+    error.code === 'model_refused' ? 'next' : defaultFallbackOn(error, context),
+});
+```
+
+`vern-llm-bedrock` needs this `vern-llm` release for the change to take effect. Custom adapters can
+set `message.refusal` or yield `{ type: 'refusal' }` to opt in. A
+`switch` over `WireStreamChunk` that has no default may stop compiling because of the new member.
+
 ## 3.1.0: `fromAnthropic` leaves out `temperature`
 
 `@anthropic-ai/sdk` 1.x sends API version `2026-10-21`, which removes `temperature` and answers 400
