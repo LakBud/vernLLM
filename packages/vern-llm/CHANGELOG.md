@@ -1,5 +1,125 @@
 # vern-llm
 
+## 3.1.0
+
+### Minor Changes
+
+- a56208b: `retryBudget` accepts a `RetryBudgetAdapter`, so one budget can be shared across processes, and `readRetryBudgetState()` reads it live.
+
+  Pass an object with `assertAvailable` and `recordAttempt`, plus optional `getSnapshot`, `readState` and `setLogger`, where the options would go. Options still build the in-process `RetryBudget`, which now implements the interface. An object with only one of the two required methods, or an optional member that is not a function, throws `LLMError('invalid_params')` at construction.
+
+  `VernLLM.readRetryBudgetState(target?)` calls the adapter's `readState` and falls back to `getRetryBudgetState()`, like `readRateLimitState()` and `readCircuitStates()`.
+
+  A budget never breaks a call: a `recordAttempt` that throws or returns a rejected promise is logged, and an `assertAvailable` that throws anything but an `LLMError` is logged and the retry goes ahead. `RetryBudgetAdapter` and `RetryBudgetSnapshot` are exported.
+
+- 224632a: A provider refusal with no content now fails once as `LLMError('invalid_params')` with the code `model_refused`, instead of retrying and falling back.
+
+  OpenAI returns a refusal as `message.refusal` with `content: null`, which used to throw the retryable `empty_response`. The call was billed again, then answered by a fallback provider. `model_refused` is never retried, never counts toward the breaker and does not fall back by default. The refused attempt's tokens are reported as a usage failure. To fail over on a refusal, return `'next'` from `fallbackOn` for that code.
+
+  What counts as a refusal, in each adapter:
+
+  - OpenAI compatible: `message.refusal`, or `delta.refusal` on a stream.
+  - `fromAnthropic`: `stop_reason: 'refusal'`.
+  - `fromFetch`: `refusal` from `mapResponse`, or a `{ type: 'refusal' }` chunk from `mapStreamEvent`.
+  - `fromGemini`: a candidate `finishReason` of `SAFETY`, `BLOCKLIST`, `PROHIBITED_CONTENT` or `SPII`, and a blocked prompt (any `promptFeedback.blockReason` but `BLOCKED_REASON_UNSPECIFIED`). `RECITATION`, `LANGUAGE` and `OTHER` finishes are not mapped and still fail as `empty_response`.
+
+  `LLMClient` responses gain an optional `message.refusal`, and `WireStreamChunk` gains `{ type: 'refusal'; delta?: string }`, which is never surfaced to callers. A `switch` over `WireStreamChunk` with no default may stop compiling. On a stream the error reaches `chunks` and `finalResult`, not the `call()` promise. A partial answer that ends in a refusal is returned as before, and text refusals and empty responses with no `refusal` are unchanged.
+
+  An empty text delta no longer counts as the first content of a stream, for every adapter. Anthropic opens with an empty text block, so counting it would have opened the stream before a refusal could be seen. The effect is that a stream is retried and can fall back until its first non empty text or tool call, and a stream that only ever sends empty text now fails as `empty_response`, the same as a non streaming call with empty content did before.
+
+- ab379e1: `LLMErrorCode` gains `budget_exceeded` (type `quota_exceeded`) and `policy_denied` (type `invalid_params`), so packages can reject a call before any provider is contacted with a code callers can branch on. The core does not throw either one itself.
+
+  `budget_exceeded` is not retryable even though `quota_exceeded` otherwise is, since a spent budget stays spent until its window resets. Neither code counts toward the circuit breaker.
+
+  ```ts
+  if (isLLMError(err) && err.code === 'budget_exceeded') {
+    // back off until the budget window resets
+  }
+  ```
+
+  Existing code keeps behaving the same at runtime. A new member on an exported union can break an exhaustive `switch` over `LLMErrorCode`, which then needs the two new cases.
+
+- ab379e1: Add `TokenUsage.costUsd`, the cost the provider says a call had, in USD.
+
+  It is filled from OpenRouter's `usage.cost` by the OpenAI compatible adapter, for plain and streamed calls, and from the `costUsd` a `fromFetch` `mapResponse` returns. It stays out of the usage when the response has no cost, or a negative or non finite one.
+
+  ```ts
+  onUsage: ({ costUsd, totalTokens }) => billing.record({ costUsd, totalTokens }),
+  ```
+
+  Nothing existing changes: the field is optional and no adapter reports it unless the provider sends one.
+
+- 4cefe9c: `fromAnthropic` no longer sends `temperature`. `@anthropic-ai/sdk` 1.x sends API version `2026-10-21`, which removes it on every model and answers `temperature: Extra inputs are not permitted`, so a default config call failed. A client pinned to an older API version opts back in with `sendTemperature: true`; Claude 4.7 and later and calls with thinking on still never get it.
+
+  ```ts
+  fromAnthropic(client, { sendTemperature: true });
+  ```
+
+  Nothing changes for SDK 1.x clients, whose requests failed before. See [Migration Notes](/docs/migration-notes).
+
+- efd7c10: A `wrap` can run everything inside it again as a separate chain with `next.again()`, at the same time as the first chain or after it.
+
+  ```ts
+  const rerunOnce: VernLLMMiddleware = {
+    name: 'rerun-once',
+    reruns: true,
+    wrap: async (request, next) => {
+      const first = await next();
+      if (!next.again || isAcceptable(first.value)) return first;
+      return next.again({ targets: ['fallback'] });
+    },
+  };
+  ```
+
+  Set `reruns: true` on the middleware entry to get it. When the `wrap` settles, every chain whose result it didn't return is cancelled, so return a chain's result unchanged; on a throw, every chain is cancelled. Targets narrow as with `next({ targets })`. Each chain reserves and refunds with `reserveUsage` and `refundUsage` like a call of its own. At most 4 per call, after which `next.again` is `undefined`, as it is for entries without `reruns`. In `cachedCall()`, a rerun is a fresh call for this caller that never reads the cache or joins a shared call, reserves as a full spend, and writes its answer to the cache.
+
+  Contexts, events and `CallMeta` carry an optional `chain`, absent for the main chain. Middleware inside a rerunning `wrap` get one `ctx.own` per chain; middleware outside it keep one `ctx.own` per call, in every hook. `WrapNext` and `WrapNextOptions` are exported.
+
+  Existing code keeps compiling and behaving the same at runtime: entries without `reruns` run exactly as before, and every new field and `next.again` is optional.
+
+- 7cd4a9d: `LLMErrorCode` gains `content_blocked` (type `invalid_params`), for a middleware that refuses a call, or the answer it got, because of its content. It is told apart from provider faults, budgets and policy in logs and `catch` blocks. Like any `invalid_params` error it is not retried, stops fallback and never counts toward the circuit breaker. The core does not throw it itself.
+
+  A `wrap` can now refuse a result it has seen. An `LLMError` with code `content_blocked` thrown after `next()` resolved is rethrown to the caller. Every other throw after `next()` is still logged and swallowed, so a bug in post processing can't fail a billed call.
+
+  ```ts
+  const refuseEmpty: VernLLMMiddleware = {
+    name: 'refuse-empty',
+    wrap: async (request, next) => {
+      const result = await next();
+      if (result.value === '') {
+        throw new LLMError(
+          'Call blocked: content refused by middleware "refuse-empty"',
+          'invalid_params',
+          {
+            code: 'content_blocked',
+          },
+        );
+      }
+      return result;
+    },
+  };
+  ```
+
+  A new member on an exported union can break an exhaustive `switch` over `LLMErrorCode`, which then needs the new case.
+
+- 7897628: Middleware `ctx` carries three read only facts about how the call started: `streaming`, `callTargets` and `deadlineAt`.
+
+  `ctx.streaming` is whether the call asked for a stream. `ctx.callTargets` is the call's own `targets`, a frozen copy, when it passed one, and an order another middleware passes to `next({ targets })` never changes it. `ctx.deadlineAt` is when the call's `deadlineMs` runs out, in epoch milliseconds, and is absent without a deadline.
+
+  All three are optional and read the same way `ctx.context` is, in every hook, stage and fallback attempt. For `cachedCall`, each caller's `deadlineAt` comes from its own `deadlineMs`.
+
+- c41037c: `CallMeta.finishReason` says why the answering target stopped: `stop`, `length`, `tool_calls`, `refusal`, `guardrail`, `content_filter` or `other`. A call that returns text does not throw when a provider stops early, so this is how a caller tells a complete answer from one cut off by a filter, a guardrail or the output limit. It is set for every adapter that reports a reason, and for a stream once `finalResult` resolves. It is absent on a cache hit. Retries and fallback are unchanged. One error changes: a streamed JSON answer that is cut off at the output limit and cannot be parsed now fails as `response_truncated`, as a non streaming call already did, instead of a plain `parse` error.
+
+  Per adapter: OpenAI compatible reads `finish_reason`, on streams too, and reports a refusal that came with text as `refusal`. `fromAnthropic` maps `stop_reason`, `fromGemini` maps the candidate `finishReason` (the safety reasons are `content_filter`), and `fromFetch` takes `finishReason` from `mapResponse` or a `{ type: 'finish', reason }` chunk from `mapStreamEvent`.
+
+  `LLMClient` responses read `finish_reason` as before, but adapters now send every reason, not only `length`. `WireStreamChunk` gains `{ type: 'finish'; reason: string }`, which is never surfaced to callers. A `switch` over `WireStreamChunk` with no default may stop compiling.
+
+- a5d4af8: `CallResult` gains `cache?: 'hit' | 'join'`, set by `cachedCall()` when no call of its own ran, so a middleware can tell a stored value from a shared in flight call.
+
+  A streamed join returns before the shared call has answered, so its `meta` is still unset when `next()` returns and it looked like a hit. `cache` is decided when the cache is read, so it is known at once, for streams too.
+
+  Existing code keeps compiling and behaving the same: the field is optional and only `cachedCall()` sets it.
+
 ## 3.0.0
 
 ### Major Changes

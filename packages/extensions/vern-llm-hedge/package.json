@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-hedge",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Latency triggered hedging for vern-llm: when a target answers slower than usual, ask the next one too and keep the first answer",
   "keywords": [
     "vern-llm",
