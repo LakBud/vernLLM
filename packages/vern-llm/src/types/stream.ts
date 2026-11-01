@@ -150,11 +150,7 @@ export type WireStreamChunk =
       hint: ProviderRateLimitHint;
     }
   | {
-      /**
-       * The provider declined the call. Never reaches callers: when the stream ends with no
-       * content, the call fails as `model_refused`. Only some adapters yield it. `delta` is
-       * optional because some providers signal a refusal by stop reason, with no text.
-       */
+      /** The provider declined. Never reaches callers: with no content, the call fails as `model_refused`. */
       type: 'refusal';
       delta?: string;
     }

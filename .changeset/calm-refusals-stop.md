@@ -10,6 +10,7 @@ What counts as a refusal, in each adapter:
 
 - OpenAI compatible: `message.refusal`, or `delta.refusal` on a stream.
 - `fromAnthropic`: `stop_reason: 'refusal'`.
+- `fromFetch`: `refusal` from `mapResponse`, or a `{ type: 'refusal' }` chunk from `mapStreamEvent`.
 - `fromGemini`: a candidate `finishReason` of `SAFETY`, `BLOCKLIST`, `PROHIBITED_CONTENT` or `SPII`, and a blocked prompt (any `promptFeedback.blockReason` but `BLOCKED_REASON_UNSPECIFIED`). `RECITATION`, `LANGUAGE` and `OTHER` finishes are not mapped and still fail as `empty_response`.
 
 `LLMClient` responses gain an optional `message.refusal`, and `WireStreamChunk` gains `{ type: 'refusal'; delta?: string }`, which is never surfaced to callers. A `switch` over `WireStreamChunk` with no default may stop compiling. On a stream the error reaches `chunks` and `finalResult`, not the `call()` promise. A partial answer that ends in a refusal is returned as before, and text refusals and empty responses with no `refusal` are unchanged.

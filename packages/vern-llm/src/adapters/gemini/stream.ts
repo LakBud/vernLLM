@@ -41,8 +41,7 @@ export async function* toWireStreamChunks(stream: GeminiStream): AsyncGenerator<
       }
     }
 
-    // After the parts, so content in the same chunk still counts as an answer. Core fails the
-    // call only when no content arrived.
+    // After the parts, so content in the same chunk still counts.
     if (geminiRefusal(chunk.candidates?.[0], chunk.promptFeedback).refusal) {
       yield { type: 'refusal' };
     }

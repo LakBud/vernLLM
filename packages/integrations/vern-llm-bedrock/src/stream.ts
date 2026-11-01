@@ -54,6 +54,8 @@ interface StreamState {
   /** Reasoning is only usable once whole, so it is gathered per block until its stop event. */
   reasoning: Map<number, { text: string; signature: string; redacted?: Uint8Array }>;
   sawJsonTool: boolean;
+  /** A refusal stop was seen. */
+  refused: boolean;
 }
 
 function* onBlockStart(state: StreamState, event: BlockStart): Generator<WireStreamChunk> {
@@ -150,6 +152,7 @@ export async function* toWireStreamChunks(
     blockKinds: new Map(),
     reasoning: new Map(),
     sawJsonTool: false,
+    refused: false,
   };
 
   // Events are narrowed one member at a time. Anything else, such as the
@@ -162,10 +165,12 @@ export async function* toWireStreamChunks(
     if (event.contentBlockStart) yield* onBlockStart(state, event.contentBlockStart);
     else if (event.contentBlockDelta) yield* onBlockDelta(state, event.contentBlockDelta);
     else if (event.contentBlockStop) yield* onBlockStop(state, event.contentBlockStop);
-    // Core fails the call only when no content arrived, so a partial answer still returns.
-    else if (isRefusalStop(event.messageStop?.stopReason)) yield { type: 'refusal' };
-    else if (event.metadata?.usage) yield usageChunk(event.metadata.usage);
+    else if (isRefusalStop(event.messageStop?.stopReason)) {
+      state.refused = true;
+      yield { type: 'refusal' };
+    } else if (event.metadata?.usage) yield usageChunk(event.metadata.usage);
   }
 
-  if (toolName && !state.sawJsonTool) throwMissingForcedJsonSchemaTool(toolName);
+  // A refusal never calls the tool; core fails it as model_refused.
+  if (toolName && !state.sawJsonTool && !state.refused) throwMissingForcedJsonSchemaTool(toolName);
 }

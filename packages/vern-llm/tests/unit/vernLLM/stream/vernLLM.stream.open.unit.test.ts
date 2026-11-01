@@ -140,6 +140,52 @@ describe('VernLLM.call, stream open with a provider refusal', () => {
     expect(createStream).toHaveBeenCalledTimes(1);
   });
 
+  it('finds a refusal that follows an empty text delta', async () => {
+    const primary = createMockStreamingClient([
+      [{ type: 'text-delta', delta: '' }, refusal, usage],
+    ]);
+    const fallback = createMockStreamingClient([[{ type: 'text-delta', delta: 'fb' }]]);
+    const llm = new VernLLM({
+      client: primary.client,
+      model: 'm',
+      maxRetries: 3,
+      baseDelayMs: 0,
+      fallback: { client: fallback.client, model: 'f' },
+    });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+
+    await expect(drain(result.chunks)).rejects.toMatchObject({ code: 'model_refused' });
+    await expect(result.finalResult).rejects.toMatchObject({ code: 'model_refused' });
+    expect(primary.createStream).toHaveBeenCalledTimes(1);
+    expect(fallback.createStream).not.toHaveBeenCalled();
+  });
+
+  it('still answers when real text follows an empty text delta', async () => {
+    const { client } = createMockStreamingClient([
+      [
+        { type: 'text-delta', delta: '' },
+        { type: 'text-delta', delta: 'answer' },
+      ],
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    await drain(result.chunks);
+
+    await expect(result.finalResult).resolves.toBe('answer');
+  });
+
+  it('treats a stream of only empty text deltas as an empty response', async () => {
+    const { client } = createMockStreamingClient([[{ type: 'text-delta', delta: '' }]]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    // The first chunk opens the call, as a ping does, so the failure reaches `finalResult`.
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+
+    await expect(result.finalResult).rejects.toThrow('Empty LLM response');
+  });
+
   it('lets content that follows a refusal win', async () => {
     const { client } = createMockStreamingClient([
       [refusal, { type: 'text-delta', delta: 'answer' }],

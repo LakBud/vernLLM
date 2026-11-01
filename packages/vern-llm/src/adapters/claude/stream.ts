@@ -24,6 +24,8 @@ interface StreamState {
   /** `message_start`'s usage, completed by `message_delta`'s cumulative input counts. */
   startUsage: AnthropicUsage | undefined;
   sawJsonTool: boolean;
+  /** A refusal stop was seen. */
+  refused: boolean;
 }
 
 function* onBlockStart(
@@ -167,6 +169,7 @@ export async function* toWireStreamChunks(
     thinkingBlocks: new Map(),
     startUsage: undefined,
     sawJsonTool: false,
+    refused: false,
   };
 
   for await (const event of stream) {
@@ -184,8 +187,8 @@ export async function* toWireStreamChunks(
         yield* onBlockStop(state, event);
         break;
       case 'message_delta':
-        // Core fails the call only when no content arrived, so a partial answer still returns.
         if (event.delta?.stop_reason && REFUSAL_STOP_REASONS.has(event.delta.stop_reason)) {
+          state.refused = true;
           yield { type: 'refusal' };
         }
         yield usageChunk(state, event);
@@ -196,5 +199,8 @@ export async function* toWireStreamChunks(
     }
   }
 
-  if (toolName && !state.sawJsonTool) throwMissingForcedJsonSchemaTool('Anthropic', toolName);
+  // A refusal never calls the tool; core fails it as model_refused.
+  if (toolName && !state.sawJsonTool && !state.refused) {
+    throwMissingForcedJsonSchemaTool('Anthropic', toolName);
+  }
 }

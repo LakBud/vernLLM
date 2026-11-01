@@ -63,9 +63,11 @@ branch on one code whoever raised it. The core defines the codes. Extensions thr
 | `content_blocked` | `invalid_params` | `vern-llm-guard`  | A check refused the call or its answer         |
 | `model_refused`   | `invalid_params` | `vern-llm`        | The provider declined the call, with no answer |
 
-An extension rejects a call before any provider is contacted. `model_refused` comes after the
-provider answered. Neither counts toward the circuit breaker, and the logger records both at `warn`
-as `rejected`. See
+`budget_exceeded` and `policy_denied` reject a call before any provider is contacted.
+`content_blocked` does too when a check refuses the call, but comes after the provider answered when
+a check refuses the answer. `model_refused` always comes after the provider answered, so the refused
+attempt can use tokens. None of them count toward the circuit breaker, and the logger records them
+at `warn` as `rejected`. See
 [Error Handling](/docs/core/error-handling) for the full list.
 
 ## What every extension follows

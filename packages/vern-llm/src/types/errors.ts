@@ -39,7 +39,7 @@ export type LLMErrorCode =
   // Content (invalid_params)
   /** A middleware refused the call, or the answer it got, because of its content. Not retried, no fallback. */
   | 'content_blocked'
-  /** The provider declined the call and returned no content. Not retried, no fallback by default. */
+  /** The provider declined the call with no content. Not retried, no fallback by default. */
   | 'model_refused'
   // Budget (quota_exceeded)
   | 'budget_exceeded'

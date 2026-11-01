@@ -20,7 +20,7 @@ try {
         console.log(err.issues); // the schema's error object, or the tool contract issues
         break;
       case 'invalid_params':
-        console.log(err.message); // the call site's own input was malformed
+        console.log(err.message); // the call site's own input was malformed, or a provider refusal
         break;
       case 'api':
         console.log(err.status); // HTTP status, if the provider returned one
@@ -70,7 +70,9 @@ try {
     combined with `jsonMode: false`, invalid conversation history, an unsupported image `mimeType`,
     or a capability the current adapter/client/model doesn't support (see `unsupported_capability`
     below). Deterministic on the caller's own input and never touches the network, so it is never
-    retried.
+    retried. The one exception is `model_refused`, raised after the provider answered with a refusal
+    and no content. The refused attempt may have used tokens, so it can carry provider usage. It is
+    never retried either.
   </Card>
   <Card title="rate_limited">
     VernLLM's own local `rateLimit` queue rejected the call before it reached the provider: the

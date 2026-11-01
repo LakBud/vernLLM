@@ -12,19 +12,13 @@ import type {
   ConverseResponse,
 } from '@aws-sdk/client-bedrock-runtime';
 
-/**
- * `stopReason` values where the model or a guardrail declined. The SDK's `StopReason` has
- * `guardrail_intervened` and `content_filtered`; `refusal` is Claude's own spelling and is not in
- * every SDK version, hence a string set. Core only fails the call when there is no content and no
- * tool call, so a guardrail's canned message, which arrives as content, is still returned.
- */
+/** `stopReason` values where the model or a guardrail declined. `refusal` is not in every SDK version. */
 const REFUSAL_STOP_REASONS: ReadonlySet<string> = new Set([
   'guardrail_intervened',
   'content_filtered',
   'refusal',
 ]);
 
-/** Whether `stopReason` is one of the refusal spellings. */
 export function isRefusalStop(stopReason: string | undefined): boolean {
   return stopReason !== undefined && REFUSAL_STOP_REASONS.has(stopReason);
 }
@@ -60,11 +54,16 @@ export function toWireResponse(response: ConverseResponse, toolName: string | un
     // back to text so it follows every other adapter's string contract.
     const toolUse = blocks.find((block) => block.toolUse?.name === toolName)?.toolUse;
 
-    if (!toolUse) throwMissingForcedJsonSchemaTool(toolName);
-
-    const { input } = toolUse;
-    assertForcedJsonSchemaToolInputIsObject(toolName, input);
-    text = JSON.stringify(input);
+    if (toolUse) {
+      const { input } = toolUse;
+      assertForcedJsonSchemaToolInputIsObject(toolName, input);
+      text = JSON.stringify(input);
+    } else if (isRefusalStop(response.stopReason)) {
+      // A refusal never calls the tool; core fails it as model_refused.
+      text = '';
+    } else {
+      throwMissingForcedJsonSchemaTool(toolName);
+    }
   } else {
     text = blocks.map((c) => c.text ?? '').join('');
 

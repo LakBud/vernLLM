@@ -131,10 +131,7 @@ export interface LLMClient {
             tool_calls?: WireToolCall[];
             /** Reasoning blocks the model produced, in order. Only Claude adapters report them. */
             thinking?: ThinkingBlock[];
-            /**
-             * Set when the provider declined the request. Only some adapters report it. With no
-             * content and no tool calls, the call fails as `model_refused` instead of retrying.
-             */
+            /** Set when the provider declined. With no content or tool calls, fails as `model_refused`. */
             refusal?: string | null;
           };
           /**

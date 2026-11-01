@@ -13,7 +13,7 @@ function hasCacheCounts(usage: MappedUsage): boolean {
 
 /** Maps what `mapResponse` returned onto the wire response. */
 export function toWireResponse(mapped: ReturnType<FetchAdapterConfig['mapResponse']>) {
-  const { content, usage, toolCalls } = mapped;
+  const { content, refusal, usage, toolCalls } = mapped;
 
   // An empty array means no tool calls, the same as undefined.
   const wireToolCalls: WireToolCall[] | undefined = toolCalls?.length
@@ -29,6 +29,7 @@ export function toWireResponse(mapped: ReturnType<FetchAdapterConfig['mapRespons
       {
         message: {
           content,
+          ...(refusal ? { refusal } : {}),
           ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
         },
       },

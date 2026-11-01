@@ -60,7 +60,6 @@ export interface GeminiModels {
       };
       finishReason?: string;
     }>;
-    /** Set with no candidates when the prompt itself was blocked. */
     promptFeedback?: { blockReason?: string };
     usageMetadata?: {
       promptTokenCount?: number;

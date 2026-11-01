@@ -100,6 +100,20 @@ const llm = new VernLLM({
 For `stream: true`, tool-call deltas go through the existing `mapStreamEvent` seam, see [Streaming](#streaming) below, there's no separate config for streaming vs non-streaming
 tool calls.
 
+## Refusals
+
+When the provider declines a call, return `refusal` from `mapResponse`. With no `content` and no
+`toolCalls`, the call fails once as [`model_refused`](/docs/core/error-handling), with no retry and
+no fallback. For streams, return `{ type: 'refusal' }` from `mapStreamEvent`. Content wins when both
+arrive.
+
+```ts title="fromfetch-refusal.ts"
+mapResponse: (json: any) => ({
+  content: json.output,
+  refusal: json.blocked ? json.reason : undefined,
+}),
+```
+
 ## Usage
 
 `mapResponse` may return `usage` with `promptTokens`, `completionTokens` and `totalTokens`.
