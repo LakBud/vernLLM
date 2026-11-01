@@ -1,6 +1,6 @@
 {
   "name": "vern-llm-policy",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Rules for which providers and models a vern-llm call may use, and whether it may run at all",
   "keywords": [
     "vern-llm",
