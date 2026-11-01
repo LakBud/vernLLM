@@ -1,5 +1,5 @@
 {
   "title": "Router",
-  "icon": "Route",
+  "icon": "RouterLogo",
   "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
 }

@@ -3,6 +3,10 @@ title: Logger Overview
 description: One structured record per call, rolling latency percentiles, and slow call and error detection for every VernLLM call
 ---
 
+<div style={{ display: 'flex', justifyContent: 'center' }}>
+  <img src="/extensions/vernllm-logger.png" alt="vern-llm-logger logo" width="96" />
+</div>
+
 `vern-llm-logger` is one middleware that writes a structured record for every call. It keeps
 rolling latency percentiles per provider and model, marks slow calls, groups repeated errors,
 samples plain successes, and writes periodic summaries. Retries, fallbacks, rate limit waits, cache

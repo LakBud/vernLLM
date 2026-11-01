@@ -20,16 +20,16 @@ export default function Layout({ children }: LayoutProps<'/docs'>) {
             url: '/docs',
           },
           {
-            title: 'Integrations',
-            description: 'Integrate your LLM calls',
-            icon: <Blocks className="size-4 text-fd-primary" />,
-            url: '/docs/integrations',
-          },
-          {
             title: 'Extensions',
             description: 'Extend your LLM calls',
             icon: <Puzzle className="size-4 text-fd-primary" />,
             url: '/docs/extensions',
+          },
+          {
+            title: 'Integrations',
+            description: 'Integrate your LLM calls',
+            icon: <Blocks className="size-4 text-fd-primary" />,
+            url: '/docs/integrations',
           },
         ],
       }}

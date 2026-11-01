@@ -1,5 +1,5 @@
 {
   "title": "Usage",
-  "icon": "Coins",
+  "icon": "UsageLogo",
   "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
 }

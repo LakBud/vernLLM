@@ -3,6 +3,10 @@ title: Router Overview
 description: Pick the target order for each VernLLM call from rules, health, latency, and cost, without changing what a call returns
 ---
 
+<div style={{ display: 'flex', justifyContent: 'center' }}>
+  <img src="/extensions/vernllm-router.png" alt="vern-llm-router logo" width="96" />
+</div>
+
 `vern-llm-router` is one middleware that decides which of a call's targets are tried first. You
 write routes that match a call by its `context`, tools, JSON output, or size, and each route orders
 its targets with a strategy: in declared order, weighted, least busy, or ranked by measured latency,

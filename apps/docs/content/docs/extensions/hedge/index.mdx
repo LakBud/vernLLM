@@ -3,6 +3,10 @@ title: Hedge Overview
 description: Send the same call to the next target when the first answer is slower than that target usually is, keep whichever answers first, and cancel the other
 ---
 
+<div style={{ display: 'flex', justifyContent: 'center' }}>
+  <img src="/extensions/vernllm-hedge.png" alt="vern-llm-hedge logo" width="96" />
+</div>
+
 `vern-llm-hedge` is one middleware that cuts the slow tail of your latency. When a call's first
 answer takes longer than that target usually takes, it starts the same call on the next target too,
 keeps whichever answers first, and lets the core cancel the other.

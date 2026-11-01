@@ -1,5 +1,5 @@
 {
   "title": "Guard",
-  "icon": "ScanSearch",
+  "icon": "GuardLogo",
   "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
 }

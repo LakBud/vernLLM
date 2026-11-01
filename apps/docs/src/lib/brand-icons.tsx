@@ -18,3 +18,15 @@ export const brandIcons: Record<string, BrandIconData> = {
   OpenTelemetry: siOpentelemetry,
   Bedrock: bedrock,
 };
+
+// VernLLM's own extension logos, keyed by the `icon` name used in each
+// extension's meta.json. They are image files in public/extensions, not
+// vector paths, so docs-icon.tsx renders them as <img>.
+export const extensionLogos: Record<string, string> = {
+  GuardLogo: '/extensions/vernllm-guard.png',
+  HedgeLogo: '/extensions/vernllm-hedge.png',
+  LoggerLogo: '/extensions/vernllm-logger.png',
+  PolicyLogo: '/extensions/vernllm-policy.png',
+  RouterLogo: '/extensions/vernllm-router.png',
+  UsageLogo: '/extensions/vernllm-usage.png',
+};

@@ -3,6 +3,10 @@ title: Usage Overview
 description: Estimated cost, wasted spend and budgets for every VernLLM call, from a price table you supply
 ---
 
+<div style={{ display: 'flex', justifyContent: 'center' }}>
+  <img src="/extensions/vernllm-usage.png" alt="vern-llm-usage logo" width="96" />
+</div>
+
 `vern-llm-usage` is one middleware with two jobs. It is a meter: it prices the token counts VernLLM
 already reports and splits out spend on attempts whose response was then rejected. It is also a
 cut off switch: it checks budgets before a call is sent and rejects it, with no provider contacted,

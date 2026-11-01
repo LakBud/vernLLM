@@ -3,6 +3,10 @@ title: Guard Overview
 description: Checks on what goes into a VernLLM call and what comes out. Label it for policy, redact values before the provider sees them, or block it
 ---
 
+<div style={{ display: 'flex', justifyContent: 'center' }}>
+  <img src="/extensions/vernllm-guard.png" alt="vern-llm-guard logo" width="96" />
+</div>
+
 `vern-llm-guard` is one middleware that looks at the text of a call, on the way in and on the way
 out. A check finds values with a detector, and then labels the call, replaces the values with
 tokens, or refuses the call.

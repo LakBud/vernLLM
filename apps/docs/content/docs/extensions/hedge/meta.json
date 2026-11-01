@@ -1,5 +1,5 @@
 {
   "title": "Hedge",
-  "icon": "Zap",
+  "icon": "HedgeLogo",
   "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
 }

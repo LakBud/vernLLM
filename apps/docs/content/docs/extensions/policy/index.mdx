@@ -3,6 +3,10 @@ title: Policy Overview
 description: Rules for which providers and models a VernLLM call may use, and whether it may run at all, decided before anything is spent
 ---
 
+<div style={{ display: 'flex', justifyContent: 'center' }}>
+  <img src="/extensions/vernllm-policy.png" alt="vern-llm-policy logo" width="96" />
+</div>
+
 `vern-llm-policy` is one middleware that removes the targets a call is not allowed to use, or
 denies the call when none are left. You write rules over facts you declare about each target, such
 as `region` or `zdr`, and over the call itself: its `context`, its request, and the labels a guard

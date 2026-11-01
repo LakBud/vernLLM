@@ -169,18 +169,30 @@ that compares with the tools that do, see [Why VernLLM](/docs/why).
 
 ## Packages
 
+`vern-llm` is the only package you need. Everything else is optional and is one of three kinds:
+
+|                        | Adapters                                    | Integrations                                          | Extensions                                            |
+| ---------------------- | ------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- |
+| Purpose                | Translate a provider's API into `LLMClient` | Connect VernLLM to something outside your process     | Add a capability inside VernLLM, as a middleware      |
+| Where it lives         | Inside `vern-llm`, at `vern-llm/adapters`   | Its own package, in `packages/integrations/`          | Its own package, in `packages/extensions/`            |
+| Third party dependency | None, you pass in the provider's own client | Yes, as a peer or dependency                          | None, it depends only on `vern-llm`                   |
+| Examples               | `fromOpenAI`, `fromAnthropic`, `fromGemini` | `vern-llm-redis`, `vern-llm-otel`, `vern-llm-bedrock` | `vern-llm-logger`, `vern-llm-usage`, `vern-llm-guard` |
+
+An adapter and an LLM integration do the same job: both turn a provider's API into an `LLMClient`.
+The difference is where the code lives. An adapter ships inside the `vern-llm` core package. An
+integration such as `vern-llm-bedrock` is published outside it, because it needs a provider SDK
+that core refuses to depend on.
+
 <Cards>
-  <Card title="vern-llm-redis" href="/docs/integrations/redis">
-    Share breakers, rate limits, and the cache across every process
-  </Card>
-  <Card title="vern-llm-otel" href="/docs/integrations/otel">
-    OpenTelemetry traces and metrics in your own backend
-  </Card>
-  <Card title="vern-llm-bedrock" href="/docs/integrations/bedrock">
-    The AWS Bedrock Converse adapter
-  </Card>
   <Card title="Adapters" href="/docs/adapters">
-    38 OpenAI compatible providers, Anthropic, Gemini, and anything over HTTP
+    38 OpenAI compatible providers, Anthropic, Gemini, and anything over HTTP, all inside core
+  </Card>
+  <Card title="Integrations" href="/docs/integrations">
+    Packages that reach outside your process, with their own third party dependencies
+  </Card>
+  <Card title="Extensions" href="/docs/extensions">
+    Logger, usage, router, policy, guard, and hedge, each a middleware with no third party
+    dependency
   </Card>
 </Cards>
 

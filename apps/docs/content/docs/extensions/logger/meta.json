@@ -1,5 +1,5 @@
 {
   "title": "Logger",
-  "icon": "ScrollText",
+  "icon": "LoggerLogo",
   "pages": ["index", "features", "API-reference", "troubleshooting", "contributing", "changelog"]
 }
