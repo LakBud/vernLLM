@@ -56,6 +56,7 @@ export async function executeCall<T>(
     const wireToolCalls = choice?.message?.tool_calls;
     const truncated = choice?.finish_reason === 'length';
     const thinking = choice?.message?.thinking;
+    const refusal = choice?.message?.refusal;
 
     let finalized: T | CallWithToolsResult<T>;
 
@@ -72,6 +73,7 @@ export async function executeCall<T>(
         finalizeDependencies(env, gateway, model),
         truncated,
         thinking,
+        refusal,
       );
     } catch (error) {
       // Reconcile usage and free the slot, but never grow AIMD for a

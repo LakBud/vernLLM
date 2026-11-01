@@ -1,5 +1,5 @@
 import { throwMissingForcedJsonSchemaTool } from '../internal/forcedJsonSchemaTool.js';
-import { promptTokens, promptTokensDetails } from './response.js';
+import { promptTokens, promptTokensDetails, REFUSAL_STOP_REASONS } from './response.js';
 
 import type { ThinkingBlock, WireStreamChunk } from '../../types/index.js';
 import type { AnthropicStreamEvent, AnthropicUsage } from './types.js';
@@ -184,6 +184,10 @@ export async function* toWireStreamChunks(
         yield* onBlockStop(state, event);
         break;
       case 'message_delta':
+        // Core fails the call only when no content arrived, so a partial answer still returns.
+        if (event.delta?.stop_reason && REFUSAL_STOP_REASONS.has(event.delta.stop_reason)) {
+          yield { type: 'refusal' };
+        }
         yield usageChunk(state, event);
         break;
       case 'ping':

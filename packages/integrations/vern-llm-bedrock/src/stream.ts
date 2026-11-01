@@ -1,6 +1,7 @@
 import { LLMError, type WireStreamChunk } from 'vern-llm';
 
 import { bytesToBase64 } from './bytes.js';
+import { isRefusalStop } from './response.js';
 import { throwMissingForcedJsonSchemaTool } from './structuredOutput.js';
 import { toWireUsage } from './usage.js';
 
@@ -161,6 +162,8 @@ export async function* toWireStreamChunks(
     if (event.contentBlockStart) yield* onBlockStart(state, event.contentBlockStart);
     else if (event.contentBlockDelta) yield* onBlockDelta(state, event.contentBlockDelta);
     else if (event.contentBlockStop) yield* onBlockStop(state, event.contentBlockStop);
+    // Core fails the call only when no content arrived, so a partial answer still returns.
+    else if (isRefusalStop(event.messageStop?.stopReason)) yield { type: 'refusal' };
     else if (event.metadata?.usage) yield usageChunk(event.metadata.usage);
   }
 

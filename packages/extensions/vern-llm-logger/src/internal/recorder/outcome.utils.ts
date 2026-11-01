@@ -44,6 +44,8 @@ const REJECTED_CODES: ReadonlySet<string> = new Set([
   'policy_denied',
   /** Refused by a middleware for its content. */
   'content_blocked',
+  /** The provider declined the call. */
+  'model_refused',
 ]);
 
 /** The rules that turn how a call ended into an outcome and a level. */

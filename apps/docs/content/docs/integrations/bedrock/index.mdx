@@ -358,6 +358,13 @@ consecutive same-role turns are merged into one, such as tool results followed b
 has no `toolChoice` equivalent to `'none'` while tools are still offered, so `fromBedrock` throws
 `LLMError('invalid_params')`, code `unsupported_capability`, for that case rather than silently falling back to `'auto'`. See [Tool Calling](/docs/core/tool-calling) for the full reference.
 
+## Refusals
+
+A response with a `stopReason` of `guardrail_intervened`, `content_filtered` or `refusal` and no
+content or tool calls fails once as `model_refused`, with no retry and no fallback by default. This
+needs `vern-llm` 3.1.0 or later. A guardrail that returns its canned message as content is an
+ordinary answer, and is returned as it is. See [Error Handling](/docs/core/error-handling).
+
 ## Multimodal input
 
 `fromBedrock` supports VernLLM's provider-independent `ContentBlock[]` format for image input.

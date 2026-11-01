@@ -152,16 +152,36 @@ The currently defined policy code is:
 | --------------- | ---------------- | -------------------------------------------------------------------------------------- |
 | `policy_denied` | `invalid_params` | A middleware policy refused the call before any provider was contacted. Never retried. |
 
-The currently defined content code is:
+The currently defined content codes are:
 
 | Code              | Error type       | Meaning                                                                                                                                   |
 | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `content_blocked` | `invalid_params` | A middleware refused the call, or the answer it got, because of its content. Never retried, no fallback, never counts toward the breaker. |
+| `model_refused`   | `invalid_params` | The provider declined the call and returned no content. Never retried, no fallback by default, never counts toward the breaker.           |
 
-The core throws none of these codes itself. They are reserved for middleware, which throws them
-from a `wrap` or a `transform`. `content_blocked` is also the one error a `wrap` can throw after
-`next()` resolved and have it reach the caller, see
+The core throws none of the budget, policy or `content_blocked` codes itself. They are reserved for
+middleware, which throws them from a `wrap` or a `transform`. `content_blocked` is also the one
+error a `wrap` can throw after `next()` resolved and have it reach the caller, see
 [Error handling](/docs/core/middleware#error-handling) in the middleware guide.
+
+`model_refused` is the core's own. The OpenAI, Claude, Gemini and Bedrock adapters report a
+provider refusal, and the core raises it when the response has no content or tool calls. See each
+adapter's Refusals section for what counts. The refused attempt's tokens are reported as a usage failure. A refusal
+that arrives as plain text is an ordinary answer. On a stream the error reaches `chunks` and
+`finalResult`, not the `call()` promise, once the provider has started to answer. To try another
+provider on a refusal, opt in with `fallbackOn`:
+
+```ts title="error-handling-model-refused.ts"
+import { defaultFallbackOn } from 'vern-llm';
+
+const llm = new VernLLM({
+  client,
+  model,
+  fallback: { client: backupClient, model: backupModel },
+  fallbackOn: (error, context) =>
+    error.code === 'model_refused' ? 'next' : defaultFallbackOn(error, context),
+});
+```
 
 The currently defined rate-limiting codes are:
 

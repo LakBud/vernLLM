@@ -47,6 +47,7 @@ describe('classifyOutcome', () => {
     ['a plain quota', new LLMError('over', 'quota_exceeded')],
     ['a policy denial', new LLMError('no', 'invalid_params', { code: 'policy_denied' as never })],
     ['a content refusal', new LLMError('no', 'invalid_params', { code: 'content_blocked' })],
+    ['a provider refusal', new LLMError('no', 'invalid_params', { code: 'model_refused' })],
   ])('classifies %s as rejected at warn, not as a fault', (_name, error) => {
     const result = failed(error);
 

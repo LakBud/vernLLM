@@ -43,6 +43,32 @@ describe('shapeResponse, empty response', () => {
     ).toThrow(expect.objectContaining({ type: 'api', code: 'empty_response' }));
   });
 
+  it('throws invalid_params/model_refused for a refusal with no content or tool calls', () => {
+    expect(() =>
+      shapeResponse(baseShapeParams({ rawContent: null, refusal: "I can't help with that." })),
+    ).toThrow(
+      expect.objectContaining({
+        type: 'invalid_params',
+        code: 'model_refused',
+        retryable: false,
+        countsTowardBreaker: false,
+        message: expect.not.stringContaining("can't help"),
+      }),
+    );
+  });
+
+  it('prefers the content over a refusal that came with it', () => {
+    expect(
+      shapeResponse(baseShapeParams({ rawContent: 'Partial answer.', refusal: 'Declined.' })),
+    ).toBe('Partial answer.');
+  });
+
+  it('keeps empty_response for an empty refusal string', () => {
+    expect(() => shapeResponse(baseShapeParams({ rawContent: null, refusal: '' }))).toThrow(
+      expect.objectContaining({ code: 'empty_response' }),
+    );
+  });
+
   it('throws empty_response for whitespace-only content with no tool calls', () => {
     expect(() => shapeResponse(baseShapeParams({ rawContent: '   ' }))).toThrow(
       expect.objectContaining({ code: 'empty_response' }),

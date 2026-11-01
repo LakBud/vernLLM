@@ -178,6 +178,13 @@ how it works across every adapter.
 
 See [Streaming](/docs/core/streaming) for the full `stream: true` contract.
 
+## Refusals
+
+A response with a `refusal` and no content or tool calls fails once as `model_refused`, with no
+retry and no fallback by default. On a stream, a `delta.refusal` with no content does the same. A
+partial answer that carries a refusal is returned as it is. See
+[Error Handling](/docs/core/error-handling).
+
 ## Multimodal input
 
 OpenAI-compatible providers with vision-capable models can receive images through VernLLM's

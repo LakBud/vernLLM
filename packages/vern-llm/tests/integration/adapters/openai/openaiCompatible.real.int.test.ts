@@ -791,4 +791,170 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
       code: 'request_timeout',
     });
   });
+
+  describe('provider refusals', () => {
+    const refusalBody = (
+      message: { content?: string | null; refusal?: string | null } = {},
+      usage = { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
+    ) => ({
+      id: 'chatcmpl-refusal',
+      object: 'chat.completion',
+      model: 'gpt-test',
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: null,
+            refusal: "I can't help with that.",
+            ...message,
+          },
+          finish_reason: 'stop',
+        },
+      ],
+      usage,
+    });
+
+    function refusingClient(srv: RealSdkServer) {
+      return fromOpenAICompatible(
+        new OpenAI({ apiKey: 'test-key', baseURL: `${srv.url}/v1`, maxRetries: 0 }),
+      );
+    }
+
+    it('fails once as model_refused without retrying, and reports the wasted usage', async () => {
+      server = await startRealSdkServer([{ body: refusalBody() }]);
+      const onUsageFailure = vi.fn();
+
+      const llm = new VernLLM({
+        client: refusingClient(server),
+        model: 'gpt-test',
+        maxRetries: 3,
+        circuitBreaker: { threshold: 1, cooldownMs: 10_000 },
+        onUsageFailure,
+      });
+
+      const error: unknown = await llm
+        .call({ userContent: 'hi', jsonMode: false })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({
+        name: 'LLMError',
+        type: 'invalid_params',
+        code: 'model_refused',
+        retryable: false,
+        countsTowardBreaker: false,
+      });
+      expect((error as Error).message).not.toContain("can't help");
+      expect(server.requests).toHaveLength(1);
+      expect(onUsageFailure).toHaveBeenCalledOnce();
+      expect(onUsageFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ promptTokens: 12, completionTokens: 6 }),
+        expect.objectContaining({ code: 'model_refused' }),
+      );
+      expect(llm.getCircuitStates()[0]?.state).toBe('closed');
+    });
+
+    it('fails once as model_refused in jsonMode too', async () => {
+      server = await startRealSdkServer([{ body: refusalBody() }]);
+
+      const llm = new VernLLM({ client: refusingClient(server), model: 'gpt-test', maxRetries: 3 });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: true })).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'model_refused',
+      });
+      expect(server.requests).toHaveLength(1);
+    });
+
+    it('fails once as model_refused on a stream, reporting the usage that follows', async () => {
+      server = await startRealSdkServer([
+        {
+          raw: sseRaw([
+            {
+              data: {
+                id: 'c1',
+                object: 'chat.completion.chunk',
+                model: 'gpt-test',
+                choices: [{ index: 0, delta: { role: 'assistant', refusal: "I can't " } }],
+              },
+            },
+            {
+              data: {
+                id: 'c1',
+                object: 'chat.completion.chunk',
+                model: 'gpt-test',
+                choices: [{ index: 0, delta: { refusal: 'help with that.' } }],
+              },
+            },
+            {
+              data: {
+                id: 'c1',
+                object: 'chat.completion.chunk',
+                model: 'gpt-test',
+                choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+              },
+            },
+            {
+              data: {
+                id: 'c1',
+                object: 'chat.completion.chunk',
+                model: 'gpt-test',
+                choices: [],
+                usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
+              },
+            },
+            { data: '[DONE]' },
+          ]),
+        },
+      ]);
+      const onUsageFailure = vi.fn();
+
+      const llm = new VernLLM({
+        client: refusingClient(server),
+        model: 'gpt-test',
+        maxRetries: 3,
+        onUsageFailure,
+      });
+
+      // The call resolves once the first chunk arrives, like a ping, so the refusal surfaces on
+      // `chunks` and `finalResult`.
+      const { chunks, finalResult } = await llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+      });
+
+      await expect(drain(chunks)).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'model_refused',
+      });
+      await expect(finalResult).rejects.toMatchObject({
+        type: 'invalid_params',
+        code: 'model_refused',
+      });
+      expect(server.requests).toHaveLength(1);
+      expect(onUsageFailure).toHaveBeenCalledOnce();
+    });
+
+    it('still returns the text when a response carries both content and a refusal', async () => {
+      server = await startRealSdkServer([{ body: refusalBody({ content: 'Partial answer.' }) }]);
+
+      const llm = new VernLLM({ client: refusingClient(server), model: 'gpt-test' });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
+        'Partial answer.',
+      );
+    });
+
+    it('treats empty content without a refusal as empty_response, as before', async () => {
+      server = await startRealSdkServer([{ body: refusalBody({ refusal: null }) }]);
+
+      const llm = new VernLLM({ client: refusingClient(server), model: 'gpt-test', maxRetries: 0 });
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).rejects.toMatchObject({
+        type: 'api',
+        code: 'empty_response',
+      });
+    });
+  });
 });

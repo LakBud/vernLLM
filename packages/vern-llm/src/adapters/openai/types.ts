@@ -29,6 +29,8 @@ export interface OpenAIStreamChunk {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      /** Set instead of `content` when the model declines the request. */
+      refusal?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;

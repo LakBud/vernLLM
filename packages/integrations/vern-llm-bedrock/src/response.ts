@@ -12,6 +12,23 @@ import type {
   ConverseResponse,
 } from '@aws-sdk/client-bedrock-runtime';
 
+/**
+ * `stopReason` values where the model or a guardrail declined. The SDK's `StopReason` has
+ * `guardrail_intervened` and `content_filtered`; `refusal` is Claude's own spelling and is not in
+ * every SDK version, hence a string set. Core only fails the call when there is no content and no
+ * tool call, so a guardrail's canned message, which arrives as content, is still returned.
+ */
+const REFUSAL_STOP_REASONS: ReadonlySet<string> = new Set([
+  'guardrail_intervened',
+  'content_filtered',
+  'refusal',
+]);
+
+/** Whether `stopReason` is one of the refusal spellings. */
+export function isRefusalStop(stopReason: string | undefined): boolean {
+  return stopReason !== undefined && REFUSAL_STOP_REASONS.has(stopReason);
+}
+
 /** The reasoning blocks of a Converse response, in order, in VernLLM's shape. */
 function toThinkingBlocks(content: BedrockContentBlock[]): ThinkingBlock[] {
   return content.flatMap((block): ThinkingBlock[] => {
@@ -78,6 +95,7 @@ export function toWireResponse(response: ConverseResponse, toolName: string | un
           content: text,
           ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
           ...(thinking.length ? { thinking } : {}),
+          ...(isRefusalStop(response.stopReason) ? { refusal: response.stopReason } : {}),
         },
         ...(response.stopReason === 'max_tokens' ? { finish_reason: 'length' as const } : {}),
       },

@@ -83,6 +83,15 @@ for await (const chunk of chunks) {
 
 See [Streaming](/docs/core/streaming) for the full `stream: true` contract.
 
+## Refusals
+
+These fail once as `model_refused`, with no retry and no fallback by default, when the response has
+no content or tool calls: a candidate `finishReason` of `SAFETY`, `BLOCKLIST`, `PROHIBITED_CONTENT`
+or `SPII`, and a blocked prompt, meaning any `promptFeedback.blockReason` but
+`BLOCKED_REASON_UNSPECIFIED`. A partial answer that ends in one of them is returned as it is.
+`RECITATION`, `LANGUAGE` and `OTHER` finishes are not refusals, since a retry can succeed. With no
+content they still fail as `empty_response`. See [Error Handling](/docs/core/error-handling).
+
 ## Multimodal input
 
 `fromGemini` supports VernLLM's provider-independent `ContentBlock[]` format for image input.

@@ -93,6 +93,78 @@ describe('VernLLM.call, stream open with a leading rate-limit hint', () => {
   });
 });
 
+describe('VernLLM.call, stream open with a provider refusal', () => {
+  const refusal: WireStreamChunk = { type: 'refusal', delta: "I can't help with that." };
+  const usage: WireStreamChunk = {
+    type: 'usage',
+    usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
+  };
+
+  it('fails once as model_refused, without a retry or a fallback request', async () => {
+    const primary = createMockStreamingClient([[refusal, usage]]);
+    const fallback = createMockStreamingClient([[{ type: 'text-delta', delta: 'fb' }]]);
+    const onUsageFailure = vi.fn();
+    const llm = new VernLLM({
+      client: primary.client,
+      model: 'm',
+      maxRetries: 3,
+      baseDelayMs: 0,
+      fallback: { client: fallback.client, model: 'f' },
+      onUsageFailure,
+    });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+
+    await expect(drain(result.chunks)).rejects.toMatchObject({
+      type: 'invalid_params',
+      code: 'model_refused',
+    });
+    await expect(result.finalResult).rejects.toMatchObject({ code: 'model_refused' });
+    expect(primary.createStream).toHaveBeenCalledTimes(1);
+    expect(fallback.createStream).not.toHaveBeenCalled();
+    expect(onUsageFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ promptTokens: 12, completionTokens: 6 }),
+      expect.objectContaining({ code: 'model_refused' }),
+    );
+  });
+
+  it('fails as model_refused when a ping and a hint come before the refusal', async () => {
+    const { client, createStream } = createMockStreamingClient([
+      [{ type: 'ping' }, { type: 'rate_limit_hint', hint: { remainingRequests: 1 } }, refusal],
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 3, baseDelayMs: 0 });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+
+    await expect(result.finalResult).rejects.toMatchObject({ code: 'model_refused' });
+    expect(createStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets content that follows a refusal win', async () => {
+    const { client } = createMockStreamingClient([
+      [refusal, { type: 'text-delta', delta: 'answer' }],
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    await drain(result.chunks);
+
+    await expect(result.finalResult).resolves.toBe('answer');
+  });
+
+  it('leaves a refusal after text alone, since the text has already been sent', async () => {
+    const { client } = createMockStreamingClient([
+      [{ type: 'text-delta', delta: 'answer' }, refusal],
+    ]);
+    const llm = new VernLLM({ client, model: 'm', maxRetries: 0 });
+
+    const result = await llm.call({ userContent: 'hi', jsonMode: false, stream: true });
+    await drain(result.chunks);
+
+    await expect(result.finalResult).resolves.toBe('answer');
+  });
+});
+
 describe('VernLLM.call, stream early exit', () => {
   it('leaves finalResult resolved when the stream already finished before the break', async () => {
     const { client } = createMockStreamingClient([

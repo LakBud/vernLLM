@@ -1,4 +1,4 @@
-import { synthesizeToolCallId, toWireUsage } from './response.js';
+import { geminiRefusal, synthesizeToolCallId, toWireUsage } from './response.js';
 
 import type { WireStreamChunk } from '../../types/index.js';
 import type { GeminiStream, GeminiUsage } from './types.js';
@@ -39,6 +39,12 @@ export async function* toWireStreamChunks(stream: GeminiStream): AsyncGenerator<
         } satisfies WireStreamChunk;
         toolCallIndex++;
       }
+    }
+
+    // After the parts, so content in the same chunk still counts as an answer. Core fails the
+    // call only when no content arrived.
+    if (geminiRefusal(chunk.candidates?.[0], chunk.promptFeedback).refusal) {
+      yield { type: 'refusal' };
     }
 
     if (chunk.usageMetadata) {

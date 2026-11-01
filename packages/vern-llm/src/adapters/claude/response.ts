@@ -3,9 +3,13 @@ import {
   assertForcedJsonSchemaToolInputIsObject,
   throwMissingForcedJsonSchemaTool,
 } from '../internal/forcedJsonSchemaTool.js';
+import { refusalReason } from '../internal/refusalReason.js';
 
 import type { ThinkingBlock, WireToolCall } from '../../types/index.js';
 import type { AnthropicResponse, AnthropicUsage } from './types.js';
+
+/** `stop_reason` values that mean the model declined: the SDK's `StopReason` `'refusal'`. */
+export const REFUSAL_STOP_REASONS: ReadonlySet<string> = new Set(['refusal']);
 
 const finite = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -105,6 +109,7 @@ export function toWireResponse(response: AnthropicResponse, toolName: string | u
           content: text,
           ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
           ...(thinking.length ? { thinking } : {}),
+          ...refusalReason(response.stop_reason, REFUSAL_STOP_REASONS),
         },
         ...finishReason(response.stop_reason, 'max_tokens'),
       },
