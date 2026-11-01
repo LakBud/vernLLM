@@ -7,6 +7,22 @@ icon: TriangleAlert
 This page tracks breaking changes across `VernLLM` releases. Most releases are additive, this
 page only covers the ones that aren't.
 
+## 3.1.0: `fromAnthropic` leaves out `temperature`
+
+`@anthropic-ai/sdk` 1.x sends API version `2026-10-21`, which removes `temperature` and answers 400
+on every model. `fromAnthropic` now never sends it, so default config calls work. Nothing changes
+for SDK 1.x clients, since their requests failed before.
+
+If your client is pinned to an older API version and you rely on `temperature`, pass
+`sendTemperature: true`. Claude 4.7 and later and calls with thinking on still never get it.
+
+```ts
+fromAnthropic(client, { sendTemperature: true });
+```
+
+`fromBedrock` also leaves `temperature` out for Claude 4.7 and later, see
+[Bedrock Migration Notes](/docs/integrations/bedrock/migration-notes).
+
 ## 3.0.0: Adapters, streaming, tools, rate limits, usage, and provider request changes
 
 Six changes affect code that works today: adapters import from `vern-llm/adapters`, `fromGemini`

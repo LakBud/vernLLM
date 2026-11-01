@@ -45,6 +45,13 @@ export interface AnthropicAdapterOptions {
    */
   forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride;
   /**
+   * Sends `temperature`. Default `false`: API version `2026-10-21`, which every
+   * `@anthropic-ai/sdk` 1.x client sends, rejects it on all models. Set `true`
+   * only for a client pinned to an older API version. Claude 4.7 and later still
+   * never get it, and neither does a request with thinking on.
+   */
+  sendTemperature?: boolean;
+  /**
    * Whether `messages.create` supports `.withResponse()`, which AIMD's
    * proactive path needs. Default `false`, since a fake or thin wrapper
    * won't implement it.
@@ -77,6 +84,7 @@ export function fromAnthropic(
       effortTokenTable,
       options?.adaptiveOnlyModels,
       options?.forcedToolChoiceUnsupportedModels,
+      options?.sendTemperature,
     );
 
   // The body is widened since, with `stream: true`, the SDK takes an extra

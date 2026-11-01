@@ -34,6 +34,7 @@ export function fromBedrock(
     effortTokenTable: resolveEffortTokenTable(options?.reasoningEffortTokens),
     adaptiveOnlyModels: options?.adaptiveOnlyModels,
     forcedToolChoiceUnsupportedModels: options?.forcedToolChoiceUnsupportedModels,
+    temperatureUnsupportedModels: options?.temperatureUnsupportedModels,
     claudeModels: options?.claudeModels,
   };
 

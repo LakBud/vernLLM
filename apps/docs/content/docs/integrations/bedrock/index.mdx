@@ -102,6 +102,7 @@ can't be checked and gets no warning, even if it still retries.
 | `toolUseSupportedModels`            | none, no preflight                                       | Models known to support tool use, see [Preflighting tool-use support](#preflighting-tool-use-support)                               |
 | `forcedToolChoiceUnsupportedModels` | Fable 5.1+, Opus 5.5+, Claude 6+                         | Models that reject a forced `tool_choice`, see [below](#models-that-reject-a-forced-tool_choice)                                    |
 | `adaptiveOnlyModels`                | Opus 4.7+, every Claude 5 tier                           | Adds models that only accept adaptive thinking, see [Reasoning](#reasoning)                                                         |
+| `temperatureUnsupportedModels`      | Claude 4.7+                                              | Models that reject `temperature`, which is then left out, see [Reasoning](#reasoning)                                               |
 | `reasoningEffortTokens`             | `minimal` 1024, `low` 4096, `medium` 16000, `high` 32000 | Token count each `reasoningEffort` tier maps onto                                                                                   |
 | `claudeModels`                      | ids containing `claude`                                  | Adds Claude models whose id doesn't say so, see [Reasoning](#reasoning)                                                             |
 
@@ -263,8 +264,9 @@ as Claude's own `thinking` inside `additionalModelRequestFields`. Other models g
 | Accepts a manual budget                                 | `thinking: { type: 'enabled', budget_tokens }`, at least 1024 and below `maxTokens` |
 | Adaptive only (Opus 4.7 and later, every Claude 5 tier) | `thinking: { type: 'adaptive' }` plus `outputConfig.effort`                         |
 
-`temperature` is dropped whenever thinking goes out, since Claude rejects both together. Add models
-to the adaptive-only rule with `adaptiveOnlyModels`, and change the token count each tier maps onto
+`temperature` is dropped whenever thinking goes out, since Claude rejects both together, and always
+on Claude 4.7 and later, which reject it outright. `temperatureUnsupportedModels` replaces that
+list. Add models to the adaptive-only rule with `adaptiveOnlyModels`, and change the token count each tier maps onto
 with `reasoningEffortTokens`. See the
 [Call Params reference](/docs/API-reference/call-params#reasoning-budget) for the conversion table.
 

@@ -95,6 +95,18 @@ export function rejectsForcedToolChoice(
 }
 
 /**
+ * Whether `model` rejects `temperature`. The built in rule is Claude 4.7 and
+ * later, in any family. `override`, when given, replaces it entirely, as it
+ * does for `rejectsForcedToolChoice`.
+ */
+export function rejectsTemperature(model: string, override?: ModelCapabilityOverride): boolean {
+  if (override) return matchesCapability(model, override);
+
+  const version = parseClaudeVersion(model);
+  return version !== null && versionAtLeast(version.major, version.minor, 4, 7);
+}
+
+/**
  * Throws `unsupported_capability` when `toolChoice` forces tool use on a
  * model that rejects it. `'auto'`, `'none'` and an unset choice pass.
  */
