@@ -17,6 +17,7 @@ import type {
   CallWithToolsResult,
   FallbackAttempt,
   FallbackOn,
+  FinishReason,
   MiddlewareStateBag,
   StreamChunk,
   TargetInfo,
@@ -292,6 +293,7 @@ function metaFor(
 function buildCallResult<R>(
   outcome: FallbackChainOutcome<R>,
   params: Pick<CallParams<unknown>, 'meta' | 'signal'>,
+  finishReason?: FinishReason,
 ): CallResult<R> {
   const meta = metaFor(
     outcome.executor,
@@ -301,6 +303,7 @@ function buildCallResult<R>(
     outcome.model,
     params.signal,
   );
+  if (finishReason) meta.finishReason = finishReason;
 
   // `params` here is the same object `VernLLM.call()` received from the
   // caller, not a clone, so this write is visible on the caller's own
@@ -323,17 +326,27 @@ export async function executeLogicalCall<T>(
   soleTarget: boolean,
   middlewareState: MiddlewareStateBag,
 ): Promise<CallResult<T | CallWithToolsResult<T>>> {
+  let finishReason: FinishReason | undefined;
+
   const fallbackChainOutcome = await runFallbackChain(
     dependencies,
     params,
     requestId,
     middlewareState,
     (executor, onAttempt, targetIndex) =>
-      executor.run(paramsForTarget(params, targetIndex), requestId, onAttempt, middlewareState),
+      executor.run(
+        paramsForTarget(params, targetIndex),
+        requestId,
+        onAttempt,
+        middlewareState,
+        (reason) => {
+          finishReason = reason;
+        },
+      ),
     soleTarget,
   );
 
-  return buildCallResult(fallbackChainOutcome, params);
+  return buildCallResult(fallbackChainOutcome, params, finishReason);
 }
 
 /**
@@ -357,6 +370,7 @@ export async function executeLogicalStreamCall<T>(
   type Opened = { executor: CallExecutor; index: number; position: number; attempts: number };
 
   const { promise: opened, resolve: resolveOpened } = createDeferred<Opened>();
+  let finishReason: FinishReason | undefined;
 
   const chain = runFallbackChain(
     dependencies,
@@ -374,6 +388,9 @@ export async function executeLogicalStreamCall<T>(
         },
         middlewareState,
         () => resolveOpened({ executor, index: targetIndex, position, attempts }),
+        (reason) => {
+          finishReason = reason;
+        },
       );
     },
     soleTarget,
@@ -400,7 +417,7 @@ export async function executeLogicalStreamCall<T>(
   );
   if (params.meta) params.meta.current = meta;
 
-  const finalResult = chain.then((outcome) => {
+  const finalResult = chain.then(async (outcome) => {
     // Same object the caller already holds, so a reopened stream shows up in it.
     Object.assign(
       meta,
@@ -413,7 +430,12 @@ export async function executeLogicalStreamCall<T>(
         params.signal,
       ),
     );
-    return outcome.result.finalResult;
+    const value = await outcome.result.finalResult;
+
+    // Known only once the stream has ended, so it is set on that same object.
+    if (finishReason) meta.finishReason = finishReason;
+
+    return value;
   });
 
   // Avoid an unhandled rejection for a caller that only reads `chunks`.

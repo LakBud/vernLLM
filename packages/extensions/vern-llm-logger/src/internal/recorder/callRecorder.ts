@@ -201,6 +201,7 @@ export class CallRecorder {
         provider: meta.provider,
         model: meta.model,
         fallbackIndex: meta.fallbackIndex,
+        finishReason: meta.finishReason,
       },
       attempts: this.attemptCount,
       retries: this.retries,

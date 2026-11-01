@@ -7,6 +7,8 @@ import { VernLLM } from '../../../../src/vernLLM.js';
 import { at, drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
+import type { CallMeta } from '../../../../src/types/index.js';
+
 /**
  * `GeminiClient` matches the real `@google/genai` SDK's types precisely
  * enough that `fromGemini(ai)` type-checks against the real `GoogleGenAI`
@@ -474,9 +476,12 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
     it('returns a partial answer that ends in a SAFETY finish', async () => {
       const llm = await single({ body: finishedWith('SAFETY', 'Partial answer.') });
 
-      await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
+      const meta: { current?: CallMeta } = {};
+
+      await expect(llm.call({ userContent: 'hi', jsonMode: false, meta })).resolves.toBe(
         'Partial answer.',
       );
+      expect(meta.current?.finishReason).toBe('content_filter');
     });
 
     it('returns streamed text that ends in a SAFETY finish', async () => {
@@ -484,14 +489,18 @@ describe('Gemini adapter integration (real @google/genai client)', () => {
         raw: sseRaw([{ data: finishedWith('SAFETY', 'Partial answer.') }]),
       });
 
+      const meta: { current?: CallMeta } = {};
+
       const { chunks, finalResult } = await llm.call({
         userContent: 'hi',
         jsonMode: false,
         stream: true,
+        meta,
       });
       await drain(chunks);
 
       await expect(finalResult).resolves.toBe('Partial answer.');
+      expect(meta.current?.finishReason).toBe('content_filter');
     });
 
     it.each([

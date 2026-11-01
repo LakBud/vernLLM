@@ -362,7 +362,9 @@ describe('fromGemini, finish reason', () => {
 
   it.each([
     ['MAX_TOKENS', 'length'],
-    ['STOP', undefined],
+    ['STOP', 'stop'],
+    ['SAFETY', 'content_filter'],
+    ['RECITATION', 'other'],
   ])('maps finishReason %s to finish_reason %s', async (finishReason, expected) => {
     const generateContent = vi.fn<GeminiClient['models']['generateContent']>(async () => ({
       candidates: [{ content: { parts: [{ text: 'x' }] }, finishReason }],

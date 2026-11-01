@@ -107,6 +107,11 @@ When the provider declines a call, return `refusal` from `mapResponse`. With no 
 no fallback. For streams, return `{ type: 'refusal' }` from `mapStreamEvent`. Content wins when both
 arrive.
 
+To report why the answer stopped, return `finishReason` from `mapResponse`, or
+`{ type: 'finish', reason }` from `mapStreamEvent`. It becomes `meta.current.finishReason`, with
+`stop`, `length`, `tool_calls`, `refusal`, `guardrail` and `content_filter` kept as they are and
+anything else reported as `other`. See [Why the answer stopped](/docs/core/provider-fallback#why-the-answer-stopped).
+
 ```ts title="fromfetch-refusal.ts"
 mapResponse: (json: any) => ({
   content: json.output,

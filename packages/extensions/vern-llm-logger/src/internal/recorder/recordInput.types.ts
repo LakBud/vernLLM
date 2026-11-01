@@ -1,13 +1,20 @@
 import type { BreakerChange, JsonValue, MiddlewareNote, PathEntry } from '../../types/index.js';
 import type { ClassifiedOutcome } from './outcome.utils.js';
-import type { TokenUsage } from 'vern-llm';
+import type { FinishReason, TokenUsage } from 'vern-llm';
 
 export interface RecordInput {
   requestId: string;
   endedAt: Date;
   classified: ClassifiedOutcome;
   /** Who answered, from the call's `meta`. */
-  answered: { provider: string; model: string; fallbackIndex: number } | undefined;
+  answered:
+    | {
+        provider: string;
+        model: string;
+        fallbackIndex: number;
+        finishReason?: FinishReason;
+      }
+    | undefined;
   /** Every chain's attempts and retries. */
   attempts: number;
   retries: number;

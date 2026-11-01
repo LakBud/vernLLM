@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import { VernLLM } from 'vern-llm';
+import { VernLLM, type CallMeta } from 'vern-llm';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { fromBedrock } from '../../src/index.js';
@@ -162,36 +162,59 @@ describe('Bedrock provider refusals (real @aws-sdk/client-bedrock-runtime client
     });
   });
 
-  it.each([['guardrail_intervened'], ['content_filtered'], ['refusal']])(
-    'returns the text when stopReason %s arrives after content',
-    async (stopReason) => {
+  const stops = [
+    ['guardrail_intervened', 'guardrail'],
+    ['content_filtered', 'content_filter'],
+    ['refusal', 'refusal'],
+  ] as const;
+
+  it.each(stops)(
+    'returns the text and reports finishReason when stopReason %s arrives after content',
+    async (stopReason, finishReason) => {
       const llm = await single({
         body: reply(stopReason, [{ text: 'Sorry, I cannot answer that.' }]),
       });
+      const meta: { current?: CallMeta } = {};
 
-      await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
+      await expect(llm.call({ userContent: 'hi', jsonMode: false, meta })).resolves.toBe(
         'Sorry, I cannot answer that.',
       );
+      expect(meta.current?.finishReason).toBe(finishReason);
     },
   );
 
-  it.each([['guardrail_intervened'], ['content_filtered'], ['refusal']])(
-    'returns streamed text when the stream ends in stopReason %s after content',
-    async (stopReason) => {
+  it.each(stops)(
+    'returns streamed text and reports finishReason when the stream ends in stopReason %s',
+    async (stopReason, finishReason) => {
       const llm = await single({
         raw: await bedrockEventStreamRaw(refusalEvents(stopReason, 'Sorry, I cannot answer that.')),
       });
+      const meta: { current?: CallMeta } = {};
 
       const { chunks, finalResult } = await llm.call({
         userContent: 'hi',
         jsonMode: false,
         stream: true,
+        meta,
       });
       await collect(chunks);
 
       await expect(finalResult).resolves.toBe('Sorry, I cannot answer that.');
+      expect(meta.current?.finishReason).toBe(finishReason);
     },
   );
+
+  it.each([
+    ['end_turn', 'stop'],
+    ['max_tokens', 'length'],
+  ] as const)('reports finishReason %s as %s on a normal answer', async (stopReason, expected) => {
+    const llm = await single({ body: reply(stopReason, [{ text: 'An answer.' }]) });
+    const meta: { current?: CallMeta } = {};
+
+    await llm.call({ userContent: 'hi', jsonMode: false, meta });
+
+    expect(meta.current?.finishReason).toBe(expected);
+  });
 
   it.each([['end_turn'], ['malformed_model_output'], ['max_tokens']])(
     'keeps failing as empty_response for stopReason %s with no content',

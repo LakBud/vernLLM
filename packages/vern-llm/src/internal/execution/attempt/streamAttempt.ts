@@ -189,7 +189,7 @@ export async function executeStreamCall<T>(
 
         releaseAtOpen?.(env.usageReporter.actualTokensFor(usage));
       },
-      finalize: (textAcc, wireToolCalls, usage, thinking) => {
+      finalize: (textAcc, wireToolCalls, usage, thinking, finishReason) => {
         const actualTokens = env.usageReporter.actualTokensFor(usage);
 
         try {
@@ -208,6 +208,7 @@ export async function executeStreamCall<T>(
           );
 
           releaseAtOpen?.(actualTokens, true);
+          args.onFinish?.(finishReason);
 
           return finalized;
         } catch (error) {

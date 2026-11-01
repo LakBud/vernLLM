@@ -12,6 +12,7 @@ import { callHookSafely } from '../utils/logger.utils.js';
 import {
   countsTowardBreaker,
   redactText,
+  type AttemptArgs,
   type AttemptEnvironment,
 } from './attempt/attemptEnvironment.js';
 import { executeCall } from './attempt/nonStreamAttempt.js';
@@ -279,6 +280,7 @@ export class CallExecutor {
     requestId: string,
     onAttempt?: () => void,
     state?: MiddlewareStateBag,
+    onFinish?: AttemptArgs<T>['onFinish'],
   ): Promise<T | CallWithToolsResult<T>> {
     return runAttemptLoop(
       this.attemptLoopParams(
@@ -295,6 +297,7 @@ export class CallExecutor {
             onRequest,
             middlewareState,
             gateway,
+            onFinish,
           }),
       ),
     );
@@ -310,6 +313,7 @@ export class CallExecutor {
     onAttempt?: () => void,
     state?: MiddlewareStateBag,
     onOpened?: () => void,
+    onFinish?: AttemptArgs<T>['onFinish'],
   ): Promise<{
     chunks: AsyncIterable<StreamChunk>;
     finalResult: Promise<T | CallWithToolsResult<T>>;
@@ -324,7 +328,7 @@ export class CallExecutor {
         (attempt, onRequest, middlewareState, gateway) =>
           executeStreamCall(
             this.env,
-            { params, requestId, attempt, onRequest, middlewareState, gateway },
+            { params, requestId, attempt, onRequest, middlewareState, gateway, onFinish },
             onOpened,
           ),
       ),

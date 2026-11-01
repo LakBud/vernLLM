@@ -86,6 +86,7 @@ describe('fromBedrock().chat.completions.createStream', () => {
     expect(chunks).toEqual([
       { type: 'text-delta', delta: 'Hello, ' },
       { type: 'text-delta', delta: 'world!' },
+      { type: 'finish', reason: 'stop' },
       {
         type: 'usage',
         usage: {
@@ -96,6 +97,26 @@ describe('fromBedrock().chat.completions.createStream', () => {
         },
       },
     ]);
+  });
+
+  it('yields no finish chunk when messageStop has no stopReason', async () => {
+    const { client } = makeFakeStreamingBedrockClient([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'Hi' } } },
+      { messageStop: {} },
+    ]);
+
+    const chunks = await collect(
+      fromBedrock(client).chat.completions.createStream!(
+        {
+          model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { signal: new AbortController().signal },
+      ),
+    );
+
+    expect(chunks).toEqual([{ type: 'text-delta', delta: 'Hi' }]);
   });
 
   it('translates a toolUse block + input deltas into tool_call_delta WireStreamChunks, keyed by contentBlockIndex', async () => {

@@ -1,7 +1,9 @@
+import { toFinishReason } from '../response/finishReason.utils.js';
 import { toTokenUsage, type TokenUsageMeta } from '../response/usage.utils.js';
 import { createToolCallAccumulator } from './toolCallAccumulator.utils.js';
 
 import type {
+  FinishReason,
   StreamChunk,
   ThinkingBlock,
   TokenUsage,
@@ -20,6 +22,7 @@ export interface StreamAccumulation {
     wireToolCalls: WireToolCall[] | undefined;
     usage: TokenUsage | undefined;
     thinking: ThinkingBlock[] | undefined;
+    finishReason: FinishReason | undefined;
   };
 }
 
@@ -37,6 +40,8 @@ export function createStreamAccumulation(
   const thinking: ThinkingBlock[] = [];
   let text = '';
   let usage: TokenUsage | undefined;
+  let finish: string | undefined;
+  let refused = false;
 
   return {
     apply(chunk) {
@@ -56,6 +61,12 @@ export function createStreamAccumulation(
         case 'usage':
           usage = toTokenUsage(chunk.usage, usageMeta);
           return push({ type: 'usage', usage });
+        case 'finish':
+          finish = chunk.reason;
+          return undefined;
+        case 'refusal':
+          refused = true;
+          return undefined;
         default:
           // A ping only resets the idle clock on the next read.
           return undefined;
@@ -69,6 +80,7 @@ export function createStreamAccumulation(
       wireToolCalls: toolCalls.toWireToolCalls(),
       usage,
       thinking: thinking.length ? thinking : undefined,
+      finishReason: toFinishReason(finish, refused),
     }),
   };
 }

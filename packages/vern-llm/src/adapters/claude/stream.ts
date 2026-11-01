@@ -1,5 +1,10 @@
 import { throwMissingForcedJsonSchemaTool } from '../internal/forcedJsonSchemaTool.js';
-import { promptTokens, promptTokensDetails, REFUSAL_STOP_REASONS } from './response.js';
+import {
+  claudeFinishReason,
+  promptTokens,
+  promptTokensDetails,
+  REFUSAL_STOP_REASONS,
+} from './response.js';
 
 import type { ThinkingBlock, WireStreamChunk } from '../../types/index.js';
 import type { AnthropicStreamEvent, AnthropicUsage } from './types.js';
@@ -190,6 +195,9 @@ export async function* toWireStreamChunks(
         if (event.delta?.stop_reason && REFUSAL_STOP_REASONS.has(event.delta.stop_reason)) {
           state.refused = true;
           yield { type: 'refusal' };
+        }
+        if (event.delta?.stop_reason) {
+          yield { type: 'finish', reason: claudeFinishReason(event.delta.stop_reason)! };
         }
         yield usageChunk(state, event);
         break;

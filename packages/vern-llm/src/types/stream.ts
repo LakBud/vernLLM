@@ -155,6 +155,11 @@ export type WireStreamChunk =
       delta?: string;
     }
   | {
+      /** Why generation stopped, as the provider spells it. Never reaches callers; core maps it onto `FinishReason`. */
+      type: 'finish';
+      reason: string;
+    }
+  | {
       /**
        * One complete reasoning block, yielded once it has fully arrived.
        * Collected onto `ToolCallResult.thinking`, never surfaced to

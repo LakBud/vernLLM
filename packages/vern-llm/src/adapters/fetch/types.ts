@@ -71,6 +71,8 @@ export interface FetchAdapterConfig {
     content?: string;
     /** The provider declined the call. Fails as `model_refused` when there is no content or tool call. */
     refusal?: string;
+    /** Why generation stopped. Reported as `CallMeta.finishReason`; unknown values become `'other'`. */
+    finishReason?: string;
     usage?: {
       /** Every input token, cache reads and writes included. */
       promptTokens?: number;

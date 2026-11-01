@@ -1,4 +1,9 @@
-import { geminiRefusal, synthesizeToolCallId, toWireUsage } from './response.js';
+import {
+  geminiFinishReason,
+  geminiRefusal,
+  synthesizeToolCallId,
+  toWireUsage,
+} from './response.js';
 
 import type { WireStreamChunk } from '../../types/index.js';
 import type { GeminiStream, GeminiUsage } from './types.js';
@@ -45,6 +50,9 @@ export async function* toWireStreamChunks(stream: GeminiStream): AsyncGenerator<
     if (geminiRefusal(chunk.candidates?.[0], chunk.promptFeedback).refusal) {
       yield { type: 'refusal' };
     }
+
+    const finish = geminiFinishReason(chunk.candidates?.[0]?.finishReason);
+    if (finish) yield { type: 'finish', reason: finish };
 
     if (chunk.usageMetadata) {
       lastUsage = chunk.usageMetadata;

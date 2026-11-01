@@ -7,6 +7,7 @@ import type { LLMError } from '../../../types/errors.js';
 import type {
   CallParams,
   DetectSoftFailure,
+  FinishReason,
   LLMClient,
   MiddlewareStateBag,
   VernLLMEvent,
@@ -48,6 +49,8 @@ export interface AttemptArgs<T> {
   onRequest: OnRequest | undefined;
   middlewareState: MiddlewareStateBag | undefined;
   gateway: BreakerGateway;
+  /** Called with the finish reason once this attempt returns a value. A failed attempt never calls it. */
+  onFinish?: (reason: FinishReason | undefined) => void;
 }
 
 export function prepareTargetAttempt<T>(env: AttemptEnvironment, args: AttemptArgs<T>) {

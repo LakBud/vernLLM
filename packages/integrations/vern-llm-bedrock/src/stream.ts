@@ -1,7 +1,7 @@
 import { LLMError, type WireStreamChunk } from 'vern-llm';
 
 import { bytesToBase64 } from './bytes.js';
-import { isRefusalStop } from './response.js';
+import { bedrockFinishReason, isRefusalStop } from './response.js';
 import { throwMissingForcedJsonSchemaTool } from './structuredOutput.js';
 import { toWireUsage } from './usage.js';
 
@@ -165,9 +165,16 @@ export async function* toWireStreamChunks(
     if (event.contentBlockStart) yield* onBlockStart(state, event.contentBlockStart);
     else if (event.contentBlockDelta) yield* onBlockDelta(state, event.contentBlockDelta);
     else if (event.contentBlockStop) yield* onBlockStop(state, event.contentBlockStop);
-    else if (isRefusalStop(event.messageStop?.stopReason)) {
-      state.refused = true;
-      yield { type: 'refusal' };
+    else if (event.messageStop) {
+      const stopReason = event.messageStop.stopReason;
+
+      if (isRefusalStop(stopReason)) {
+        state.refused = true;
+        yield { type: 'refusal' };
+      }
+
+      const finish = bedrockFinishReason(stopReason);
+      if (finish) yield { type: 'finish', reason: finish };
     } else if (event.metadata?.usage) yield usageChunk(event.metadata.usage);
   }
 

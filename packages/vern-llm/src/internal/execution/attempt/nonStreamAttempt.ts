@@ -1,5 +1,6 @@
 import { readRateLimitHint } from '../../utils/rate-limit/rateLimitHint.utils.js';
 import { finalizeResponse } from '../responseFinalizer.js';
+import { toFinishReason } from '../utils/response/finishReason.utils.js';
 import { withTimeout } from '../utils/retry/retry.utils.js';
 import {
   finalizeDependencies,
@@ -57,6 +58,7 @@ export async function executeCall<T>(
     const truncated = choice?.finish_reason === 'length';
     const thinking = choice?.message?.thinking;
     const refusal = choice?.message?.refusal;
+    const finishReason = toFinishReason(choice?.finish_reason, Boolean(refusal));
 
     let finalized: T | CallWithToolsResult<T>;
 
@@ -85,6 +87,7 @@ export async function executeCall<T>(
 
     release?.(actualTokens, true);
     release = undefined;
+    args.onFinish?.(finishReason);
 
     return finalized;
   } finally {

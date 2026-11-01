@@ -47,6 +47,19 @@ export interface FallbackTarget {
  * who wants provider identity on the same line as the result doesn't need
  * to read it back out of `onUsage`.
  */
+/**
+ * Why the answering target stopped. Adapters map their provider's reason onto these. `'other'`
+ * is any reason with no match here.
+ */
+export type FinishReason =
+  | 'stop'
+  | 'length'
+  | 'tool_calls'
+  | 'refusal'
+  | 'guardrail'
+  | 'content_filter'
+  | 'other';
+
 export interface CallMeta {
   provider: string;
   model: string;
@@ -59,6 +72,11 @@ export interface CallMeta {
   position: number;
   /** Absent for the main chain, 1 and up for chains started with `next.again()`. */
   chain?: number;
+  /**
+   * Why the answering target stopped, when its adapter reports it. For a stream it is set once
+   * `finalResult` resolves. Absent on a cache hit.
+   */
+  finishReason?: FinishReason;
 }
 
 /** One configured target, as a middleware sees it in `ctx.targets`. */

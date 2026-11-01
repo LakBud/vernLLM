@@ -67,10 +67,34 @@ const scenarios: Scenario[] = [
     ],
     check: ([record]) => {
       expect(record!.outputTokensPerSec).toBeGreaterThan(0);
-      for (const absent of ['error', 'breaker', 'middleware', 'custom', 'cache', 'reason']) {
+      for (const absent of [
+        'error',
+        'breaker',
+        'middleware',
+        'custom',
+        'cache',
+        'reason',
+        'finishReason',
+      ]) {
         expect(record).not.toHaveProperty(absent);
       }
     },
+  },
+  {
+    name: 'answer cut off by the provider',
+    build: (logger) => {
+      const cutOff = {
+        choices: [{ message: { content: 'Half an answer' }, finish_reason: 'content_filter' }],
+        usage: USAGE,
+      };
+      const llm = new VernLLM({
+        ...BASE,
+        client: createMockClient([cutOff]).client,
+        middleware: logger,
+      });
+      return { execute: () => llm.call(call) };
+    },
+    records: [{ kind: 'call', outcome: 'ok', level: 'info', finishReason: 'content_filter' }],
   },
   {
     name: 'retry then success',

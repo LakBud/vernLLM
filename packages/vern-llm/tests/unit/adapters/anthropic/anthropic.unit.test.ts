@@ -324,10 +324,26 @@ describe('fromAnthropic, stop reason', () => {
     expect(result.choices?.[0]?.finish_reason).toBe('length');
   });
 
-  it('leaves finish_reason out for any other stop reason', async () => {
+  it.each([
+    ['end_turn', 'stop'],
+    ['stop_sequence', 'stop'],
+    ['pause_turn', 'other'],
+  ])('maps stop_reason %s to finish_reason %s', async (stopReason, expected) => {
     const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
       content: [{ type: 'text', text: 'done' }],
-      stop_reason: 'end_turn',
+      stop_reason: stopReason,
+    }));
+
+    const result = await fromAnthropic({ messages: { create } }).chat.completions.create(request, {
+      signal: new AbortController().signal,
+    });
+
+    expect(result.choices?.[0]?.finish_reason).toBe(expected);
+  });
+
+  it('leaves finish_reason out when the response has no stop_reason', async () => {
+    const create = vi.fn<AnthropicClient['messages']['create']>(async () => ({
+      content: [{ type: 'text', text: 'done' }],
     }));
 
     const result = await fromAnthropic({ messages: { create } }).chat.completions.create(request, {

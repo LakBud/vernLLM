@@ -182,9 +182,11 @@ See [Streaming](/docs/core/streaming) for the full `stream: true` contract.
 
 A response with a `refusal` and no content or tool calls fails once as `model_refused`, with no
 retry and no fallback by default. On a stream, a `delta.refusal` with no content does the same. A
-partial answer that carries a refusal is returned as it is. A `finish_reason` of `content_filter`
-with no content is not a refusal: it still fails as the retryable `empty_response`. See
-[Error Handling](/docs/core/error-handling).
+partial answer that carries a refusal is returned as it is, with `meta.current.finishReason` set to
+`refusal`. A `finish_reason` of `content_filter` with no content is not a refusal: it still fails as
+the retryable `empty_response`. With content it is returned, and `finishReason` is `content_filter`.
+See [Error Handling](/docs/core/error-handling) and
+[Why the answer stopped](/docs/core/provider-fallback#why-the-answer-stopped).
 
 ## Multimodal input
 
