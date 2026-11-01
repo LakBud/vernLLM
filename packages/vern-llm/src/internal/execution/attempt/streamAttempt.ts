@@ -189,7 +189,7 @@ export async function executeStreamCall<T>(
 
         releaseAtOpen?.(env.usageReporter.actualTokensFor(usage));
       },
-      finalize: (textAcc, wireToolCalls, usage, thinking) => {
+      finalize: (textAcc, wireToolCalls, usage, thinking, finishReason) => {
         const actualTokens = env.usageReporter.actualTokensFor(usage);
 
         try {
@@ -203,11 +203,12 @@ export async function executeStreamCall<T>(
             attempt,
             state,
             finalizeDependencies(env, gateway, model),
-            false,
+            finishReason === 'length',
             thinking,
           );
 
           releaseAtOpen?.(actualTokens, true);
+          args.onFinish?.(finishReason);
 
           return finalized;
         } catch (error) {
@@ -261,9 +262,9 @@ async function readUntilContent(
 
       if (chunk.type === 'rate_limit_hint') {
         limiter?.reactToRateLimitHint(chunk.hint);
-      } else if (chunk.type === 'refusal') {
-        refused = true;
       } else if (chunk.type !== 'ping') {
+        // A refusal is held too, so one that comes before text is still seen by the accumulator.
+        if (chunk.type === 'refusal') refused = true;
         held.push(chunk);
       }
 

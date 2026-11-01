@@ -30,6 +30,11 @@ export function* toWireStreamChunks(chunk: OpenAIStreamChunk): Generator<WireStr
     }
   }
 
+  const finishReason = chunk.choices?.[0]?.finish_reason;
+  if (finishReason) {
+    yield { type: 'finish', reason: finishReason };
+  }
+
   if (chunk.usage) {
     yield { type: 'usage', usage: normalizeUsage(chunk.usage) };
   }

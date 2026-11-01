@@ -410,7 +410,11 @@ describe('fromBedrock, stop reason', () => {
 
   it.each([
     ['max_tokens', 'length'],
-    ['end_turn', undefined],
+    ['end_turn', 'stop'],
+    ['tool_use', 'tool_calls'],
+    ['guardrail_intervened', 'guardrail'],
+    ['content_filtered', 'content_filter'],
+    ['malformed_model_output', 'other'],
   ])('maps stopReason %s to finish_reason %s', async (stopReason, expected) => {
     const converse = vi.fn<ConverseHandler>(async () => ({
       output: { message: { content: [{ text: 'x' }] } },
@@ -422,5 +426,17 @@ describe('fromBedrock, stop reason', () => {
     });
 
     expect(result.choices?.[0]?.finish_reason).toBe(expected);
+  });
+
+  it('leaves finish_reason out when the response has no stopReason', async () => {
+    const converse = vi.fn<ConverseHandler>(async () => ({
+      output: { message: { content: [{ text: 'x' }] } },
+    }));
+
+    const result = await fromBedrock(stubbedClient({ converse })).chat.completions.create(request, {
+      signal: new AbortController().signal,
+    });
+
+    expect(result.choices?.[0]).not.toHaveProperty('finish_reason');
   });
 });

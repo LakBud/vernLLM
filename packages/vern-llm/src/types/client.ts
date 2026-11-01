@@ -135,8 +135,9 @@ export interface LLMClient {
             refusal?: string | null;
           };
           /**
-           * Why generation stopped, in OpenAI's terms. Only `'length'` is read: output that then
-           * fails to parse becomes the retryable `response_truncated`. Optional.
+           * Why generation stopped, in OpenAI's terms. Reported as `CallMeta.finishReason`, and
+           * `'length'` also turns output that fails to parse into the retryable
+           * `response_truncated`. Optional.
            */
           finish_reason?: string | null;
         }>;

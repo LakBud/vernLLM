@@ -364,7 +364,8 @@ A response with a `stopReason` of `guardrail_intervened`, `content_filtered` or 
 content or tool calls fails once as `model_refused`, with no retry and no fallback by default. This
 needs `vern-llm` 3.1.0 or later. A guardrail that returns its canned message as content is an
 ordinary answer, and is returned as it is. So is a stop reason that arrives after text, on a stream
-or not. See [Error Handling](/docs/core/error-handling).
+or not, with `meta.current.finishReason` set to `guardrail`, `content_filter` or `refusal`. See
+[Error Handling](/docs/core/error-handling) and [Why the answer stopped](/docs/core/provider-fallback#why-the-answer-stopped).
 
 ## Multimodal input
 

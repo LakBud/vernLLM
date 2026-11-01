@@ -6,6 +6,8 @@ import { VernLLM } from '../../../../src/vernLLM.js';
 import { drain } from '../../../helpers.js';
 import { sseRaw, startRealSdkServer, type RealSdkServer } from '../../../realSdkServer.js';
 
+import type { CallMeta } from '../../../../src/types/index.js';
+
 describe('Anthropic provider refusals (real @anthropic-ai/sdk client)', () => {
   let server: RealSdkServer | undefined;
 
@@ -187,7 +189,12 @@ describe('Anthropic provider refusals (real @anthropic-ai/sdk client)', () => {
       model: 'claude-test',
     });
 
-    await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe('Partial answer.');
+    const meta: { current?: CallMeta } = {};
+
+    await expect(llm.call({ userContent: 'hi', jsonMode: false, meta })).resolves.toBe(
+      'Partial answer.',
+    );
+    expect(meta.current?.finishReason).toBe('refusal');
   });
 
   it('returns streamed text that ends in a refusal', async () => {
@@ -199,14 +206,18 @@ describe('Anthropic provider refusals (real @anthropic-ai/sdk client)', () => {
       model: 'claude-test',
     });
 
+    const meta: { current?: CallMeta } = {};
+
     const { chunks, finalResult } = await llm.call({
       userContent: 'hi',
       jsonMode: false,
       stream: true,
+      meta,
     });
     await drain(chunks);
 
     await expect(finalResult).resolves.toBe('Partial answer.');
+    expect(meta.current?.finishReason).toBe('refusal');
   });
 
   it('leaves other stop reasons with no content as empty_response', async () => {

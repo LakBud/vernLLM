@@ -252,6 +252,7 @@ meta.current;
 //   attempts: 1,           // attempts against the target that answered, including the successful one
 //   position: 1,           // where it sat in the order tried, 0 based
 //   chain: 1,              // only on a chain started with next.again(), absent for the main chain
+//   finishReason: 'stop',  // why the target stopped, when its adapter reports it
 // }
 ```
 
@@ -262,6 +263,26 @@ point `call()` returns `{ chunks, finalResult }`, so `meta.current` is already p
 `metaRef()` is just a small helper that returns `{}`, typed as `{ current?: CallMeta }`, so you
 don't need to write that type out by hand. A plain `const meta: { current?: CallMeta } = {}`
 literal still works exactly the same, since `meta` on `CallParams` hasn't changed shape.
+
+## Why the answer stopped
+
+`meta.current.finishReason` says why the answering target stopped. The values are the same for every
+provider:
+
+| Value            | Meaning                                                  |
+| ---------------- | -------------------------------------------------------- |
+| `stop`           | A normal end, or a stop sequence                         |
+| `length`         | The output limit was reached, so the text can be cut off |
+| `tool_calls`     | The model stopped to call a tool                         |
+| `refusal`        | The model declined, and text still came back             |
+| `guardrail`      | A Bedrock guardrail stopped the answer                   |
+| `content_filter` | A provider's content filter stopped the answer           |
+| `other`          | A reason with no match above                             |
+
+It is how you tell a complete answer from one that was cut off, since a call that returns text does
+not throw when the provider stops early. It is absent when the adapter reports no reason, and on a
+cache hit. With `stream: true` it is set once `finalResult` resolves, so read it after that. A
+refusal or filter stop with no text still fails as `model_refused` or `empty_response`, as before.
 
 ## Choosing the order per call
 

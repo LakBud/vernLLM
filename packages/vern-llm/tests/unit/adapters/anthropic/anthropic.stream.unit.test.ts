@@ -158,7 +158,7 @@ describe('fromAnthropic().chat.completions.createStream', () => {
         { type: 'message_stop' },
       ]);
 
-      expect(chunks.map((chunk) => chunk.type)).toEqual(['refusal', 'usage']);
+      expect(chunks.map((chunk) => chunk.type)).toEqual(['refusal', 'finish', 'usage']);
     });
 
     it.each([['end_turn'], [null], [undefined]])(
@@ -173,7 +173,9 @@ describe('fromAnthropic().chat.completions.createStream', () => {
           },
         ]);
 
-        expect(chunks.map((chunk) => chunk.type)).toEqual(['usage']);
+        expect(chunks.map((chunk) => chunk.type)).toEqual(
+          stopReason ? ['finish', 'usage'] : ['usage'],
+        );
       },
     );
   });

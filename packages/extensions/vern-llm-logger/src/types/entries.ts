@@ -1,5 +1,6 @@
 import type { LogLevel } from './sink.js';
 import type { SeriesSnapshot } from './stats.js';
+import type { FinishReason } from 'vern-llm';
 
 export type JsonValue =
   | string
@@ -58,6 +59,8 @@ export interface CallLogRecord {
   provider?: string;
   model?: string;
   fallbackIndex?: number;
+  /** Why the answering target stopped, when its adapter reports it. */
+  finishReason?: FinishReason;
   /** Every attempt of every chain. */
   attempts: number;
   retries: number;

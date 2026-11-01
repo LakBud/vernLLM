@@ -1,4 +1,4 @@
-import { LLMError, type ThinkingBlock, type WireToolCall } from 'vern-llm';
+import { LLMError, type FinishReason, type ThinkingBlock, type WireToolCall } from 'vern-llm';
 
 import { bytesToBase64 } from './bytes.js';
 import {
@@ -18,6 +18,21 @@ const REFUSAL_STOP_REASONS: ReadonlySet<string> = new Set([
   'content_filtered',
   'refusal',
 ]);
+
+const FINISH_REASONS: Readonly<Record<string, FinishReason>> = {
+  end_turn: 'stop',
+  stop_sequence: 'stop',
+  max_tokens: 'length',
+  tool_use: 'tool_calls',
+  guardrail_intervened: 'guardrail',
+  content_filtered: 'content_filter',
+  refusal: 'refusal',
+};
+
+/** The shared finish reason for a Converse `stopReason`. */
+export function bedrockFinishReason(stopReason: string | undefined): FinishReason | undefined {
+  return stopReason ? (FINISH_REASONS[stopReason] ?? 'other') : undefined;
+}
 
 export function isRefusalStop(stopReason: string | undefined): boolean {
   return stopReason !== undefined && REFUSAL_STOP_REASONS.has(stopReason);
@@ -96,7 +111,7 @@ export function toWireResponse(response: ConverseResponse, toolName: string | un
           ...(thinking.length ? { thinking } : {}),
           ...(isRefusalStop(response.stopReason) ? { refusal: response.stopReason } : {}),
         },
-        ...(response.stopReason === 'max_tokens' ? { finish_reason: 'length' as const } : {}),
+        ...(response.stopReason ? { finish_reason: bedrockFinishReason(response.stopReason) } : {}),
       },
     ],
     usage: toWireUsage(response.usage),

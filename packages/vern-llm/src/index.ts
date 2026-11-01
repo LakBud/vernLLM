@@ -110,6 +110,7 @@ export {
   type TargetInfo,
   type CircuitTarget,
   type CallMeta,
+  type FinishReason,
   type SchemaLike,
   type JsonSchemaSpec,
   type ToolDefinition,

@@ -9,6 +9,7 @@ import type { Logger } from '../../logger.js';
 import type {
   CallWithToolsResult,
   StreamChunk,
+  FinishReason,
   ThinkingBlock,
   TokenUsage,
   WireStreamChunk,
@@ -54,6 +55,7 @@ export interface StreamAccumulatorOptions<T> {
     wireToolCalls: WireToolCall[] | undefined,
     usage: TokenUsage | undefined,
     thinking: ThinkingBlock[] | undefined,
+    finishReason: FinishReason | undefined,
   ) => T | CallWithToolsResult<T>;
 }
 
@@ -206,8 +208,8 @@ export function buildStreamResult<T>(
     }
 
     try {
-      const { text, wireToolCalls, usage, thinking } = accumulation.result();
-      const finalized = options.finalize(text, wireToolCalls, usage, thinking);
+      const { text, wireToolCalls, usage, thinking, finishReason } = accumulation.result();
+      const finalized = options.finalize(text, wireToolCalls, usage, thinking, finishReason);
 
       resolveFinal(finalized);
     } catch (error) {

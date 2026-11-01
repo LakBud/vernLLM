@@ -1,4 +1,4 @@
-import { finishReason } from '../internal/finishReason.js';
+import { finishReason, mapFinishReason } from '../internal/finishReason.js';
 import {
   assertForcedJsonSchemaToolInputIsObject,
   throwMissingForcedJsonSchemaTool,
@@ -9,6 +9,18 @@ import type { ThinkingBlock, WireToolCall } from '../../types/index.js';
 import type { AnthropicResponse, AnthropicUsage } from './types.js';
 
 /** `stop_reason` values that mean the model declined. */
+const FINISH_REASONS = {
+  end_turn: 'stop',
+  stop_sequence: 'stop',
+  max_tokens: 'length',
+  tool_use: 'tool_calls',
+  refusal: 'refusal',
+} as const;
+
+/** The shared finish reason for a `stop_reason`. */
+export const claudeFinishReason = (reason: string | null | undefined) =>
+  mapFinishReason(reason, FINISH_REASONS);
+
 export const REFUSAL_STOP_REASONS: ReadonlySet<string> = new Set(['refusal']);
 
 const finite = (value: number | null | undefined) =>
@@ -117,7 +129,7 @@ export function toWireResponse(response: AnthropicResponse, toolName: string | u
           ...(thinking.length ? { thinking } : {}),
           ...refusal,
         },
-        ...finishReason(response.stop_reason, 'max_tokens'),
+        ...finishReason(response.stop_reason, FINISH_REASONS),
       },
     ],
     usage: {

@@ -42,6 +42,7 @@ function addAnswer(record: CallLogRecord, input: RecordInput): void {
     record.provider = answered.provider;
     record.model = answered.model;
     record.fallbackIndex = answered.fallbackIndex;
+    if (answered.finishReason) record.finishReason = answered.finishReason;
   }
   if (input.chains) {
     record.chains = input.chains.count;

@@ -164,6 +164,7 @@ describe('fromBedrock, driving a BedrockRuntimeClient', () => {
 
     expect(await drain(client)).toEqual([
       { type: 'text-delta', delta: 'hey' },
+      { type: 'finish', reason: 'stop' },
       {
         type: 'usage',
         usage: {

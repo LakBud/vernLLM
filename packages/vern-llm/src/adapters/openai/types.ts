@@ -36,6 +36,7 @@ export interface OpenAIStreamChunk {
         function?: { name?: string; arguments?: string };
       }>;
     };
+    finish_reason?: string | null;
   }>;
   usage?: OpenAIUsage;
 }

@@ -87,7 +87,8 @@ the call spent on it (`elapsedMs`), and the `errorCode` that ended it.
 The top level `provider`, `model`, and `fallbackIndex` name the target that answered
 (`fallbackIndex` is `-1` for the primary). `attempts` counts every request sent across all targets,
 `retries` counts the retries between them, and `retryDelayMs` and `queueWaitMs` are the time spent
-waiting on backoff and on a rate limit.
+waiting on backoff and on a rate limit. `finishReason` says why the answering target stopped when
+its adapter reports it, so an answer cut off by a filter or the output limit can be counted.
 
 ## More than one chain
 

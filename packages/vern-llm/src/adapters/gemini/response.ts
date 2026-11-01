@@ -1,4 +1,4 @@
-import { finishReason } from '../internal/finishReason.js';
+import { finishReason, mapFinishReason } from '../internal/finishReason.js';
 import { refusalReason } from '../internal/refusalReason.js';
 
 import type { WireToolCall } from '../../types/index.js';
@@ -24,6 +24,19 @@ export function toWireUsage(usage: GeminiUsage | undefined) {
       : {}),
   };
 }
+
+const FINISH_REASONS = {
+  STOP: 'stop',
+  MAX_TOKENS: 'length',
+  SAFETY: 'content_filter',
+  BLOCKLIST: 'content_filter',
+  PROHIBITED_CONTENT: 'content_filter',
+  SPII: 'content_filter',
+} as const;
+
+/** The shared finish reason for a candidate's `finishReason`. */
+export const geminiFinishReason = (reason: string | null | undefined) =>
+  mapFinishReason(reason, FINISH_REASONS);
 
 /**
  * `finishReason`s where Gemini declined. `RECITATION`, `LANGUAGE` and `OTHER` stay `empty_response`,
@@ -94,7 +107,7 @@ export function toWireResponse(response: GeminiResponse) {
           ...(wireToolCalls ? { tool_calls: wireToolCalls } : {}),
           ...geminiRefusal(response.candidates?.[0], response.promptFeedback),
         },
-        ...finishReason(response.candidates?.[0]?.finishReason, 'MAX_TOKENS'),
+        ...finishReason(response.candidates?.[0]?.finishReason, FINISH_REASONS),
       },
     ],
     usage: toWireUsage(response.usageMetadata),
