@@ -204,8 +204,8 @@ which changes per-provider beyond how each adapter maps its own streaming events
 ## Refusals
 
 A response with `stop_reason: 'refusal'` and no content or tool calls fails once as `model_refused`,
-with no retry and no fallback by default. A partial answer that ends in a refusal is returned as
-it is. See [Error Handling](/docs/core/error-handling).
+with no retry and no fallback by default. A `refusal` stop reason that arrives after text, on a
+stream or not, returns the text as it is. See [Error Handling](/docs/core/error-handling).
 
 ## Multimodal input
 

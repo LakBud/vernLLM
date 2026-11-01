@@ -162,32 +162,36 @@ describe('Bedrock provider refusals (real @aws-sdk/client-bedrock-runtime client
     });
   });
 
-  it('returns the guardrail message when it arrives as content', async () => {
-    const llm = await single({
-      body: reply('guardrail_intervened', [{ text: 'Sorry, I cannot answer that.' }]),
-    });
+  it.each([['guardrail_intervened'], ['content_filtered'], ['refusal']])(
+    'returns the text when stopReason %s arrives after content',
+    async (stopReason) => {
+      const llm = await single({
+        body: reply(stopReason, [{ text: 'Sorry, I cannot answer that.' }]),
+      });
 
-    await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
-      'Sorry, I cannot answer that.',
-    );
-  });
+      await expect(llm.call({ userContent: 'hi', jsonMode: false })).resolves.toBe(
+        'Sorry, I cannot answer that.',
+      );
+    },
+  );
 
-  it('returns a streamed guardrail message that arrives as content', async () => {
-    const llm = await single({
-      raw: await bedrockEventStreamRaw(
-        refusalEvents('guardrail_intervened', 'Sorry, I cannot answer that.'),
-      ),
-    });
+  it.each([['guardrail_intervened'], ['content_filtered'], ['refusal']])(
+    'returns streamed text when the stream ends in stopReason %s after content',
+    async (stopReason) => {
+      const llm = await single({
+        raw: await bedrockEventStreamRaw(refusalEvents(stopReason, 'Sorry, I cannot answer that.')),
+      });
 
-    const { chunks, finalResult } = await llm.call({
-      userContent: 'hi',
-      jsonMode: false,
-      stream: true,
-    });
-    await collect(chunks);
+      const { chunks, finalResult } = await llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+      });
+      await collect(chunks);
 
-    await expect(finalResult).resolves.toBe('Sorry, I cannot answer that.');
-  });
+      await expect(finalResult).resolves.toBe('Sorry, I cannot answer that.');
+    },
+  );
 
   it.each([['end_turn'], ['malformed_model_output'], ['max_tokens']])(
     'keeps failing as empty_response for stopReason %s with no content',
