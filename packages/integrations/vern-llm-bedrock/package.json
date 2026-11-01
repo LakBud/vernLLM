@@ -70,14 +70,14 @@
     "size": "size-limit"
   },
   "peerDependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1136.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1161.0",
     "vern-llm": "workspace:^"
   },
   "devDependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1160.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1161.0",
     "@size-limit/file": "14.3.0",
     "@smithy/eventstream-serde-node": "^4.5.2",
-    "@smithy/node-http-handler": "^4.14.0",
+    "@smithy/node-http-handler": "^4.14.1",
     "@smithy/util-utf8": "^4.5.2",
     "@types/node": "^26.6.6",
     "@vitest/coverage-v8": "^5.0.5",
