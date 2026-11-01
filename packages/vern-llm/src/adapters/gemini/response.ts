@@ -25,7 +25,12 @@ export function toWireUsage(usage: GeminiUsage | undefined) {
   };
 }
 
-/** `finishReason`s where Gemini declined. `RECITATION`, `LANGUAGE` and `OTHER` stay `empty_response`. */
+/**
+ * `finishReason`s where Gemini declined. `RECITATION`, `LANGUAGE` and `OTHER` stay `empty_response`,
+ * since they depend on what was generated and a retry or another provider can succeed. A finish
+ * reason added to the API later also falls through to `empty_response`, which retries, until it is
+ * added here.
+ */
 const REFUSAL_FINISH_REASONS: ReadonlySet<string> = new Set([
   'SAFETY',
   'BLOCKLIST',
@@ -33,7 +38,11 @@ const REFUSAL_FINISH_REASONS: ReadonlySet<string> = new Set([
   'SPII',
 ]);
 
-/** The wire `refusal` for a response or chunk. Any `promptFeedback.blockReason` counts as one. */
+/**
+ * The wire `refusal` for a response or chunk. Any `promptFeedback.blockReason` counts as one,
+ * `OTHER` included, unlike a candidate `finishReason` of `OTHER`: the block is on the prompt, so
+ * every retry is blocked the same way.
+ */
 export function geminiRefusal(
   candidate: { finishReason?: string } | undefined,
   promptFeedback: { blockReason?: string } | undefined,

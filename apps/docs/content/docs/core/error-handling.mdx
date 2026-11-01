@@ -170,8 +170,10 @@ error a `wrap` can throw after `next()` resolved and have it reach the caller, s
 provider refusal, and the core raises it when the response has no content or tool calls. See each
 adapter's Refusals section for what counts. The refused attempt's tokens are reported as a usage failure. A refusal
 that arrives as plain text is an ordinary answer. On a stream the error reaches `chunks` and
-`finalResult`, not the `call()` promise, once the provider has started to answer. To try another
-provider on a refusal, opt in with `fallbackOn`:
+`finalResult`, not the `call()` promise, once the provider has started to answer. The type is
+`invalid_params`, like `content_blocked`, so a handler that reads that type as "my request was bad"
+should check `error.code === 'model_refused'` first. To try another provider on a refusal, opt in
+with `fallbackOn`:
 
 ```ts title="error-handling-model-refused.ts"
 import { defaultFallbackOn } from 'vern-llm';
@@ -522,7 +524,10 @@ consuming the remaining `maxRetries`.
   provider response problem rather than provider availability or transport health, so
   `unknown_tool`, `duplicate_tool_call_id`, `tool_choice_none_violated`, and `unexpected_tool_calls`
   cannot cause a healthy provider's circuit to open. The same is true of `invalid_params` errors:
-  they never reach the provider at all, so they say nothing about the provider's health either.
+  they are raised before a request is sent, so they say nothing about the provider's health either.
+  `model_refused` is the one `invalid_params` error raised after a request was sent. The provider
+  answered with a refusal, not a failure, so it says nothing about availability and does not count
+  toward the breaker either.
 </Callout>
 
 <Callout type="warn">
