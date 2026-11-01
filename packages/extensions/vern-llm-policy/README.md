@@ -183,4 +183,6 @@ Every call emits a `policy.decision` event before anything inside the policy run
 
 `flags` maps each flag that is `false` to the rule that set it, `exceptions` lists the ones that applied, `errors` lists `{ rule, name }` for each failure, and `labels` is the labels the call had, or `'unknown'`.
 
-It holds rule ids, target names and kinds of error, never a `context` value, an error message or request content. Set `version` to tag decisions with the revision of your rules, which also appears in the `issues` of a denial.
+The event's own data holds rule ids, target names and kinds of error, never a `context` value, an error message or request content. Set `version` to tag decisions with the revision of your rules, which also appears in the `issues` of a denial.
+
+Like every event, it carries the call's `context` on its envelope, so decisions can be correlated with the call. If `context` holds anything sensitive, drop it before forwarding events to a log sink.

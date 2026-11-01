@@ -22,9 +22,12 @@ joins included. The record exists even when the call then fails.
 }
 ```
 
-It holds rule ids, target names, labels and the kind of each error, **never a `context` value**, an
-error message or request content, so a logger or a trace can keep it. The logger keeps `policy.*`
+Its data holds rule ids, target names, labels and the kind of each error, **never a `context` value**,
+an error message or request content, so a logger or a trace can keep it. The logger keeps `policy.*`
 events by default, so they appear in its records without configuration.
+
+Like every event, it carries the call's `context` on its envelope, so decisions can be correlated with
+the call. If `context` holds anything sensitive, drop it before forwarding events to a log sink.
 
 ## Errors
 
