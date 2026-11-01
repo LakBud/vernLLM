@@ -203,7 +203,7 @@ export async function executeStreamCall<T>(
             attempt,
             state,
             finalizeDependencies(env, gateway, model),
-            false,
+            finishReason === 'length',
             thinking,
           );
 
@@ -262,9 +262,9 @@ async function readUntilContent(
 
       if (chunk.type === 'rate_limit_hint') {
         limiter?.reactToRateLimitHint(chunk.hint);
-      } else if (chunk.type === 'refusal') {
-        refused = true;
       } else if (chunk.type !== 'ping') {
+        // A refusal is held too, so one that comes before text is still seen by the accumulator.
+        if (chunk.type === 'refusal') refused = true;
         held.push(chunk);
       }
 

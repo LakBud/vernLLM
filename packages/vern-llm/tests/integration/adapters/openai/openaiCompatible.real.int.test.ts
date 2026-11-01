@@ -968,6 +968,52 @@ describe('OpenAI-compatible adapter integration (real SDK clients)', () => {
       expect(meta.current?.finishReason).toBe(expected);
     });
 
+    it('reports length, not refusal, when a refusal comes with text cut off at the limit', async () => {
+      const body = refusalBody({ content: 'Partial answer.' });
+      body.choices[0]!.finish_reason = 'length';
+      server = await startRealSdkServer([{ body }]);
+      const llm = new VernLLM({ client: refusingClient(server), model: 'gpt-test' });
+      const meta: { current?: CallMeta } = {};
+
+      await llm.call({ userContent: 'hi', jsonMode: false, meta });
+
+      expect(meta.current?.finishReason).toBe('length');
+    });
+
+    it('reports refusal when a refusal delta comes before the text of a stream', async () => {
+      const chunk = (delta: object, finish_reason: string | null = null) => ({
+        data: {
+          id: 'c',
+          object: 'chat.completion.chunk',
+          model: 'gpt-test',
+          choices: [{ index: 0, delta, finish_reason }],
+        },
+      });
+      server = await startRealSdkServer([
+        {
+          raw: sseRaw([
+            chunk({ role: 'assistant', refusal: "I can't " }),
+            chunk({ content: 'Partial answer.' }),
+            chunk({}, 'stop'),
+            { data: '[DONE]' },
+          ]),
+        },
+      ]);
+      const llm = new VernLLM({ client: refusingClient(server), model: 'gpt-test' });
+      const meta: { current?: CallMeta } = {};
+
+      const { chunks, finalResult } = await llm.call({
+        userContent: 'hi',
+        jsonMode: false,
+        stream: true,
+        meta,
+      });
+      await drain(chunks);
+
+      await expect(finalResult).resolves.toBe('Partial answer.');
+      expect(meta.current?.finishReason).toBe('refusal');
+    });
+
     it('reports content_filter on a streamed answer that the filter cut off', async () => {
       server = await startRealSdkServer([
         {

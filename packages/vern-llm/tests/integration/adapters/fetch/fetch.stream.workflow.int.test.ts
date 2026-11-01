@@ -356,6 +356,41 @@ describe('VernLLM.call(stream: true) through fromFetch, end to end', () => {
       expect(meta.current?.finishReason).toBe('content_filter');
     });
 
+    it.each([
+      ['length', 'response_truncated'],
+      ['stop', undefined],
+    ])(
+      'fails a streamed JSON answer that cannot be parsed after finish %s with code %s',
+      async (finish, code) => {
+        const requestStream = vi.fn(async (_url: string, _init: unknown) =>
+          fakeReadableStream([
+            'data: {"delta":"{\\"city\\":"}\n\n',
+            `data: {"finish":"${finish}"}\n\n`,
+          ]),
+        );
+        const llm = new VernLLM({
+          client: fromFetch({
+            url: 'https://api.example.com',
+            requestStream,
+            mapRequest: () => ({}),
+            mapResponse: () => ({}),
+            mapStreamEvent: mapEvent,
+          }),
+          model: 'test-model',
+          maxRetries: 0,
+        });
+
+        const { chunks, finalResult } = await llm.call({
+          userContent: 'hi',
+          jsonMode: true,
+          stream: true,
+        });
+        await drain(chunks);
+
+        await expect(finalResult).rejects.toMatchObject({ type: 'parse', code });
+      },
+    );
+
     it("does not carry a failed target's finish reason into the fallback answer", async () => {
       const primary = fromFetch({
         url: 'https://api.example.com/a',
