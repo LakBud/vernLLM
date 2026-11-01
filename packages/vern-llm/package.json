@@ -78,7 +78,7 @@
     "@types/node": "^26.6.6",
     "@vitest/coverage-v8": "^5.0.5",
     "groq-sdk": "^1.6.0",
-    "openai": "^7.45.1",
+    "openai": "^7.47.0",
     "publint": "^0.3.25",
     "size-limit": "^14.3.0",
     "tsdown": "^0.23.4",
