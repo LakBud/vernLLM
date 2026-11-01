@@ -23,7 +23,7 @@ describe('fromAnthropic', () => {
 
   it('maps system + user messages into Anthropic system/messages shape', async () => {
     const { client, create } = makeFakeAnthropicClient('hi there');
-    const adapted = fromAnthropic(client);
+    const adapted = fromAnthropic(client, { sendTemperature: true });
     const controller = new AbortController();
 
     await adapted.chat.completions.create(

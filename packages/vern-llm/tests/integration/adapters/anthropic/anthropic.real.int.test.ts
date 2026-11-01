@@ -70,6 +70,83 @@ describe('Anthropic adapter integration (real @anthropic-ai/sdk client)', () => 
     });
   });
 
+  const okResponse = (model: string) => ({
+    body: {
+      id: 'msg_temp',
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 5, output_tokens: 1 },
+    },
+  });
+
+  it(
+    'leaves temperature out of a default config call on every model, since the real SDK sends ' +
+      'API version 2026-10-21, which rejects it everywhere',
+    async () => {
+      server = await startRealSdkServer([okResponse('claude-haiku-4-5')]);
+
+      const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url });
+      const llm = new VernLLM({ client: fromAnthropic(anthropic), model: 'claude-haiku-4-5' });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      const sent = at(server.requests, 0);
+      expect(sent.headers['anthropic-version']).toBe('2026-10-21');
+      expect('temperature' in (sent.body as object)).toBe(false);
+    },
+  );
+
+  it.each([
+    ['claude-haiku-4-5', true],
+    ['claude-sonnet-4-6', true],
+    ['claude-opus-4-20250514', true],
+    ['claude-test', true],
+    ['claude-opus-4-7', false],
+    ['claude-haiku-5-5', false],
+    ['claude-sonnet-5-5', false],
+    ['claude-fable-5-1', false],
+  ])(
+    'with sendTemperature on a client pinned to API version 2023-06-01, %s sends temperature: %s',
+    async (model, sends) => {
+      server = await startRealSdkServer([okResponse(model)]);
+
+      const anthropic = new Anthropic({
+        apiKey: 'test-key',
+        baseURL: server.url,
+        defaultHeaders: { 'anthropic-version': '2023-06-01' },
+      });
+      const llm = new VernLLM({
+        client: fromAnthropic(anthropic, { sendTemperature: true }),
+        model,
+      });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      const sent = at(server.requests, 0);
+      expect(sent.headers['anthropic-version']).toBe('2023-06-01');
+      expect((sent.body as { temperature?: number }).temperature).toBe(sends ? 0.2 : undefined);
+    },
+  );
+
+  it('drops temperature when thinking is on, even with sendTemperature', async () => {
+    server = await startRealSdkServer([okResponse('claude-sonnet-4-6')]);
+
+    const anthropic = new Anthropic({ apiKey: 'test-key', baseURL: server.url });
+    const llm = new VernLLM({
+      client: fromAnthropic(anthropic, { sendTemperature: true }),
+      model: 'claude-sonnet-4-6',
+    });
+
+    await llm.call({ userContent: 'hi', jsonMode: false, maxTokens: 4000, budgetTokens: 2048 });
+
+    const sent = at(server.requests, 0);
+    expect(sent.body).toMatchObject({ thinking: { type: 'enabled', budget_tokens: 2048 } });
+    expect('temperature' in (sent.body as object)).toBe(false);
+  });
+
   it('forces real tool-use for json_schema structured output and unwraps the real SDK response', async () => {
     server = await startRealSdkServer([
       {

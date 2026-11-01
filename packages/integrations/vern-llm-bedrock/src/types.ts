@@ -42,6 +42,11 @@ export interface BedrockAdapterOptions {
    */
   forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride;
   /**
+   * Replaces the built in list of models that reject `temperature` (Claude 4.7
+   * and later). `inferenceConfig.temperature` is left out for these.
+   */
+  temperatureUnsupportedModels?: ModelCapabilityOverride;
+  /**
    * Adds models that are Claude but whose id doesn't say so, such as an
    * application inference profile ARN. Ids containing `claude` are always
    * treated as Claude. The version based rules can't read a nameless id, so
@@ -57,5 +62,6 @@ export interface ResolvedOptions {
   effortTokenTable: EffortTokenTable;
   adaptiveOnlyModels: ModelCapabilityOverride | undefined;
   forcedToolChoiceUnsupportedModels: ModelCapabilityOverride | undefined;
+  temperatureUnsupportedModels: ModelCapabilityOverride | undefined;
   claudeModels: ModelCapabilityOverride | undefined;
 }

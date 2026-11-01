@@ -1,6 +1,7 @@
 import { LLMError, type ContentBlock, type LLMClient } from '../../types/index.js';
 import { planClaudeStructuredOutput, resolveClaudeThinking } from '../internal/claudeRequest.js';
 import { assertSupportedImageMimeType } from '../internal/imageFormat.js';
+import { rejectsTemperature } from '../internal/temperatureSupport.js';
 
 import type { ModelCapabilityOverride } from '../internal/nativeStructuredOutput.js';
 import type { EffortTokenTable } from '../internal/reasoningBudget.utils.js';
@@ -118,6 +119,7 @@ export function buildAnthropicRequestBody(
   effortTokenTable?: EffortTokenTable,
   adaptiveOnlyModels?: ModelCapabilityOverride,
   forcedToolChoiceUnsupportedModels?: ModelCapabilityOverride,
+  sendTemperature = false,
 ): { body: AnthropicRequestBody; toolName: string | undefined } {
   const systemMessage = params.messages.find((m) => m.role === 'system');
 
@@ -165,9 +167,15 @@ export function buildAnthropicRequestBody(
   const effort = resolved?.effort;
   const system = systemMessage?.content;
 
-  // Anthropic rejects temperature alongside any thinking mode, and VernLLM
-  // always sends one, so it is dropped whenever thinking goes out.
-  const temperature = resolved ? undefined : params.temperature;
+  // API version 2026-10-21, which every @anthropic-ai/sdk 1.x client sends, removes
+  // temperature from all models and answers 400, and VernLLM always resolves one,
+  // so it is only sent when `sendTemperature` opts in. Even then it is dropped
+  // alongside any thinking mode, and for Claude 4.7 and later, which reject it
+  // on the older API versions too.
+  const temperature =
+    resolved || !sendTemperature || rejectsTemperature(params.model)
+      ? undefined
+      : params.temperature;
 
   const body: AnthropicRequestBody = {
     model: params.model,

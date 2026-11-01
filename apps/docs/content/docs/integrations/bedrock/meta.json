@@ -1,5 +1,5 @@
 {
   "title": "AWS Bedrock",
   "icon": "Bedrock",
-  "pages": ["index", "guardrails", "contributing", "changelog"]
+  "pages": ["index", "guardrails", "migration-notes", "contributing", "changelog"]
 }

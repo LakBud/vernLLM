@@ -1,0 +1,24 @@
+---
+title: Migration Notes
+description: Breaking changes in vern-llm-bedrock by version, what changed in requests, and what to update when upgrading alongside vern-llm.
+icon: TriangleAlert
+---
+
+This page tracks breaking changes in `vern-llm-bedrock`. For `vern-llm` itself, see
+[Migration Notes](/docs/migration-notes).
+
+## 0.2.0: `temperature` is left out on Claude 4.7 and later
+
+Bedrock rejects `temperature` on Claude 4.7 and later, so a default config call failed.
+`fromBedrock` now leaves `inferenceConfig.temperature` out for these models, matched on Bedrock ids,
+region prefixed inference profiles, and ARNs containing one. Other models, such as Nova and Llama,
+still get it. The model then samples at Bedrock's default.
+
+If the rule is wrong for a model, replace it with your own list or predicate. An application
+inference profile ARN that doesn't contain `claude` isn't matched, so list it:
+
+```ts
+fromBedrock(client, {
+  temperatureUnsupportedModels: (model) => model.includes('claude-opus-4-7'),
+});
+```

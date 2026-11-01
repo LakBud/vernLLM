@@ -334,4 +334,54 @@ describe('Bedrock adapter integration', () => {
       expect(converse).not.toHaveBeenCalled();
     });
   });
+
+  describe('temperature', () => {
+    // A call with the default config resolves temperature 0.2 and sends it unless the model rejects it.
+    async function sentTemperature(
+      model: string,
+      options?: Parameters<typeof fromBedrock>[1],
+    ): Promise<number | undefined> {
+      const converse = vi.fn<ConverseHandler>(async () => ({
+        output: { message: { content: [{ text: 'ok' }] } },
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      }));
+
+      const llm = new VernLLM({
+        client: fromBedrock(stubbedClient({ converse }), options),
+        model,
+      });
+
+      await llm.call({ userContent: 'hi', jsonMode: false });
+
+      return converse.mock.calls[0]?.[0]?.inferenceConfig?.temperature;
+    }
+
+    it.each([
+      ['anthropic.claude-haiku-4-5-20251001-v1:0', 0.2],
+      ['anthropic.claude-test', 0.2],
+      ['amazon.nova-pro-v1:0', 0.2],
+      ['anthropic.claude-opus-4-7-v1:0', undefined],
+      ['us.anthropic.claude-haiku-5-5-v1:0', undefined],
+      [
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5-5-v1:0',
+        undefined,
+      ],
+    ])('%s sends temperature %s by default', async (model, expected) => {
+      expect(await sentTemperature(model)).toBe(expected);
+    });
+
+    it('temperatureUnsupportedModels as a list replaces the built in rule', async () => {
+      const options = { temperatureUnsupportedModels: ['anthropic.claude-test'] };
+
+      expect(await sentTemperature('anthropic.claude-test', options)).toBeUndefined();
+      expect(await sentTemperature('anthropic.claude-opus-4-7-v1:0', options)).toBe(0.2);
+    });
+
+    it('temperatureUnsupportedModels as a predicate replaces the built in rule', async () => {
+      const options = { temperatureUnsupportedModels: (model: string) => model.includes('nova') };
+
+      expect(await sentTemperature('amazon.nova-pro-v1:0', options)).toBeUndefined();
+      expect(await sentTemperature('anthropic.claude-haiku-5-5-v1:0', options)).toBe(0.2);
+    });
+  });
 });

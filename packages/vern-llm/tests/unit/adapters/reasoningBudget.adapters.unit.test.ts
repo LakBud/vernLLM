@@ -167,7 +167,7 @@ describe('fromAnthropic reasoning budget', () => {
 
   it('omits temperature when manual thinking (budget_tokens) is set, even the instance default', async () => {
     const { client, create } = makeFakeAnthropicClient('hi');
-    const adapted = fromAnthropic(client);
+    const adapted = fromAnthropic(client, { sendTemperature: true });
 
     await adapted.chat.completions.create(
       {
@@ -183,9 +183,9 @@ describe('fromAnthropic reasoning budget', () => {
     expect('temperature' in create.mock.calls[0]![0]).toBe(false);
   });
 
-  it('keeps temperature when neither budget_tokens nor reasoning_effort is set', async () => {
+  it('keeps temperature when neither budget_tokens nor reasoning_effort is set, with sendTemperature', async () => {
     const { client, create } = makeFakeAnthropicClient('hi');
-    const adapted = fromAnthropic(client);
+    const adapted = fromAnthropic(client, { sendTemperature: true });
 
     await adapted.chat.completions.create(
       {
@@ -310,11 +310,15 @@ describe('fromAnthropic reasoning budget', () => {
 
     it('omits temperature on the adaptive path too, not just the manual budget_tokens path', async () => {
       const { client, create } = makeFakeAnthropicClient('hi');
-      const adapted = fromAnthropic(client);
+      // `claude-x` accepts temperature by the model rule, so only thinking can drop it here.
+      const adapted = fromAnthropic(client, {
+        sendTemperature: true,
+        adaptiveOnlyModels: ['claude-x'],
+      });
 
       await adapted.chat.completions.create(
         {
-          model: 'claude-sonnet-5',
+          model: 'claude-x',
           max_tokens: 100000,
           temperature: 0.2,
           reasoning_effort: 'medium',

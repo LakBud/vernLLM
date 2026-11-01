@@ -13,7 +13,7 @@ import type { ModelCapabilityOverride } from './nativeStructuredOutput.js';
  * A second segment of 8 digits or more is a snapshot date
  * (`claude-sonnet-5-20260101`), not a minor version, so it reads as `0`.
  */
-function parseClaudeVersion(
+export function parseClaudeVersion(
   model: string,
 ): { family?: string; major: number; minor: number } | null {
   const named = /claude-([a-z]+)-(\d+)(?:[-.](\d+))?/i.exec(model);
@@ -27,7 +27,12 @@ function parseClaudeVersion(
 }
 
 /** Whether `[major, minor]` is at least `[atLeastMajor, atLeastMinor]`. */
-function versionAtLeast(major: number, minor: number, atLeastMajor: number, atLeastMinor: number) {
+export function versionAtLeast(
+  major: number,
+  minor: number,
+  atLeastMajor: number,
+  atLeastMinor: number,
+) {
   return major > atLeastMajor || (major === atLeastMajor && minor >= atLeastMinor);
 }
 

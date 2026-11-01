@@ -84,6 +84,9 @@ describe('VernLLM.call(stream: true) through fromAnthropic, end to end', () => {
     ]);
 
     await expect(finalResult).resolves.toEqual({ city: 'Denver' });
+
+    // The default config resolves a temperature, which the adapter leaves out.
+    expect('temperature' in create.mock.calls[0]![0]).toBe(false);
   });
 
   it('streams tool_use blocks that accumulate into the same validated ToolCall[] a non-streaming call would return', async () => {

@@ -1,7 +1,11 @@
 import { LLMError, type ContentBlock, type WireCallRequest } from 'vern-llm';
 
 import { decodeBase64 } from './bytes.js';
-import { matchesCapability, type ModelCapabilityOverride } from './capabilities.js';
+import {
+  matchesCapability,
+  rejectsTemperature,
+  type ModelCapabilityOverride,
+} from './capabilities.js';
 import { planStructuredOutput } from './structuredOutput.js';
 import { resolveClaudeThinking } from './thinking.js';
 
@@ -307,8 +311,13 @@ export function buildBedrockRequest(
     ? { thinking: resolved.thinking }
     : undefined;
 
-  // Claude rejects temperature alongside any thinking mode.
-  const temperature = additionalModelRequestFields ? undefined : params.temperature;
+  // Claude rejects temperature alongside any thinking mode, and Claude 4.7 and
+  // later reject it outright.
+  const temperature =
+    additionalModelRequestFields ||
+    rejectsTemperature(params.model, options.temperatureUnsupportedModels)
+      ? undefined
+      : params.temperature;
 
   const request: ConverseRequest = {
     modelId: params.model,

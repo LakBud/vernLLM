@@ -152,6 +152,21 @@ predicate:
 fromAnthropic(client, { forcedToolChoiceUnsupportedModels: (model) => model.includes('opus-5-5') });
 ```
 
+## Temperature
+
+`fromAnthropic` never sends `temperature` by default. `@anthropic-ai/sdk` 1.x sends API version
+`2026-10-21`, which removes it on every model and answers 400, so VernLLM's default `temperature`
+would fail every call. A `temperature` you set is ignored too.
+
+For a client pinned to an older API version, opt in with `sendTemperature`. It is still left out on
+Claude 4.7 and later, which reject it on every version, and whenever thinking is on.
+
+```ts
+const anthropic = new Anthropic({ defaultHeaders: { 'anthropic-version': '2023-06-01' } });
+
+fromAnthropic(anthropic, { sendTemperature: true });
+```
+
 ## Streaming
 
 `fromAnthropic` implements `createStream` on top of the Messages API's own streaming mode. Anthropic's
