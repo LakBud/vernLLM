@@ -59,6 +59,21 @@ A process that has never recorded an attempt starts from an empty copy. `await l
 or `await budget.readState()`, asks Redis for the live window and refreshes that copy.
 `getRetryBudgetState()` reports the local copy.
 
+## Joining a busy window
+
+A process that joins a window already at the ratio starts from that empty copy, so its first
+retries can overshoot until the reply to its first attempt lands. In one run, two processes at a
+ratio of `0.2` ended a window at 6 retries over 22 attempts, `0.27`. Load the live window before the
+process takes traffic. If Redis is down this rejects, and the in process fallback still applies:
+
+```ts
+await budget.readState().catch(() => {});
+```
+
+A provider call usually takes far longer than a Redis round trip, so the first reply normally lands
+before the first retry decision. Processes that retry at the same moment can also briefly overshoot,
+since the check and the record are not one step.
+
 ## Redis unavailable
 
 The budget falls back to core's own [Retry Budget](/docs/core/retry-budget), built from the same
