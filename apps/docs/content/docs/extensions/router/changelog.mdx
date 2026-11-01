@@ -1,9 +1,43 @@
 ---
 title: Changelog
-description: Release history for vern-llm-router, the target ordering extension for VernLLM, generated from Changesets.
+description: Release history for vern-llm-router
 icon: Clock
 ---
 
 vern-llm-router uses Changesets for versioning. The release history below is generated automatically.
 
-No release yet. The history appears here after the first one.
+# vern-llm-router
+
+## 0.1.0
+
+### Minor Changes
+
+- ba5d612: First release of `vern-llm-router`, a middleware that picks the target order for each call from routes you write. Routes match on `context`, tools, JSON output or input size, and order targets by tiers, weights, least busy, or a ranking on latency, cost and quality. Targets with an open breaker or a rate limit go behind healthy ones, and `holdBack` does the same for a target named in a custom event, such as `data.target`, for `holdMs` (default 10 seconds, at most 60). Every call emits a `router.decision` event, and `apply: false` runs it in shadow mode.
+
+  ```ts
+  import { VernLLM } from 'vern-llm';
+  import { routerMiddleware } from 'vern-llm-router';
+
+  const router = routerMiddleware({
+    health: () => llm,
+    holdBack: [{ event: 'my.slow', holdMs: 5_000 }],
+    routes: [
+      { name: 'tools', when: { hasTools: true }, exclude: ['small'] },
+      { name: 'default', strategy: 'balanced', targets: [['main'], '*'] },
+    ],
+  });
+
+  const llm = new VernLLM({
+    client,
+    model: 'main',
+    fallback: [{ client: smallClient, model: 'mini', name: 'small' }],
+    middleware: [router],
+  });
+  ```
+
+  A new package, so existing code keeps compiling and behaving the same at runtime. It never adds a target, and a failure while deciding runs the call as it would be without a router.
+
+### Patch Changes
+
+- Updated dependencies: vern-llm@3.1.0
+

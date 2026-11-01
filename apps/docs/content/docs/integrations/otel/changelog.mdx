@@ -1,12 +1,30 @@
 ---
 title: Changelog
-description: Release history for vern-llm-otel, the OpenTelemetry middleware for VernLLM, generated from Changesets.
+description: Release history for vern-llm-otel
 icon: Clock
 ---
 
 vern-llm-otel uses Changesets for versioning. The release history below is generated automatically.
 
 # vern-llm-otel
+
+## 0.3.0
+
+### Minor Changes
+
+- dec26dc: Calls with more than one chain get one attempt span per chain.
+
+  A middleware that reruns the rest of the pipeline with `next.again()` runs attempts side by side. Each chain now tracks its own current attempt, so a second chain no longer closes the first one's span as abandoned. The attempt that answers keeps its usage, outcome and status, the attempts that were cancelled end with `vernllm.attempt.outcome: "unknown"`, and the attempt duration metrics include the answering attempt. Events carry their chain, so retries, fallbacks, rate limit waits and usage land on the right span. Calls with a single chain are unchanged.
+
+- 49826ec: Add `endAttributes` and `otelLogFields`.
+
+  `endAttributes(ctx)` adds attributes to the call span when it ends, after `finalResult` settles for a stream, so values only known at the end, such as a cost, can go on it. It is guarded and sanitized like `attributes`, and applied before the package's own end attributes, so it can never replace a `vernllm.*` or `gen_ai.*` one.
+
+  `otelLogFields(ctx)` returns the call span's `traceId` and `spanId`, or `{}` when there is no valid span, for a log record to carry. It works with either middleware registered first.
+
+### Patch Changes
+
+- Updated dependencies: vern-llm@3.1.0
 
 ## 0.2.0
 
