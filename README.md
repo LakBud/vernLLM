@@ -54,19 +54,19 @@ Works with OpenAI, Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI,
 
 This is a pnpm monorepo with multiple workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
 
-| Path                                                                                 | Description                                                                                                                  |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| [`packages/vern-llm`](./packages/vern-llm)                                           | The `vern-llm` npm package: source, tests, and its own README with the full API reference.                                   |
-| [`packages/integrations/vern-llm-redis`](./packages/integrations/vern-llm-redis)     | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`.             |
-| [`packages/integrations/vern-llm-otel`](./packages/integrations/vern-llm-otel)       | The `vern-llm-otel` npm package: OpenTelemetry traces and metrics for `vern-llm`.                                            |
-| [`packages/integrations/vern-llm-bedrock`](./packages/integrations/vern-llm-bedrock) | The `vern-llm-bedrock` npm package: the AWS Bedrock Converse adapter for `vern-llm`, built on the AWS SDK client.            |
-| [`packages/extensions/vern-llm-logger`](./packages/extensions/vern-llm-logger)       | The `vern-llm-logger` package (in development): structured call logs and rolling latency percentiles.                        |
-| [`packages/extensions/vern-llm-usage`](./packages/extensions/vern-llm-usage)         | The `vern-llm-usage` package (in development): estimated cost, wasted spend and budgets for each call.                       |
-| [`packages/extensions/vern-llm-router`](./packages/extensions/vern-llm-router)       | The `vern-llm-router` package (in development): picks the target order for each call from rules you write.                   |
-| [`packages/extensions/vern-llm-policy`](./packages/extensions/vern-llm-policy)       | The `vern-llm-policy` package (in development): rules for which providers and models a call may use, and whether it may run. |
-| [`packages/extensions/vern-llm-guard`](./packages/extensions/vern-llm-guard)         | The `vern-llm-guard` package (in development): checks on what goes into a call and what comes out: label, redact or block.   |
-| [`packages/extensions/vern-llm-hedge`](./packages/extensions/vern-llm-hedge)         | The `vern-llm-hedge` package (in development): sends a slow call to the next target too and keeps the first answer.          |
-| [`apps/docs`](./apps/docs)                                                           | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                             |
+| Path                                                                                 | Description                                                                                                       |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| [`packages/vern-llm`](./packages/vern-llm)                                           | The `vern-llm` npm package: source, tests, and its own README with the full API reference.                        |
+| [`packages/integrations/vern-llm-redis`](./packages/integrations/vern-llm-redis)     | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`.  |
+| [`packages/integrations/vern-llm-otel`](./packages/integrations/vern-llm-otel)       | The `vern-llm-otel` npm package: OpenTelemetry traces and metrics for `vern-llm`.                                 |
+| [`packages/integrations/vern-llm-bedrock`](./packages/integrations/vern-llm-bedrock) | The `vern-llm-bedrock` npm package: the AWS Bedrock Converse adapter for `vern-llm`, built on the AWS SDK client. |
+| [`packages/extensions/vern-llm-logger`](./packages/extensions/vern-llm-logger)       | The `vern-llm-logger` package: structured call logs and rolling latency percentiles.                              |
+| [`packages/extensions/vern-llm-usage`](./packages/extensions/vern-llm-usage)         | The `vern-llm-usage` package: estimated cost, wasted spend and budgets for each call.                             |
+| [`packages/extensions/vern-llm-router`](./packages/extensions/vern-llm-router)       | The `vern-llm-router` package: picks the target order for each call from rules you write.                         |
+| [`packages/extensions/vern-llm-policy`](./packages/extensions/vern-llm-policy)       | The `vern-llm-policy` package: rules for which providers and models a call may use, and whether it may run.       |
+| [`packages/extensions/vern-llm-guard`](./packages/extensions/vern-llm-guard)         | The `vern-llm-guard` package: checks on what goes into a call and what comes out: label, redact or block.         |
+| [`packages/extensions/vern-llm-hedge`](./packages/extensions/vern-llm-hedge)         | The `vern-llm-hedge` package: sends a slow call to the next target too and keeps the first answer.                |
+| [`apps/docs`](./apps/docs)                                                           | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                  |
 
 ## License
 
