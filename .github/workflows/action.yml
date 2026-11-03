@@ -1,0 +1,62 @@
+name: Setup workspace
+description: Install pnpm, Node and dependencies, and optionally restore the Nx cache and set the Nx base and head. Run actions/checkout first.
+
+inputs:
+  node-version:
+    description: Node version, the single place the repo's CI Node version is set.
+    default: '24.21.0'
+  registry-url:
+    description: npm registry URL, set only by jobs that publish.
+    default: ''
+  install:
+    description: Run pnpm install. Turn off for jobs that only need Node and run scripts with no dependencies.
+    default: 'true'
+  nx-cache:
+    description: Restore Nx's task cache from the most recent run of the same job.
+    default: 'true'
+  nx-shas:
+    description: Set NX_BASE and NX_HEAD for nx affected. Needs a checkout with fetch-depth 0.
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    # The pnpm version comes from "packageManager" in the root package.json.
+    - uses: pnpm/action-setup@v6
+
+    - uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        registry-url: ${{ inputs.registry-url }}
+
+    - name: Install dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    # Restores Nx's task cache (see nx.json's cacheDirectory) from the
+    # most recent run of the same job, so a task Nx already computed is
+    # read back instead of re-run. Keyed per job, not shared across
+    # jobs: two jobs saving an identical key would fail one of the
+    # saves, since a GitHub Actions cache key can only be written once.
+    # The key ends in the commit SHA so every run saves its own entry.
+    # A key that only held the lockfile hash would match exactly on
+    # every later run, and actions/cache skips the save on an exact
+    # match, so the cache would stay frozen at the first run. Nx hashes
+    # task inputs itself, so stale entries are never reused wrongly.
+    - name: Restore Nx cache
+      if: inputs.nx-cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: .nx/cache
+        key: nx-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+        restore-keys: |
+          nx-${{ runner.os }}-${{ github.job }}-
+
+    # Sets NX_BASE / NX_HEAD, so `nx affected` compares against the PR's
+    # real base (or the last successful push to main), not just the
+    # immediately preceding commit.
+    - name: Set Nx base and head
+      if: inputs.nx-shas == 'true'
+      uses: nrwl/nx-set-shas@v5

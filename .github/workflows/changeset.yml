@@ -25,14 +25,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/setup
         with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+          nx-cache: 'false'
+          nx-shas: 'false'
 
       - name: Check for changeset
         run: pnpm changeset status --since=origin/main

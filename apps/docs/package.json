@@ -1,6 +1,11 @@
 {
   "name": "vern-llm-docs",
   "private": true,
+  "nx": {
+    "tags": [
+      "docs"
+    ]
+  },
   "scripts": {
     "build": "next build",
     "dev": "next dev",
