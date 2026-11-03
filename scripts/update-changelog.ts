@@ -27,7 +27,19 @@ const dirs: Record<string, string> = {
   'vern-llm-hedge': 'packages/extensions',
 };
 
+// Optional package names limit the run to those pages, so one package's release never
+// rewrites another package's page. Without names every page is written. Each page written
+// is printed, one path per line, so a caller can tell which files to commit.
+const only = process.argv.slice(2);
+for (const name of only) {
+  if (!(name in packages)) {
+    console.error(`No docs changelog page is configured for ${name}, skipping it.`);
+  }
+}
+
 for (const [pkg, docPath] of Object.entries(packages)) {
+  if (only.length > 0 && !only.includes(pkg)) continue;
+
   const changelogPath = `${dirs[pkg] ?? 'packages'}/${pkg}/CHANGELOG.md`;
 
   let changelog: string;
@@ -55,4 +67,5 @@ ${changelog}
   // A new package's docs folder may not exist in the checkout yet.
   await mkdir(dirname(docPath), { recursive: true });
   await writeFile(docPath, output);
+  console.log(docPath);
 }

@@ -22,40 +22,11 @@ jobs:
           filter: tree:0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: ./.github/actions/setup
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # Restores Nx's task cache (see nx.json's cacheDirectory) from the
-      # most recent run of this job, so a task Nx already computed is
-      # read back instead of re-run. Keyed per job, not shared across
-      # jobs: two jobs saving an identical key would fail one of the
-      # saves, since a GitHub Actions cache key can only be written once.
-      # The key ends in the commit SHA so every run saves its own entry.
-      # A key that only held the lockfile hash would match exactly on
-      # every later run, and actions/cache skips the save on an exact
-      # match, so the cache would stay frozen at the first run. Nx hashes
-      # task inputs itself, so stale entries are never reused wrongly.
-      - name: Restore Nx cache
-        uses: actions/cache@v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-${{ github.job }}-
-
-      # Sets NX_BASE / NX_HEAD for this job, so `nx affected` below
-      # compares against the PR's real base (or the last successful push
-      # to main), not just the immediately preceding commit.
-      - uses: nrwl/nx-set-shas@v5
-
+      # The docs project (tag:docs) is linted, typechecked and built in the docs job.
       - name: Lint affected projects
-        run: pnpm exec nx affected -t lint --verbose
+        run: pnpm exec nx affected -t lint --exclude=tag:docs --verbose
 
   typecheck:
     runs-on: ubuntu-latest
@@ -66,24 +37,7 @@ jobs:
           filter: tree:0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Restore Nx cache
-        uses: actions/cache@v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-${{ github.job }}-
-
-      - uses: nrwl/nx-set-shas@v5
+      - uses: ./.github/actions/setup
 
       # vern-llm-redis type-checks against vern-llm's real built .d.ts
       # output via the workspace link, so its typecheck target depends
@@ -92,7 +46,7 @@ jobs:
       # first" step needed here the way the old per-package workflows
       # required.
       - name: Typecheck affected projects
-        run: pnpm exec nx affected -t typecheck typecheck:test types:check --verbose
+        run: pnpm exec nx affected -t typecheck typecheck:test types:check --exclude=tag:docs --verbose
 
   build:
     runs-on: ubuntu-latest
@@ -103,30 +57,13 @@ jobs:
           filter: tree:0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Check peer dependencies
         run: pnpm peers check
 
-      - name: Restore Nx cache
-        uses: actions/cache@v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-${{ github.job }}-
-
-      - uses: nrwl/nx-set-shas@v5
-
       - name: Build, bundle-size check and smoke test affected projects
-        run: pnpm exec nx affected -t build size smoke-test --verbose
+        run: pnpm exec nx affected -t build size smoke-test --exclude=tag:docs --verbose
 
       # bench:check exists on the core, the extensions, the integrations and stack-bench: it fails when a
       # package's per call cost (or the whole middleware stack's, for stack-bench) grows past the baseline in
@@ -144,24 +81,7 @@ jobs:
           filter: tree:0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Restore Nx cache
-        uses: actions/cache@v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-${{ github.job }}-
-
-      - uses: nrwl/nx-set-shas@v5
+      - uses: ./.github/actions/setup
 
       - name: Test unit, affected projects
         run: pnpm exec nx affected -t test:unit:coverage --output-style=static --verbose
@@ -283,16 +203,9 @@ jobs:
           filter: tree:0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/setup
         with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - uses: nrwl/nx-set-shas@v5
+          nx-cache: 'false'
 
       # Only vern-llm-redis uses the redis-server binary, so the install below
       # is skipped when that project is not affected. This needs the
@@ -425,32 +338,13 @@ jobs:
           filter: tree:0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: ./.github/actions/setup
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Restore Nx cache
-        uses: actions/cache@v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-${{ github.job }}-
-
-      - uses: nrwl/nx-set-shas@v5
-
-      # Explicit exclude, not a project filter Nx offers a cleaner flag
-      # for: lint and build exist on every project, so an unscoped
-      # `nx affected -t lint build` here would redundantly re-run them
-      # for vern-llm and vern-llm-redis too (already covered by the lint
-      # and build jobs above), not just for vern-llm-docs. Revisit with
-      # Nx project tags (e.g. exclude '*,!tag:docs') if a fourth project
-      # ever needs this same kind of scoping.
+      # Scoped to projects tagged "docs" (see apps/docs/package.json), which
+      # the lint, typecheck and build jobs above exclude, so each docs check
+      # runs exactly once. A new package needs no change here. `nx affected`
+      # has no --projects flag (it would be forwarded to the target's own
+      # command), so "exclude everything except tag:docs" is how it is scoped.
       #
       # Run as separate commands, not one combined target list:
       # types:check runs `next typegen`, which writes
@@ -459,15 +353,15 @@ jobs:
       # targets have no ordering guarantee within the same project and
       # can run concurrently, racing on that file.
       - name: Lint affected docs
-        run: pnpm exec nx affected -t lint --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose
+        run: pnpm exec nx affected -t lint --exclude='*,!tag:docs' --verbose
 
       - name: Typecheck affected docs
-        run: pnpm exec nx affected -t types:check --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose
+        run: pnpm exec nx affected -t types:check --exclude='*,!tag:docs' --verbose
 
       # Fails on any internal /docs/... link whose page or #anchor doesn't
       # exist. The test target covers the checker itself.
       - name: Check affected docs links
-        run: pnpm exec nx affected -t links:check test --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose
+        run: pnpm exec nx affected -t links:check test --exclude='*,!tag:docs' --verbose
 
       # Next.js writes its incremental build cache to apps/docs/.next/cache,
       # which Nx does not track (the build target's outputs are dist). It is
@@ -485,4 +379,4 @@ jobs:
             next-${{ runner.os }}-
 
       - name: Build affected docs
-        run: pnpm exec nx affected -t build --exclude=vern-llm,vern-llm-redis,vern-llm-otel,vern-llm-bedrock,vern-llm-logger,vern-llm-usage,vern-llm-router,vern-llm-policy,vern-llm-guard,vern-llm-hedge --verbose
+        run: pnpm exec nx affected -t build --exclude='*,!tag:docs' --verbose

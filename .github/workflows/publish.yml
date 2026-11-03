@@ -12,7 +12,7 @@ on:
           - canary
 
       tag:
-        description: 'Production release tag, e.g. vern-llm@1.2.3, vern-llm-redis@0.2.0, vern-llm-otel@0.1.0, vern-llm-bedrock@0.1.0, vern-llm-logger@0.1.0, vern-llm-usage@0.1.0, vern-llm-router@0.1.0, vern-llm-policy@0.1.0, vern-llm-guard@0.1.0 or vern-llm-hedge@0.1.0'
+        description: 'Production release tag, in <package-name>@<version> form, e.g. vern-llm@1.2.3 or vern-llm-redis@0.2.0'
         required: false
         type: string
 
@@ -57,77 +57,48 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/setup
         with:
-          node-version: 24.21.0
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+          nx-cache: 'false'
+          nx-shas: 'false'
 
       - run: npm install -g npm@11.5.1 && npm --version
 
-      - run: pnpm install --frozen-lockfile
-
       # Tags are "<package.json name>@<version>", split on the last "@"
       # so scoped names like "@org/name@1.2.3" still split correctly.
-      - name: Resolve package name and version from the tag
+      - name: Resolve package name, version and directory from the tag
         id: tag
         env:
           TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           NAME="${TAG%@*}"
           VERSION="${TAG##*@}"
+          DIR="$(node scripts/resolve-packages.ts "$NAME" | jq -r '.[0].dir')"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Find that package's directory in the workspace
-        id: pkg
-        env:
-          NAME: ${{ steps.tag.outputs.name }}
-        run: |
-          DIR="$(node -e '
-            const fs = require("fs");
-            const path = require("path");
-            const name = process.env.NAME;
-            for (const root of ["packages", "packages/integrations", "packages/extensions", "apps"]) {
-              if (!fs.existsSync(root)) continue;
-              for (const entry of fs.readdirSync(root)) {
-                const pkgPath = path.join(root, entry, "package.json");
-                if (!fs.existsSync(pkgPath)) continue;
-                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-                if (pkg.name === name) {
-                  process.stdout.write(path.join(root, entry));
-                  process.exit(0);
-                }
-              }
-            }
-          ')"
-
-          if [ -z "$DIR" ]; then
-            echo "ERROR: no workspace package named '$NAME' was found under packages/, packages/integrations/, packages/extensions/ or apps/"
-            exit 1
-          fi
-
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Verify the tag's version matches the package's own version
         env:
-          DIR: ${{ steps.pkg.outputs.dir }}
+          DIR: ${{ steps.tag.outputs.dir }}
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          ACTUAL="$(node -p "require('./$DIR/package.json').version")"
+          ACTUAL="$(jq -r '.version' "$DIR/package.json")"
 
           if [[ "$ACTUAL" != "$VERSION" ]]; then
             echo "ERROR: tag version '$VERSION' does not match $DIR/package.json version '$ACTUAL'"
             exit 1
           fi
 
-      - name: Typecheck
-        run: pnpm run typecheck
-
-      - name: Test
-        run: pnpm run test:unit
+      # Scoped to the package being released. Nx builds the workspace packages it
+      # depends on first. The whole repo already passed CI on the merge that
+      # produced this tag, so it is not run again here.
+      - name: Typecheck and test the package
+        env:
+          NAME: ${{ steps.tag.outputs.name }}
+        run: pnpm exec nx run-many -t typecheck typecheck:test types:check test:unit --projects="$NAME"
 
       - name: Build
         env:
@@ -147,23 +118,27 @@ jobs:
       # --no-git-checks since this runs against a detached tag checkout,
       # not a branch with a clean working tree pnpm would otherwise expect.
       - name: Publish to npm
-        working-directory: ${{ steps.pkg.outputs.dir }}
+        working-directory: ${{ steps.tag.outputs.dir }}
         run: pnpm publish --no-git-checks
 
-      # Runs for either package's release, not just vern-llm's: the
-      # changelog script itself now reads both packages' CHANGELOG.md
-      # files into one combined docs page, so a vern-llm-redis release
-      # needs this refresh (and redeploy) just as much as vern-llm's does.
+      # Writes only this package's changelog page (update-changelog prints the
+      # pages it wrote), so a release never overwrites another package's newer page.
       - name: Update docs changelog
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router' || steps.tag.outputs.name == 'vern-llm-policy' || steps.tag.outputs.name == 'vern-llm-guard' || steps.tag.outputs.name == 'vern-llm-hedge'
-        run: pnpm update-changelog
+        env:
+          NAME: ${{ steps.tag.outputs.name }}
+        run: pnpm --silent update-changelog "$NAME" > "$RUNNER_TEMP/changelog-pages.txt"
 
       - name: Commit changelog docs update
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router' || steps.tag.outputs.name == 'vern-llm-policy' || steps.tag.outputs.name == 'vern-llm-guard' || steps.tag.outputs.name == 'vern-llm-hedge'
-        env:
-          TAG_NAME: ${{ steps.tag.outputs.name }}
         run: |
           set -euo pipefail
+
+          mapfile -t files < "$RUNNER_TEMP/changelog-pages.txt"
+
+          # A package without a release yet has no generated page.
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No changelog pages to commit"
+            exit 0
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -175,41 +150,14 @@ jobs:
 
           trap 'git worktree remove --force "$WORKTREE"' EXIT
 
-          files=(
-            "apps/docs/content/docs/changelog.mdx"
-            "apps/docs/content/docs/integrations/redis/changelog.mdx"
-            "apps/docs/content/docs/integrations/otel/changelog.mdx"
-            "apps/docs/content/docs/integrations/bedrock/changelog.mdx"
-            "apps/docs/content/docs/extensions/logger/changelog.mdx"
-            "apps/docs/content/docs/extensions/usage/changelog.mdx"
-            "apps/docs/content/docs/extensions/router/changelog.mdx"
-            "apps/docs/content/docs/extensions/policy/changelog.mdx"
-            "apps/docs/content/docs/extensions/guard/changelog.mdx"
-            "apps/docs/content/docs/extensions/hedge/changelog.mdx"
-          )
-
-          # A hedge release touches only its own page.
-          if [ "$TAG_NAME" = "vern-llm-hedge" ]; then
-            files=("apps/docs/content/docs/extensions/hedge/changelog.mdx")
-          fi
-
-          # A package without a release yet has no generated page, so skip it.
-          copied=()
           for file in "${files[@]}"; do
-            [ -f "$file" ] || continue
             mkdir -p "$WORKTREE/$(dirname "$file")"
             cp "$file" "$WORKTREE/$file"
-            copied+=("$file")
           done
 
           cd "$WORKTREE"
 
-          if [ "${#copied[@]}" -eq 0 ]; then
-            echo "No changelog pages to commit"
-            exit 0
-          fi
-
-          git add "${copied[@]}"
+          git add "${files[@]}"
 
           if git diff --cached --quiet; then
             echo "No changelog changes to commit"
@@ -218,9 +166,9 @@ jobs:
 
           git commit -m "docs: update changelog"
 
-          # Packages released from the same merge run in parallel and push
-          # the same pages, so a rejected push rebases and retries. A rebase
-          # that leaves nothing new means another run already pushed it.
+          # Packages released from the same merge run in parallel, each pushing
+          # its own page, so a rejected push rebases and retries. A rebase that
+          # leaves nothing new means another run already pushed it.
           for attempt in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               exit 0
@@ -236,7 +184,6 @@ jobs:
           exit 1
 
       - name: Deploy to Vercel
-        if: steps.tag.outputs.name == 'vern-llm' || steps.tag.outputs.name == 'vern-llm-redis' || steps.tag.outputs.name == 'vern-llm-otel' || steps.tag.outputs.name == 'vern-llm-bedrock' || steps.tag.outputs.name == 'vern-llm-logger' || steps.tag.outputs.name == 'vern-llm-usage' || steps.tag.outputs.name == 'vern-llm-router' || steps.tag.outputs.name == 'vern-llm-policy' || steps.tag.outputs.name == 'vern-llm-guard' || steps.tag.outputs.name == 'vern-llm-hedge'
         run: |
           curl -X POST "${{ secrets.VERNLLM_RELEASE }}"
 
@@ -249,17 +196,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/setup
         with:
-          node-version: 24.21.0
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+          nx-cache: 'false'
+          nx-shas: 'false'
 
       - run: npm install -g npm@11.5.1 && npm --version
-
-      - run: pnpm install --frozen-lockfile
 
       - run: pnpm run typecheck
 
@@ -273,38 +216,21 @@ jobs:
         env:
           NAMES: ${{ inputs.package || 'vern-llm' }}
         run: |
-          node -e '
-            const fs = require("fs");
-            const path = require("path");
-            const names = process.env.NAMES.split(/[\s,]+/).filter(Boolean);
-            const found = new Map();
-            for (const root of ["packages", "packages/integrations", "packages/extensions", "apps"]) {
-              if (!fs.existsSync(root)) continue;
-              for (const entry of fs.readdirSync(root)) {
-                const pkgPath = path.join(root, entry, "package.json");
-                if (!fs.existsSync(pkgPath)) continue;
-                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-                if (names.includes(pkg.name)) found.set(pkg.name, { dir: path.join(root, entry), pkg });
-              }
-            }
-            const missing = names.filter((n) => !found.has(n));
-            if (missing.length) {
-              console.log(`ERROR: no workspace package named ${missing.join(", ")} was found`);
-              process.exit(1);
-            }
-            for (const [name, { pkg }] of found) {
-              const deps = { ...pkg.dependencies, ...pkg.peerDependencies };
-              for (const [dep, range] of Object.entries(deps)) {
-                if (String(range).startsWith("workspace:") && !found.has(dep)) {
-                  console.log(`::warning::${name} depends on ${dep}, which is not in this canary, so it will resolve to the last ${dep} release`);
-                }
-              }
-            }
-            const out = process.env.GITHUB_OUTPUT;
-            fs.appendFileSync(out, `dirs=${[...found.values()].map((v) => v.dir).join(" ")}\n`);
-            fs.appendFileSync(out, `filters=${[...found.keys()].map((n) => `--filter=${n}`).join(" ")}\n`);
-            fs.appendFileSync(out, `names=${[...found.keys()].join(" ")}\n`);
-          '
+          set -euo pipefail
+          RESOLVED="$(node scripts/resolve-packages.ts "$NAMES")"
+
+          jq -r '
+            map(.name) as $names
+            | .[] | .name as $pkg | .workspaceDeps[]
+            | select(. as $dep | $names | index($dep) | not)
+            | "::warning::\($pkg) depends on \(.), which is not in this canary, so it will resolve to the last \(.) release"
+          ' <<< "$RESOLVED"
+
+          {
+            echo "dirs=$(jq -r 'map(.dir) | join(" ")' <<< "$RESOLVED")"
+            echo "filters=$(jq -r 'map("--filter=" + .name) | join(" ")' <<< "$RESOLVED")"
+            echo "names=$(jq -r 'map(.name) | join(" ")' <<< "$RESOLVED")"
+          } >> "$GITHUB_OUTPUT"
 
       - run: pnpm ${{ steps.pkg.outputs.filters }} run build
 

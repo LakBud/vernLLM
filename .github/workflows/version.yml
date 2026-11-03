@@ -32,15 +32,10 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/setup
         with:
-          node-version: 24.21.0
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          nx-cache: 'false'
+          nx-shas: 'false'
 
       - name: Verify there are no pending changesets
         run: pnpm changeset status
@@ -98,6 +93,13 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # Node only, for scripts/resolve-packages.ts: no dependencies are installed here.
+      - uses: ./.github/actions/setup
+        with:
+          install: 'false'
+          nx-cache: 'false'
+          nx-shas: 'false'
+
       - name: Extract release notes from CHANGELOG
         id: notes
         env:
@@ -106,31 +108,9 @@ jobs:
           set -euo pipefail
           NAME="${TAG%@*}"
           VERSION="${TAG##*@}"
-          export NAME
           echo "Tag: $TAG -> package: $NAME version: $VERSION"
 
-          DIR="$(node -e '
-            const fs = require("fs");
-            const path = require("path");
-            const name = process.env.NAME;
-            for (const root of ["packages", "packages/integrations", "packages/extensions", "apps"]) {
-              if (!fs.existsSync(root)) continue;
-              for (const entry of fs.readdirSync(root)) {
-                const pkgPath = path.join(root, entry, "package.json");
-                if (!fs.existsSync(pkgPath)) continue;
-                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-                if (pkg.name === name) {
-                  process.stdout.write(path.join(root, entry));
-                  process.exit(0);
-                }
-              }
-            }
-          ')"
-
-          if [ -z "$DIR" ]; then
-            echo "ERROR: no workspace package named '$NAME' found"
-            exit 1
-          fi
+          DIR="$(node scripts/resolve-packages.ts "$NAME" | jq -r '.[0].dir')"
 
           CHANGELOG="$DIR/CHANGELOG.md"
           NOTES_FILE="$RUNNER_TEMP/release-notes-$NAME.md"
