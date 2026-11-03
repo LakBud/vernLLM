@@ -43,6 +43,8 @@ import {
 } from '@lobehub/icons';
 import { Globe } from 'lucide-react';
 
+import { brandIcons } from './brand-icons';
+
 export const providers = [
   { name: 'OpenAI', Icon: OpenAI, href: '/docs/adapters' },
   { name: 'Anthropic', Icon: Anthropic, href: '/docs/adapters/anthropic' },
@@ -88,6 +90,66 @@ export const providers = [
   { name: 'Custom HTTPS API', Icon: Globe, href: '/docs/adapters/custom-fetch' },
 ];
 
+export const extensions = [
+  {
+    name: 'Logger',
+    logo: '/extensions/vernllm-logger.png',
+    href: '/docs/extensions/logger',
+    description: 'One structured record per call, with latency percentiles and slow call alerts.',
+  },
+  {
+    name: 'Usage',
+    logo: '/extensions/vernllm-usage.png',
+    href: '/docs/extensions/usage',
+    description: 'Know what every call costs, and stop spend before a provider is contacted.',
+  },
+  {
+    name: 'Router',
+    logo: '/extensions/vernllm-router.png',
+    href: '/docs/extensions/router',
+    description: 'Picks the best target for each call by rules, health, latency, or cost.',
+  },
+  {
+    name: 'Policy',
+    logo: '/extensions/vernllm-policy.png',
+    href: '/docs/extensions/policy',
+    description: 'Keeps calls off providers they must not use, and records why.',
+  },
+  {
+    name: 'Guard',
+    logo: '/extensions/vernllm-guard.png',
+    href: '/docs/extensions/guard',
+    description: 'Redacts or blocks sensitive data on the way in and out, streams included.',
+  },
+  {
+    name: 'Hedge',
+    logo: '/extensions/vernllm-hedge.png',
+    href: '/docs/extensions/hedge',
+    description: 'Races a slow call against the next target and keeps the first answer.',
+  },
+];
+
+export const integrations = [
+  {
+    name: 'Redis',
+    icon: brandIcons['Redis'],
+    href: '/docs/integrations/redis',
+    description: 'One shared state for breakers, limits, budgets, and cache across every instance.',
+  },
+  {
+    name: 'OpenTelemetry',
+    icon: brandIcons['OpenTelemetry'],
+    href: '/docs/integrations/otel',
+    description: 'Every call becomes a trace and metrics in your observability stack.',
+  },
+  {
+    name: 'AWS Bedrock',
+    icon: brandIcons['Bedrock'],
+    href: '/docs/integrations/bedrock',
+    description: 'Every Bedrock model and guardrail, through the AWS SDK you already use.',
+  },
+];
+
 export const codeExample = `import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
@@ -98,8 +160,8 @@ const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_AP
 
 export const llm = new VernLLM({
   client: openai,
-  model: 'gpt-4o',
-  fallback: { client: anthropic, model: 'claude-sonnet-5', circuitBreaker: true },
+  model: 'gpt-6-sol',
+  fallback: { client: anthropic, model: 'claude-opus-5-5', circuitBreaker: true },
   rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000, maxConcurrent: 20 },
   retryBudget: { windowMs: 60_000, minCalls: 20, retryRatio: 0.2 },
   maxRetries: 3,

@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
+import type { ComponentProps } from 'react';
 
 import { ServerCodeBlock } from '@fumadocs/base-ui/components/codeblock.rsc';
 import { transformerIcon } from 'fumadocs-core/mdx-plugins';
+import Image from 'next/image';
 import Link from 'next/link';
 import { createCssVariablesTheme } from 'shiki';
 
@@ -10,7 +12,14 @@ import Squares from '../../components/squares';
 import { AuroraBarsClient } from '@/components/aurora-bars-client';
 import { InstallCommand } from '@/components/install-command';
 import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
-import { annotations, codeExample, faqItems, providers } from '@/lib/home.utils';
+import {
+  annotations,
+  codeExample,
+  extensions,
+  faqItems,
+  integrations,
+  providers,
+} from '@/lib/home.utils';
 import {
   generateFaqPage,
   generateOrganization,
@@ -28,6 +37,25 @@ const primaryButtonClass =
 
 const secondaryButtonClass =
   'inline-flex items-center gap-1.5 rounded-md border border-fd-border bg-fd-card px-3 py-1.5 text-sm font-medium text-fd-foreground transition-colors hover:bg-fd-accent';
+
+// Tags every code line with its 1 based number, so a note can point at it.
+const lineNumbers: NonNullable<ComponentProps<typeof ServerCodeBlock>['transformers']>[number] = {
+  name: 'line-numbers',
+  line(node, line) {
+    node.properties['data-line'] = line;
+  },
+};
+
+// The first code line each note names, then one hover rule per note.
+const codeLines = codeExample.split('\n');
+const noteLinkCss = annotations
+  .map((a, n) => {
+    const line = codeLines.findIndex((text) => text.includes(a.line)) + 1;
+    return line
+      ? `.code-notes:has([data-note="${n}"]:hover) [data-line="${line}"]{background:color-mix(in srgb,var(--color-fd-primary) 14%,transparent);box-shadow:inset 2px 0 0 var(--color-fd-primary)}`
+      : '';
+  })
+  .join('');
 
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
@@ -61,10 +89,10 @@ export default function HomePage() {
               by default.
             </h1>
 
-            <p className="mt-6 max-w-xl text-base text-fd-muted-foreground lg:text-lg">
-              The LLM call framework. Resilience, observability, and control for every call. Retry
-              budgets, provider fallback, rate limiting, circuit breaking and more, dependency-light
-              and typed from the start.
+            <p className="mt-6 max-w-xl text-base text-fd-muted-foreground lg:w-[32vw] lg:min-w-[26rem] lg:max-w-none lg:text-lg">
+              The LLM call framework. Resilience, observability, and control for every call.
+              Providers go down, bills spike, and private data ends up where it shouldn't. VernLLM
+              keeps all three in check inside your own process, with no gateway to host.
             </p>
           </div>
 
@@ -96,12 +124,14 @@ export default function HomePage() {
 
       {/* CODE */}
       <section className="px-6 py-20 lg:px-16">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-10 lg:grid-cols-12">
+        {/* Hovering a note lights the code line it names. */}
+        <style>{noteLinkCss}</style>
+        <div className="code-notes mx-auto grid max-w-6xl grid-cols-1 items-center gap-10 lg:grid-cols-12">
           <div className="lg:col-span-8">
             <ServerCodeBlock
               lang="ts"
               code={codeExample}
-              transformers={[transformerIcon()]}
+              transformers={[transformerIcon(), lineNumbers]}
               themes={{
                 light: createCssVariablesTheme({
                   name: 'vern',
@@ -129,14 +159,103 @@ export default function HomePage() {
             </h2>
 
             <ul className="flex flex-col gap-3">
-              {annotations.map((a) => (
-                <li key={a.line} className="flex flex-col gap-0.5">
+              {annotations.map((a, n) => (
+                <li key={a.line} data-note={n} className="group flex flex-col gap-0.5">
                   <code className="font-mono text-xs text-fd-primary">{a.line}</code>
-                  <span className="text-sm text-fd-muted-foreground">→ {a.note}</span>
+                  <span className="text-sm text-fd-muted-foreground transition-colors group-hover:text-fd-foreground">
+                    {a.note}
+                  </span>
                 </li>
               ))}
             </ul>
           </div>
+        </div>
+      </section>
+
+      {/* EXTENSIONS */}
+      <section className="px-6 py-20 lg:px-16">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-14">
+          <div className="flex flex-col items-center gap-4 text-center">
+            <h2 className="text-4xl font-semibold sm:text-5xl lg:text-[60px]">Extensions</h2>
+
+            <p className="max-w-xl text-base text-fd-muted-foreground">
+              Extend your LLM calls even further. With extensions, VernLLM records every call, caps
+              its cost, keeps private data out, chooses where it goes, and rescues it when a
+              provider is slow. Add only the ones you need.
+            </p>
+          </div>
+
+          <div className="grid w-full grid-cols-2 gap-x-6 gap-y-12 md:grid-cols-3 lg:grid-cols-6">
+            {extensions.map(({ name, logo, href, description }) => (
+              <Link
+                key={name}
+                href={href}
+                className="group flex flex-col items-center gap-5 text-center"
+              >
+                <Image
+                  src={logo}
+                  alt={`${name} extension logo`}
+                  width={952}
+                  height={1144}
+                  className="h-16 w-auto opacity-80 transition-all duration-200 group-hover:-translate-y-1 group-hover:opacity-100 md:h-20"
+                />
+
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-base font-semibold text-fd-foreground">{name}</span>
+                  <span className="text-sm text-fd-muted-foreground">{description}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+
+          <Link href="/docs/extensions" className={primaryButtonClass}>
+            Browse all extensions
+          </Link>
+        </div>
+      </section>
+
+      {/* INTEGRATIONS */}
+      <section className="px-6 py-20 lg:px-16">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-14">
+          <div className="flex flex-col items-center gap-4 text-center">
+            <h2 className="text-4xl font-semibold sm:text-5xl lg:text-[60px]">Integrations</h2>
+
+            <p className="max-w-xl text-base text-fd-muted-foreground">
+              Integrate your LLM calls even further. Integrations connect VernLLM to what lives
+              outside your process: state shared across every instance, traces in the stack you
+              already run, and providers with their own SDK.
+            </p>
+          </div>
+
+          <div className="grid w-full max-w-3xl grid-cols-1 gap-x-6 gap-y-12 sm:grid-cols-3">
+            {integrations.map(({ name, icon, href, description }) =>
+              icon ? (
+                <Link
+                  key={name}
+                  href={href}
+                  className="group flex flex-col items-center gap-5 text-center"
+                >
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className="h-12 w-12 text-fd-muted-foreground opacity-60 transition-all duration-200 group-hover:-translate-y-1 group-hover:text-fd-card-foreground group-hover:opacity-100 md:h-16 md:w-16"
+                  >
+                    <path d={icon.path} fillRule={icon.fillRule} />
+                  </svg>
+
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-base font-semibold text-fd-foreground">{name}</span>
+                    <span className="text-sm text-fd-muted-foreground">{description}</span>
+                  </div>
+                </Link>
+              ) : null,
+            )}
+          </div>
+
+          <Link href="/docs/integrations" className={primaryButtonClass}>
+            Browse all integrations
+          </Link>
         </div>
       </section>
 
@@ -192,11 +311,19 @@ export default function HomePage() {
         speed={2}
       />
 
+      <section className="border-y border-fd-border">
+        <div className="w-full py-4">
+          <InstallCommand />
+        </div>
+      </section>
+
       {/* FOOTER */}
-      <section className="border-t border-fd-border">
-        <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-6 py-16 text-center lg:px-16">
+      <section className="relative overflow-hidden">
+        <Squares squareSize={44} />
+
+        <div className="relative z-10 mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-6 py-16 text-center lg:px-16">
           <h2 className="max-w-xl text-xl font-bold text-fd-foreground sm:text-3xl">
-            Stop reinventing the call layer.
+            Make every call count.
           </h2>
 
           <div className={buttonGroupClass}>
@@ -213,8 +340,6 @@ export default function HomePage() {
               Source
             </a>
           </div>
-
-          <code className="font-mono text-xs text-fd-muted-foreground">npm install vern-llm</code>
         </div>
       </section>
     </div>
