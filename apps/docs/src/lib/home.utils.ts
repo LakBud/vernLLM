@@ -216,38 +216,53 @@ export const annotations = [
 ];
 export const faqItems = [
   {
-    question: 'What problem does VernLLM solve?',
+    question:
+      'My provider returns a 200, but the answer is empty, cut off, or an error hidden in the stream. Who catches that?',
     answer:
-      'LLM calls fail in ways plain SDK calls do not handle: timeouts, rate limit errors, a provider having an outage, or a request that just hangs. VernLLM adds retries with backoff, a circuit breaker, provider fallback, rate limiting, and caching around your existing client, so a single bad call does not take down your app.',
+      'Retry logic that keys on status codes misses these. VernLLM judges the answer: an empty body fails, JSON cut off at `max_tokens` becomes a retryable `response_truncated` error, and a stream that errors before its first content chunk is retried or falls back, even after a keep alive ping opened it. `detectSoftFailure` flags anything else you consider broken, and each failure counts against that target breaker.',
   },
   {
-    question: 'Why use VernLLM instead of a gateway?',
+    question: 'A provider outage multiplies my traffic with retries. How do I stop a retry storm?',
     answer:
-      'VernLLM runs in your own process, so there is no extra network hop or proxy to maintain. It is built around small interfaces rather than one config object, so caching, rate limiting, and the circuit breaker can each be swapped for your own implementation. Running in-process also means it can react to your own application logic, not just the request and response, catching failures a gateway watching traffic from outside your app would miss. A gateway is still the better choice for one shared setup across many services or languages.',
+      'A retry budget caps retries at a share of each target traffic over a rolling window, so retries stop before they pile onto a struggling provider. Retries also use full jitter and honor `Retry-After`. Set your provider SDK to `maxRetries: 0`, since the OpenAI, Anthropic, and Gemini SDKs retry on their own and would stack on top.',
   },
   {
-    question: 'Why use VernLLM instead of calling the client directly?',
+    question:
+      'During an outage every request still waits on the failing provider. How do I fail over fast?',
     answer:
-      'Calling the client directly means you own retries, timeouts, circuit breaking, and caching yourself, code most teams end up rewriting per project. VernLLM ships those as configurable options on one class, so you keep your existing provider client and wrap it instead of reimplementing the resilience layer.',
+      'Each target has its own circuit breaker. Once the primary opens, calls skip it and go straight to the fallback instead of paying for failed attempts first. Recovery uses half open trial calls rather than a timer, and your own errors, such as a bad request or a schema failure, never trip it. With `vern-llm-redis` the breaker state is shared across instances.',
   },
   {
-    question: 'Can I bring my own cache backend?',
+    question: 'How do I stay under my provider rate limit instead of collecting 429s?',
     answer:
-      'Yes. cachedCall accepts any adapter implementing get/set (delete is optional), so Redis, a database, or a custom store can replace the built-in in-memory cache without changing how you call it.',
+      'A `rateLimit` such as `{ requestsPerMinute: 500 }` estimates tokens before each call, queues calls within your request, token, and concurrency limits, then reconciles with real usage. It shrinks the limit after a 429, or ahead of one when the provider reports few requests left. Every target has its own limiter, so a burst against a struggling primary cannot starve a healthy fallback, and `vern-llm-redis` shares the buckets across processes.',
   },
   {
-    question: 'Can I hook into or modify requests before they go out?',
+    question: 'What happens to streams that stall, fail midway, or get abandoned by the user?',
     answer:
-      'Yes, through middleware. transform edits or redacts an outgoing request before it is sent, and wrap runs around a whole logical call, retries and fallback attempts included, for logging, tracing, or cost tracking.',
+      'A stream that fails before its first content chunk is retried or falls back. Once text has reached the caller it is not replayed, since that would duplicate output you may have already rendered. An idle chunk timeout catches a provider that stalls mid stream and counts it against the breaker, and leaving a `for await` loop early cancels the provider stream and frees the rate limit slot.',
   },
   {
-    question: 'Is it typed?',
+    question: 'Some calls are not failing, just slow. How do I cut the tail?',
     answer:
-      'Yes, written in TypeScript from the ground up. Structured output schemas, call params, and errors are all typed, so mistakes surface at compile time instead of at runtime.',
+      'A timeout only helps after the wait. `vern-llm-hedge` starts the same call on your next provider once the first answer takes longer than that target usually does, keeps whichever answers first, and cancels the other. The delay is learned from logger latency percentiles, a token bucket caps the extra traffic at about 5% of calls, and usage reports what hedging costs.',
   },
   {
-    question: 'How many dependencies does it add to my project?',
+    question:
+      'How do I make sure sensitive data never falls back to a provider it should not reach?',
     answer:
-      'Zero runtime dependencies. VernLLM does not bundle Zod or provider SDKs, it relies on compatible interfaces instead, so you bring your own provider clients and schema validators while keeping your dependency tree minimal.',
+      '`vern-llm-guard` finds values like secrets or PII and redacts, labels, or blocks them, streams included. `vern-llm-policy` then removes every target that keeps data or sits in the wrong region, and a removed target can never return through a retry or a fallback. A rule or label that cannot be evaluated fails closed. The built in detectors are heuristics, so run them in audit mode first and treat them as a layer, not a guarantee.',
+  },
+  {
+    question:
+      'How do I keep one tenant or feature from burning my budget, and see what failed calls cost?',
+    answer:
+      '`vern-llm-usage` checks budgets such as `{ key: "tenantId", limitUsd: 50, per: "day" }` before the call is sent, so an over budget call is rejected without contacting the provider. It also reports spend on attempts whose response was then rejected. Costs are estimates from your own price table, so the provider invoice stays the source of truth.',
   },
 ];
+
+// Plain text for structured data, without the backticks that mark code in answers.
+export const faqPlain = faqItems.map(({ question, answer }) => ({
+  question,
+  answer: answer.replace(/`/g, ''),
+}));

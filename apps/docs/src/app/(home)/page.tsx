@@ -10,6 +10,7 @@ import { createCssVariablesTheme } from 'shiki';
 import Squares from '../../components/squares';
 
 import { AuroraBarsClient } from '@/components/aurora-bars-client';
+import { FaqAnswer } from '@/components/faq-answer';
 import { InstallCommand } from '@/components/install-command';
 import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
 import {
@@ -17,6 +18,7 @@ import {
   codeExample,
   extensions,
   faqItems,
+  faqPlain,
   integrations,
   providers,
 } from '@/lib/home.utils';
@@ -75,7 +77,7 @@ export default function HomePage() {
         data={generateWebSite({ name: appName, description: siteDescription, url: baseUrl })}
       />
       <JsonLd data={generateOrganization()} />
-      <JsonLd data={generateFaqPage(faqItems)} />
+      <JsonLd data={generateFaqPage(faqPlain)} />
 
       {/* HERO */}
       <section className="relative overflow-hidden">
@@ -179,9 +181,10 @@ export default function HomePage() {
             <h2 className="text-4xl font-semibold sm:text-5xl lg:text-[60px]">Extensions</h2>
 
             <p className="max-w-xl text-base text-fd-muted-foreground">
-              Extend your LLM calls even further. With extensions, VernLLM records every call, caps
-              its cost, keeps private data out, chooses where it goes, and rescues it when a
-              provider is slow. Add only the ones you need.
+              Extend your LLM calls even further. Extensions add a capability inside VernLLM, with
+              no third party dependencies. Together they record every call, cap its cost, keep
+              private data out, choose where it goes, and rescue it when a provider is slow. Add
+              only the ones you need.
             </p>
           </div>
 
@@ -290,7 +293,13 @@ export default function HomePage() {
       {/* FAQ */}
       <section className="px-6 py-20 lg:px-16">
         <div className="mx-auto flex max-w-2xl flex-col gap-8">
-          <MotionAccordion items={faqItems} gap={0} />
+          <MotionAccordion
+            items={faqItems.map(({ question, answer }) => ({
+              question,
+              answer: <FaqAnswer text={answer} />,
+            }))}
+            gap={0}
+          />
         </div>
       </section>
 
