@@ -10,6 +10,7 @@ import { createCssVariablesTheme } from 'shiki';
 import Squares from '../../components/squares';
 
 import { AuroraBarsClient } from '@/components/aurora-bars-client';
+import { CopyInstallButton } from '@/components/copy-install-button';
 import { FaqAnswer } from '@/components/faq-answer';
 import { InstallCommand } from '@/components/install-command';
 import { MotionAccordion } from '@/components/unlumen-ui/motion-faqs-accordion';
@@ -104,6 +105,8 @@ export default function HomePage() {
                 Read the docs
               </Link>
 
+              <CopyInstallButton />
+
               <a
                 href="https://github.com/LakBud/vernLLM"
                 target="_blank"
@@ -182,9 +185,8 @@ export default function HomePage() {
 
             <p className="max-w-xl text-base text-fd-muted-foreground">
               Extend your LLM calls even further. Extensions add a capability inside VernLLM, with
-              no third party dependencies. Together they record every call, cap its cost, keep
-              private data out, choose where it goes, and rescue it when a provider is slow. Add
-              only the ones you need.
+              no third party dependency. Each one is a middleware that depends only on VernLLM, so
+              you install only what you use.
             </p>
           </div>
 
@@ -339,6 +341,8 @@ export default function HomePage() {
             <Link href="/docs" className={primaryButtonClass}>
               Get started
             </Link>
+
+            <CopyInstallButton />
 
             <a
               href="https://github.com/LakBud/vernLLM"

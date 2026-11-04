@@ -95,37 +95,41 @@ export const extensions = [
     name: 'Logger',
     logo: '/extensions/vernllm-logger.png',
     href: '/docs/extensions/logger',
-    description: 'One structured record per call, with latency percentiles and slow call alerts.',
+    description:
+      'One structured record per call, rolling latency percentiles, slow call and error detection.',
   },
   {
     name: 'Usage',
     logo: '/extensions/vernllm-usage.png',
     href: '/docs/extensions/usage',
-    description: 'Know what every call costs, and stop spend before a provider is contacted.',
+    description:
+      'Estimated cost and wasted spend per call, plus token and dollar budgets that reject early.',
   },
   {
     name: 'Router',
     logo: '/extensions/vernllm-router.png',
     href: '/docs/extensions/router',
-    description: 'Picks the best target for each call by rules, health, latency, or cost.',
+    description:
+      'Orders targets by rules, health, latency, or cost, with a dry run and shadow mode.',
   },
   {
     name: 'Policy',
     logo: '/extensions/vernllm-policy.png',
     href: '/docs/extensions/policy',
-    description: 'Keeps calls off providers they must not use, and records why.',
+    description: 'Removes forbidden targets, fails safe, and audits every decision.',
   },
   {
     name: 'Guard',
     logo: '/extensions/vernllm-guard.png',
     href: '/docs/extensions/guard',
-    description: 'Redacts or blocks sensitive data on the way in and out, streams included.',
+    description:
+      'Labels, redacts or blocks what goes into a call and what comes out, streams included.',
   },
   {
     name: 'Hedge',
     logo: '/extensions/vernllm-hedge.png',
     href: '/docs/extensions/hedge',
-    description: 'Races a slow call against the next target and keeps the first answer.',
+    description: 'Sends a slow call to the next target too and keeps the first answer.',
   },
 ];
 
