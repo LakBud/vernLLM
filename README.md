@@ -24,14 +24,56 @@
 
 <p align="center">One interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock, with retry budgets, circuit breaking, multi provider fallback, rate limiting, caching, and middleware built in, all running in your own process rather than a new network hop.</p>
 
+## Install
+
+```bash
+npm i vern-llm
+```
+
+Needs Node 22.22 or newer. Zero runtime dependencies, provider SDKs and `zod` are optional.
+
+## Quick start
+
+```ts
+import OpenAI from 'openai';
+import { VernLLM } from 'vern-llm';
+import { fromOpenAI } from 'vern-llm/adapters';
+
+const llm = new VernLLM({
+  client: fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 })),
+  model: 'gpt-6-sol',
+});
+
+const result = await llm.call({ userContent: 'Say hello.' });
+```
+
+Pass `maxRetries: 0` to provider SDKs so VernLLM is the only one that retries.
+
+## What you get
+
+- **Resilience:** jittered retries, retry budgets, per target circuit breakers, ordered fallback, rate limiting, timeouts, and caching
+- **Observability:** one event stream for retries, fallbacks, breaker changes, waits, and usage
+- **Control:** middleware for routing, policy, guardrails, and budgets
+- **Structured output, tool calling, and streaming** through the same `call`
+
+## Why not a gateway
+
+A gateway sees an HTTP request and response. VernLLM sees the call: the schema the answer must pass, the tenant it belongs to, and which providers it may use. So it judges the answer instead of the status code, adds no network hop or server, and keeps third parties out of the path of your prompts.
+
+## Full example
+
+Fallback, rate limiting, a retry budget, and timeouts in one config:
+
 ```ts
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { VernLLM } from 'vern-llm';
 import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
 
-const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
-const anthropic = fromAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }));
+const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 }));
+const anthropic = fromAnthropic(
+  new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 }),
+);
 
 const llm = new VernLLM({
   client: openai,
@@ -151,7 +193,12 @@ This is a pnpm monorepo with multiple workspaces, managed with [Nx](https://nx.d
 | [`packages/extensions/vern-llm-policy`](./packages/extensions/vern-llm-policy)       | The `vern-llm-policy` package: rules for which providers and models a call may use, and whether it may run.       |
 | [`packages/extensions/vern-llm-guard`](./packages/extensions/vern-llm-guard)         | The `vern-llm-guard` package: checks on what goes into a call and what comes out: label, redact or block.         |
 | [`packages/extensions/vern-llm-hedge`](./packages/extensions/vern-llm-hedge)         | The `vern-llm-hedge` package: sends a slow call to the next target too and keeps the first answer.                |
+| [`packages/stack-bench`](./packages/stack-bench) | Private benchmark of the per call overhead of the extensions stacked on one VernLLM. |
 | [`apps/docs`](./apps/docs)                                                           | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                  |
+
+## Contributing
+
+See [CONTRIBUTING](./.github/CONTRIBUTING.md), the [security policy](./.github/SECURITY.md), and the [code of conduct](./.github/CODE_OF_CONDUCT.md). Release notes live in the [changelog](./packages/vern-llm/CHANGELOG.md).
 
 ## License
 
