@@ -6,9 +6,19 @@
 
 <p align="center">Picks the target order for each <a href="https://github.com/LakBud/vernLLM/tree/main/packages/vern-llm">vern-llm</a> call, from rules you write.</p>
 
-A middleware that reorders the targets a call may try. It never adds a target, never changes what a call returns or throws, and if deciding fails the call runs exactly as it would without it.
+A fixed fallback order sends every call to the same first target, even when it is slow today, costs ten times what the call needs, or keeps returning answers you reject. `vern-llm-router` is one middleware that decides which of a call's targets are tried first, from rules you write and from what your own traffic measured.
 
-## Usage
+It only reorders. It never adds a target, never changes what a call returns or throws, and if deciding fails the call runs exactly as it would without it.
+
+## Installation
+
+```bash
+npm i vern-llm-router
+```
+
+`vern-llm` is a peer dependency, and the package has no other dependency.
+
+## Quick start
 
 ```ts
 import { VernLLM } from 'vern-llm';
@@ -32,11 +42,24 @@ const llm = new VernLLM({
 });
 ```
 
-The first route whose `when` matches decides the order. `targets` takes names, tiers (`[['a', 'b'], ['c']]`) and `'*'` for every target not named. A call that passes `targets` keeps its own order. Force a route for one call with `state: [stateEntry(routerRouteKey, 'bulk')]`.
+The first route whose `when` matches decides the order. Free and trial calls go to the small model, calls with tools never do, and everything else tries `main` first.
 
-A route's `strategy` orders its targets inside each tier. `ordered` (the default) keeps the order you wrote. `{ type: 'weighted', weights, stickyBy? }` puts a weighted random pick first and the rest by weight, and with `stickyBy` a user's context value is hashed instead, so the same user keeps the same first target and its provider prompt cache stays warm. `'least-busy'` samples two targets (by `weights`, when given) and puts the one with fewer attempts in flight, divided by its weight, first. Consecutive names in `targets` form one tier, so `targets: ['a', 'b', 'c']` is what a strategy chooses between.
+## What you get
 
-`rank` scores every target on weighted metrics and puts the best first: `latency`, `predictedLatency`, `cost`, `effectiveCost`, `quality` and your own `custom` function. Each metric is how many times worse than the best target, on a log scale, so different units combine and one outlier only hurts itself. A target within `tolerance` (default 0.2) of the best shares first place by closeness, and with chance `explore` (default 0.05) a random usable target goes first so every target keeps being measured. `'latency'`, `'cost'` and `'balanced'` are shorthands. Targets with an unknown value score at the median of the known ones.
+| Capability             | How it works                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Routes                 | Match a call by its `context`, tools, JSON output, or size                                                           |
+| Strategies             | `ordered`, `weighted` (sticky per user, so a provider prompt cache stays warm), `'least-busy'`, or `rank`            |
+| Ranking by measurement | Scores targets on latency, predicted latency, cost, effective cost, and quality, on a log scale so units combine     |
+| Quality aware cost     | `effectiveCost` is the price divided by the share of answers that are usable                                         |
+| Exploration            | A small share of calls tries a random usable target, so no target starves of data                                    |
+| Health                 | A target with an open breaker or an exhausted rate limit moves to the back, and a 429 cools it for its `Retry-After` |
+| Slow start             | A target whose breaker just closed ramps back in over `slowStartMs`                                                  |
+| Soft limits            | A target over `latencyMs`, `costUsd`, or `qualityFailureRate` moves behind the others                                |
+
+## Usage
+
+### Ranking by latency and cost
 
 ```ts
 const router = routerMiddleware({
@@ -49,20 +72,28 @@ const router = routerMiddleware({
 });
 ```
 
-`predictedLatency` is the streamed time to first token plus this route's typical answer length at the target's generation speed, so a slow starting, fast generating provider wins long answers. `effectiveCost` is the price divided by the share of answers that are usable. `quality` is the share of responded attempts rejected as unusable, read for the route first and for the target overall below that. Both stats and cost are optional, and a strategy that needs one you did not pass fails at construction. Stats reads are reused for `statsTtlMs` (default 1000).
+Stats and cost are both optional, and a strategy that needs one you did not pass fails at construction, not in production.
 
-`limits` are soft: a target over `latencyMs`, `costUsd` or `qualityFailureRate` moves behind the others, and if all are over, the order stays. A call with `deadlineMs` also moves targets that cannot answer in the time left behind the rest, on every strategy.
+### Trying a rule before you ship it
 
-With `health`, a target whose breaker is open goes last, then one that is rate limited (a local limit used up, or a provider 429 still cooling down for its `Retry-After`, 5 seconds without one). A half open target keeps its place so its trial runs, and if every target is unhealthy the order stays as it is. After a breaker closes, a target ramps back over `slowStartMs` (default 30 seconds, `0` turns it off) and may give way to the next healthy one meanwhile. A route with `health: false` skips the open and limited step.
-
-A route that leaves no target at all, through `exclude` or `targets`, fails the call with `no_eligible_targets` and logs a warning once, since that is a configuration error. When a route lists its targets and `exclude` removes all of them, construction throws instead. The capability filter never does: when no target is known to fit, all stay.
-
-Each call emits a `router.decision` event after it settles: the route, the order, what was excluded and why, and `applied`. Set `apply: false` to run in shadow mode, where decisions are computed and emitted and every call keeps its declared order.
-
-`router.preview({ request, context })` returns the decision a call would get right now without calling anything, and needs `health`. `routeDimension` and `driftDimension` are logger dimensions that split stats by route and show whether the router's first choice is the target that answered:
+`router.preview({ request, context })` returns the decision a call would get right now, without calling anything:
 
 ```ts
-loggerMiddleware({ dimensions: { route: routeDimension, drift: driftDimension } });
+// { route: 'bulk', strategy: 'ordered', order: ['small'], excluded: [...], demoted: [], explored: false }
 ```
 
-Register one instance per `VernLLM`. `vern-llm` is a peer dependency, and the package has no other dependency.
+For a rollout, set `apply: false`. Every decision is computed and emitted as a `router.decision` event and no call changes, so you can compare against the declared order before switching it on. One pure function backs real calls, `preview()`, and shadow mode, so they always agree.
+
+### With policy
+
+The router decides what is preferred, and [`vern-llm-policy`](https://www.npmjs.com/package/vern-llm-policy) decides what is allowed. Policy runs first and removes targets, so the router only ever orders what is left.
+
+Register one instance per `VernLLM`.
+
+## Documentation
+
+See the [router docs](https://vernllm.dev/docs/extensions/router) for [routes](https://vernllm.dev/docs/extensions/router/features/routes), [strategies](https://vernllm.dev/docs/extensions/router/features/strategies), [health](https://vernllm.dev/docs/extensions/router/features/health), and [observability](https://vernllm.dev/docs/extensions/router/features/observability).
+
+## License
+
+MIT

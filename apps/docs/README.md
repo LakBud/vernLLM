@@ -10,65 +10,87 @@
   <img src="https://img.shields.io/badge/Fumadocs-16-6366F1" alt="Fumadocs" />
 </p>
 
-<p align="center">The documentation site for <a href="../../packages/vern-llm"><code>vern-llm</code></a>, built with <a href="https://nextjs.org">Next.js</a> and <a href="https://fumadocs.dev">Fumadocs</a> (scaffolded with Create Fumadocs). Deployed on <a href="https://vercel.com">Vercel</a> at <a href="https://vernllm.dev">vernllm.dev</a>.</p>
+<p align="center">The documentation site for <a href="../../packages/vern-llm"><code>vern-llm</code></a>, built with <a href="https://nextjs.org">Next.js</a> and <a href="https://fumadocs.dev">Fumadocs</a> (scaffolded with Create Fumadocs). Deployed at <a href="https://vernllm.dev">vernllm.dev</a>.</p>
 
-## Development
+Most people meet VernLLM here before they read a line of its source, so a page that is wrong or out of date misleads them from the start. Everything on the site is MDX in this folder, and a page you edit shows up locally in seconds.
+
+## Quick start
 
 From the repo root:
 
 ```bash
+pnpm install
 pnpm dev:docs
 ```
 
-Or from this directory:
+Open [http://localhost:3000](http://localhost:3000). Edits to any `.mdx` file reload on save.
 
-```bash
-pnpm dev
-```
+## Adding or changing a page
 
-Open [http://localhost:3000](http://localhost:3000) to see the site.
+1. Add or edit an `.mdx` file under [`content/docs`](./content/docs). Each page starts with frontmatter:
 
-## Content
+   ```mdx
+   ---
+   title: Retries
+   description: Exponential backoff with jitter, Retry-After awareness, and what gets retried
+   ---
+   ```
 
-Docs pages live in [`content/docs`](./content/docs) as MDX, organized by section:
+2. For a new page, add its file name to the `pages` list in that folder's `meta.json`, which controls the sidebar order.
+3. Link to other pages with site paths such as `/docs/core/retries#sdk-internal-retries`.
+4. Run the checks below before opening a pull request.
 
-| Section                                          | Contents                                                                                         |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| [`index.mdx`](./content/docs/index.mdx)          | Getting started: install and make your first call.                                               |
-| [`about.mdx`](./content/docs/about.mdx)          | What VernLLM is and why it exists.                                                               |
-| [`core/`](./content/docs/core)                   | Fallback, circuit breaker, retry budget, rate limiting, caching, observability, and more.        |
-| [`customization/`](./content/docs/customization) | Custom middleware, breakers, caches, rate limiters, tokenizers, schemas, providers, and loggers. |
-| [`guides/`](./content/docs/guides)               | End to end walkthroughs: fallback patterns, tuning, caching methods, streaming, tool loops.      |
-| [`API-reference/`](./content/docs/API-reference) | Call params, instance configuration, and reference notes.                                        |
-| [`adapters/`](./content/docs/adapters)           | OpenAI-compatible providers, Anthropic, Gemini, and the raw fetch escape hatch.                  |
-| [`integrations/`](./content/docs/integrations)   | Companion packages such as `vern-llm-redis` and `vern-llm-bedrock`.                              |
-| `development`, `migration-notes`, `changelog`    | Dev setup, upgrade notes, and release notes.                                                     |
-| `contributing`, `security`, `code-of-conduct`    | Community pages.                                                                                 |
+## Checks
 
-Each folder has a `meta.json` controlling sidebar ordering. Edit or add `.mdx` files there and the site picks them up automatically.
+CI runs all of these on every pull request that touches the docs, so running them first saves a round trip:
+
+| Command            | What it catches                                                    |
+| ------------------ | ------------------------------------------------------------------ |
+| `pnpm links:check` | An internal `/docs/...` link whose page or `#anchor` doesn't exist |
+| `pnpm types:check` | Broken MDX or frontmatter, and type errors in the app              |
+| `pnpm lint`        | Lint errors, with oxlint                                           |
+| `pnpm test`        | Failures in the link checker and SEO tests                         |
+| `pnpm build`       | Anything that only breaks in a production build                    |
+
+Run them from this directory. `pnpm dev` and `pnpm start` run the dev server and serve a production build.
+
+## Where content lives
+
+| Section                                          | Contents                                                                                        |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| [`index.mdx`](./content/docs/index.mdx)          | Getting started: install and make your first call                                               |
+| [`about.mdx`](./content/docs/about.mdx)          | What VernLLM is and the principles behind it                                                    |
+| [`why.mdx`](./content/docs/why.mdx)              | The comparison with the AI SDK, LiteLLM, and Portkey                                            |
+| [`core/`](./content/docs/core)                   | Fallback, circuit breaker, retry budget, rate limiting, caching, observability, and more        |
+| [`adapters/`](./content/docs/adapters)           | OpenAI compatible providers, Anthropic, Gemini, and the raw fetch escape hatch                  |
+| [`extensions/`](./content/docs/extensions)       | Logger, usage, router, policy, guard, and hedge                                                 |
+| [`integrations/`](./content/docs/integrations)   | Redis, OpenTelemetry, and Bedrock                                                               |
+| [`customization/`](./content/docs/customization) | Custom middleware, breakers, caches, rate limiters, tokenizers, schemas, providers, and loggers |
+| [`guides/`](./content/docs/guides)               | End to end walkthroughs: fallback patterns, tuning, caching methods, streaming, tool loops      |
+| [`API-reference/`](./content/docs/API-reference) | Call params, instance configuration, and reference notes                                        |
+
+Two things to know before editing:
+
+- **Changelog pages are generated.** Every `changelog.mdx` is written from Changesets releases when a package is published, so a hand edit is overwritten. Change the release note in a [changeset](../../.changeset/README.md) instead.
+- **A comparison needs a source.** `why.mdx` states the versions it was checked against. Update that note when you change a claim about another tool.
 
 ## Project structure
 
-- `src/app`: Next.js App Router routes: `(home)` for the landing page, `docs` for the documentation layout, `changelog`, `og` for social images, `llms.txt` and `llms-full.txt` for LLM friendly docs, and `api/search` for search.
-- `src/lib/source.ts`: the content source adapter; Fumadocs' [`loader()`](https://fumadocs.dev/docs/headless/source-api) exposes the MDX content to the app.
-- `src/lib/layout.shared.tsx`: shared layout options used across routes.
-- `src/components`: MDX components, search dialog, and UI primitives.
-- `source.config.ts`: Fumadocs MDX configuration (frontmatter schema, etc.). See the [MDX introduction](https://fumadocs.dev/docs/mdx) for details.
-
-## Scripts
-
-| Command            | Description                                                            |
-| ------------------ | ---------------------------------------------------------------------- |
-| `pnpm dev`         | Start the dev server.                                                  |
-| `pnpm build`       | Production build.                                                      |
-| `pnpm start`       | Serve the production build.                                            |
-| `pnpm types:check` | Regenerate Fumadocs MDX types and Next types, then `tsc --noEmit`.     |
-| `pnpm links:check` | Verify every internal `/docs/...` link resolves to a page and heading. |
-| `pnpm test`        | Run the link checker's tests.                                          |
-| `pnpm lint`        | Lint with oxlint.                                                      |
+| Path                                   | What it is                                                                                                           |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `src/app/(home)`                       | The landing page                                                                                                     |
+| `src/app/docs`                         | The documentation layout and page route                                                                              |
+| `src/app/changelog`                    | The changelog page                                                                                                   |
+| `src/app/llms.txt` and `llms-full.txt` | The docs as plain text for LLMs                                                                                      |
+| `src/app/og`                           | Social images                                                                                                        |
+| `src/app/api/search`                   | Search                                                                                                               |
+| `src/lib/source.ts`                    | The content source: Fumadocs' [`loader()`](https://fumadocs.dev/docs/headless/source-api) exposes the MDX to the app |
+| `src/components`                       | MDX components such as the verdict tables, the search dialog, and UI primitives                                      |
+| `source.config.ts`                     | Fumadocs MDX configuration, including the frontmatter schema                                                         |
+| `scripts/check-links.ts`               | The link checker behind `pnpm links:check`                                                                           |
 
 ## Learn more
 
 - [Next.js documentation](https://nextjs.org/docs)
 - [Fumadocs documentation](https://fumadocs.dev)
-- [`vern-llm` package README](../../packages/vern-llm/README.md) -> the full API reference this site documents
+- [Contributing guide](../../.github/CONTRIBUTING.md)

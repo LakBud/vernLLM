@@ -6,8 +6,9 @@
 
 <p align="center">
   <a href="https://vernllm.dev">Documentation</a> ·
-  <a href="./packages/vern-llm">Package</a> ·
-  <a href="https://npmjs.com/package/vern-llm">npm</a>
+  <a href="https://vernllm.dev/docs/why">Why VernLLM</a> ·
+  <a href="https://npmjs.com/package/vern-llm">npm</a> ·
+  <a href="https://x.com/VernLLM">X</a>
 </p>
 
 <p align="center">
@@ -17,20 +18,27 @@
   <a href="https://codecov.io/gh/LakBud/vernLLM"><img src="https://codecov.io/gh/LakBud/vernLLM/graph/badge.svg?token=NKKW54MODY" alt="codecov" /></a>
   <a href="https://www.bestpractices.dev/projects/14212"><img src="https://www.bestpractices.dev/projects/14212/badge" alt="OpenSSF Best Practices" /></a>
   <a href="./LICENSE.md"><img src="https://img.shields.io/npm/l/vern-llm.svg" alt="license" /></a>
-  <a href="https://x.com/VernLLM"><img src="https://img.shields.io/badge/%40VernLLM-000000?style=flat&logo=x&logoColor=white" alt="X @VernLLM" /></a>
 </p>
 
-<p align="center">The LLM call framework. Resilience, observability, and control for every call.</p>
+<p align="center"><a href="https://vernllm.dev">VernLLM</a> is the LLM call framework for TypeScript: resilience, observability, and control for every call, running inside your own process instead of behind a gateway.</p>
 
-<p align="center">One interface across OpenAI-compatible, Anthropic, Gemini, and Bedrock, with retry budgets, circuit breaking, multi provider fallback, rate limiting, caching, and middleware built in, all running in your own process rather than a new network hop.</p>
+LLM providers fail in ways a status code doesn't show: a 200 with an empty body, JSON cut off at `max_tokens`, a stream that dies before its first chunk, an outage that your own retries make worse. VernLLM sees the whole call, not only the HTTP request, so it can handle all of them:
 
-## Install
+- **Resilience.** Calls keep working when providers fail, and a failing provider can't take your app down with it.
+- **Observability.** Every retry, fallback, wait, and breaker change is reported, tied to the call and the tenant that caused it.
+- **Control.** Your code decides which providers a call may use, in what order, and when to give up.
+
+It works with OpenAI compatible providers, Anthropic, Gemini, and Bedrock through one interface, and has zero runtime dependencies. See [Why VernLLM](https://vernllm.dev/docs/why) for the comparison with the AI SDK, LiteLLM, and Portkey.
+
+## Installation
+
+You will need Node.js 22.22 or newer.
 
 ```bash
 npm i vern-llm
 ```
 
-Needs Node 22.22 or newer. Zero runtime dependencies, provider SDKs and `zod` are optional.
+Provider SDKs and `zod` are optional. Install the ones you use, for example `npm i openai`.
 
 ## Quick start
 
@@ -44,161 +52,254 @@ const llm = new VernLLM({
   model: 'gpt-6-sol',
 });
 
-const result = await llm.call({ userContent: 'Say hello.' });
+const text = await llm.call({ userContent: 'Say hello.', jsonMode: false });
 ```
 
-Pass `maxRetries: 0` to provider SDKs so VernLLM is the only one that retries.
+JSON mode is on by default, so `call` returns parsed JSON unless you pass `jsonMode: false`. Pass `maxRetries: 0` to provider SDKs so VernLLM is the only one that retries.
 
-## What you get
+## What it handles
 
-- **Resilience:** jittered retries, retry budgets, per target circuit breakers, ordered fallback, rate limiting, timeouts, and caching
-- **Observability:** one event stream for retries, fallbacks, breaker changes, waits, and usage
-- **Control:** middleware for routing, policy, guardrails, and budgets
-- **Structured output, tool calling, and streaming** through the same `call`
+Each row is a failure that looks fine from the outside, and what VernLLM does about it:
 
-## Why not a gateway
+| What goes wrong                                           | What VernLLM does                                                                                               |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| A 200 with an empty body, or JSON cut off at `max_tokens` | Treats it as a failure, so it retries, falls back, and counts against that target's breaker                     |
+| A stream that errors after the 200 but before any content | Retries and falls back, even after a keep-alive ping opened the stream                                          |
+| A primary that keeps failing                              | Opens its breaker, so calls skip it and go straight to the fallback instead of paying for failed attempts first |
+| Retries tripling your traffic in the middle of an outage  | A retry budget caps retries at a share of each target's traffic                                                 |
+| A bad request, a schema mismatch, or a rejected budget    | Fails fast without tripping the breaker, since it says nothing about the provider's health                      |
+| A burst that would hit your account's rate limit          | Queues within requests, tokens, and concurrency limits per target, and shrinks them after a 429                 |
+| A cache that errors                                       | Treats a failing cache as a miss, and serves concurrent misses for one key with a single provider call          |
+| Every provider failing at once                            | Fails fast with a `FallbackExhaustedError` that carries every attempt                                           |
 
-A gateway sees an HTTP request and response. VernLLM sees the call: the schema the answer must pass, the tenant it belongs to, and which providers it may use. So it judges the answer instead of the status code, adds no network hop or server, and keeps third parties out of the path of your prompts.
+## Usage
 
-## Full example
+### Surviving an outage
 
-Fallback, rate limiting, a retry budget, and timeouts in one config:
+Fallback, a circuit breaker, a retry budget, rate limiting, and timeouts in one config:
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
-import { VernLLM } from 'vern-llm';
 import { fromAnthropic, fromOpenAI } from 'vern-llm/adapters';
 
-const openai = fromOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 }));
-const anthropic = fromAnthropic(
-  new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 }),
-);
-
 const llm = new VernLLM({
-  client: openai,
+  client: fromOpenAI(openai),
   model: 'gpt-6-sol',
-  fallback: { client: anthropic, model: 'claude-opus-5-5', circuitBreaker: true },
-  rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000, maxConcurrent: 20 },
+  fallback: {
+    name: 'anthropic',
+    client: fromAnthropic(new Anthropic({ maxRetries: 0 })),
+    model: 'claude-opus-5-5',
+    circuitBreaker: true,
+  },
   retryBudget: { windowMs: 60_000, minCalls: 20, retryRatio: 0.2 },
+  rateLimit: { requestsPerMinute: 500, tokensPerMinute: 100_000, maxConcurrent: 20 },
   maxRetries: 3,
   timeoutMs: 10_000,
-  defaultMaxTokens: 1000,
-  defaultReasoningEffort: 'medium',
 });
-
-const result = await llm.call({ userContent: "What's the weather in New York?" });
 ```
 
-## Extensions
+Every target gets its own retries, breaker, limiter, and budget, so a struggling primary can't use up what a healthy fallback needs. Recovery goes through half open trial calls, not a timer, and bad config throws at construction instead of in production.
 
-Optional packages that add a capability inside VernLLM, with no third party dependency. Each one is a [middleware](https://vernllm.dev/docs/core/middleware) that depends only on `vern-llm`, so you install only what you use.
+### Seeing what happened
 
-| Package                                                    | What it adds                                                                                |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| [`vern-llm-logger`](./packages/extensions/vern-llm-logger) | One structured record per call, rolling latency percentiles, slow call and error detection. |
-| [`vern-llm-usage`](./packages/extensions/vern-llm-usage)   | Estimated cost and wasted spend per call, plus token and dollar budgets that reject early.  |
-| [`vern-llm-router`](./packages/extensions/vern-llm-router) | Orders targets by rules, health, latency, or cost, with a dry run and shadow mode.          |
-| [`vern-llm-policy`](./packages/extensions/vern-llm-policy) | Removes forbidden targets, fails safe, and audits every decision.                           |
-| [`vern-llm-guard`](./packages/extensions/vern-llm-guard)   | Labels, redacts or blocks what goes into a call and what comes out, streams included.       |
-| [`vern-llm-hedge`](./packages/extensions/vern-llm-hedge)   | Sends a slow call to the next target too and keeps the first answer.                        |
+One `onEvent` stream reports every decision made inside a call:
 
 ```ts
-import { jsonSink, loggerMiddleware } from 'vern-llm-logger';
+const llm = new VernLLM({
+  client: fromOpenAI(openai),
+  model: 'gpt-6-sol',
+  onEvent: (event) => {
+    switch (event.kind) {
+      case 'retry':
+        console.log(`retry ${event.attempt} on ${event.provider} in ${event.delayMs}ms`);
+        break;
+      case 'circuit_state':
+        console.log(`circuit ${event.provider}: ${event.from} -> ${event.to}`);
+        break;
+      case 'fallback':
+        console.log(`fallback ${event.from} -> ${event.to}`);
+        break;
+    }
+  },
+});
+```
+
+The same stream answers the questions that come up during an incident:
+
+| Question                               | Where the answer is                                                                   |
+| -------------------------------------- | ------------------------------------------------------------------------------------- |
+| Why did this call take 9 seconds?      | `rate_limited` with the wait, `retry` with the delay, `fallback` with time per target |
+| Which tenant spent these tokens?       | The call's `context` rides on every event and every usage report                      |
+| Were we billed for a call that failed? | A `usage_failure` event and `onUsageFailure`                                          |
+| Is a breaker open right now?           | `getCircuitStates()`, `getFailureBreakdown()`, and `getRetryBudgetState()`            |
+| What exactly was sent?                 | Every `LLMError` keeps each attempt with a request snapshot, auth headers stripped    |
+
+Errors are typed, with 12 error types and 38 codes, so your code can tell a timeout from a schema failure from an open circuit. [`vern-llm-otel`](./packages/integrations/vern-llm-otel) turns the whole stream into OpenTelemetry traces and metrics.
+
+### Structured output
+
+Pass any validator as `schema`. A mismatch throws a typed `validation` error, and JSON cut off at `max_tokens` is retried instead of returned.
+
+```ts
+import { z } from 'zod';
+
+const candidate = await llm.call({
+  systemPrompt: 'Extract the candidate name and skills as JSON.',
+  userContent: resumeText,
+  schema: z.object({ name: z.string(), skills: z.array(z.string()) }),
+});
+```
+
+### Streaming
+
+```ts
+const { chunks, finalResult } = await llm.call({
+  userContent: 'Write a short poem about the ocean.',
+  jsonMode: false,
+  stream: true,
+});
+
+for await (const chunk of chunks) {
+  if (chunk.type === 'text-delta') process.stdout.write(chunk.delta);
+}
+
+const result = await finalResult;
+```
+
+A stream that fails before its first chunk is retried and falls back like any other call.
+
+### Tool calling
+
+VernLLM returns typed tool calls. You run the tools and continue the conversation.
+
+```ts
+const result = await llm.call({
+  userContent: 'What is the weather in New York?',
+  tools: [
+    {
+      name: 'get_weather',
+      description: 'Gets the current weather for a city',
+      parameters: {
+        type: 'object',
+        properties: { city: { type: 'string' } },
+        required: ['city'],
+      },
+    },
+  ],
+});
+
+if (result.type === 'tool_calls') {
+  for (const call of result.toolCalls) console.log(call.name, call.arguments);
+}
+```
+
+### Middleware
+
+Routing and policy are TypeScript in your repo. A `wrap` can drop or reorder targets, and an inner one can never add back what an outer one removed.
+
+```ts
+import type { VernLLMMiddleware } from 'vern-llm';
+
+const residency: VernLLMMiddleware = {
+  name: 'residency',
+  wrap: (request, next, ctx) =>
+    ctx.context?.region === 'eu'
+      ? next({ targets: ctx.targets.filter((t) => t.name.startsWith('eu-')).map((t) => t.name) })
+      : next(),
+};
+
+await llm.call({ userContent, context: { tenantId: 't1', region: 'eu' } });
+```
+
+## Why not a gateway
+
+A gateway sees an HTTP request and response. VernLLM sees the call: the schema the answer must pass, the tenant it belongs to, and which providers it may use. That changes three things:
+
+1. **It judges the answer, not the status code.** A 200 with an unusable body is a failure.
+2. **It tells your fault from the provider's.** A bad request never opens the circuit for everyone.
+3. **It adds nothing that can fail.** No extra network hop, no server to run, and prompts never pass through a third party.
+
+It is not a gateway, dashboard, key manager, pricing table, or agent framework, and it never executes tools for you. If you want those, it works alongside them: point an OpenAI compatible adapter at LiteLLM, Portkey, or the Vercel AI Gateway and pick a single retry owner. VernLLM fits best in TypeScript services where a failed LLM call is an incident.
+
+## Built to be depended on
+
+- **Zero runtime dependencies** in core, so there is nothing transitive to audit.
+- **A size cap in CI:** the core bundle must stay under 120 KB, and the adapters entry under 12 KB.
+- **Over 2,400 tests in core**, with coverage gates and CodeQL scanning on every change.
+- **An overhead benchmark in CI** for core and every extension, which fails when a call gets slower than its baseline.
+- **npm provenance** on published packages, and a changeset for every behavior change that spells out what changes at runtime.
+
+## Packages
+
+Everything beyond core is optional and depends only on `vern-llm`, so you install only what you use.
+
+### Adapters
+
+Adapters translate a provider's API into one small `LLMClient` interface, so retries, fallback, rate limiting, and caching behave the same whichever provider is behind a call. They ship inside `vern-llm`, on the `vern-llm/adapters` entry.
+
+| Adapter                                 | Providers                                                                                                                                                              |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fromOpenAI` and `fromOpenAICompatible` | OpenAI, plus 36 named providers such as Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, Ollama, OpenRouter, xAI, and vLLM, and any OpenAI compatible API |
+| `fromAnthropic`                         | Anthropic                                                                                                                                                              |
+| `fromGemini`                            | Gemini                                                                                                                                                                 |
+| `fromFetch`                             | Any provider reachable over HTTP, with your own URL, headers, and request and response mapping                                                                         |
+| `fromBedrock`                           | AWS Bedrock, from the [`vern-llm-bedrock`](./packages/integrations/vern-llm-bedrock) integration because it is built on the AWS SDK client                             |
+
+### Extensions
+
+Extensions add a capability inside the call. Each one is a [middleware](https://vernllm.dev/docs/core/middleware) with a fixed place in the call, so the order you list them in never matters.
+
+| Package                                                    | What it adds                                                                    |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [`vern-llm-logger`](./packages/extensions/vern-llm-logger) | One structured record per call, rolling latency percentiles, slow call alerts   |
+| [`vern-llm-usage`](./packages/extensions/vern-llm-usage)   | Estimated cost and wasted spend per call, budgets that reject early             |
+| [`vern-llm-router`](./packages/extensions/vern-llm-router) | Target order from rules, health, latency, or cost, with dry run and shadow mode |
+| [`vern-llm-policy`](./packages/extensions/vern-llm-policy) | Removes forbidden targets, fails closed, and audits every decision              |
+| [`vern-llm-guard`](./packages/extensions/vern-llm-guard)   | Labels, redacts, or blocks what goes into a call and what comes out             |
+| [`vern-llm-hedge`](./packages/extensions/vern-llm-hedge)   | Sends a slow call to the next target too and keeps the first answer             |
+
+```ts
 import { guardMiddleware, patterns } from 'vern-llm-guard';
-
-const logger = loggerMiddleware({ sink: jsonSink() });
-const guard = guardMiddleware({
-  version: '2026-10-25.1',
-  checks: [{ id: 'secrets', detect: patterns(['secrets']), action: 'block' }],
-});
-
-const llm = new VernLLM({ client: openai, model: 'gpt-6-sol', middleware: [logger, guard] });
-```
-
-Every extension has a fixed place in the call, so the order you list them in never matters. See the [extensions docs](https://vernllm.dev/docs/extensions) for how they compose.
-
-## Integrations
-
-Optional packages that connect VernLLM to what lives outside your process: state shared across instances, telemetry, and provider SDKs. Each one backs an extension point core already exposes, so your calls don't change, and takes `vern-llm` as a peer dependency. Start without any, and add one when your app runs as more than one process, you want calls in your observability stack, or your provider needs its own SDK.
-
-| Package                                                        | What it connects                                                                                        |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| [`vern-llm-redis`](./packages/integrations/vern-llm-redis)     | Shares circuit breaker, rate limit, retry budget, and cache state across every process running VernLLM. |
-| [`vern-llm-otel`](./packages/integrations/vern-llm-otel)       | Turns every call into OpenTelemetry traces and metrics that follow the GenAI semantic conventions.      |
-| [`vern-llm-bedrock`](./packages/integrations/vern-llm-bedrock) | Calls every AWS Bedrock Converse model through the AWS SDK's own client.                                |
-
-```ts
-import Redis from 'ioredis';
-import { otelMiddleware } from 'vern-llm-otel';
-import { redisCache, redisCircuitBreaker, redisRateLimit } from 'vern-llm-redis';
-import { fromIoredis } from 'vern-llm-redis/clients';
-
-const redis = fromIoredis(new Redis());
+import { jsonSink, loggerMiddleware } from 'vern-llm-logger';
 
 const llm = new VernLLM({
   client: openai,
   model: 'gpt-6-sol',
-  circuitBreaker: redisCircuitBreaker(redis),
-  rateLimit: redisRateLimit(redis, { requestsPerMinute: 500 }),
-  cache: redisCache(redis),
-  middleware: [otelMiddleware({ providerNames: { primary: 'openai' } })],
+  middleware: [
+    loggerMiddleware({ sink: jsonSink() }),
+    guardMiddleware({
+      version: '2026-10-25.1',
+      checks: [{ id: 'secrets', detect: patterns(['secrets']), action: 'block' }],
+    }),
+  ],
 });
 ```
 
-See the [integrations docs](https://vernllm.dev/docs/integrations) for setup and options.
+### Integrations
 
-## Adapters
+Integrations connect VernLLM to what lives outside your process. Each one backs an extension point core already exposes, so your calls don't change. Add one when your app runs as more than one process, you want calls in your observability stack, or your provider needs its own SDK.
 
-VernLLM talks to every provider through one small `LLMClient` interface. An adapter translates a provider's native API into that shape, so retries, fallback, rate limiting, and caching behave the same whichever provider is behind a call.
+| Package                                                        | What it connects                                                            |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [`vern-llm-redis`](./packages/integrations/vern-llm-redis)     | Shares breaker, rate limit, retry budget, and cache state across processes  |
+| [`vern-llm-otel`](./packages/integrations/vern-llm-otel)       | OpenTelemetry traces and metrics that follow the GenAI semantic conventions |
+| [`vern-llm-bedrock`](./packages/integrations/vern-llm-bedrock) | AWS Bedrock Converse models through the AWS SDK's own client                |
 
-The adapters live inside the core `vern-llm` package, on their own `vern-llm/adapters` entry so the main entry stays provider free:
+### Better together
 
-| Adapter                                 | Providers                                                                                                                                                            |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fromOpenAI` and `fromOpenAICompatible` | OpenAI, plus named aliases for Groq, Mistral, DeepSeek, Cerebras, Together AI, Fireworks AI, Ollama, OpenRouter, xAI, vLLM, LM Studio, and any OpenAI compatible API |
-| `fromAnthropic`                         | Anthropic                                                                                                                                                            |
-| `fromGemini`                            | Gemini                                                                                                                                                               |
-| `fromFetch`                             | Any provider reachable over HTTP, with your own URL, headers, and request and response mapping                                                                       |
+Every package stands alone, and some combinations are worth reaching for:
 
-```ts
-import { fromAnthropic, fromGroq, fromOpenAI } from 'vern-llm/adapters';
-```
+- **Privacy by routing (guard, policy):** the guard finds PII and policy removes every target that may not see it, failing closed if the guard didn't run.
+- **A budget per tenant for the whole fleet (usage, Redis):** limits are checked before a provider is contacted and shared across every process.
+- **Routing that tunes itself (router, logger):** targets are ranked by measured latency, failure rate, and cost, with shadow mode to check the picks first.
 
-AWS Bedrock is the one provider that isn't in core. It ships as an [integration](#integrations), `fromBedrock` in `vern-llm-bedrock`, because it is built on the AWS SDK client. See the [adapters docs](https://vernllm.dev/docs/adapters) for every named provider.
-
-## Better together
-
-Every package stands alone, so you can mix extensions, integrations, and adapters freely. Some combinations are worth reaching for, and these are a few examples:
-
-- **Privacy by routing (guard, policy, Bedrock):** the guard finds PII, with the built in detectors or your AWS Bedrock guardrails through `bedrockGuardrail`, and policy removes every target that keeps data or sits in the wrong region. If the guard didn't run, policy treats the call as sensitive, so it fails closed.
-- **Faster tails without a bigger bill (hedge, usage):** hedge sends a slow call to a second target and keeps the first answer. Usage lets you skip targets that cost far more or stop hedging when a budget is nearly spent, and policy flags can keep sensitive calls from being sent twice.
-- **Routing that tunes itself (router, logger):** the router ranks targets by measured latency, failure rate, and cost, so a provider that slows down or starts returning unusable answers loses first place. Shadow mode lets you check its picks before switching it on.
-- **A budget per tenant for the whole fleet (usage, Redis):** limits such as $50 a day per tenant are checked before a provider is contacted, and `redisUsageStore` shares them across every process.
-- **Traces that explain themselves (OpenTelemetry, router):** extension events such as `router.decision` become span events, so a trace can show why a call went where it did, not only that it did.
-
-## Repository layout
-
-This is a pnpm monorepo with multiple workspaces, managed with [Nx](https://nx.dev) for task caching and affected-based CI:
-
-| Path                                                                                 | Description                                                                                                       |
-| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| [`packages/vern-llm`](./packages/vern-llm)                                           | The `vern-llm` npm package: source, tests, and its own README with the full API reference.                        |
-| [`packages/integrations/vern-llm-redis`](./packages/integrations/vern-llm-redis)     | The `vern-llm-redis` npm package: Redis backed circuit breaker, rate limiter, and cache adapters for `vern-llm`.  |
-| [`packages/integrations/vern-llm-otel`](./packages/integrations/vern-llm-otel)       | The `vern-llm-otel` npm package: OpenTelemetry traces and metrics for `vern-llm`.                                 |
-| [`packages/integrations/vern-llm-bedrock`](./packages/integrations/vern-llm-bedrock) | The `vern-llm-bedrock` npm package: the AWS Bedrock Converse adapter for `vern-llm`, built on the AWS SDK client. |
-| [`packages/extensions/vern-llm-logger`](./packages/extensions/vern-llm-logger)       | The `vern-llm-logger` package: structured call logs and rolling latency percentiles.                              |
-| [`packages/extensions/vern-llm-usage`](./packages/extensions/vern-llm-usage)         | The `vern-llm-usage` package: estimated cost, wasted spend and budgets for each call.                             |
-| [`packages/extensions/vern-llm-router`](./packages/extensions/vern-llm-router)       | The `vern-llm-router` package: picks the target order for each call from rules you write.                         |
-| [`packages/extensions/vern-llm-policy`](./packages/extensions/vern-llm-policy)       | The `vern-llm-policy` package: rules for which providers and models a call may use, and whether it may run.       |
-| [`packages/extensions/vern-llm-guard`](./packages/extensions/vern-llm-guard)         | The `vern-llm-guard` package: checks on what goes into a call and what comes out: label, redact or block.         |
-| [`packages/extensions/vern-llm-hedge`](./packages/extensions/vern-llm-hedge)         | The `vern-llm-hedge` package: sends a slow call to the next target too and keeps the first answer.                |
-| [`packages/stack-bench`](./packages/stack-bench) | Private benchmark of the per call overhead of the extensions stacked on one VernLLM. |
-| [`apps/docs`](./apps/docs)                                                           | The [Fumadocs](https://fumadocs.dev)-powered documentation site.                                                  |
+See the docs for [adapters](https://vernllm.dev/docs/adapters), [extensions](https://vernllm.dev/docs/extensions), and [integrations](https://vernllm.dev/docs/integrations).
 
 ## Contributing
 
-See [CONTRIBUTING](./.github/CONTRIBUTING.md), the [security policy](./.github/SECURITY.md), and the [code of conduct](./.github/CODE_OF_CONDUCT.md). Release notes live in the [changelog](./packages/vern-llm/CHANGELOG.md).
+Contributions are welcome. See [CONTRIBUTING](./.github/CONTRIBUTING.md), the [security policy](./.github/SECURITY.md), and the [code of conduct](./.github/CODE_OF_CONDUCT.md). Questions and ideas go in [issues](https://github.com/LakBud/vernLLM/issues), and release notes live in the [changelog](./packages/vern-llm/CHANGELOG.md).
+
+This is a pnpm monorepo managed with [Nx](https://nx.dev): packages live in [`packages/`](./packages) and the docs site in [`apps/docs`](./apps/docs).
 
 ## License
 

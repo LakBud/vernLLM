@@ -14,20 +14,22 @@
 
 <p align="center"><sub>Redis® is a registered trademark of Redis Ltd. This is an unofficial community integration, not affiliated with or endorsed by Redis Ltd.</sub></p>
 
-## Install
+vern-llm keeps its state in process memory. That is right for one process and wrong for ten: every instance discovers the same outage on its own, ten instances with a limit of 100 requests a minute send 1,000, and each one caches the same answer separately. `vern-llm-redis` backs the circuit breaker, rate limiter, retry budget, cache, and usage budgets with Redis, so every process shares one view. Your calls don't change.
 
-```
+## Installation
+
+```bash
 npm i vern-llm-redis
 ```
 
-`vern-llm` is a peer dependency, so this package shares the copy your app already uses. Bring your own Redis client, ioredis and node-redis (the official "redis" package) are both supported directly.
+`vern-llm` is a peer dependency, so this package shares the copy your app already uses. Bring your own Redis client: ioredis and node-redis (the official `redis` package) are both supported directly. Redis 5 or newer is required.
 
-## Usage with ioredis
+## Quick start
 
 ```ts
 import Redis from 'ioredis';
 import { VernLLM } from 'vern-llm';
-import { redisCircuitBreaker, redisRateLimit, redisRetryBudget, redisCache } from 'vern-llm-redis';
+import { redisCache, redisCircuitBreaker, redisRateLimit, redisRetryBudget } from 'vern-llm-redis';
 import { fromIoredis, fromIoredisSubscriber } from 'vern-llm-redis/clients';
 
 const redis = new Redis();
@@ -36,22 +38,42 @@ const subscriber = fromIoredisSubscriber(redis.duplicate());
 
 const llm = new VernLLM({
   circuitBreaker: redisCircuitBreaker(client, { threshold: 5, cooldownMs: 30000, subscriber }),
-  rateLimit: redisRateLimit(client, {
-    requestsPerMinute: 100,
-    aimd: { increaseBy: 5, decreaseFactor: 0.5, minCapacity: 10, maxCapacity: 200 },
-    subscriber,
-  }),
+  rateLimit: redisRateLimit(client, { requestsPerMinute: 100, subscriber }),
   retryBudget: redisRetryBudget(client, { windowMs: 60000, minCalls: 10, retryRatio: 0.1 }),
   cache: redisCache(client),
 });
 ```
 
-## Usage with node-redis
+Now one process opening a circuit opens it for all of them, and 100 requests a minute means 100 across the fleet.
+
+## What gets shared
+
+| Adapter               | What every process shares                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `redisCircuitBreaker` | Breaker state, pushed over pub/sub, typically within a few ms, with one process winning each half open trial |
+| `redisRateLimit`      | Requests, tokens, and concurrency limits, one first come first served queue, and the shrinking after a 429   |
+| `redisRetryBudget`    | The share of a target's traffic that may be retries, so a fleet can't retry its way into a provider outage   |
+| `redisCache`          | Cached answers, as a drop in for `InMemoryCacheAdapter`                                                      |
+| `redisUsageStore`     | [`vern-llm-usage`](https://www.npmjs.com/package/vern-llm-usage) budgets, from `vern-llm-redis/usageStore`   |
+
+## On a Redis outage
+
+Shared state is one more thing that can fail, so each adapter states what it does when Redis is down:
+
+| Adapter         | On a Redis outage                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------- |
+| Circuit breaker | Falls back to core's in-process breaker until Redis answers again. Failed writes are logged and swallowed |
+| Retry budget    | Falls back to core's in-process budget, so each process still caps its own retries                        |
+| Cache           | Fails open: a cache that errors is treated as a miss                                                      |
+| Usage store     | Follows `vern-llm-usage`'s `onStoreError` option: send the call unmetered, or reject it                   |
+| Rate limit      | No fail open path. A rejected Redis call fails the LLM call, so a limit is never silently skipped         |
+
+## Usage
+
+### With node-redis
 
 ```ts
 import { createClient } from 'redis';
-import { VernLLM } from 'vern-llm';
-import { redisCircuitBreaker, redisRateLimit, redisCache } from 'vern-llm-redis';
 import { fromNodeRedis, fromNodeRedisSubscriber } from 'vern-llm-redis/clients';
 
 const raw = await createClient().connect();
@@ -60,32 +82,28 @@ const client = fromNodeRedis(raw);
 const rawSubscriber = raw.duplicate();
 await rawSubscriber.connect();
 const subscriber = fromNodeRedisSubscriber(rawSubscriber);
-
-const llm = new VernLLM({
-  circuitBreaker: redisCircuitBreaker(client, { subscriber }),
-  rateLimit: redisRateLimit(client, { requestsPerMinute: 100, subscriber }),
-  cache: redisCache(client),
-});
 ```
 
-`subscriber` is optional everywhere it appears. Without one, both adapters still work correctly, just with slightly looser timing, see below.
+### With or without a subscriber
 
-## Adapters
+`subscriber` is optional everywhere it appears. With one, breaker transitions and freed concurrency slots reach every process over pub/sub. Without one, the adapters still work correctly and fall back to polling (`pollIntervalMs`), with slightly looser timing. Waits on requests and tokens per minute are always precise: the exact refill time is computed from live bucket state and slept, never polled.
 
-**redisCircuitBreaker** gates each call against Redis backed state. `assertClosed` throws synchronously off a local cache. With `subscriber`, every real transition anywhere is pushed to every process over pub/sub, typically within a few ms. Without one, a background poll (`pollIntervalMs`, default 5000) re-checks every key this process has touched, bounding staleness instead of leaving it purely reactive to this process's own calls.
+### Details worth knowing
 
-It keeps the built in breaker's failure rules wherever they can run inside Redis: `tripping` (`{ kind: 'consecutive', threshold }` or `{ kind: 'rolling', windowMs, minCalls, failureRatio }`), `halfOpenProbes`, `halfOpenSuccessRatio`, and an exponential `cooldownBackoff`. A custom `TrippingPolicy` or a function `cooldownBackoff` cannot run inside Redis, so they throw at construction. See the [docs](https://vernllm.dev/docs/integrations/redis/features/circuit-breaker) for every option.
+- A custom `TrippingPolicy` or a function `cooldownBackoff` cannot run inside Redis, so they throw at construction instead of silently behaving differently.
+- A crashed holder's concurrency slot comes back after `concurrencyLeaseMs`.
+- A process joining a retry window already at its ratio starts from an empty copy. `await budget.readState()` at startup loads the live window.
+- Every instance sharing the same `keyPrefix` and Redis database coordinates together, so give unrelated services, and each retry budget target, their own prefix.
+- The breaker, rate limiter, and retry budget return a `dispose()` method. Call it before closing the Redis client.
 
-**redisRateLimit** enforces requests per minute, tokens per minute, and concurrency across processes, including a shared AIMD ceiling when `aimd` is set. Requests/min and tokens/min waits are always precise: the exact refill time is computed from live bucket state and slept, never polled. Concurrency waits, which only clear via an external release, wake on that release's pub/sub notification when `subscriber` is set; without one they fall back to polling every `pollIntervalMs` (default 250), since nothing else can know when a slot freed. Waiters are served first come first served across processes (`fairQueue`, on by default), and a crashed holder's slot comes back after `concurrencyLeaseMs`. See the [docs](https://vernllm.dev/docs/integrations/redis/features/rate-limit) for every option.
+### Other Redis clients
 
-**redisRetryBudget** caps the share of a target's traffic, across every process, that may be retries. `assertAvailable` reads a local copy of the shared window, refreshed by the reply to each attempt's record script, so the retry check never waits on Redis. A process joining a window already at the ratio starts from an empty copy, so its first retries can overshoot; `await budget.readState()` at startup loads the live window. On a Redis outage it falls back to core's in-process budget, so each process still caps its own retries. Give each target its own `keyPrefix`. See the [docs](https://vernllm.dev/docs/integrations/redis/features/retry-budget) for every option.
+The adapters accept anything shaped like `RedisClient` (`get`, `set`, `del`, `eval`) and `RedisSubscriber` (`subscribe`, `on('message', ...)`). Write a small wrapper matching those two interfaces for any other client.
 
-**redisUsageStore** is a store for `vern-llm-usage`, so its budgets are shared across processes. Each operation is one script, so a reservation holds every scope or none. Import it from `vern-llm-redis/usageStore`. See the [docs](https://vernllm.dev/docs/integrations/redis/features/usage-store).
+## Documentation
 
-The circuit breaker, rate limiter and retry budget return a `dispose()` method, call it before closing the Redis client. Redis 5 or newer is required, since scripts read the server clock.
+See the [Redis docs](https://vernllm.dev/docs/integrations/redis) for the [circuit breaker](https://vernllm.dev/docs/integrations/redis/features/circuit-breaker), [rate limit](https://vernllm.dev/docs/integrations/redis/features/rate-limit), [retry budget](https://vernllm.dev/docs/integrations/redis/features/retry-budget), [cache](https://vernllm.dev/docs/integrations/redis/features/cache), and [usage store](https://vernllm.dev/docs/integrations/redis/features/usage-store).
 
-**redisCache** matches `vern-llm`'s own `CacheAdapter` shape. Drop it in anywhere `InMemoryCacheAdapter` is used today.
+## License
 
-## Other Redis clients
-
-Both adapters accept anything shaped like `RedisClient` (`get`, `set`, `del`, `eval`) and `RedisSubscriber` (`subscribe`, `on('message', ...)`). Write a small wrapper matching those two interfaces for any other client, the same pattern `fromIoredis`/`fromNodeRedis` use.
+MIT
